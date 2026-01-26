@@ -247,6 +247,49 @@
         - Model is optimized to predict the user-specified outputs, not to optimize the outputs themselves
       </prediction_targets>
 
+      <trend_based_targets status="TODO">
+        Alternative to price percentage targets - predict market trends/regimes.
+        May provide more balanced class distribution than percentage-based targets.
+
+        <trend_types>
+          - Uptrend: Higher highs and higher lows over N periods
+          - Downtrend: Lower highs and lower lows over N periods
+          - Sideways/Consolidation: Price range bound within X% for N periods
+          - Breakout: Price moves beyond recent range by X%
+          - Reversal: Trend direction change detected
+        </trend_types>
+
+        <trend_detection_methods>
+          - Moving average crossovers (e.g., SMA20 > SMA50)
+          - Linear regression slope over N periods
+          - ADX (Average Directional Index) for trend strength
+          - Pivot point analysis (swing highs/lows)
+          - Donchian channel breakouts
+        </trend_detection_methods>
+
+        <configurable_parameters>
+          - Trend detection method to use
+          - Lookback period for trend identification
+          - Minimum trend strength threshold
+          - Trend duration requirements
+          - Prediction horizon (how far ahead to predict)
+        </configurable_parameters>
+
+        <expected_benefits>
+          - More balanced classes (trends are more common than 10%+ moves)
+          - Easier for models to learn patterns
+          - More actionable for trading strategies
+          - Can combine with percentage targets for multi-output models
+        </expected_benefits>
+
+        <implementation_notes>
+          - Add TrendTargetService similar to PredictionTargetService
+          - Support both binary (trend/no-trend) and multi-class (up/down/sideways)
+          - Include trend strength as auxiliary output
+          - Visualize detected trends on chart
+        </implementation_notes>
+      </trend_based_targets>
+
       <multi_dataset_training>
         - Support training models against multiple datasets simultaneously
         - Dataset selection:
