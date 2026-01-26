@@ -335,6 +335,10 @@ class SentimentService:
             format_type="dict"
         )
 
+        # Check for error response
+        if isinstance(result, dict) and "error" in result:
+            raise Exception(result["error"])
+
         raw_articles = result.get("articles", [])
         logger.info(f"Received {len(raw_articles)} raw articles from {provider}")
 

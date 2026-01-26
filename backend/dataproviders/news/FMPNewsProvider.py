@@ -127,11 +127,15 @@ class FMPNewsProvider(MarketNewsInterface):
                 tickers=symbol,
                 limit=limit * 2  # Get extra to account for filtering
             )
-            
+
             if not news_data:
                 logger.warning(f"No news data returned from FMP for {symbol}")
                 return self._format_empty_response(symbol, actual_start_date, end_date, format_type)
-            
+
+            # Ensure comparison dates are timezone-aware
+            compare_start = actual_start_date if actual_start_date.tzinfo else actual_start_date.replace(tzinfo=timezone.utc)
+            compare_end = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
+
             # Filter by date range (FMP returns publishedDate as string)
             filtered_articles = []
             for article in news_data:
@@ -140,7 +144,7 @@ class FMPNewsProvider(MarketNewsInterface):
                     # Ensure all dates are timezone-aware for comparison
                     if pub_date.tzinfo is None:
                         pub_date = pub_date.replace(tzinfo=timezone.utc)
-                    if actual_start_date <= pub_date <= end_date:
+                    if compare_start <= pub_date <= compare_end:
                         filtered_articles.append(article)
                         if len(filtered_articles) >= limit:
                             break
@@ -192,7 +196,12 @@ class FMPNewsProvider(MarketNewsInterface):
                 
         except Exception as e:
             logger.error(f"Error fetching FMP company news for {symbol}: {e}")
-            return f"Error fetching news: {str(e)}"
+            error_msg = f"Error fetching news: {str(e)}"
+            if format_type == "dict":
+                return {"error": error_msg, "articles": [], "article_count": 0}
+            elif format_type == "both":
+                return {"text": error_msg, "data": {"error": error_msg, "articles": [], "article_count": 0}}
+            return error_msg
     
     @log_provider_call
     def get_global_news(
@@ -244,11 +253,15 @@ class FMPNewsProvider(MarketNewsInterface):
                 apikey=self.api_key,
                 page=0  # Get first page
             )
-            
+
             if not news_data:
                 logger.warning("No general news data returned from FMP")
                 return self._format_empty_response(None, actual_start_date, end_date, format_type)
-            
+
+            # Ensure comparison dates are timezone-aware
+            compare_start = actual_start_date if actual_start_date.tzinfo else actual_start_date.replace(tzinfo=timezone.utc)
+            compare_end = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
+
             # Filter by date range and limit
             filtered_articles = []
             for article in news_data:
@@ -257,7 +270,7 @@ class FMPNewsProvider(MarketNewsInterface):
                     # Ensure all dates are timezone-aware for comparison
                     if pub_date.tzinfo is None:
                         pub_date = pub_date.replace(tzinfo=timezone.utc)
-                    if actual_start_date <= pub_date <= end_date:
+                    if compare_start <= pub_date <= compare_end:
                         filtered_articles.append(article)
                         if len(filtered_articles) >= limit:
                             break
@@ -307,7 +320,12 @@ class FMPNewsProvider(MarketNewsInterface):
                 
         except Exception as e:
             logger.error(f"Error fetching FMP general news: {e}")
-            return f"Error fetching news: {str(e)}"
+            error_msg = f"Error fetching news: {str(e)}"
+            if format_type == "dict":
+                return {"error": error_msg, "articles": [], "article_count": 0}
+            elif format_type == "both":
+                return {"text": error_msg, "data": {"error": error_msg, "articles": [], "article_count": 0}}
+            return error_msg
     
     def _format_empty_response(
         self, 
