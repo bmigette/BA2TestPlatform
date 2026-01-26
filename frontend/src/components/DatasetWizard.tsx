@@ -1,10 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle, Plus, Trash2, Save, FolderOpen } from 'lucide-react';
 
+type WizardMode = 'create' | 'duplicate' | 'edit';
+
+interface InitialDataset {
+  id: number;
+  name: string;
+  ticker: string;
+  timeframe: string;
+  start_date: string;
+  end_date: string;
+  normalization_buffer_pct?: number;
+  technical_indicators?: any;
+  generation_config?: any;
+}
+
 interface DatasetWizardProps {
   isOpen: boolean;
   onClose: () => void;
   onComplete: () => void;
+  mode?: WizardMode;
+  initialData?: InitialDataset | null;
 }
 
 // Updated indicator config with individual timeframe
@@ -51,6 +67,7 @@ interface WizardData {
   startDate: string;
   endDate: string;
   dataProvider: string;
+  normalizationBufferPct: number;
   indicators: IndicatorConfig[];
   sentiment: SentimentConfig;
   fundamentals: FundamentalsConfig;
@@ -82,28 +99,75 @@ const INDICATOR_TYPES = [
   { type: 'stochastic', name: 'Stochastic Oscillator', hasPeriod: false },
 ];
 
-const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComplete }) => {
+const getDefaultWizardData = (): WizardData => ({
+  ticker: '',
+  timeframe: '1d',
+  startDate: '',
+  endDate: '',
+  dataProvider: 'yfinance',
+  normalizationBufferPct: 0.35,
+  indicators: [],
+  sentiment: {
+    enabled: false,
+    newsSources: ['google_news', 'fmp_news'],
+    lookbackPeriods: ['1d', '1w', '1m', '6m'],
+    sentimentCategories: ['positive', 'neutral', 'negative'],
+    impactTimeframes: ['short', 'medium', 'long']
+  },
+  fundamentals: {
+    enabled: false,
+    metrics: ['fcf', 'pe', 'eps', 'revenue'],
+    macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment']
+  }
+});
+
+const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComplete, mode = 'create', initialData = null }) => {
   const [currentStep, setCurrentStep] = useState(1);
-  const [wizardData, setWizardData] = useState<WizardData>({
-    ticker: '',
-    timeframe: '1d',
-    startDate: '',
-    endDate: '',
-    dataProvider: 'yfinance',
-    indicators: [],
-    sentiment: {
-      enabled: false,
-      newsSources: ['google_news', 'fmp_news'],
-      lookbackPeriods: ['1d', '1w', '1m', '6m'],
-      sentimentCategories: ['positive', 'neutral', 'negative'],
-      impactTimeframes: ['short', 'medium', 'long']
-    },
-    fundamentals: {
-      enabled: false,
-      metrics: ['fcf', 'pe', 'eps', 'revenue'],
-      macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment']
+  const [wizardData, setWizardData] = useState<WizardData>(getDefaultWizardData());
+
+  // Initialize from initialData when mode changes
+  useEffect(() => {
+    if (isOpen && initialData && (mode === 'duplicate' || mode === 'edit')) {
+      // Parse dates from ISO format
+      const startDate = initialData.generation_config?.original_start_date ||
+                       (initialData.start_date ? initialData.start_date.split('T')[0] : '');
+      const endDate = initialData.generation_config?.original_end_date ||
+                     (initialData.end_date ? initialData.end_date.split('T')[0] : '');
+
+      // Parse indicators
+      let indicators: IndicatorConfig[] = [];
+      if (initialData.technical_indicators && Array.isArray(initialData.technical_indicators)) {
+        indicators = initialData.technical_indicators.map((ind: any) => ({
+          id: `ind_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          ...ind
+        }));
+      }
+
+      setWizardData({
+        ticker: mode === 'duplicate' ? '' : initialData.ticker,  // Clear ticker for duplicate
+        timeframe: initialData.timeframe,
+        startDate,
+        endDate,
+        dataProvider: initialData.generation_config?.data_provider || 'yfinance',
+        normalizationBufferPct: initialData.normalization_buffer_pct || 0.35,
+        indicators,
+        sentiment: {
+          enabled: false,
+          newsSources: ['google_news', 'fmp_news'],
+          lookbackPeriods: ['1d', '1w', '1m', '6m'],
+          sentimentCategories: ['positive', 'neutral', 'negative'],
+          impactTimeframes: ['short', 'medium', 'long']
+        },
+        fundamentals: {
+          enabled: false,
+          metrics: ['fcf', 'pe', 'eps', 'revenue'],
+          macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment']
+        }
+      });
+    } else if (isOpen && mode === 'create') {
+      setWizardData(getDefaultWizardData());
     }
-  });
+  }, [isOpen, mode, initialData]);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -316,24 +380,54 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       // Convert indicators to API format
       const technicalIndicators = wizardData.indicators.map(({ id, name, ...rest }) => rest);
 
-      const response = await fetch('http://localhost:8002/api/datasets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ticker: wizardData.ticker,
-          timeframe: wizardData.timeframe,
-          start_date: wizardData.startDate || undefined,
-          end_date: wizardData.endDate || undefined,
-          data_provider: wizardData.dataProvider,
-          technical_indicators: technicalIndicators,
-          sentiment_config: wizardData.sentiment.enabled ? wizardData.sentiment : null,
-          fundamentals_config: wizardData.fundamentals.enabled ? wizardData.fundamentals : null
-        }),
-      });
+      let response: Response;
+
+      if (mode === 'duplicate' && initialData) {
+        // Duplicate: POST to /{id}/duplicate
+        response = await fetch(`http://localhost:8002/api/datasets/${initialData.id}/duplicate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            new_ticker: wizardData.ticker || undefined,
+            new_name: undefined  // Let backend generate name
+          }),
+        });
+      } else if (mode === 'edit' && initialData) {
+        // Edit: PUT to /{id}
+        response = await fetch(`http://localhost:8002/api/datasets/${initialData.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ticker: wizardData.ticker,
+            timeframe: wizardData.timeframe,
+            start_date: wizardData.startDate || undefined,
+            end_date: wizardData.endDate || undefined,
+            technical_indicators: technicalIndicators,
+            normalization_buffer_pct: wizardData.normalizationBufferPct
+          }),
+        });
+      } else {
+        // Create: POST to /
+        response = await fetch('http://localhost:8002/api/datasets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ticker: wizardData.ticker,
+            timeframe: wizardData.timeframe,
+            start_date: wizardData.startDate || undefined,
+            end_date: wizardData.endDate || undefined,
+            data_provider: wizardData.dataProvider,
+            normalization_buffer_pct: wizardData.normalizationBufferPct,
+            technical_indicators: technicalIndicators,
+            sentiment_config: wizardData.sentiment.enabled ? wizardData.sentiment : null,
+            fundamentals_config: wizardData.fundamentals.enabled ? wizardData.fundamentals : null
+          }),
+        });
+      }
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to create dataset');
+        throw new Error(errorData.detail || `Failed to ${mode} dataset`);
       }
 
       onComplete();
@@ -341,30 +435,34 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
       // Reset wizard
       setCurrentStep(1);
-      setWizardData({
-        ticker: '',
-        timeframe: '1d',
-        startDate: '',
-        endDate: '',
-        dataProvider: 'yfinance',
-        indicators: [],
-        sentiment: {
-          enabled: false,
-          newsSources: ['google_news', 'fmp_news'],
-          lookbackPeriods: ['1d', '1w', '1m', '6m'],
-          sentimentCategories: ['positive', 'neutral', 'negative'],
-          impactTimeframes: ['short', 'medium', 'long']
-        },
-        fundamentals: {
-          enabled: false,
-          metrics: ['fcf', 'pe', 'eps', 'revenue'],
-          macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment']
-        }
-      });
+      setWizardData(getDefaultWizardData());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const getActionButtonText = () => {
+    if (isCreating) {
+      switch (mode) {
+        case 'duplicate': return 'Duplicating...';
+        case 'edit': return 'Updating...';
+        default: return 'Creating...';
+      }
+    }
+    switch (mode) {
+      case 'duplicate': return 'Duplicate Dataset';
+      case 'edit': return 'Update Dataset';
+      default: return 'Create Dataset';
+    }
+  };
+
+  const getModalTitle = () => {
+    switch (mode) {
+      case 'duplicate': return 'Duplicate Dataset';
+      case 'edit': return 'Edit Dataset';
+      default: return 'Create New Dataset';
     }
   };
 
@@ -499,6 +597,39 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
           </label>
         ))}
+      </div>
+
+      {/* Advanced Settings */}
+      <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <details className="group">
+          <summary className="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
+            Advanced Settings
+          </summary>
+          <div className="mt-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+                Normalization Buffer (%)
+              </label>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                Extra headroom above/below observed min/max for live trading. Higher values handle more price growth.
+              </p>
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="5"
+                  value={wizardData.normalizationBufferPct * 100}
+                  onChange={(e) => setWizardData({ ...wizardData, normalizationBufferPct: parseInt(e.target.value) / 100 })}
+                  className="flex-1"
+                />
+                <span className="w-16 text-center font-medium text-gray-900 dark:text-gray-100">
+                  {(wizardData.normalizationBufferPct * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -971,7 +1102,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Create New Dataset</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{getModalTitle()}</h2>
           <button
             onClick={onClose}
             className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
@@ -1033,7 +1164,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={isCreating}
           >
-            {isCreating ? 'Creating...' : currentStep === 6 ? 'Create Dataset' : 'Next'}
+            {currentStep === 6 ? getActionButtonText() : 'Next'}
           </button>
         </div>
       </div>

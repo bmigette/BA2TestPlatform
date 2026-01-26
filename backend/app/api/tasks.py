@@ -58,6 +58,7 @@ class QueueStatsResponse(BaseModel):
     running: int
     completed: int
     failed: int
+    paused: int = 0
     workers: int
     active_workers: int
 
@@ -161,6 +162,176 @@ async def cancel_task(task_id: str):
         "task_id": task_id,
         "status": "cancelled",
         "message": "Task cancelled successfully"
+    }
+
+
+@router.post("/{task_id}/pause")
+async def pause_task(task_id: str):
+    """
+    Pause a running task.
+
+    The task handler will save a checkpoint and stop processing.
+    Use resume to continue from the checkpoint.
+
+    Args:
+        task_id: Task identifier
+
+    Returns:
+        Pause status
+    """
+    queue = get_task_queue()
+    success = queue.pause_task(task_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task {task_id} cannot be paused (not found or not running)"
+        )
+
+    return {
+        "task_id": task_id,
+        "status": "paused",
+        "message": "Task paused successfully. A checkpoint has been saved."
+    }
+
+
+@router.post("/{task_id}/resume")
+async def resume_task(task_id: str):
+    """
+    Resume a paused task.
+
+    The task will be re-queued and continue from the last checkpoint.
+
+    Args:
+        task_id: Task identifier
+
+    Returns:
+        Resume status
+    """
+    queue = get_task_queue()
+    success = queue.resume_task(task_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task {task_id} cannot be resumed (not found or not paused)"
+        )
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "message": "Task resumed and re-queued for processing"
+    }
+
+
+@router.get("/{task_id}/checkpoints")
+async def list_task_checkpoints(task_id: str):
+    """
+    List all checkpoints for a task.
+
+    Args:
+        task_id: Task identifier
+
+    Returns:
+        List of checkpoints
+    """
+    from app.services.training_checkpoint import get_checkpoint_service
+
+    checkpoint_service = get_checkpoint_service()
+    checkpoints = checkpoint_service.list_checkpoints(task_id)
+
+    return {
+        "task_id": task_id,
+        "checkpoints": checkpoints,
+        "count": len(checkpoints)
+    }
+
+
+@router.get("/{task_id}/checkpoints/latest")
+async def get_latest_checkpoint(task_id: str):
+    """
+    Get the latest checkpoint for a task.
+
+    Args:
+        task_id: Task identifier
+
+    Returns:
+        Latest checkpoint info
+    """
+    from app.services.training_checkpoint import get_checkpoint_service
+
+    checkpoint_service = get_checkpoint_service()
+    checkpoint = checkpoint_service.get_latest_checkpoint_info(task_id)
+
+    if not checkpoint:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No checkpoint found for task {task_id}"
+        )
+
+    return checkpoint
+
+
+@router.delete("/{task_id}/checkpoints/{epoch}")
+async def delete_checkpoint(task_id: str, epoch: int):
+    """
+    Delete a specific checkpoint.
+
+    Args:
+        task_id: Task identifier
+        epoch: Epoch number of checkpoint to delete
+
+    Returns:
+        Deletion status
+    """
+    from app.services.training_checkpoint import get_checkpoint_service
+
+    checkpoint_service = get_checkpoint_service()
+    success = checkpoint_service.delete_checkpoint(task_id, epoch)
+
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Checkpoint not found for task {task_id} at epoch {epoch}"
+        )
+
+    return {
+        "task_id": task_id,
+        "epoch": epoch,
+        "message": "Checkpoint deleted successfully"
+    }
+
+
+@router.post("/{task_id}/checkpoints/cleanup")
+async def cleanup_checkpoints(
+    task_id: str,
+    keep_latest: bool = Query(True, description="Keep the latest checkpoint"),
+    keep_best: bool = Query(True, description="Keep the best checkpoint")
+):
+    """
+    Clean up old checkpoints for a task, keeping only essential ones.
+
+    Args:
+        task_id: Task identifier
+        keep_latest: Whether to keep the latest checkpoint
+        keep_best: Whether to keep the best checkpoint
+
+    Returns:
+        Cleanup result
+    """
+    from app.services.training_checkpoint import get_checkpoint_service
+
+    checkpoint_service = get_checkpoint_service()
+    deleted = checkpoint_service.cleanup_task_checkpoints(
+        task_id,
+        keep_latest=keep_latest,
+        keep_best=keep_best
+    )
+
+    return {
+        "task_id": task_id,
+        "deleted": deleted,
+        "message": f"Deleted {deleted} checkpoints"
     }
 
 

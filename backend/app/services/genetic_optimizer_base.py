@@ -61,9 +61,17 @@ class GeneticOptimizerBase(ABC):
     All genetic library adapters must implement this interface.
     """
 
+    # Maximum number of layers for per-layer optimization
+    MAX_LAYERS = 4
+
     # Standard hyperparameter ranges
+    # Per-layer sizes: hidden_dim_layer_1, hidden_dim_layer_2, etc.
+    # These are combined into a list based on n_rnn_layers during decode
     DEFAULT_PARAM_RANGES = {
-        'hidden_dim': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_1': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_2': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_3': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_4': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
         'n_rnn_layers': {'min': 1, 'max': 4, 'step': 1, 'type': 'int'},
         'dropout': {'min': 0.0, 'max': 0.5, 'step': 0.1, 'type': 'float'},
         'learning_rate': {'min': 0.0001, 'max': 0.01, 'step': 0.0001, 'type': 'float'},

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Copy, Edit } from 'lucide-react';
 import DatasetWizard from '../components/DatasetWizard';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Toast from '../components/Toast';
@@ -14,13 +14,20 @@ interface Dataset {
   end_date: string;
   rows_count: number;
   created_at: string;
+  normalization_buffer_pct?: number;
+  technical_indicators?: any;
+  generation_config?: any;
 }
+
+type WizardMode = 'create' | 'duplicate' | 'edit';
 
 const Datasets: React.FC = () => {
   const navigate = useNavigate();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [wizardMode, setWizardMode] = useState<WizardMode>('create');
+  const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [datasetToDelete, setDatasetToDelete] = useState<number | null>(null);
@@ -86,6 +93,30 @@ const Datasets: React.FC = () => {
     return new Date(dateString).toLocaleDateString();
   };
 
+  const handleDuplicate = (dataset: Dataset) => {
+    setSelectedDataset(dataset);
+    setWizardMode('duplicate');
+    setIsWizardOpen(true);
+  };
+
+  const handleEdit = (dataset: Dataset) => {
+    setSelectedDataset(dataset);
+    setWizardMode('edit');
+    setIsWizardOpen(true);
+  };
+
+  const handleCreateNew = () => {
+    setSelectedDataset(null);
+    setWizardMode('create');
+    setIsWizardOpen(true);
+  };
+
+  const handleWizardClose = () => {
+    setIsWizardOpen(false);
+    setSelectedDataset(null);
+    setWizardMode('create');
+  };
+
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
@@ -99,7 +130,7 @@ const Datasets: React.FC = () => {
             <span>Refresh</span>
           </button>
           <button
-            onClick={() => setIsWizardOpen(true)}
+            onClick={handleCreateNew}
             className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 flex items-center space-x-2"
           >
             <Plus size={16} />
@@ -122,7 +153,7 @@ const Datasets: React.FC = () => {
         <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg">
           <p className="text-gray-600 dark:text-gray-400 mb-4">No datasets yet</p>
           <button
-            onClick={() => setIsWizardOpen(true)}
+            onClick={handleCreateNew}
             className="px-6 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 inline-flex items-center space-x-2"
           >
             <Plus size={20} />
@@ -183,16 +214,38 @@ const Datasets: React.FC = () => {
                     {formatDate(dataset.created_at)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteClick(dataset.id);
-                      }}
-                      className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
-                      title="Delete dataset"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center justify-end space-x-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEdit(dataset);
+                        }}
+                        className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
+                        title="Edit dataset"
+                      >
+                        <Edit size={16} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDuplicate(dataset);
+                        }}
+                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
+                        title="Duplicate dataset"
+                      >
+                        <Copy size={16} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteClick(dataset.id);
+                        }}
+                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
+                        title="Delete dataset"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -203,8 +256,10 @@ const Datasets: React.FC = () => {
 
       <DatasetWizard
         isOpen={isWizardOpen}
-        onClose={() => setIsWizardOpen(false)}
+        onClose={handleWizardClose}
         onComplete={fetchDatasets}
+        mode={wizardMode}
+        initialData={selectedDataset}
       />
 
       <ConfirmDialog

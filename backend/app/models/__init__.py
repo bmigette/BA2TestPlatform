@@ -4,10 +4,16 @@ from .database import Base, engine, SessionLocal, get_db
 from .worker import Worker
 from .task_queue import TaskQueue, TaskStatus, TaskPriority
 from .indicator_collection import IndicatorCollection
+from .dataset import Dataset
+from .normalization_config import NormalizationConfig
+from .training_checkpoint import TrainingCheckpoint
 
 __all__ = [
     "Base", "engine", "SessionLocal", "get_db",
     "Worker",
     "TaskQueue", "TaskStatus", "TaskPriority",
-    "IndicatorCollection"
+    "IndicatorCollection",
+    "Dataset",
+    "NormalizationConfig",
+    "TrainingCheckpoint"
 ]

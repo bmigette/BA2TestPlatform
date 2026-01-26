@@ -4,7 +4,7 @@ Pydantic schemas for dataset API requests and responses
 
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class DatasetCreate(BaseModel):
@@ -19,6 +19,24 @@ class DatasetCreate(BaseModel):
     fundamentals_config: Optional[Dict[str, Any]] = Field(None, description="Fundamentals configuration")
     sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")
     indicator_collection_id: Optional[int] = Field(None, description="ID of indicator collection to use")
+    normalization_buffer_pct: float = Field(0.35, description="Buffer percentage for normalization (default 35%)")
+
+
+class DatasetUpdate(BaseModel):
+    """Schema for updating an existing dataset"""
+    name: Optional[str] = Field(None, description="New name for dataset")
+    ticker: Optional[str] = Field(None, description="New ticker symbol (will regenerate data)")
+    timeframe: Optional[str] = Field(None, description="New timeframe (will regenerate data)")
+    start_date: Optional[str] = Field(None, description="New start date (will regenerate data)")
+    end_date: Optional[str] = Field(None, description="New end date (will regenerate data)")
+    technical_indicators: Optional[List[Dict[str, Any]]] = Field(None, description="New indicators (will regenerate data)")
+    normalization_buffer_pct: Optional[float] = Field(None, description="New buffer percentage")
+
+
+class DatasetDuplicate(BaseModel):
+    """Schema for duplicating a dataset"""
+    new_ticker: Optional[str] = Field(None, description="New ticker symbol for duplicate")
+    new_name: Optional[str] = Field(None, description="New name for duplicate")
 
 
 class DatasetResponse(BaseModel):
@@ -34,6 +52,7 @@ class DatasetResponse(BaseModel):
     fundamentals_config: Optional[Dict[str, Any]]
     sentiment_config: Optional[Dict[str, Any]]
     generation_config: Optional[Dict[str, Any]]
+    normalization_buffer_pct: float
     file_path: str
     created_at: datetime
     updated_at: Optional[datetime]

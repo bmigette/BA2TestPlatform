@@ -225,6 +225,93 @@ class TaskQueueService:
         finally:
             db.close()
 
+    def pause_task(self, task_id: str) -> bool:
+        """
+        Pause a running task.
+
+        The task handler should check for pause status and save checkpoint.
+
+        Returns:
+            True if task was paused
+        """
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if not task:
+                logger.warning(f"Task {task_id} not found for pause")
+                return False
+
+            if task.status != TaskStatus.RUNNING.value:
+                logger.warning(f"Task {task_id} is not running (status={task.status}), cannot pause")
+                return False
+
+            task.status = TaskStatus.PAUSED.value
+            db.commit()
+
+            logger.info(f"Paused task {task_id}")
+            return True
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to pause task {task_id}: {e}")
+            return False
+        finally:
+            db.close()
+
+    def resume_task(self, task_id: str) -> bool:
+        """
+        Resume a paused task.
+
+        The task will be re-queued and picked up by a worker,
+        which should resume from the last checkpoint.
+
+        Returns:
+            True if task was resumed
+        """
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if not task:
+                logger.warning(f"Task {task_id} not found for resume")
+                return False
+
+            if task.status != TaskStatus.PAUSED.value:
+                logger.warning(f"Task {task_id} is not paused (status={task.status}), cannot resume")
+                return False
+
+            # Re-queue the task
+            task.status = TaskStatus.QUEUED.value
+            task.queued_at = datetime.now()
+            db.commit()
+
+            logger.info(f"Resumed task {task_id} - re-queued for processing")
+            return True
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to resume task {task_id}: {e}")
+            return False
+        finally:
+            db.close()
+
+    def is_task_paused(self, task_id: str) -> bool:
+        """
+        Check if a task is paused or pause requested.
+
+        Task handlers should call this periodically to check if they should pause.
+
+        Returns:
+            True if task should pause
+        """
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if task:
+                return task.status == TaskStatus.PAUSED.value
+            return False
+        finally:
+            db.close()
+
     def update_progress(self, task_id: str, progress: float, message: Optional[str] = None):
         """Update task progress."""
         db = SessionLocal()
@@ -273,6 +360,7 @@ class TaskQueueService:
             running = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.RUNNING.value).count()
             completed = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.COMPLETED.value).count()
             failed = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.FAILED.value).count()
+            paused = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.PAUSED.value).count()
 
             return {
                 "total": total,
@@ -281,6 +369,7 @@ class TaskQueueService:
                 "running": running,
                 "completed": completed,
                 "failed": failed,
+                "paused": paused,
                 "workers": self.max_workers,
                 "active_workers": len(self._active_tasks)
             }

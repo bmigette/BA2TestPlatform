@@ -2,7 +2,7 @@
 Dataset model for storing dataset metadata
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Text
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Text, Float
 from sqlalchemy.sql import func
 from .database import Base
 
@@ -29,6 +29,9 @@ class Dataset(Base):
     # Stores: data_provider, original_start_date, original_end_date,
     # indicator_collection_id, and all parameters used during creation
     generation_config = Column(JSON, nullable=True)
+
+    # Normalization buffer percentage for live data headroom (default 35%)
+    normalization_buffer_pct = Column(Float, default=0.35, nullable=False)
 
     # File storage
     file_path = Column(String(500), nullable=False)

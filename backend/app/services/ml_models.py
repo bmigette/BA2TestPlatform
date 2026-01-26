@@ -160,6 +160,7 @@ class MLModelsService:
 
         Args:
             params: Model parameters (uses defaults if not provided)
+                   - hidden_dim: Can be int (same for all layers) or list/tuple (per-layer)
 
         Returns:
             Darts RNNModel configured as LSTM
@@ -169,16 +170,32 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['lstm']['default_params'], **(params or {})}
 
+        # Handle per-layer hidden dimensions
+        hidden_dim = p['hidden_dim']
+        n_rnn_layers = p['n_rnn_layers']
+
+        # If hidden_dim is a list/tuple, validate length matches n_rnn_layers
+        if isinstance(hidden_dim, (list, tuple)):
+            if len(hidden_dim) != n_rnn_layers:
+                # Truncate or extend to match n_rnn_layers
+                if len(hidden_dim) > n_rnn_layers:
+                    hidden_dim = hidden_dim[:n_rnn_layers]
+                else:
+                    # Extend with last value
+                    hidden_dim = list(hidden_dim) + [hidden_dim[-1]] * (n_rnn_layers - len(hidden_dim))
+            hidden_dim = tuple(hidden_dim)
+            logger.info(f"Using per-layer hidden dimensions: {hidden_dim}")
+
         model = RNNModel(
             model='LSTM',
             input_chunk_length=p['input_chunk_length'],
             output_chunk_length=p['output_chunk_length'],
-            hidden_dim=p['hidden_dim'],
-            n_rnn_layers=p['n_rnn_layers'],
+            hidden_dim=hidden_dim,
+            n_rnn_layers=n_rnn_layers,
             dropout=p['dropout'],
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': 1e-3},
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
             pl_trainer_kwargs={
                 'accelerator': 'gpu' if self.use_gpu else 'cpu',
                 'devices': 1 if self.use_gpu else 'auto'
@@ -194,6 +211,7 @@ class MLModelsService:
 
         Args:
             params: Model parameters (uses defaults if not provided)
+                   - layer_widths: Can be int (same for all layers) or list (per-layer)
 
         Returns:
             Darts NBEATSModel
@@ -203,16 +221,31 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['nbeats']['default_params'], **(params or {})}
 
+        # Handle per-layer widths
+        layer_widths = p['layer_widths']
+        num_layers = p['num_layers']
+
+        # If layer_widths is a list, validate length matches num_layers
+        if isinstance(layer_widths, (list, tuple)):
+            if len(layer_widths) != num_layers:
+                # Truncate or extend to match num_layers
+                if len(layer_widths) > num_layers:
+                    layer_widths = list(layer_widths[:num_layers])
+                else:
+                    # Extend with last value
+                    layer_widths = list(layer_widths) + [layer_widths[-1]] * (num_layers - len(layer_widths))
+            logger.info(f"Using per-layer widths: {layer_widths}")
+
         model = NBEATSModel(
             input_chunk_length=p['input_chunk_length'],
             output_chunk_length=p['output_chunk_length'],
             num_stacks=p['num_stacks'],
             num_blocks=p['num_blocks'],
-            num_layers=p['num_layers'],
-            layer_widths=p['layer_widths'],
+            num_layers=num_layers,
+            layer_widths=layer_widths,
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': 1e-3},
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
             pl_trainer_kwargs={
                 'accelerator': 'gpu' if self.use_gpu else 'cpu',
                 'devices': 1 if self.use_gpu else 'auto'
@@ -228,6 +261,7 @@ class MLModelsService:
 
         Args:
             params: Model parameters (uses defaults if not provided)
+                   - hidden_dim: Can be int (same for all layers) or list/tuple (per-layer)
 
         Returns:
             Darts RNNModel configured as vanilla RNN
@@ -237,16 +271,32 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['rnn']['default_params'], **(params or {})}
 
+        # Handle per-layer hidden dimensions
+        hidden_dim = p['hidden_dim']
+        n_rnn_layers = p['n_rnn_layers']
+
+        # If hidden_dim is a list/tuple, validate length matches n_rnn_layers
+        if isinstance(hidden_dim, (list, tuple)):
+            if len(hidden_dim) != n_rnn_layers:
+                # Truncate or extend to match n_rnn_layers
+                if len(hidden_dim) > n_rnn_layers:
+                    hidden_dim = hidden_dim[:n_rnn_layers]
+                else:
+                    # Extend with last value
+                    hidden_dim = list(hidden_dim) + [hidden_dim[-1]] * (n_rnn_layers - len(hidden_dim))
+            hidden_dim = tuple(hidden_dim)
+            logger.info(f"Using per-layer hidden dimensions: {hidden_dim}")
+
         model = RNNModel(
             model='RNN',
             input_chunk_length=p['input_chunk_length'],
             output_chunk_length=p['output_chunk_length'],
-            hidden_dim=p['hidden_dim'],
-            n_rnn_layers=p['n_rnn_layers'],
+            hidden_dim=hidden_dim,
+            n_rnn_layers=n_rnn_layers,
             dropout=p['dropout'],
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': 1e-3},
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
             pl_trainer_kwargs={
                 'accelerator': 'gpu' if self.use_gpu else 'cpu',
                 'devices': 1 if self.use_gpu else 'auto'

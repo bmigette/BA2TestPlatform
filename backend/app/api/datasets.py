@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.models.database import get_db
 from app.models.dataset import Dataset
-from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse
+from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate
 from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
@@ -157,6 +157,7 @@ async def create_dataset(
             fundamentals_config=dataset_create.fundamentals_config,
             sentiment_config=dataset_create.sentiment_config,
             generation_config=generation_config,
+            normalization_buffer_pct=dataset_create.normalization_buffer_pct,
             file_path=str(file_path)
         )
 
@@ -529,6 +530,268 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete dataset: {str(e)}"
+        )
+
+
+@router.post("/{dataset_id}/duplicate", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+async def duplicate_dataset(
+    dataset_id: int,
+    duplicate_request: DatasetDuplicate,
+    db: Session = Depends(get_db)
+):
+    """
+    Duplicate a dataset, optionally with a different ticker.
+
+    Re-fetches data using the stored generation_config with optional new ticker.
+
+    Args:
+        dataset_id: ID of dataset to duplicate
+        duplicate_request: Optional new ticker and name
+        db: Database session
+
+    Returns:
+        Newly created dataset
+    """
+    try:
+        # Get original dataset
+        original = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not original:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Determine new ticker and name
+        new_ticker = duplicate_request.new_ticker or original.ticker
+        if duplicate_request.new_name:
+            new_name = duplicate_request.new_name
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_name = f"{new_ticker}_{original.timeframe}_{timestamp}"
+
+        logger.info(f"Duplicating dataset {dataset_id} to {new_name} with ticker {new_ticker}")
+
+        # Fetch data using the original generation config
+        provider = YFinanceDataProvider()
+
+        # Use original dates from generation_config or dataset
+        gen_config = original.generation_config or {}
+        start_date = datetime.strptime(gen_config.get("original_start_date"), "%Y-%m-%d") if gen_config.get("original_start_date") else original.start_date
+        end_date = datetime.strptime(gen_config.get("original_end_date"), "%Y-%m-%d") if gen_config.get("original_end_date") else original.end_date
+
+        # Convert timeframe to interval
+        interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+        }
+        interval = interval_map.get(original.timeframe, "1d")
+
+        data_points = provider.get_data(
+            symbol=new_ticker,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
+        )
+
+        if not data_points:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No data available for {new_ticker}"
+            )
+
+        # Convert to DataFrame
+        df = pd.DataFrame([{
+            'Date': dp.timestamp,
+            'Open': dp.open,
+            'High': dp.high,
+            'Low': dp.low,
+            'Close': dp.close,
+            'Volume': dp.volume
+        } for dp in data_points])
+        df = df.sort_values('Date').reset_index(drop=True)
+
+        # Save to new file
+        datasets_dir = Path("datasets")
+        datasets_dir.mkdir(exist_ok=True)
+        file_path = datasets_dir / f"{new_name}.csv"
+        df.to_csv(file_path, index=False)
+
+        # Build new generation config
+        new_gen_config = {
+            "data_provider": gen_config.get("data_provider", "yfinance"),
+            "original_start_date": gen_config.get("original_start_date"),
+            "original_end_date": gen_config.get("original_end_date"),
+            "indicator_collection_id": gen_config.get("indicator_collection_id"),
+            "duplicated_from": dataset_id,
+            "created_at": datetime.now().isoformat()
+        }
+
+        # Create new database record
+        new_dataset = Dataset(
+            name=new_name,
+            ticker=new_ticker,
+            timeframe=original.timeframe,
+            start_date=df['Date'].min(),
+            end_date=df['Date'].max(),
+            rows_count=len(df),
+            technical_indicators=original.technical_indicators,
+            fundamentals_config=original.fundamentals_config,
+            sentiment_config=original.sentiment_config,
+            generation_config=new_gen_config,
+            normalization_buffer_pct=original.normalization_buffer_pct,
+            file_path=str(file_path)
+        )
+
+        db.add(new_dataset)
+        db.commit()
+        db.refresh(new_dataset)
+
+        logger.info(f"Created duplicate dataset with ID {new_dataset.id}")
+        return new_dataset
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error duplicating dataset: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to duplicate dataset: {str(e)}"
+        )
+
+
+@router.put("/{dataset_id}", response_model=DatasetResponse)
+async def update_dataset(
+    dataset_id: int,
+    dataset_update: DatasetUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    Update dataset properties.
+
+    If ticker, dates, or timeframe change, the data will be regenerated.
+
+    Args:
+        dataset_id: Dataset ID to update
+        dataset_update: Fields to update
+        db: Database session
+
+    Returns:
+        Updated dataset
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Check if we need to regenerate data
+        needs_regeneration = False
+        if dataset_update.ticker and dataset_update.ticker != dataset.ticker:
+            needs_regeneration = True
+        if dataset_update.timeframe and dataset_update.timeframe != dataset.timeframe:
+            needs_regeneration = True
+        if dataset_update.start_date or dataset_update.end_date:
+            needs_regeneration = True
+
+        if needs_regeneration:
+            logger.info(f"Regenerating data for dataset {dataset_id}")
+
+            # Fetch new data
+            provider = YFinanceDataProvider()
+
+            new_ticker = dataset_update.ticker or dataset.ticker
+            new_timeframe = dataset_update.timeframe or dataset.timeframe
+
+            # Parse dates
+            gen_config = dataset.generation_config or {}
+            if dataset_update.start_date:
+                start_date = datetime.strptime(dataset_update.start_date, "%Y-%m-%d")
+            elif gen_config.get("original_start_date"):
+                start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
+            else:
+                start_date = dataset.start_date
+
+            if dataset_update.end_date:
+                end_date = datetime.strptime(dataset_update.end_date, "%Y-%m-%d")
+            elif gen_config.get("original_end_date"):
+                end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
+            else:
+                end_date = dataset.end_date
+
+            interval_map = {
+                "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+            }
+            interval = interval_map.get(new_timeframe, "1d")
+
+            data_points = provider.get_data(
+                symbol=new_ticker,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval
+            )
+
+            if not data_points:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"No data available for {new_ticker}"
+                )
+
+            # Convert to DataFrame
+            df = pd.DataFrame([{
+                'Date': dp.timestamp,
+                'Open': dp.open,
+                'High': dp.high,
+                'Low': dp.low,
+                'Close': dp.close,
+                'Volume': dp.volume
+            } for dp in data_points])
+            df = df.sort_values('Date').reset_index(drop=True)
+
+            # Save to file (keep same path)
+            file_path = Path(dataset.file_path)
+            df.to_csv(file_path, index=False)
+
+            # Update dataset fields
+            dataset.ticker = new_ticker
+            dataset.timeframe = new_timeframe
+            dataset.start_date = df['Date'].min()
+            dataset.end_date = df['Date'].max()
+            dataset.rows_count = len(df)
+
+            # Update generation config
+            gen_config["original_start_date"] = dataset_update.start_date or gen_config.get("original_start_date")
+            gen_config["original_end_date"] = dataset_update.end_date or gen_config.get("original_end_date")
+            gen_config["updated_at"] = datetime.now().isoformat()
+            dataset.generation_config = gen_config
+
+        # Update simple fields
+        if dataset_update.name:
+            dataset.name = dataset_update.name
+
+        if dataset_update.normalization_buffer_pct is not None:
+            dataset.normalization_buffer_pct = dataset_update.normalization_buffer_pct
+
+        if dataset_update.technical_indicators is not None:
+            dataset.technical_indicators = dataset_update.technical_indicators
+
+        db.commit()
+        db.refresh(dataset)
+
+        logger.info(f"Updated dataset {dataset_id}")
+        return dataset
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating dataset: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update dataset: {str(e)}"
         )
 
 

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from app.models.database import get_db
 from app.models.dataset import Dataset
+from app.models.normalization_config import NormalizationConfig
 from app.services.ml_models import (
     MLModelsService,
     PredictionTargetService,
@@ -546,4 +547,202 @@ async def run_genetic_optimization_with_library(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Optimization failed: {str(e)}"
+        )
+
+
+# =============== Normalization Config Endpoints ===============
+
+@router.get("/normalization/{model_id}")
+async def get_model_normalization(
+    model_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get normalization parameters for a trained model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Normalization configuration
+    """
+    config = db.query(NormalizationConfig).filter(
+        NormalizationConfig.model_id == model_id
+    ).first()
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Normalization config not found for model: {model_id}"
+        )
+
+    return {
+        "model_id": model_id,
+        "method": config.method,
+        "buffer_pct": config.buffer_pct,
+        "feature_ranges": config.feature_ranges,
+        "means": config.means,
+        "stds": config.stds,
+        "created_at": config.created_at.isoformat() if config.created_at else None
+    }
+
+
+@router.get("/normalization/{model_id}/export")
+async def export_normalization(
+    model_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Export normalization parameters as JSON for live trading.
+
+    This export can be used to apply the same normalization to live data.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Complete export data with usage instructions
+    """
+    config = db.query(NormalizationConfig).filter(
+        NormalizationConfig.model_id == model_id
+    ).first()
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Normalization config not found for model: {model_id}"
+        )
+
+    export_data = {
+        "version": "1.0",
+        "model_id": model_id,
+        "method": config.method,
+        "buffer_pct": config.buffer_pct,
+        "feature_ranges": config.feature_ranges,
+        "means": config.means,
+        "stds": config.stds,
+        "created_at": config.created_at.isoformat() if config.created_at else None,
+        "usage": {
+            "python": """
+from app.services.data_preparation import DataPreparationService
+
+# Load parameters
+prep_service = DataPreparationService()
+prep_service.load_params(export_data)
+
+# Apply to live data
+normalized_df = prep_service.transform(live_df)
+
+# Inverse transform predictions
+predictions_df = prep_service.inverse_transform(model_output)
+""",
+            "example_transform": "normalized = (value - buffered_min) / (buffered_max - buffered_min)"
+        }
+    }
+
+    return export_data
+
+
+@router.get("/normalization/by-dataset/{dataset_id}")
+async def get_dataset_normalization_configs(
+    dataset_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all normalization configs associated with a dataset.
+
+    Args:
+        dataset_id: Dataset ID
+
+    Returns:
+        List of normalization configs for models trained on this dataset
+    """
+    configs = db.query(NormalizationConfig).filter(
+        NormalizationConfig.dataset_id == dataset_id
+    ).all()
+
+    return {
+        "dataset_id": dataset_id,
+        "configs": [
+            {
+                "id": c.id,
+                "model_id": c.model_id,
+                "method": c.method,
+                "buffer_pct": c.buffer_pct,
+                "created_at": c.created_at.isoformat() if c.created_at else None
+            }
+            for c in configs
+        ],
+        "count": len(configs)
+    }
+
+
+@router.post("/normalization/save")
+async def save_normalization_config(
+    model_id: str,
+    dataset_id: Optional[int] = None,
+    method: str = "minmax_buffered",
+    buffer_pct: float = 0.35,
+    feature_ranges: Dict = None,
+    means: Dict = None,
+    stds: Dict = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Save normalization configuration for a model.
+
+    This is called automatically during training, but can also be called
+    manually to store normalization parameters.
+
+    Args:
+        model_id: Model identifier
+        dataset_id: Optional dataset ID
+        method: Normalization method
+        buffer_pct: Buffer percentage for minmax_buffered
+        feature_ranges: Feature min/max ranges
+        means: Mean values for z-score
+        stds: Std dev values for z-score
+
+    Returns:
+        Saved config ID
+    """
+    try:
+        # Check if config already exists
+        existing = db.query(NormalizationConfig).filter(
+            NormalizationConfig.model_id == model_id
+        ).first()
+
+        if existing:
+            # Update existing
+            existing.method = method
+            existing.buffer_pct = buffer_pct
+            existing.feature_ranges = feature_ranges
+            existing.means = means
+            existing.stds = stds
+            existing.dataset_id = dataset_id
+            db.commit()
+            db.refresh(existing)
+            return {"id": existing.id, "status": "updated", "model_id": model_id}
+        else:
+            # Create new
+            config = NormalizationConfig(
+                model_id=model_id,
+                dataset_id=dataset_id,
+                method=method,
+                buffer_pct=buffer_pct,
+                feature_ranges=feature_ranges,
+                means=means,
+                stds=stds
+            )
+            db.add(config)
+            db.commit()
+            db.refresh(config)
+            return {"id": config.id, "status": "created", "model_id": model_id}
+
+    except Exception as e:
+        logger.error(f"Error saving normalization config: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save normalization config: {str(e)}"
         )

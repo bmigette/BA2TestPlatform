@@ -32,9 +32,17 @@ class GeneticOptimizer:
     to find optimal model architectures.
     """
 
+    # Maximum number of layers for per-layer optimization
+    MAX_LAYERS = 4
+
     # Default hyperparameter ranges
+    # Per-layer sizes: hidden_dim_layer_1, hidden_dim_layer_2, etc.
+    # These are combined into a list based on n_rnn_layers during decode
     DEFAULT_PARAM_RANGES = {
-        'hidden_dim': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_1': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_2': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_3': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'hidden_dim_layer_4': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
         'n_rnn_layers': {'min': 1, 'max': 4, 'step': 1, 'type': 'int'},
         'dropout': {'min': 0.0, 'max': 0.5, 'step': 0.1, 'type': 'float'},
         'learning_rate': {'min': 0.0001, 'max': 0.01, 'step': 0.0001, 'type': 'float'},
@@ -171,13 +179,16 @@ class GeneticOptimizer:
         """
         Decode individual (chromosome) to parameter dictionary.
 
+        Combines per-layer hidden dimensions into a single hidden_dim list
+        based on n_rnn_layers value.
+
         Args:
             individual: List of gene values
 
         Returns:
             Dictionary of parameter names to values
         """
-        params = {}
+        raw_params = {}
         for i, (param_name, config) in enumerate(self.param_ranges.items()):
             value = individual[i]
             if config['type'] == 'int':
@@ -188,22 +199,70 @@ class GeneticOptimizer:
                 # Round to step size
                 step = config.get('step', 0.01)
                 value = round(value / step) * step
-            params[param_name] = value
+            raw_params[param_name] = value
+
+        # Combine per-layer hidden dims into a list
+        params = {}
+        n_layers = raw_params.get('n_rnn_layers', 2)
+        hidden_dims = []
+
+        for key, value in raw_params.items():
+            if key.startswith('hidden_dim_layer_'):
+                layer_num = int(key.split('_')[-1])
+                if layer_num <= n_layers:
+                    hidden_dims.append((layer_num, value))
+            elif key.startswith('layer_widths_layer_'):
+                # For N-BEATS models
+                layer_num = int(key.split('_')[-1])
+                if layer_num <= raw_params.get('num_layers', 4):
+                    hidden_dims.append((layer_num, value))
+            else:
+                params[key] = value
+
+        # Sort by layer number and extract values
+        if hidden_dims:
+            hidden_dims.sort(key=lambda x: x[0])
+            hidden_dim_list = [v for _, v in hidden_dims]
+            # Use 'hidden_dim' for RNN/LSTM models (can be list or tuple)
+            params['hidden_dim'] = tuple(hidden_dim_list)
+            # Also provide as 'layer_widths' for N-BEATS models
+            params['layer_widths'] = hidden_dim_list
+
         return params
 
     def encode_params(self, params: Dict) -> List:
         """
         Encode parameter dictionary to individual (chromosome).
 
+        Expands hidden_dim list to per-layer parameters.
+
         Args:
-            params: Dictionary of parameter values
+            params: Dictionary of parameter values (hidden_dim can be list/tuple or int)
 
         Returns:
             List of gene values
         """
+        # Expand hidden_dim list to per-layer params if needed
+        expanded_params = params.copy()
+        hidden_dim = params.get('hidden_dim')
+        if isinstance(hidden_dim, (list, tuple)):
+            for i, dim in enumerate(hidden_dim):
+                expanded_params[f'hidden_dim_layer_{i+1}'] = dim
+            # Fill remaining layers with last value
+            for i in range(len(hidden_dim), self.MAX_LAYERS):
+                expanded_params[f'hidden_dim_layer_{i+1}'] = hidden_dim[-1] if hidden_dim else 64
+
+        # Handle layer_widths similarly (for N-BEATS)
+        layer_widths = params.get('layer_widths')
+        if isinstance(layer_widths, (list, tuple)) and 'hidden_dim' not in params:
+            for i, width in enumerate(layer_widths):
+                expanded_params[f'hidden_dim_layer_{i+1}'] = width
+            for i in range(len(layer_widths), self.MAX_LAYERS):
+                expanded_params[f'hidden_dim_layer_{i+1}'] = layer_widths[-1] if layer_widths else 256
+
         individual = []
         for param_name in self.param_names:
-            individual.append(params.get(param_name, self.param_ranges[param_name]['min']))
+            individual.append(expanded_params.get(param_name, self.param_ranges[param_name]['min']))
         return creator.Individual(individual)
 
     def optimize(
@@ -404,10 +463,19 @@ class FitnessEvaluator:
         # Simple fitness based on some parameter heuristics
         score = 0.5
 
-        # Prefer moderate hidden dim
+        # Prefer moderate hidden dims (handle both list and scalar)
         hidden_dim = params.get('hidden_dim', 64)
-        if 64 <= hidden_dim <= 128:
-            score += 0.2
+        if isinstance(hidden_dim, (list, tuple)):
+            # Score based on average layer size
+            avg_dim = sum(hidden_dim) / len(hidden_dim) if hidden_dim else 64
+            if 64 <= avg_dim <= 128:
+                score += 0.15
+            # Bonus for decreasing layer sizes (common architecture pattern)
+            if len(hidden_dim) > 1 and all(hidden_dim[i] >= hidden_dim[i+1] for i in range(len(hidden_dim)-1)):
+                score += 0.05
+        else:
+            if 64 <= hidden_dim <= 128:
+                score += 0.2
 
         # Prefer 2 layers
         n_layers = params.get('n_rnn_layers', 2)
