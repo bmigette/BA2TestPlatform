@@ -30,9 +30,14 @@ pandas-ta>=0.4.67b0
 # Sentiment Analysis
 transformers>=4.47.0
 
-# Task Queue
-celery>=5.4.0
-redis>=5.2.0
+# Data Providers
+yfinance>=0.2.40
+alpaca-py>=0.21.0
+fmpsdk>=20230123
+stockstats>=0.6.2
+beautifulsoup4>=4.12.0
+tenacity>=8.2.0
+finnhub-python>=2.4.0
 
 # Validation
 pydantic>=2.10.0
