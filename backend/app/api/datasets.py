@@ -327,12 +327,11 @@ async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
 
         df = pd.read_csv(file_path)
 
-        # Replace NaN/inf values with None for JSON serialization
-        df = df.replace([float('inf'), float('-inf')], None)
-        df = df.where(pd.notnull(df), None)
-
-        # Convert DataFrame to list of dicts for JSON serialization
-        data = df.to_dict(orient='records')
+        # Use pandas to_json with proper NaN handling, then parse back
+        # This is the most reliable way to handle NaN/inf for JSON
+        import json
+        json_str = df.to_json(orient='records', date_format='iso')
+        data = json.loads(json_str)
 
         return {
             "dataset_id": dataset_id,
