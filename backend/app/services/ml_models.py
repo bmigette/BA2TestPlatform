@@ -501,6 +501,154 @@ class PredictionTargetService:
         return True
 
 
+class ClassImbalanceConfig:
+    """
+    Configuration for handling class imbalance in binary classification.
+
+    Provides factory methods for getting loss functions and fitness metrics
+    optimized for imbalanced datasets (common with prediction targets).
+    """
+
+    # Available loss functions
+    LOSS_FUNCTIONS = {
+        'cross_entropy': {
+            'name': 'Cross-Entropy',
+            'description': 'Standard cross-entropy loss. NOT recommended for imbalanced data.',
+            'recommended_for': 'Balanced datasets only'
+        },
+        'weighted_cross_entropy': {
+            'name': 'Weighted Cross-Entropy',
+            'description': 'Cross-entropy with class weights based on frequency.',
+            'recommended_for': 'Moderate imbalance (10-30% minority class)'
+        },
+        'focal_loss': {
+            'name': 'Focal Loss',
+            'description': 'Down-weights easy examples, focuses on hard ones. Best for severe imbalance.',
+            'recommended_for': 'Severe imbalance (<10% minority class)',
+            'default_gamma': 2.0
+        }
+    }
+
+    # Available fitness metrics for genetic algorithm
+    FITNESS_METRICS = {
+        'accuracy': {
+            'name': 'Accuracy',
+            'description': 'Proportion of correct predictions. NOT recommended for imbalanced data.',
+            'recommended_for': 'Balanced datasets only'
+        },
+        'f1_score': {
+            'name': 'F1 Score',
+            'description': 'Harmonic mean of precision and recall. Best general-purpose metric.',
+            'recommended_for': 'Most imbalanced scenarios (DEFAULT)'
+        },
+        'precision': {
+            'name': 'Precision',
+            'description': 'Minimize false positives. Use when false alarms are costly.',
+            'recommended_for': 'When avoiding false positives is critical'
+        },
+        'recall': {
+            'name': 'Recall',
+            'description': 'Minimize false negatives. Use when catching all positives is critical.',
+            'recommended_for': 'When missing positive cases is critical'
+        },
+        'auc_roc': {
+            'name': 'AUC-ROC',
+            'description': 'Area under ROC curve. Threshold-independent metric.',
+            'recommended_for': 'When threshold will be tuned later'
+        },
+        'balanced_accuracy': {
+            'name': 'Balanced Accuracy',
+            'description': 'Average of per-class recall. Simple balanced metric.',
+            'recommended_for': 'Quick balanced evaluation'
+        }
+    }
+
+    @staticmethod
+    def get_loss_function(
+        loss_type: str,
+        positive_count: int = None,
+        negative_count: int = None,
+        gamma: float = 2.0,
+        alpha: float = None
+    ):
+        """
+        Get a PyTorch loss function for training.
+
+        Args:
+            loss_type: One of 'cross_entropy', 'weighted_cross_entropy', 'focal_loss'
+            positive_count: Number of positive samples (for auto-weighting)
+            negative_count: Number of negative samples (for auto-weighting)
+            gamma: Focal loss gamma parameter (focusing strength)
+            alpha: Optional alpha override for focal loss
+
+        Returns:
+            PyTorch loss module
+        """
+        from app.services.losses import get_loss_function
+        return get_loss_function(loss_type, positive_count, negative_count, gamma, alpha)
+
+    @staticmethod
+    def get_recommended_config(positive_count: int, negative_count: int) -> dict:
+        """
+        Get recommended loss function and fitness metric based on class distribution.
+
+        Args:
+            positive_count: Number of positive samples
+            negative_count: Number of negative samples
+
+        Returns:
+            Dictionary with recommended configuration
+        """
+        total = positive_count + negative_count
+        positive_pct = (positive_count / total * 100) if total > 0 else 50
+
+        if positive_pct < 5:
+            # Extreme imbalance
+            return {
+                'loss_function': 'focal_loss',
+                'gamma': 2.5,  # Higher gamma for extreme imbalance
+                'fitness_metric': 'f1_score',
+                'warning': f'Extreme class imbalance ({positive_pct:.1f}% positive). '
+                          f'Model may struggle. Consider adjusting targets.'
+            }
+        elif positive_pct < 10:
+            # Severe imbalance
+            return {
+                'loss_function': 'focal_loss',
+                'gamma': 2.0,
+                'fitness_metric': 'f1_score',
+                'warning': f'Severe class imbalance ({positive_pct:.1f}% positive). '
+                          f'Using Focal Loss with F1 metric.'
+            }
+        elif positive_pct < 30:
+            # Moderate imbalance
+            return {
+                'loss_function': 'weighted_cross_entropy',
+                'fitness_metric': 'f1_score',
+                'warning': None
+            }
+        else:
+            # Relatively balanced
+            return {
+                'loss_function': 'cross_entropy',
+                'fitness_metric': 'accuracy',
+                'warning': None
+            }
+
+    @staticmethod
+    def get_available_configs() -> dict:
+        """Get all available loss functions and fitness metrics."""
+        return {
+            'loss_functions': ClassImbalanceConfig.LOSS_FUNCTIONS,
+            'fitness_metrics': ClassImbalanceConfig.FITNESS_METRICS,
+            'defaults': {
+                'loss_function': 'focal_loss',
+                'fitness_metric': 'f1_score',
+                'gamma': 2.0
+            }
+        }
+
+
 class DatasetSplitter:
     """
     Service for splitting datasets into train/test sets.

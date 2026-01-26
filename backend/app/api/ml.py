@@ -19,7 +19,8 @@ from app.models.normalization_config import NormalizationConfig
 from app.services.ml_models import (
     MLModelsService,
     PredictionTargetService,
-    DatasetSplitter
+    DatasetSplitter,
+    ClassImbalanceConfig
 )
 from app.services.training import TrainingService, ModelEvaluator
 from app.services.genetic import GeneticOptimizer, FitnessEvaluator, DEAP_AVAILABLE
@@ -993,3 +994,45 @@ async def save_normalization_config(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save normalization config: {str(e)}"
         )
+
+
+@router.get("/class-imbalance/config")
+async def get_class_imbalance_config():
+    """
+    Get available class imbalance handling configurations.
+
+    Returns:
+        Available loss functions, fitness metrics, and default settings
+    """
+    return ClassImbalanceConfig.get_available_configs()
+
+
+@router.post("/class-imbalance/recommend")
+async def get_recommended_imbalance_config(
+    positive_count: int,
+    negative_count: int
+):
+    """
+    Get recommended configuration based on class distribution.
+
+    Args:
+        positive_count: Number of positive samples
+        negative_count: Number of negative samples
+
+    Returns:
+        Recommended loss function and fitness metric
+    """
+    recommendation = ClassImbalanceConfig.get_recommended_config(positive_count, negative_count)
+
+    # Add class distribution info
+    total = positive_count + negative_count
+    recommendation['class_distribution'] = {
+        'positive_count': positive_count,
+        'negative_count': negative_count,
+        'positive_pct': round(positive_count / total * 100, 2) if total > 0 else 0,
+        'negative_pct': round(negative_count / total * 100, 2) if total > 0 else 0,
+        'imbalance_ratio': round(max(positive_count, negative_count) / min(positive_count, negative_count), 2)
+            if min(positive_count, negative_count) > 0 else float('inf')
+    }
+
+    return recommendation

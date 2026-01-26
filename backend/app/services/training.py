@@ -290,6 +290,9 @@ class TrainingService:
 class ModelEvaluator:
     """
     Utility class for model evaluation and metrics.
+
+    For imbalanced datasets (which is common with prediction targets),
+    use the ClassificationMetrics from app.services.metrics instead.
     """
 
     @staticmethod
@@ -301,6 +304,10 @@ class ModelEvaluator:
         """
         Calculate classification metrics for binary predictions.
 
+        For comprehensive metrics including AUC-ROC, use:
+        from app.services.metrics import ClassificationMetrics
+        ClassificationMetrics.calculate_all(y_true, y_pred_proba, threshold)
+
         Args:
             y_true: True labels
             y_pred: Predicted probabilities
@@ -309,6 +316,14 @@ class ModelEvaluator:
         Returns:
             Dictionary of metrics
         """
+        # Import and delegate to new comprehensive metrics module
+        try:
+            from app.services.metrics import ClassificationMetrics
+            return ClassificationMetrics.calculate_all(y_true, y_pred, threshold)
+        except ImportError:
+            # Fallback to basic implementation
+            pass
+
         y_pred_binary = (y_pred >= threshold).astype(int)
 
         # True/False Positives/Negatives
@@ -322,14 +337,44 @@ class ModelEvaluator:
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+        balanced_accuracy = (recall + specificity) / 2
 
         return {
             'accuracy': accuracy,
             'precision': precision,
             'recall': recall,
             'f1_score': f1,
+            'balanced_accuracy': balanced_accuracy,
             'true_positives': int(tp),
             'true_negatives': int(tn),
             'false_positives': int(fp),
             'false_negatives': int(fn)
         }
+
+    @staticmethod
+    def get_fitness_score(
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        metric: str = 'f1_score',
+        threshold: float = 0.5
+    ) -> float:
+        """
+        Get a single fitness score for optimization.
+
+        Args:
+            y_true: True labels
+            y_pred: Predicted probabilities
+            metric: One of 'accuracy', 'f1_score', 'precision', 'recall',
+                   'balanced_accuracy', 'auc_roc'
+            threshold: Classification threshold
+
+        Returns:
+            Fitness score (higher is better)
+        """
+        try:
+            from app.services.metrics import ClassificationMetrics
+            return ClassificationMetrics.get_fitness_score(y_true, y_pred, metric, threshold)
+        except ImportError:
+            metrics = ModelEvaluator.calculate_classification_metrics(y_true, y_pred, threshold)
+            return metrics.get(metric, 0.0)
