@@ -54,6 +54,29 @@ This platform provides two main components:
 cd backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
+```
+
+#### GPU/CUDA Support (Recommended)
+
+For GPU-accelerated training, install PyTorch with CUDA support **before** installing other requirements:
+
+1. Visit [PyTorch Get Started](https://pytorch.org/get-started/locally/)
+2. Select your configuration (OS, CUDA version)
+3. Run the generated command, for example:
+   ```bash
+   # Example for CUDA 12.4
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+   ```
+
+Then install the remaining dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+#### CPU Only
+
+If you don't have a CUDA-capable GPU, simply install all dependencies:
+```bash
 pip install -r requirements.txt
 ```
 

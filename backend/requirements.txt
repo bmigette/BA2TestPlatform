@@ -14,8 +14,17 @@ numpy>=2.0.0
 pyarrow>=18.0.0
 
 # Deep Learning
+# NOTE: For GPU/CUDA support, install PyTorch separately first:
+# See https://pytorch.org/get-started/locally/
 torch>=2.5.0
 darts>=0.32.0
+
+# Darts Optional Dependencies (for additional models)
+prophet>=1.1.1
+catboost>=1.0.6
+lightgbm>=3.2.0
+xgboost>=2.1.4
+statsforecast>=1.4
 
 # Genetic Optimization
 deap>=1.4.1
