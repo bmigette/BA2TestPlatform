@@ -284,7 +284,8 @@ class SentimentService:
         ticker: str,
         start_date: datetime,
         end_date: datetime,
-        provider: str = "fmp"
+        provider: str = "fmp",
+        enrich_content: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Fetch news articles for a ticker in date range using real news providers.
@@ -293,7 +294,8 @@ class SentimentService:
             ticker: Stock ticker symbol
             start_date: Start date
             end_date: End date
-            provider: News provider to use ('fmp', 'alphavantage', 'google', 'finnhub', 'alpaca')
+            provider: News provider to use ('fmp', 'alphavantage', 'finnhub', 'alpaca')
+            enrich_content: Whether to fetch full article content for short summaries
 
         Returns:
             List of news articles with title, content, date, source
@@ -315,8 +317,18 @@ class SentimentService:
                     format_type="dict"
                 )
 
+                raw_articles = result.get("articles", [])
+
+                # Enrich articles with short summaries using trafilatura
+                if enrich_content and hasattr(news_provider, 'enrich_articles_with_content'):
+                    raw_articles = news_provider.enrich_articles_with_content(
+                        raw_articles,
+                        max_workers=5,
+                        min_summary_length=100
+                    )
+
                 # Convert to standard format
-                for article in result.get("articles", []):
+                for article in raw_articles:
                     pub_date = article.get("published_at", "")
                     # Parse date string to datetime if needed
                     if isinstance(pub_date, str) and pub_date:
@@ -329,7 +341,8 @@ class SentimentService:
                         'title': article.get('title', ''),
                         'content': article.get('summary', article.get('snippet', '')),
                         'date': pub_date,
-                        'source': article.get('source', provider.upper())
+                        'source': article.get('source', provider.upper()),
+                        'content_fetched': article.get('content_fetched', False)
                     })
 
                 logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
@@ -350,10 +363,14 @@ class SentimentService:
         Get news provider instance by name.
 
         Args:
-            provider: Provider name
+            provider: Provider name ('fmp', 'alphavantage', 'finnhub', 'alpaca')
 
         Returns:
             News provider instance or None if not available
+
+        Note:
+            GoogleNewsProvider has been removed (scraping unreliable).
+            AINewsProvider requires ModelFactory dependency.
         """
         try:
             if provider == "fmp":
@@ -362,9 +379,6 @@ class SentimentService:
             elif provider == "alphavantage":
                 from dataproviders.news import AlphaVantageNewsProvider
                 return AlphaVantageNewsProvider()
-            elif provider == "google":
-                from dataproviders.news import GoogleNewsProvider
-                return GoogleNewsProvider()
             elif provider == "finnhub":
                 from dataproviders.news import FinnhubNewsProvider
                 return FinnhubNewsProvider()

@@ -9,19 +9,21 @@ API Documentation: https://docs.alpaca.markets/reference/news-3
 
 from typing import Dict, Any, Literal, Optional
 from datetime import datetime, timezone
+import logging
 
 from alpaca.data.historical import NewsClient
 from alpaca.data.requests import NewsRequest
 
-from ba2_trade_platform.core.interfaces import MarketNewsInterface
-from ba2_trade_platform.core.provider_utils import (
+from .base import (
+    MarketNewsInterface,
     validate_date_range,
     validate_lookback_days,
-    calculate_date_range,
-    log_provider_call,
+    calculate_date_range
 )
-from ba2_trade_platform.config import get_app_setting
-from ba2_trade_platform.logger import logger
+from .config import get_app_setting
+from dataproviders.utils import log_provider_call
+
+logger = logging.getLogger(__name__)
 
 
 class AlpacaNewsProvider(MarketNewsInterface):

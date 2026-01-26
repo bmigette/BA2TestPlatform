@@ -8,13 +8,15 @@ API Documentation: https://site.financialmodelingprep.com/developer/docs#stock-n
 
 from typing import Dict, Any, Literal, Optional
 from datetime import datetime, timedelta, timezone
+import logging
 
 import fmpsdk
 
-from ba2_trade_platform.core.interfaces import MarketNewsInterface
-from ba2_trade_platform.core.provider_utils import calculate_date_range, log_provider_call
-from ba2_trade_platform.config import get_app_setting
-from ba2_trade_platform.logger import logger
+from .base import MarketNewsInterface, calculate_date_range
+from .config import get_app_setting
+from dataproviders.utils import log_provider_call
+
+logger = logging.getLogger(__name__)
 
 
 class FMPNewsProvider(MarketNewsInterface):

@@ -7,20 +7,22 @@ Provides company-specific news using Alpha Vantage News Sentiment API.
 from typing import Dict, Any, Literal, Optional
 from datetime import datetime, timezone
 import json
+import logging
 
-from ba2_trade_platform.core.interfaces import MarketNewsInterface
-from ba2_trade_platform.core.provider_utils import (
+from .base import (
+    MarketNewsInterface,
     validate_date_range,
     validate_lookback_days,
-    calculate_date_range,
-    log_provider_call
+    calculate_date_range
 )
-from ba2_trade_platform.modules.dataproviders.alpha_vantage_common import (
+from dataproviders.alpha_vantage_common import (
     AlphaVantageBaseProvider,
     format_datetime_for_api,
     AlphaVantageRateLimitError
 )
-from ba2_trade_platform.logger import logger
+from dataproviders.utils import log_provider_call
+
+logger = logging.getLogger(__name__)
 
 
 class AlphaVantageNewsProvider(AlphaVantageBaseProvider, MarketNewsInterface):
@@ -32,12 +34,12 @@ class AlphaVantageNewsProvider(AlphaVantageBaseProvider, MarketNewsInterface):
     and topics like fiscal policy, mergers & acquisitions, IPOs.
     """
     
-    def __init__(self, source: str = "ba2_trade_platform"):
+    def __init__(self, source: str = "ba2_ml_platform"):
         """
         Initialize the Alpha Vantage News Provider with API credentials.
-        
+
         Args:
-            source: Source identifier for API tracking (e.g., 'ba2_trade_platform', 'trading_agents')
+            source: Source identifier for API tracking
         """
         AlphaVantageBaseProvider.__init__(self, source)
         MarketNewsInterface.__init__(self)
