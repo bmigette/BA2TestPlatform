@@ -75,9 +75,23 @@ interface PredictionPreview {
     negative_pct: number;
     total_valid: number;
   }>;
-  sample_data: any[];
+  target_data: any[];  // All rows with Date + target columns
   total_rows: number;
 }
+
+// Custom diamond shape for prediction target markers
+const DiamondShape = (props: any) => {
+  const { cx, cy, fill, stroke, strokeWidth } = props;
+  const size = 6;
+  return (
+    <polygon
+      points={`${cx},${cy - size} ${cx + size},${cy} ${cx},${cy + size} ${cx - size},${cy}`}
+      fill={fill}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+    />
+  );
+};
 
 interface IndicatorVisibility {
   sma20: boolean;
@@ -1038,8 +1052,8 @@ const DatasetDetails: React.FC = () => {
                 );
               })}
               {/* Prediction Target Markers */}
-              {indicators.showTargets && predictionPreview && predictionPreview.sample_data &&
-                predictionPreview.sample_data.map((sample, idx) => {
+              {indicators.showTargets && predictionPreview && predictionPreview.target_data &&
+                predictionPreview.target_data.map((sample, idx) => {
                   const dataPoint = candlestickData.find(d => d.Date === sample.Date);
                   if (!dataPoint) return null;
 
@@ -1059,11 +1073,11 @@ const DatasetDetails: React.FC = () => {
                         x={sample.Date}
                         y={dataPoint.Low * 0.98}
                         yAxisId="price"
-                        r={5}
+                        r={6}
                         fill="#10B981"
                         stroke="#065F46"
                         strokeWidth={1.5}
-                        shape="diamond"
+                        shape={(props) => <DiamondShape {...props} fill="#10B981" stroke="#065F46" strokeWidth={1.5} />}
                       />
                     );
                   }
@@ -1074,11 +1088,11 @@ const DatasetDetails: React.FC = () => {
                         x={sample.Date}
                         y={dataPoint.High * 1.02}
                         yAxisId="price"
-                        r={5}
+                        r={6}
                         fill="#EF4444"
                         stroke="#991B1B"
                         strokeWidth={1.5}
-                        shape="diamond"
+                        shape={(props) => <DiamondShape {...props} fill="#EF4444" stroke="#991B1B" strokeWidth={1.5} />}
                       />
                     );
                   }

@@ -250,18 +250,18 @@ async def preview_prediction_targets(
                 "total_rows": len(result_df)
             }
 
-        # Get sample data (last 50 rows with target columns)
-        sample_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume'] + target_cols
-        sample_cols = [c for c in sample_cols if c in result_df.columns]
-        sample_df = result_df[sample_cols].tail(50).copy()
+        # Get ALL target data (Date + target columns only for chart overlay)
+        target_data_cols = ['Date'] + target_cols
+        target_data_cols = [c for c in target_data_cols if c in result_df.columns]
+        target_df = result_df[target_data_cols].copy()
 
         # Convert dates to strings for JSON serialization
-        sample_df['Date'] = sample_df['Date'].astype(str)
+        target_df['Date'] = target_df['Date'].astype(str)
 
         # Use pandas to_json with proper NaN handling, then parse back
         import json
-        json_str = sample_df.to_json(orient='records', date_format='iso')
-        sample_data = json.loads(json_str)
+        json_str = target_df.to_json(orient='records', date_format='iso')
+        target_data = json.loads(json_str)
 
         logger.info(f"Preview complete: {len(target_cols)} target columns calculated")
 
@@ -270,7 +270,7 @@ async def preview_prediction_targets(
             "ticker": dataset.ticker,
             "target_columns": target_cols,
             "statistics": stats,
-            "sample_data": sample_data,
+            "target_data": target_data,  # All rows with Date + target columns
             "total_rows": len(result_df),
             "message": f"Preview of {len(target_cols)} prediction targets (not saved)"
         }
