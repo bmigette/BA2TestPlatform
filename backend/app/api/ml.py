@@ -169,6 +169,240 @@ async def calculate_prediction_targets(
         )
 
 
+@router.post("/datasets/{dataset_id}/preview-targets")
+async def preview_prediction_targets(
+    dataset_id: int,
+    targets: List[Dict[str, Any]] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Preview prediction targets without modifying the dataset.
+
+    Calculates targets and returns statistics without saving to the original file.
+    Use this to see what the training data would look like before committing.
+
+    Args:
+        dataset_id: Dataset ID
+        targets: List of target configurations, e.g.:
+            [{"profit_pct": 10, "max_dd": 5, "days": 7, "direction": "up"}]
+        db: Database session
+
+    Returns:
+        Statistics and sample data for each target column
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        # Default targets if not provided
+        if targets is None:
+            targets = [
+                {'profit_pct': 10, 'max_dd': 5, 'days': 7, 'direction': 'up'},
+                {'profit_pct': 10, 'max_dd': 5, 'days': 7, 'direction': 'down'}
+            ]
+
+        logger.info(f"Previewing {len(targets)} prediction targets for dataset {dataset_id}")
+
+        # Calculate targets (in memory only)
+        target_service = PredictionTargetService()
+        result_df = target_service.calculate_prediction_targets(df, targets)
+
+        # Get target columns
+        target_cols = [col for col in result_df.columns if col.startswith('price_')]
+
+        # Calculate statistics for each target
+        stats = {}
+        for col in target_cols:
+            col_data = result_df[col]
+            valid_count = int(col_data.notna().sum())
+            positive_count = int(col_data.sum()) if valid_count > 0 else 0
+            negative_count = valid_count - positive_count
+
+            stats[col] = {
+                "positive_count": positive_count,
+                "negative_count": negative_count,
+                "positive_pct": round(positive_count / valid_count * 100, 2) if valid_count > 0 else 0,
+                "negative_pct": round(negative_count / valid_count * 100, 2) if valid_count > 0 else 0,
+                "total_valid": valid_count,
+                "total_rows": len(result_df)
+            }
+
+        # Get sample data (last 50 rows with target columns)
+        sample_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume'] + target_cols
+        sample_cols = [c for c in sample_cols if c in result_df.columns]
+        sample_df = result_df[sample_cols].tail(50).copy()
+
+        # Convert dates to strings for JSON serialization
+        sample_df['Date'] = sample_df['Date'].astype(str)
+        sample_data = sample_df.to_dict(orient='records')
+
+        logger.info(f"Preview complete: {len(target_cols)} target columns calculated")
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "target_columns": target_cols,
+            "statistics": stats,
+            "sample_data": sample_data,
+            "total_rows": len(result_df),
+            "message": f"Preview of {len(target_cols)} prediction targets (not saved)"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error previewing prediction targets: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to preview prediction targets: {str(e)}"
+        )
+
+
+@router.post("/datasets/{dataset_id}/generate-training-data")
+async def generate_training_data(
+    dataset_id: int,
+    targets: List[Dict[str, Any]] = None,
+    normalize: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate training-ready dataset with prediction targets and normalization.
+
+    Creates a separate file (*_training.csv) for ML training, preserving the original.
+    Also saves normalization parameters for live data processing.
+
+    Args:
+        dataset_id: Dataset ID
+        targets: List of target configurations
+        normalize: Whether to normalize the data (default: True)
+        db: Database session
+
+    Returns:
+        File paths and statistics for the generated training data
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        # Default targets if not provided
+        if targets is None:
+            targets = [
+                {'profit_pct': 10, 'max_dd': 5, 'days': 7, 'direction': 'up'},
+                {'profit_pct': 10, 'max_dd': 5, 'days': 7, 'direction': 'down'}
+            ]
+
+        logger.info(f"Generating training data for dataset {dataset_id} with {len(targets)} targets")
+
+        # Calculate targets
+        target_service = PredictionTargetService()
+        result_df = target_service.calculate_prediction_targets(df, targets)
+
+        # Get target columns
+        target_cols = [col for col in result_df.columns if col.startswith('price_')]
+
+        norm_params = None
+        norm_path = None
+
+        # Normalize if requested
+        if normalize:
+            from app.services.data_preparation import DataPreparationService
+
+            prep_service = DataPreparationService(buffer_pct=dataset.normalization_buffer_pct)
+
+            # Normalize OHLCV columns
+            numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+            numeric_cols = [c for c in numeric_cols if c in result_df.columns]
+            result_df = prep_service.fit_transform(result_df, numeric_cols)
+
+            # Export normalization params
+            norm_params = prep_service.export_params()
+
+            # Save normalization params
+            norm_path = file_path.parent / f"{file_path.stem}_normalization.json"
+            import json
+            with open(norm_path, 'w') as f:
+                json.dump(norm_params, f, indent=2, default=str)
+
+            logger.info(f"Saved normalization params to {norm_path}")
+
+        # Save training dataset
+        training_path = file_path.parent / f"{file_path.stem}_training.csv"
+        result_df.to_csv(training_path, index=False)
+        logger.info(f"Saved training data to {training_path}")
+
+        # Update dataset with file paths
+        dataset.training_file_path = str(training_path)
+        if norm_path:
+            dataset.normalization_file_path = str(norm_path)
+        db.commit()
+
+        # Calculate statistics
+        stats = {}
+        for col in target_cols:
+            col_data = result_df[col]
+            valid_count = int(col_data.notna().sum())
+            positive_count = int(col_data.sum()) if valid_count > 0 else 0
+            stats[col] = {
+                "positive_count": positive_count,
+                "negative_count": valid_count - positive_count,
+                "positive_pct": round(positive_count / valid_count * 100, 2) if valid_count > 0 else 0
+            }
+
+        return {
+            "dataset_id": dataset_id,
+            "original_file": str(file_path),
+            "training_file": str(training_path),
+            "normalization_file": str(norm_path) if norm_path else None,
+            "target_columns": target_cols,
+            "statistics": stats,
+            "total_columns": len(result_df.columns),
+            "total_rows": len(result_df),
+            "normalized": normalize,
+            "message": f"Generated training data with {len(target_cols)} targets"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating training data: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate training data: {str(e)}"
+        )
+
+
 @router.post("/datasets/{dataset_id}/split")
 async def split_dataset(
     dataset_id: int,

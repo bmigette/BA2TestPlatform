@@ -3,7 +3,7 @@ Dataset API endpoints
 Updated for preview endpoint and Parquet export
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
@@ -1642,3 +1642,86 @@ async def check_timeframe_match(
             else f"Timeframe mismatch: {', '.join(timeframes)}"
         )
     }
+
+
+@router.get("/{dataset_id}/sentiment")
+async def get_dataset_sentiment(
+    dataset_id: int,
+    provider: str = Query("fmp", description="News provider (fmp, alphavantage, google, finnhub, alpaca)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get sentiment markers for a dataset.
+
+    Fetches real news articles for the dataset's ticker and date range,
+    analyzes sentiment, and returns markers for chart visualization.
+
+    Args:
+        dataset_id: Dataset ID
+        provider: News provider to use (fmp, alphavantage, google, finnhub, alpaca)
+        db: Database session
+
+    Returns:
+        List of sentiment markers with date, sentiment, score, headline, source
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        logger.info(f"Fetching sentiment for dataset {dataset_id} ({dataset.ticker}) using {provider}")
+
+        sentiment_service = SentimentService()
+
+        # Fetch news articles
+        articles = sentiment_service.fetch_news_for_ticker(
+            ticker=dataset.ticker,
+            start_date=dataset.start_date,
+            end_date=dataset.end_date,
+            provider=provider
+        )
+
+        # Analyze sentiment for each article
+        analyzed = sentiment_service.analyze_news_articles(articles)
+
+        # Convert to markers for chart
+        markers = []
+        for article in analyzed:
+            # Handle date conversion
+            article_date = article.get('date', '')
+            if isinstance(article_date, datetime):
+                date_str = article_date.isoformat()
+            else:
+                date_str = str(article_date)
+
+            markers.append({
+                "date": date_str,
+                "sentiment": article.get('sentiment', 'neutral'),
+                "score": article.get('sentiment_score', 0.5),
+                "headline": article.get('title', ''),
+                "source": article.get('source', 'Unknown'),
+                "impact_timeframe": article.get('impact_timeframe', 'medium')
+            })
+
+        logger.info(f"Returning {len(markers)} sentiment markers for dataset {dataset_id}")
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "provider": provider,
+            "markers": markers,
+            "total_count": len(markers),
+            "is_mock": any(m['source'].startswith('Mock') for m in markers)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching sentiment for dataset {dataset_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch sentiment: {str(e)}"
+        )

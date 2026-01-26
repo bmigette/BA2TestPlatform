@@ -283,13 +283,112 @@ class SentimentService:
         self,
         ticker: str,
         start_date: datetime,
+        end_date: datetime,
+        provider: str = "fmp"
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch news articles for a ticker in date range using real news providers.
+
+        Args:
+            ticker: Stock ticker symbol
+            start_date: Start date
+            end_date: End date
+            provider: News provider to use ('fmp', 'alphavantage', 'google', 'finnhub', 'alpaca')
+
+        Returns:
+            List of news articles with title, content, date, source
+        """
+        logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider}")
+
+        articles = []
+
+        try:
+            # Try to use the real news providers
+            news_provider = self._get_news_provider(provider)
+
+            if news_provider:
+                # Fetch news using the provider
+                result = news_provider.get_company_news(
+                    symbol=ticker,
+                    end_date=end_date,
+                    start_date=start_date,
+                    format_type="dict"
+                )
+
+                # Convert to standard format
+                for article in result.get("articles", []):
+                    pub_date = article.get("published_at", "")
+                    # Parse date string to datetime if needed
+                    if isinstance(pub_date, str) and pub_date:
+                        try:
+                            pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
+                        except ValueError:
+                            pub_date = start_date
+
+                    articles.append({
+                        'title': article.get('title', ''),
+                        'content': article.get('summary', article.get('snippet', '')),
+                        'date': pub_date,
+                        'source': article.get('source', provider.upper())
+                    })
+
+                logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
+            else:
+                # Fall back to mock data if provider not available
+                logger.warning(f"Provider {provider} not available, using mock data")
+                articles = self._generate_mock_news(ticker, start_date, end_date)
+
+        except Exception as e:
+            logger.error(f"Error fetching news from {provider}: {e}")
+            # Fall back to mock data on error
+            articles = self._generate_mock_news(ticker, start_date, end_date)
+
+        return articles
+
+    def _get_news_provider(self, provider: str):
+        """
+        Get news provider instance by name.
+
+        Args:
+            provider: Provider name
+
+        Returns:
+            News provider instance or None if not available
+        """
+        try:
+            if provider == "fmp":
+                from dataproviders.news import FMPNewsProvider
+                return FMPNewsProvider()
+            elif provider == "alphavantage":
+                from dataproviders.news import AlphaVantageNewsProvider
+                return AlphaVantageNewsProvider()
+            elif provider == "google":
+                from dataproviders.news import GoogleNewsProvider
+                return GoogleNewsProvider()
+            elif provider == "finnhub":
+                from dataproviders.news import FinnhubNewsProvider
+                return FinnhubNewsProvider()
+            elif provider == "alpaca":
+                from dataproviders.news import AlpacaNewsProvider
+                return AlpacaNewsProvider()
+            else:
+                logger.warning(f"Unknown news provider: {provider}")
+                return None
+        except ImportError as e:
+            logger.warning(f"Could not import {provider} news provider: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Could not initialize {provider} news provider: {e}")
+            return None
+
+    def _generate_mock_news(
+        self,
+        ticker: str,
+        start_date: datetime,
         end_date: datetime
     ) -> List[Dict[str, Any]]:
         """
-        Fetch news articles for a ticker in date range.
-
-        This is a placeholder that returns mock data.
-        In production, integrate with news APIs (Alpha Vantage, FMP, etc.)
+        Generate mock news data as fallback.
 
         Args:
             ticker: Stock ticker symbol
@@ -297,12 +396,8 @@ class SentimentService:
             end_date: End date
 
         Returns:
-            List of news articles with title, content, date
+            List of mock news articles
         """
-        # Generate mock news data for demonstration
-        # In production, use actual news APIs from dataproviders
-        logger.info(f"Fetching news for {ticker} from {start_date} to {end_date}")
-
         mock_news = []
         current_date = start_date
 

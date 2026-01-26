@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save } from 'lucide-react';
 import {
   XAxis,
   YAxis,
@@ -58,6 +58,25 @@ interface SentimentMarker {
   source?: string;
 }
 
+interface PredictionTarget {
+  profitPct: number;
+  maxDd: number;
+  days: number;
+}
+
+interface PredictionPreview {
+  target_columns: string[];
+  statistics: Record<string, {
+    positive_count: number;
+    negative_count: number;
+    positive_pct: number;
+    negative_pct: number;
+    total_valid: number;
+  }>;
+  sample_data: any[];
+  total_rows: number;
+}
+
 interface IndicatorVisibility {
   sma20: boolean;
   sma50: boolean;
@@ -106,8 +125,19 @@ const DatasetDetails: React.FC = () => {
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [chartData, setChartData] = useState<OHLCData[]>([]);
   const [sentimentMarkers, setSentimentMarkers] = useState<SentimentMarker[]>([]);
+  const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [sentimentIsMock, setSentimentIsMock] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [initialZoomSet, setInitialZoomSet] = useState(false);
+
+  // Prediction targets state
+  const [predictionTargets, setPredictionTargets] = useState<PredictionTarget[]>([]);
+  const [newTarget, setNewTarget] = useState<PredictionTarget>({ profitPct: 10, maxDd: 5, days: 14 });
+  const [predictionPreview, setPredictionPreview] = useState<PredictionPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [generateLoading, setGenerateLoading] = useState(false);
+  const [generatedFiles, setGeneratedFiles] = useState<{ training: string; normalization: string } | null>(null);
   const [zoomDomain, setZoomDomain] = useState<{ startIndex: number; endIndex: number } | null>(null);
   const [indicators, setIndicators] = useState<IndicatorVisibility>({
     sma20: true,
@@ -121,40 +151,109 @@ const DatasetDetails: React.FC = () => {
     showSentiment: true,
   });
 
-  // Generate mock sentiment markers based on chart data
-  const generateSentimentMarkers = (data: OHLCData[]): SentimentMarker[] => {
-    if (data.length === 0) return [];
+  // Fetch real sentiment markers from API
+  const fetchSentimentMarkers = async (datasetId: number) => {
+    setSentimentLoading(true);
+    try {
+      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/sentiment?provider=fmp`);
+      if (response.ok) {
+        const data = await response.json();
+        setSentimentMarkers(data.markers || []);
+        setSentimentIsMock(data.is_mock || false);
+      } else {
+        console.error('Failed to fetch sentiment markers');
+        setSentimentMarkers([]);
+      }
+    } catch (err) {
+      console.error('Error fetching sentiment:', err);
+      setSentimentMarkers([]);
+    } finally {
+      setSentimentLoading(false);
+    }
+  };
 
-    const markers: SentimentMarker[] = [];
-    const sampleDates = data.filter((_, i) => i % 15 === 0).slice(0, 10);
+  // Prediction target functions
+  const addPredictionTarget = () => {
+    if (newTarget.profitPct > 0 && newTarget.maxDd > 0 && newTarget.days > 0) {
+      setPredictionTargets([...predictionTargets, { ...newTarget }]);
+      setNewTarget({ profitPct: 10, maxDd: 5, days: 14 });
+    }
+  };
 
-    const headlines = [
-      { text: 'Strong earnings beat expectations', sentiment: 'positive' as const },
-      { text: 'Analyst upgrade to Buy rating', sentiment: 'positive' as const },
-      { text: 'Market volatility concerns', sentiment: 'negative' as const },
-      { text: 'Mixed quarterly results', sentiment: 'neutral' as const },
-      { text: 'New product launch announced', sentiment: 'positive' as const },
-      { text: 'Supply chain disruptions', sentiment: 'negative' as const },
-      { text: 'Dividend increase announced', sentiment: 'positive' as const },
-      { text: 'Regulatory concerns emerge', sentiment: 'negative' as const },
-      { text: 'Industry outlook stable', sentiment: 'neutral' as const },
-      { text: 'Revenue growth exceeds forecast', sentiment: 'positive' as const },
-    ];
+  const removePredictionTarget = (index: number) => {
+    setPredictionTargets(predictionTargets.filter((_, i) => i !== index));
+  };
 
-    sampleDates.forEach((d, i) => {
-      const h = headlines[i % headlines.length];
-      markers.push({
-        date: d.Date,
-        sentiment: h.sentiment,
-        score: h.sentiment === 'positive' ? 0.7 + Math.random() * 0.3 :
-               h.sentiment === 'negative' ? -(0.7 + Math.random() * 0.3) :
-               -0.2 + Math.random() * 0.4,
-        headline: h.text,
-        source: ['Reuters', 'Bloomberg', 'WSJ', 'CNBC'][Math.floor(Math.random() * 4)],
-      });
-    });
+  const previewPredictionTargets = async () => {
+    if (!dataset || predictionTargets.length === 0) return;
 
-    return markers;
+    setPreviewLoading(true);
+    setPredictionPreview(null);
+
+    try {
+      // Convert targets to API format (both up and down directions)
+      const apiTargets = predictionTargets.flatMap(t => [
+        { profit_pct: t.profitPct, max_dd: t.maxDd, days: t.days, direction: 'up' },
+        { profit_pct: t.profitPct, max_dd: t.maxDd, days: t.days, direction: 'down' }
+      ]);
+
+      const response = await fetch(
+        `http://localhost:8002/api/ml/datasets/${dataset.id}/preview-targets`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(apiTargets)
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setPredictionPreview(data);
+      } else {
+        console.error('Preview failed');
+      }
+    } catch (err) {
+      console.error('Preview error:', err);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const generateTrainingData = async () => {
+    if (!dataset || predictionTargets.length === 0) return;
+
+    setGenerateLoading(true);
+    setGeneratedFiles(null);
+
+    try {
+      const apiTargets = predictionTargets.flatMap(t => [
+        { profit_pct: t.profitPct, max_dd: t.maxDd, days: t.days, direction: 'up' },
+        { profit_pct: t.profitPct, max_dd: t.maxDd, days: t.days, direction: 'down' }
+      ]);
+
+      const response = await fetch(
+        `http://localhost:8002/api/ml/datasets/${dataset.id}/generate-training-data`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targets: apiTargets, normalize: true })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setGeneratedFiles({
+          training: data.training_file,
+          normalization: data.normalization_file
+        });
+      } else {
+        console.error('Generate failed');
+      }
+    } catch (err) {
+      console.error('Generate error:', err);
+    } finally {
+      setGenerateLoading(false);
+    }
   };
 
   // Calculate simple moving average (utility function for future use)
@@ -234,7 +333,6 @@ const DatasetDetails: React.FC = () => {
             const rawData = csvData.data || [];
             const enrichedData = addIndicatorsToData(rawData);
             setChartData(enrichedData);
-            setSentimentMarkers(generateSentimentMarkers(enrichedData));
           }
         } catch (err) {
           console.log('Preview endpoint not available yet');
@@ -250,6 +348,30 @@ const DatasetDetails: React.FC = () => {
       fetchDataset();
     }
   }, [id]);
+
+  // Fetch sentiment when dataset loads and sentiment toggle is on
+  useEffect(() => {
+    if (dataset && indicators.showSentiment) {
+      fetchSentimentMarkers(dataset.id);
+    }
+  }, [dataset?.id, indicators.showSentiment]);
+
+  // Set initial zoom based on data length (show last 100 bars by default)
+  useEffect(() => {
+    if (chartData.length > 0 && !initialZoomSet) {
+      const dataLength = chartData.length;
+      const maxInitialBars = 100;
+
+      if (dataLength > maxInitialBars) {
+        // Start from the end (most recent data)
+        setZoomDomain({
+          startIndex: dataLength - maxInitialBars,
+          endIndex: dataLength - 1
+        });
+      }
+      setInitialZoomSet(true);
+    }
+  }, [chartData.length, initialZoomSet]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString();
@@ -562,7 +684,31 @@ const DatasetDetails: React.FC = () => {
           >
             <MessageSquare size={14} />
             News Sentiment
+            {sentimentLoading && <span className="ml-1 animate-spin">...</span>}
           </button>
+          {/* Sentiment Legend */}
+          {indicators.showSentiment && (
+            <div className="flex items-center gap-3 ml-3 text-xs">
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                <span className="text-gray-500 dark:text-gray-400">Positive</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                <span className="text-gray-500 dark:text-gray-400">Neutral</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                <span className="text-gray-500 dark:text-gray-400">Negative</span>
+              </div>
+              {sentimentIsMock && (
+                <span className="text-orange-500 text-xs">(Mock Data)</span>
+              )}
+              {!sentimentIsMock && sentimentMarkers.length > 0 && (
+                <span className="text-gray-400 text-xs">({sentimentMarkers.length} articles)</span>
+              )}
+            </div>
+          )}
         </div>
         {chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height={500}>
@@ -813,6 +959,159 @@ const DatasetDetails: React.FC = () => {
             </div>
           </dl>
         </div>
+      </div>
+
+      {/* Prediction Targets Preview Panel */}
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mt-6">
+        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+          <Target size={20} className="text-purple-500" />
+          Prediction Targets Preview
+        </h2>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Define prediction targets to generate training labels. Each target creates binary columns
+          indicating whether the price moved by the specified percentage within the time window.
+        </p>
+
+        {/* Target configuration form */}
+        <div className="flex flex-wrap items-end gap-4 mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              Profit Target (%)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              value={newTarget.profitPct}
+              onChange={(e) => setNewTarget({ ...newTarget, profitPct: parseFloat(e.target.value) || 0 })}
+              className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              Max Drawdown (%)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="50"
+              value={newTarget.maxDd}
+              onChange={(e) => setNewTarget({ ...newTarget, maxDd: parseFloat(e.target.value) || 0 })}
+              className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              Time Window (days)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="365"
+              value={newTarget.days}
+              onChange={(e) => setNewTarget({ ...newTarget, days: parseInt(e.target.value) || 0 })}
+              className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+            />
+          </div>
+          <button
+            onClick={addPredictionTarget}
+            className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 flex items-center gap-1"
+          >
+            <Plus size={16} />
+            Add Target
+          </button>
+        </div>
+
+        {/* Added targets list */}
+        {predictionTargets.length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-sm font-medium mb-2">Configured Targets:</h4>
+            <div className="flex flex-wrap gap-2">
+              {predictionTargets.map((t, i) => (
+                <span
+                  key={i}
+                  className="px-3 py-1.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-full text-sm flex items-center gap-2"
+                >
+                  {t.profitPct}% profit / {t.maxDd}% max DD / {t.days} days
+                  <button
+                    onClick={() => removePredictionTarget(i)}
+                    className="hover:text-red-500"
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div className="flex gap-3 mb-4">
+          <button
+            onClick={previewPredictionTargets}
+            disabled={predictionTargets.length === 0 || previewLoading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            <Play size={16} />
+            {previewLoading ? 'Calculating...' : 'Preview Targets'}
+          </button>
+          <button
+            onClick={generateTrainingData}
+            disabled={predictionTargets.length === 0 || generateLoading}
+            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            <Save size={16} />
+            {generateLoading ? 'Generating...' : 'Generate Training Data'}
+          </button>
+        </div>
+
+        {/* Generated files info */}
+        {generatedFiles && (
+          <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
+            <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
+              Training Data Generated
+            </h4>
+            <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1">
+              <div><strong>Training file:</strong> {generatedFiles.training}</div>
+              {generatedFiles.normalization && (
+                <div><strong>Normalization params:</strong> {generatedFiles.normalization}</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Preview statistics */}
+        {predictionPreview && (
+          <div className="mt-4">
+            <h4 className="text-sm font-medium mb-3">Target Statistics:</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {Object.entries(predictionPreview.statistics).map(([col, stats]) => (
+                <div key={col} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <div className="font-mono text-xs text-gray-600 dark:text-gray-400 mb-2 break-all">
+                    {col}
+                  </div>
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="text-green-600 dark:text-green-400">
+                      {stats.positive_count} ({stats.positive_pct}%)
+                    </span>
+                    <span className="text-red-600 dark:text-red-400">
+                      {stats.negative_count} ({stats.negative_pct}%)
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-green-500"
+                      style={{ width: `${stats.positive_pct}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 text-xs text-gray-500">
+              Total rows: {predictionPreview.total_rows} | Valid samples: {Object.values(predictionPreview.statistics)[0]?.total_valid || 0}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
