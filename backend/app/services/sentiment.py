@@ -375,7 +375,10 @@ class SentimentService:
                 'date': pub_date,
                 'source': article.get('source', provider.upper()),
                 'url': article.get('url', ''),
-                'content_fetched': article.get('content_fetched', False)
+                'content_fetched': article.get('content_fetched', False),
+                # Preserve provider's built-in sentiment if available (e.g., from Alpha Vantage)
+                'sentiment': article.get('sentiment'),
+                'sentiment_score': article.get('sentiment_score')
             })
 
         logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
@@ -400,7 +403,7 @@ class SentimentService:
             GoogleNewsProvider has been removed (scraping unreliable).
             AINewsProvider requires ModelFactory dependency.
         """
-        valid_providers = ['fmp', 'alphavantage', 'finnhub', 'alpaca']
+        valid_providers = ['fmp', 'alphavantage', 'finnhub', 'alpaca', 'localfiles']
 
         if provider not in valid_providers:
             raise ValueError(f"Unknown news provider: '{provider}'. Valid providers: {valid_providers}")
@@ -427,6 +430,11 @@ class SentimentService:
             if AlpacaNewsProvider is None:
                 raise ImportError("AlpacaNewsProvider not available - check if alpaca-py is installed")
             return AlpacaNewsProvider()
+        elif provider == "localfiles":
+            from dataproviders.news import LocalFilesNewsProvider
+            if LocalFilesNewsProvider is None:
+                raise ImportError("LocalFilesNewsProvider not available")
+            return LocalFilesNewsProvider()
 
     @staticmethod
     def get_feature_descriptions() -> Dict[str, str]:

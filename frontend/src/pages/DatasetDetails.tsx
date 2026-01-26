@@ -89,6 +89,7 @@ interface IndicatorVisibility {
   showMacd: boolean;
   showRsi: boolean;
   showSentiment: boolean;
+  showTargets: boolean;
 }
 
 // Custom Candlestick component for Recharts
@@ -153,6 +154,7 @@ const DatasetDetails: React.FC = () => {
     showMacd: false,
     showRsi: false,
     showSentiment: true,
+    showTargets: true,
   });
 
   // Fetch real sentiment markers from API
@@ -817,6 +819,30 @@ const DatasetDetails: React.FC = () => {
             News Sentiment
             {sentimentLoading && <span className="ml-1 animate-spin">...</span>}
           </button>
+          <button
+            onClick={() => toggleIndicator('showTargets')}
+            className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
+              indicators.showTargets
+                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+            }`}
+          >
+            <Target size={14} />
+            Prediction Targets
+          </button>
+          {/* Target Legend */}
+          {indicators.showTargets && predictionPreview && (
+            <div className="flex items-center gap-3 ml-2 text-xs">
+              <div className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rotate-45 bg-green-500 border border-green-700"></div>
+                <span className="text-gray-500 dark:text-gray-400">Up Target</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rotate-45 bg-red-500 border border-red-700"></div>
+                <span className="text-gray-500 dark:text-gray-400">Down Target</span>
+              </div>
+            </div>
+          )}
           {/* Sentiment Legend */}
           {indicators.showSentiment && (
             <div className="flex items-center gap-3 ml-3 text-xs">
@@ -1011,6 +1037,54 @@ const DatasetDetails: React.FC = () => {
                   />
                 );
               })}
+              {/* Prediction Target Markers */}
+              {indicators.showTargets && predictionPreview && predictionPreview.sample_data &&
+                predictionPreview.sample_data.map((sample, idx) => {
+                  const dataPoint = candlestickData.find(d => d.Date === sample.Date);
+                  if (!dataPoint) return null;
+
+                  // Check for up targets (green) - price_up_* columns with value 1
+                  const upTargetCols = predictionPreview.target_columns.filter(col => col.includes('_up_'));
+                  const hasUpTarget = upTargetCols.some(col => sample[col] === 1);
+
+                  // Check for down targets (red) - price_down_* columns with value 1
+                  const downTargetCols = predictionPreview.target_columns.filter(col => col.includes('_down_'));
+                  const hasDownTarget = downTargetCols.some(col => sample[col] === 1);
+
+                  const markers = [];
+                  if (hasUpTarget) {
+                    markers.push(
+                      <ReferenceDot
+                        key={`target-up-${idx}`}
+                        x={sample.Date}
+                        y={dataPoint.Low * 0.98}
+                        yAxisId="price"
+                        r={5}
+                        fill="#10B981"
+                        stroke="#065F46"
+                        strokeWidth={1.5}
+                        shape="diamond"
+                      />
+                    );
+                  }
+                  if (hasDownTarget) {
+                    markers.push(
+                      <ReferenceDot
+                        key={`target-down-${idx}`}
+                        x={sample.Date}
+                        y={dataPoint.High * 1.02}
+                        yAxisId="price"
+                        r={5}
+                        fill="#EF4444"
+                        stroke="#991B1B"
+                        strokeWidth={1.5}
+                        shape="diamond"
+                      />
+                    );
+                  }
+                  return markers;
+                }).flat().filter(Boolean)
+              }
               <Brush
                 key={brushKey}
                 dataKey="Date"
@@ -1261,25 +1335,44 @@ const DatasetDetails: React.FC = () => {
         {/* Preview statistics */}
         {predictionPreview && (
           <div className="mt-4">
-            <h4 className="text-sm font-medium mb-3">Target Statistics:</h4>
+            <h4 className="text-sm font-medium mb-2">Target Statistics:</h4>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              Number of data points where each target condition was detected
+            </p>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {Object.entries(predictionPreview.statistics).map(([col, stats]) => (
                 <div key={col} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                   <div className="font-mono text-xs text-gray-600 dark:text-gray-400 mb-2 break-all">
                     {col}
                   </div>
-                  <div className="flex items-center gap-4 text-sm">
-                    <span className="text-green-600 dark:text-green-400">
-                      {stats.positive_count} ({stats.positive_pct}%)
-                    </span>
-                    <span className="text-red-600 dark:text-red-400">
-                      {stats.negative_count} ({stats.negative_pct}%)
-                    </span>
+                  <div className="flex items-center justify-between text-sm mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                      <span className="text-gray-600 dark:text-gray-300">Detected:</span>
+                      <span className="font-semibold text-green-600 dark:text-green-400">
+                        {stats.positive_count}
+                      </span>
+                      <span className="text-gray-500 text-xs">({stats.positive_pct}%)</span>
+                    </div>
                   </div>
-                  <div className="mt-2 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded-full bg-gray-400"></div>
+                      <span className="text-gray-600 dark:text-gray-300">Not detected:</span>
+                      <span className="font-semibold text-gray-600 dark:text-gray-400">
+                        {stats.negative_count}
+                      </span>
+                      <span className="text-gray-500 text-xs">({stats.negative_pct}%)</span>
+                    </div>
+                  </div>
+                  {/* Visual ratio bar */}
+                  <div className="mt-3 flex items-center gap-1">
                     <div
-                      className="h-full bg-green-500"
-                      style={{ width: `${stats.positive_pct}%` }}
+                      className="h-1.5 bg-green-500 rounded-l"
+                      style={{ width: `${stats.positive_pct}%`, minWidth: stats.positive_count > 0 ? '4px' : '0' }}
+                    />
+                    <div
+                      className="h-1.5 bg-gray-300 dark:bg-gray-500 rounded-r flex-1"
                     />
                   </div>
                 </div>

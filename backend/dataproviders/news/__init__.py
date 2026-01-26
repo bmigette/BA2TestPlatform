@@ -31,6 +31,7 @@ FMPNewsProvider = None
 AlphaVantageNewsProvider = None
 FinnhubNewsProvider = None
 AlpacaNewsProvider = None
+LocalFilesNewsProvider = None
 
 try:
     from .FMPNewsProvider import FMPNewsProvider
@@ -52,6 +53,11 @@ try:
 except ImportError as e:
     logger.debug(f"AlpacaNewsProvider not available: {e}")
 
+try:
+    from .LocalFilesNewsProvider import LocalFilesNewsProvider
+except ImportError as e:
+    logger.debug(f"LocalFilesNewsProvider not available: {e}")
+
 
 def get_available_providers() -> list[str]:
     """Get list of available news providers."""
@@ -64,6 +70,8 @@ def get_available_providers() -> list[str]:
         providers.append("finnhub")
     if AlpacaNewsProvider is not None:
         providers.append("alpaca")
+    if LocalFilesNewsProvider is not None:
+        providers.append("localfiles")
     return providers
 
 
@@ -76,5 +84,6 @@ __all__ = [
     "AlphaVantageNewsProvider",
     "FinnhubNewsProvider",
     "AlpacaNewsProvider",
+    "LocalFilesNewsProvider",
     "get_available_providers",
 ]

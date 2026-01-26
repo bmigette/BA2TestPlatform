@@ -74,6 +74,9 @@ backend/datasets/*.csv
 backend/datasets/*.parquet
 !backend/datasets/.gitkeep
 
+# News exports (user data)
+news_exports/
+
 # Model files (large)
 backend/models/*.pt
 backend/models/*.pth

@@ -5,9 +5,13 @@ Provides endpoints for testing and debugging various providers.
 """
 
 from fastapi import APIRouter, HTTPException, status, Query
-from typing import Optional
+from fastapi.responses import JSONResponse
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+from pathlib import Path
 import logging
+import json
+import uuid
 
 from app.services.sentiment import SentimentService
 
@@ -19,8 +23,10 @@ router = APIRouter()
 @router.get("/news/fetch")
 async def fetch_news(
     symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)"),
-    provider: str = Query("fmp", description="News provider (fmp, alpaca)"),
-    days: int = Query(30, description="Number of days to look back"),
+    provider: str = Query("fmp", description="News provider (fmp, alpaca, alphavantage)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). If not provided, defaults to 30 days ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). If not provided, defaults to today."),
+    days: Optional[int] = Query(None, description="Deprecated: Use start_date/end_date instead. Number of days to look back."),
     limit: int = Query(50, description="Maximum number of articles")
 ):
     """
@@ -29,23 +35,37 @@ async def fetch_news(
     Args:
         symbol: Stock ticker symbol
         provider: News provider to use
-        days: Days to look back
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        days: Deprecated, use date range instead
         limit: Maximum articles to return
 
     Returns:
         List of news articles
     """
     try:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        # Parse dates or use defaults
+        if end_date:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end_dt = datetime.now()
 
-        logger.info(f"Fetching news for {symbol} from {provider}, last {days} days")
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        elif days:
+            # Legacy support for days parameter
+            start_dt = end_dt - timedelta(days=days)
+        else:
+            # Default to last 30 days
+            start_dt = end_dt - timedelta(days=30)
+
+        logger.info(f"Fetching news for {symbol} from {provider}, {start_dt.date()} to {end_dt.date()}")
 
         sentiment_service = SentimentService()
         articles = sentiment_service.fetch_news_for_ticker(
             ticker=symbol,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=start_dt,
+            end_date=end_dt,
             provider=provider,
             enrich_content=False
         )
@@ -63,8 +83,8 @@ async def fetch_news(
         return {
             "symbol": symbol,
             "provider": provider,
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
+            "start_date": start_dt.isoformat(),
+            "end_date": end_dt.isoformat(),
             "article_count": len(articles),
             "articles": articles
         }
@@ -151,7 +171,26 @@ async def list_news_providers():
             "description": "Company and market news from FMP API",
             "requires_api_key": True,
             "api_key_configured": bool(os.getenv("FMP_API_KEY")),
-            "features": ["company_news", "market_news"]
+            "features": ["company_news", "market_news"],
+            "has_sentiment": False
+        },
+        {
+            "id": "alphavantage",
+            "name": "Alpha Vantage",
+            "description": "News with built-in sentiment analysis from Alpha Vantage API",
+            "requires_api_key": True,
+            "api_key_configured": bool(os.getenv("ALPHA_VANTAGE_API_KEY")),
+            "features": ["company_news", "sentiment_analysis"],
+            "has_sentiment": True
+        },
+        {
+            "id": "finnhub",
+            "name": "Finnhub",
+            "description": "Company and market news from Finnhub API",
+            "requires_api_key": True,
+            "api_key_configured": bool(os.getenv("FINNHUB_API_KEY")),
+            "features": ["company_news", "global_news"],
+            "has_sentiment": False
         },
         {
             "id": "alpaca",
@@ -159,11 +198,141 @@ async def list_news_providers():
             "description": "News from Alpaca trading platform",
             "requires_api_key": True,
             "api_key_configured": bool(os.getenv("ALPACA_API_KEY")),
-            "features": ["company_news"]
+            "features": ["company_news"],
+            "has_sentiment": False
+        },
+        {
+            "id": "localfiles",
+            "name": "Local Files",
+            "description": "Read from previously exported JSON files",
+            "requires_api_key": False,
+            "api_key_configured": True,
+            "features": ["company_news", "cached_sentiment"],
+            "has_sentiment": True
         }
     ]
 
     return {
         "providers": providers,
         "default": "fmp"
+    }
+
+
+# Directory for exported news files
+NEWS_EXPORTS_DIR = Path("news_exports")
+
+
+@router.post("/news/export")
+async def export_news_to_json(
+    symbol: str = Query(..., description="Stock ticker symbol"),
+    provider: str = Query(..., description="Provider used to fetch the news"),
+    articles: List[Dict[str, Any]] = None
+):
+    """
+    Export news articles to a JSON file with standardized format.
+
+    The exported format can be imported using the LocalFiles news provider.
+
+    Args:
+        symbol: Stock ticker symbol
+        provider: Original provider name
+        articles: List of articles to export
+
+    Returns:
+        Export file path and metadata
+    """
+    if not articles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No articles provided for export"
+        )
+
+    try:
+        # Ensure export directory exists
+        NEWS_EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{symbol}_{provider}_{timestamp}.json"
+        filepath = NEWS_EXPORTS_DIR / filename
+
+        # Standardize article format for export
+        export_data = {
+            "version": "1.0",
+            "export_date": datetime.now().isoformat(),
+            "symbol": symbol,
+            "provider": provider,
+            "article_count": len(articles),
+            "articles": []
+        }
+
+        for article in articles:
+            # Standardize date format
+            date = article.get("date") or article.get("published_at") or ""
+            if isinstance(date, datetime):
+                date = date.isoformat()
+
+            export_data["articles"].append({
+                "title": article.get("title", ""),
+                "summary": article.get("summary") or article.get("content", ""),
+                "source": article.get("source", ""),
+                "url": article.get("url", ""),
+                "published_at": date,
+                "sentiment": article.get("sentiment"),
+                "sentiment_score": article.get("sentiment_score")
+            })
+
+        # Write to file
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Exported {len(articles)} articles to {filepath}")
+
+        return {
+            "success": True,
+            "filename": filename,
+            "filepath": str(filepath),
+            "article_count": len(articles),
+            "message": f"Exported {len(articles)} articles to {filename}"
+        }
+
+    except Exception as e:
+        logger.error(f"Error exporting news: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to export news: {str(e)}"
+        )
+
+
+@router.get("/news/exports")
+async def list_news_exports():
+    """
+    List all exported news files.
+
+    Returns:
+        List of export files with metadata
+    """
+    exports = []
+
+    if NEWS_EXPORTS_DIR.exists():
+        for filepath in NEWS_EXPORTS_DIR.glob("*.json"):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                exports.append({
+                    "filename": filepath.name,
+                    "filepath": str(filepath),
+                    "symbol": data.get("symbol", ""),
+                    "provider": data.get("provider", ""),
+                    "article_count": data.get("article_count", 0),
+                    "export_date": data.get("export_date", ""),
+                    "size_kb": round(filepath.stat().st_size / 1024, 2)
+                })
+            except Exception as e:
+                logger.warning(f"Error reading export file {filepath}: {e}")
+
+    return {
+        "exports": sorted(exports, key=lambda x: x["export_date"], reverse=True),
+        "count": len(exports),
+        "directory": str(NEWS_EXPORTS_DIR)
     }

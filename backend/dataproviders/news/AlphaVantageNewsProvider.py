@@ -204,7 +204,8 @@ class AlphaVantageNewsProvider(AlphaVantageBaseProvider, MarketNewsInterface):
                     "published_at": item.get("time_published", ""),
                     "url": item.get("url", ""),
                     "image_url": item.get("banner_image"),
-                    "sentiment": self._parse_sentiment(item.get("overall_sentiment_label")),
+                    # Store raw sentiment from Alpha Vantage API (e.g., "Bullish", "Bearish", "Neutral")
+                    "sentiment": item.get("overall_sentiment_label"),
                     "sentiment_score": item.get("overall_sentiment_score"),
                     "symbols": [ticker.get("ticker") for ticker in item.get("ticker_sentiment", [])]
                 }
@@ -294,7 +295,8 @@ class AlphaVantageNewsProvider(AlphaVantageBaseProvider, MarketNewsInterface):
                     "published_at": item.get("time_published", ""),
                     "url": item.get("url", ""),
                     "image_url": item.get("banner_image"),
-                    "sentiment": self._parse_sentiment(item.get("overall_sentiment_label")),
+                    # Store raw sentiment from Alpha Vantage API (e.g., "Bullish", "Bearish", "Neutral")
+                    "sentiment": item.get("overall_sentiment_label"),
                     "sentiment_score": item.get("overall_sentiment_score"),
                     "symbols": [ticker.get("ticker") for ticker in item.get("ticker_sentiment", [])]
                 }
@@ -324,15 +326,3 @@ class AlphaVantageNewsProvider(AlphaVantageBaseProvider, MarketNewsInterface):
             logger.error(f"Error fetching global news: {e}", exc_info=True)
             raise
     
-    def _parse_sentiment(self, sentiment_label: Optional[str]) -> Optional[str]:
-        """Parse sentiment label to standard format."""
-        if not sentiment_label:
-            return None
-        
-        label = sentiment_label.lower()
-        if "bullish" in label or "positive" in label:
-            return "positive"
-        elif "bearish" in label or "negative" in label:
-            return "negative"
-        else:
-            return "neutral"

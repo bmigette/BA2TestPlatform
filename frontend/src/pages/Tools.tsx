@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare } from 'lucide-react';
+import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download } from 'lucide-react';
 
 interface NewsArticle {
   title: string;
@@ -9,6 +9,9 @@ interface NewsArticle {
   url?: string;
   date?: string;
   published_at?: string;
+  // Provider-specific sentiment fields (e.g., from Alpha Vantage)
+  sentiment?: string;
+  sentiment_score?: number;
 }
 
 interface SentimentResult {
@@ -22,6 +25,7 @@ interface NewsProvider {
   name: string;
   description: string;
   api_key_configured: boolean;
+  has_sentiment?: boolean;
 }
 
 const Tools: React.FC = () => {
@@ -67,7 +71,19 @@ const Tools: React.FC = () => {
 const NewsProviderTester: React.FC = () => {
   const [symbol, setSymbol] = useState('AAPL');
   const [provider, setProvider] = useState('fmp');
-  const [days, setDays] = useState(30);
+  // Default to last 30 days
+  const getDefaultDates = () => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    return {
+      start: start.toISOString().split('T')[0],
+      end: end.toISOString().split('T')[0]
+    };
+  };
+  const defaultDates = getDefaultDates();
+  const [startDate, setStartDate] = useState(defaultDates.start);
+  const [endDate, setEndDate] = useState(defaultDates.end);
   const [providers, setProviders] = useState<NewsProvider[]>([]);
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(false);
@@ -101,7 +117,8 @@ const NewsProviderTester: React.FC = () => {
       const params = new URLSearchParams({
         symbol,
         provider,
-        days: days.toString(),
+        start_date: startDate,
+        end_date: endDate,
         limit: '50'
       });
 
@@ -172,6 +189,39 @@ const NewsProviderTester: React.FC = () => {
     }
   };
 
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+
+  const exportToJson = async () => {
+    if (articles.length === 0) return;
+
+    setExporting(true);
+    setExportMessage(null);
+
+    try {
+      const response = await fetch(
+        `http://localhost:8002/api/tools/news/export?symbol=${symbol}&provider=${provider}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(articles)
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setExportMessage(`Exported to ${data.filename}`);
+      } else {
+        const errorData = await response.json();
+        setExportMessage(`Export failed: ${errorData.detail}`);
+      }
+    } catch (err) {
+      setExportMessage(`Export error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const getSentimentColor = (sentiment: string) => {
     switch (sentiment) {
       case 'positive':
@@ -200,7 +250,7 @@ const NewsProviderTester: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
         <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-gray-100">Test News Provider</h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Symbol
@@ -239,14 +289,24 @@ const NewsProviderTester: React.FC = () => {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Days Back
+              Start Date
             </label>
             <input
-              type="number"
-              value={days}
-              onChange={(e) => setDays(parseInt(e.target.value) || 30)}
-              min={1}
-              max={365}
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              End Date
+            </label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
           </div>
@@ -308,14 +368,38 @@ const NewsProviderTester: React.FC = () => {
             <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
               Results ({articles.length} articles)
             </h2>
-            <button
-              onClick={analyzeAllSentiments}
-              disabled={analyzingIndex !== null}
-              className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
-            >
-              <MessageSquare size={16} />
-              Analyze All Sentiments
-            </button>
+            <div className="flex items-center gap-3">
+              {exportMessage && (
+                <span className={`text-sm ${exportMessage.includes('failed') || exportMessage.includes('error') ? 'text-red-500' : 'text-green-500'}`}>
+                  {exportMessage}
+                </span>
+              )}
+              <button
+                onClick={exportToJson}
+                disabled={exporting || articles.length === 0}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {exporting ? (
+                  <>
+                    <Loader size={16} className="animate-spin" />
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <Download size={16} />
+                    Export JSON
+                  </>
+                )}
+              </button>
+              <button
+                onClick={analyzeAllSentiments}
+                disabled={analyzingIndex !== null}
+                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                <MessageSquare size={16} />
+                Analyze All Sentiments
+              </button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -355,6 +439,21 @@ const NewsProviderTester: React.FC = () => {
                   </div>
 
                   <div className="flex flex-col items-end gap-2">
+                    {/* Show provider's built-in sentiment if available */}
+                    {article.sentiment && (
+                      <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                        <span className="text-xs opacity-75">API:</span>
+                        <span className="text-sm font-medium capitalize">
+                          {article.sentiment}
+                        </span>
+                        {article.sentiment_score !== undefined && (
+                          <span className="text-xs opacity-75">
+                            ({(article.sentiment_score * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {/* Show FinBERT analysis or analyze button */}
                     {sentimentResults[index] ? (
                       <div className={`px-3 py-1.5 rounded-full flex items-center gap-1.5 ${getSentimentColor(sentimentResults[index]!.sentiment)}`}>
                         {getSentimentIcon(sentimentResults[index]!.sentiment)}
@@ -379,7 +478,7 @@ const NewsProviderTester: React.FC = () => {
                         ) : (
                           <>
                             <MessageSquare size={14} />
-                            Analyze
+                            FinBERT
                           </>
                         )}
                       </button>
