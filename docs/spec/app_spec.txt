@@ -1,0 +1,774 @@
+<project_specification>
+  <project_name>Deep Learning Financial Forecasting Platform</project_name>
+
+  <overview>
+    Build a comprehensive platform to train and evaluate deep learning models for financial forecasting.
+    The platform consists of two main components:
+    1. MODEL BUILDER - Uses genetic optimization to build best-fit models for financial timeseries prediction
+    2. STRATEGY BACKTESTER - Tests trained models against historical market data to evaluate performance
+
+    The application should provide a modern, fluid interface for configuring optimization jobs, monitoring
+    training progress, visualizing datasets, and backtesting trading strategies based on model predictions.
+  </overview>
+
+  <technology_stack>
+    <api_keys>
+      API keys are stored in .env file in the project root
+    </api_keys>
+    <backend>
+      <runtime>Python 3.10+</runtime>
+      <deep_learning>PyTorch with CUDA support for GPU acceleration</deep_learning>
+      <timeseries_library>Darts (for LSTM, RCNN, N-BEATS and other state-of-the-art models)</timeseries_library>
+      <genetic_optimization>DEAP, PyGAD, or shinkaEvolve (genetic algorithm libraries - user-selectable)</genetic_optimization>
+      <backtesting>Backtesting.py or VectorBT (strategy backtesting library)</backtesting>
+      <sentiment_analysis>Transformers library with pre-trained financial sentiment models</sentiment_analysis>
+      <technical_indicators>TA-Lib, pandas-ta</technical_indicators>
+      <data_handling>Pandas, NumPy</data_handling>
+      <api_framework>FastAPI with async support</api_framework>
+      <task_queue>Celery with Redis for background job processing</task_queue>
+      <database>SQLite or PostgreSQL for job/model metadata</database>
+      <logging>
+        Python logging module with separate log files for different levels:
+        - debug.log: DEBUG and higher (all messages)
+        - info.log: INFO and higher (normal operations)
+        - error.log: ERROR and higher (errors and critical issues)
+        - All loggers should use the Python logging module, not print statements
+        - Log format should include timestamp, level, module, and message
+        - Log rotation should be configured for production use
+      </logging>
+    </backend>
+    <frontend>
+      <framework>React with TypeScript and Vite</framework>
+      <styling>Tailwind CSS with shadcn/ui components</styling>
+      <charts>Recharts or Plotly.js for advanced financial charts</charts>
+      <state_management>Zustand or React Context</state_management>
+      <routing>React Router</routing>
+      <real_time>WebSocket or SSE for live training progress</real_time>
+    </frontend>
+    <data_providers>
+      Custom data provider package copied from BA2TradePlatform
+      Includes: Alpha Vantage, Yahoo Finance, Polygon.io, EODHD, and other API-based providers
+      NOTE: Only include API-based providers, exclude AI providers
+    </data_providers>
+  </technology_stack>
+
+  <core_features>
+    <dataset_preparation>
+      <data_sources>
+        - Copy dataproviders package from C:\Users\basti\OneDrive\Documents\dev\BA2TradePlatform\ba2_trade_platform\modules\dataproviders
+        - Create shared package that can be reused across projects
+        - Include only API-based data providers (exclude AI providers)
+        - Support multiple data providers: Alpha Vantage, Yahoo Finance, Polygon.io, EODHD
+        - Verify 1-year historical data availability across providers
+      </data_sources>
+
+      <dataset_composition>
+        - Base OHLC data from selected ticker
+        - User-configurable timeframe: 1h, 4h, D1, etc.
+        - Target dataset size: 1 year of historical data
+        - Train/test split: User-configurable percentage
+      </dataset_composition>
+
+      <technical_indicators>
+        - Multi-timeframe technical indicators
+        - Include all indicators available from dataproviders
+        - Examples: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, Stochastic, etc.
+        - Calculate indicators for multiple timeframes (e.g., 15m, 1h, 4h, D1)
+      </technical_indicators>
+
+      <fundamentals_macro_data>
+        - Fundamental indicators: FCF, P/E, EPS, Revenue, etc.
+        - Handle periodic data (annual/quarterly) by creating features:
+          * Days since last event (e.g., days_to_last_FCF)
+          * Last event value (e.g., last_FCF)
+          * Last event percentage change (e.g., last_FCF_percent)
+          * Days to next event (e.g., days_to_next_FCF)
+          * Next event forecast (e.g., next_FCF_forecast)
+        - Macro indicators: Interest rates, GDP, inflation, etc.
+      </fundamentals_macro_data>
+
+      <sentiment_analysis>
+        - Use ML model for news sentiment analysis (Transformers library)
+        - Cannot directly incorporate news events into dataset
+        - Create aggregated sentiment features:
+          * Count of news in past: 1 day, 1 week, 1 month, 6 months
+          * Sentiment categories: Positive, Neutral, Negative
+          * Impact timeframe: Short-term, Medium-term, Long-term
+          * Example fields: news_1d_positive_short, news_1w_negative_long, etc.
+      </sentiment_analysis>
+
+      <dataset_visualization>
+        - Interactive chart showing price action with OHLC candlesticks
+        - Overlay technical indicators
+        - Display news events with sentiment markers
+        - Timeline slider to navigate historical data
+        - Zoom and pan functionality
+        - Export dataset to CSV/Parquet
+      </dataset_visualization>
+    </dataset_preparation>
+
+    <model_builder>
+      <genetic_optimization>
+        - Support multiple genetic optimization libraries:
+          * DEAP - Classic, flexible genetic algorithm framework
+          * PyGAD - Simple, NumPy-focused genetic algorithms
+          * shinkaEvolve - Advanced evolutionary strategies with GPU support
+        - User-selectable library per optimization job
+        - Library selection in optimization profile
+        - Optimize model architecture and hyperparameters
+        - User-configurable optimization parameters
+        - Queue multiple optimization jobs
+        - View live training progress
+      </genetic_optimization>
+
+      <model_types>
+        - LSTM (Long Short-Term Memory)
+        - RCNN (Recurrent Convolutional Neural Network)
+        - N-BEATS (Neural Basis Expansion Analysis)
+        - Temporal Fusion Transformer
+        - Other state-of-the-art timeseries/financial forecasting models
+        - User can select: all models, specific models, or exclude certain models
+      </model_types>
+
+      <optimization_parameters>
+        - Number of layers (range or specific values)
+        - Layer sizes/neurons (range or specific values)
+        - Activation functions: ReLU, tanh, sigmoid, LeakyReLU, etc.
+        - Learning rate (range or specific values)
+        - Batch size
+        - Dropout rate
+        - Optimizer type: Adam, SGD, RMSprop
+        - Lookback window size
+        - Forecast horizon
+        - Each parameter can be: single value, range, or multiple choice
+        - User-defined increment steps for range parameters:
+          * Each parameter with a range allows custom step size
+          * Example: layers step=1, layer_size step=16, learning_rate step=0.001
+          * Step size determines granularity of genetic algorithm search
+          * Smaller steps = finer search but more combinations
+          * UI shows estimated combinations based on ranges and steps
+          * Default smart steps provided (e.g., power-of-2 for neurons)
+      </optimization_parameters>
+
+      <prediction_targets>
+        - User-configurable output fields for each optimization job
+        - Symmetric up/down predictions (must be balanced)
+        - User specifies:
+          * Profit percentage targets (e.g., 10%, 20%, 50%, etc.)
+          * Maximum drawdown tolerance (e.g., 5%, 10%, 15%, etc.)
+          * Time periods (e.g., 7, 15, 30, 90 days)
+        - Example outputs:
+          * price_up_10pct_5dd_7d (price goes up 10% with max 5% DD in 7 days)
+          * price_down_10pct_5dd_7d (price goes down 10% with max 5% DD in 7 days)
+        - User can define multiple output combinations per job
+        - Constraint: Must be symmetric (if predict up scenarios, predict same down scenarios)
+        - Model is optimized to predict the user-specified outputs, not to optimize the outputs themselves
+      </prediction_targets>
+
+      <multi_dataset_training>
+        - Support training models against multiple datasets simultaneously
+        - Dataset selection:
+          * Multi-select interface in job creation form
+          * Show combined statistics preview (total rows, date ranges)
+          * Visual summary of selected datasets
+        - Dataset compatibility validation:
+          * Verify matching column structures across datasets
+          * Check timeframe compatibility (warn if different)
+          * Option to resample to common timeframe if needed
+        - Data combination strategies:
+          * Chronological merge: Combine all data sorted by date
+          * Ticker-tagged merge: Add ticker column to distinguish sources
+          * Weighted merge: User-configurable weights per dataset
+        - Cross-validation support:
+          * Use each dataset as hold-out for validation in turn
+          * Report per-dataset and aggregate metrics
+        - Multi-ticker scenarios:
+          * Train single model on multiple tickers (e.g., sector analysis)
+          * Learn general patterns across different securities
+          * Per-ticker performance breakdown in results
+        - Progress tracking:
+          * Show overall and per-dataset progress
+          * Highlight current dataset being processed
+          * Status indicators for each dataset (pending/processing/complete)
+        - Configuration persistence:
+          * Save multi-dataset selections in job templates
+          * Restore dataset selections when loading profiles
+          * Include dataset metadata in job details API
+      </multi_dataset_training>
+
+      <optimization_profiles>
+        - Save optimization configurations as profiles
+        - Load existing profiles
+        - Visualize profile settings before running
+        - Share profiles across projects
+        - Profile includes: model types, parameter ranges, dataset config, user-defined output fields
+        - Output field configuration:
+          * List of profit/loss targets with their DD and timeframes
+          * Symmetry enforcement (auto-create down scenarios for up scenarios)
+          * Custom field naming
+      </optimization_profiles>
+
+      <training_execution>
+        - Queue optimization jobs in backend (Celery task queue)
+        - Live progress updates via WebSocket/SSE
+        - Display training metrics: loss, accuracy, validation loss
+        - Show current generation/iteration
+        - Display best model so far
+        - GPU utilization monitoring
+        - Estimated time remaining
+        - Pause/resume/cancel job functionality
+      </training_execution>
+
+      <training_visualization>
+        - Real-time loss/accuracy charts
+        - Generation-by-generation improvement
+        - Confusion matrix for classification targets
+        - Model architecture visualization
+        - Hyperparameter evolution over generations
+      </training_visualization>
+    </model_builder>
+
+    <strategy_backtester>
+      <backtesting_library>
+        - Use established Python library: Backtesting.py or VectorBT
+        - Rich interactive charts with profit/loss metrics
+        - Interactive price action chart with entry/exit markers
+      </backtesting_library>
+
+      <backtest_strategy>
+        - Strategy based on model predictions
+        - Entry conditions:
+          * Model gives buy signal (threshold configurable)
+          * Custom technical indicator conditions
+          * Risk management rules
+        - Exit conditions:
+          * Model gives sell signal
+          * Take profit target hit
+          * Stop loss hit
+          * Time-based exit
+          * Trailing stop
+        - Refer to BA2TradePlatform trade actions/conditions for inspiration
+      </backtest_strategy>
+
+      <strategy_parameters>
+        - Position sizing: Fixed, percentage of capital, Kelly criterion
+        - Risk per trade (% of capital)
+        - Maximum concurrent positions
+        - Commission/slippage modeling
+        - Leverage (if applicable)
+        - Minimum prediction confidence threshold
+      </strategy_parameters>
+
+      <backtest_visualization>
+        - Equity curve over time
+        - Drawdown chart
+        - Trade markers on price chart (green=buy, red=sell)
+        - Trade list with details (entry/exit price, P&L, duration)
+        - Performance metrics:
+          * Total return
+          * Sharpe ratio
+          * Maximum drawdown
+          * Win rate
+          * Profit factor
+          * Average trade duration
+          * Best/worst trades
+      </backtest_visualization>
+
+      <genetic_optimization_backtest>
+        - Optimize strategy parameters using genetic algorithm
+        - Parameters to optimize:
+          * Prediction confidence threshold
+          * Take profit / Stop loss levels
+          * Position sizing
+          * Indicator parameters
+        - Fitness function: Sharpe ratio, total return, or custom metric
+        - Avoid overfitting with walk-forward analysis
+      </genetic_optimization_backtest>
+    </strategy_backtester>
+
+    <user_interface>
+      <dashboard>
+        - Overview of all optimization jobs (running, completed, failed)
+        - Quick stats: models trained, backtests run, best performing model
+        - Recent activity timeline
+        - System resource usage (GPU, CPU, memory)
+      </dashboard>
+
+      <dataset_management>
+        - List of created datasets
+        - Create new dataset wizard:
+          * Step 1: Select ticker and timeframe
+          * Step 2: Select data providers
+          * Step 3: Configure technical indicators
+          * Step 4: Configure sentiment analysis
+          * Step 5: Configure fundamentals/macro
+          * Step 6: Review and create
+        - Dataset preview with visualization
+        - Edit/delete datasets
+        - Dataset statistics (rows, columns, date range, missing data)
+      </dataset_management>
+
+      <model_training>
+        - Create new optimization job
+        - Select dataset
+        - Configure optimization profile or create new
+        - Select model types to evaluate
+        - Set parameter ranges
+        - Define prediction output fields:
+          * Add multiple profit/DD/period combinations
+          * UI suggests common presets (10%/5%/7d, 20%/10%/30d, etc.)
+          * Auto-generate symmetric down scenarios
+          * Preview output field names
+        - Set training/validation split
+        - Start optimization
+        - Monitor live progress with charts
+        - View training logs
+        - Save trained models
+      </model_training>
+
+      <model_library>
+        - Grid/list view of all trained models
+        - Filter by dataset, performance metrics, date created
+        - Sort by accuracy, loss, date
+        - Model details page:
+          * Architecture diagram
+          * Hyperparameters
+          * Training history
+          * Performance metrics
+          * Predictions visualization
+        - Export model (ONNX, PyTorch checkpoint)
+        - Delete model
+        - Clone and retrain with different parameters
+      </model_library>
+
+      <backtesting_interface>
+        - Select trained model
+        - Choose backtest period (date range)
+        - Configure strategy parameters
+        - Run backtest
+        - View results with interactive charts
+        - Compare multiple strategies side-by-side
+        - Export backtest results (CSV, PDF report)
+        - Save strategy configuration
+      </backtesting_interface>
+
+      <optimization_profiles>
+        - List of saved profiles
+        - Create/edit/delete profiles
+        - Profile editor with form for all parameters
+        - Duplicate profile
+        - Import/export profiles (JSON)
+      </optimization_profiles>
+    </user_interface>
+
+    <settings_configuration>
+      <worker_configuration>
+        - Single backend server with multiple configurable workers
+        - Workers are processes that train and infer models
+        - Backend host can also act as a worker (local worker)
+        - Worker management:
+          * Add/remove worker configurations
+          * Store: name, URL, description, capabilities (train/infer/both)
+          * Enable/disable individual workers
+          * Local worker enabled by default (runs on backend host)
+        - Worker types:
+          * Local worker: Runs on same machine as backend
+          * Remote worker: Runs on separate machine, connects via API
+          * Each worker reports its GPU/CPU capabilities
+        - Worker health monitoring:
+          * Visual indicator of connection status (green/yellow/red)
+          * Periodic health check pings to all enabled workers
+          * Show GPU utilization, memory, active jobs per worker
+          * Alert on worker connection failures
+        - Job distribution:
+          * Backend distributes jobs to available workers
+          * Round-robin or least-loaded strategy
+          * Jobs can be assigned to specific workers
+          * Failed jobs can be reassigned to other workers
+        - Worker API endpoints:
+          * GET /api/workers - List all configured workers
+          * POST /api/workers - Add new worker
+          * PUT /api/workers/:id - Update worker configuration
+          * DELETE /api/workers/:id - Remove worker
+          * GET /api/workers/:id/status - Get worker status and metrics
+          * POST /api/workers/:id/enable - Enable worker
+          * POST /api/workers/:id/disable - Disable worker
+        - Configuration persistence:
+          * Workers stored in database
+          * Import/export worker configurations
+      </worker_configuration>
+
+      <api_keys_management>
+        - Configure API keys for data providers
+        - Test connection for each provider
+        - Enable/disable providers
+      </api_keys_management>
+
+      <gpu_configuration>
+        - Enable/disable GPU acceleration
+        - Select GPU device (if multiple GPUs)
+        - Set memory limit
+      </gpu_configuration>
+
+      <job_queue_settings>
+        - Maximum concurrent jobs
+        - Job priority settings
+        - Automatic retry on failure
+      </job_queue_settings>
+
+      <ui_preferences>
+        - Theme: Light/Dark
+        - Chart style preferences
+        - Notification settings
+        - Auto-refresh intervals
+      </ui_preferences>
+    </settings_configuration>
+  </core_features>
+
+  <database_schema>
+    <tables>
+      <datasets>
+        - id, name, ticker, timeframe
+        - start_date, end_date, rows_count
+        - technical_indicators (JSON)
+        - fundamentals_config (JSON)
+        - sentiment_config (JSON)
+        - file_path, created_at, updated_at
+      </datasets>
+
+      <optimization_jobs>
+        - id, name, dataset_id, status
+        - model_types (JSON array)
+        - parameter_ranges (JSON)
+        - prediction_targets (JSON)
+        - train_test_split, created_at, started_at, completed_at
+        - best_model_id, best_fitness_score
+      </optimization_jobs>
+
+      <models>
+        - id, job_id, model_type, architecture (JSON)
+        - hyperparameters (JSON), training_metrics (JSON)
+        - file_path, created_at
+        - accuracy, loss, val_accuracy, val_loss
+      </models>
+
+      <backtests>
+        - id, model_id, name, start_date, end_date
+        - strategy_config (JSON), results (JSON)
+        - total_return, sharpe_ratio, max_drawdown
+        - win_rate, profit_factor
+        - created_at, updated_at
+      </backtests>
+
+      <optimization_profiles>
+        - id, name, description
+        - model_types (JSON)
+        - parameter_ranges (JSON)
+        - prediction_targets (JSON)
+        - created_at, updated_at
+      </optimization_profiles>
+
+      <api_keys>
+        - id, provider_name, api_key_encrypted
+        - is_active, last_tested_at, created_at
+      </api_keys>
+
+      <workers>
+        - id, name, url, description
+        - worker_type (local/remote)
+        - capabilities (JSON: {train: bool, infer: bool})
+        - is_enabled, is_local
+        - gpu_info (JSON: device name, memory, count)
+        - cpu_info (JSON: cores, model)
+        - last_heartbeat, status (online/offline/busy)
+        - active_jobs_count, total_jobs_completed
+        - created_at, updated_at
+      </workers>
+    </tables>
+  </database_schema>
+
+  <api_endpoints>
+    <datasets>
+      - GET /api/datasets - List all datasets
+      - POST /api/datasets - Create new dataset
+      - GET /api/datasets/:id - Get dataset details
+      - PUT /api/datasets/:id - Update dataset
+      - DELETE /api/datasets/:id - Delete dataset
+      - GET /api/datasets/:id/preview - Get dataset preview/visualization
+      - GET /api/datasets/:id/stats - Get dataset statistics
+    </datasets>
+
+    <optimization>
+      - GET /api/jobs - List optimization jobs
+      - POST /api/jobs - Create new optimization job
+      - GET /api/jobs/:id - Get job details
+      - DELETE /api/jobs/:id - Cancel/delete job
+      - POST /api/jobs/:id/pause - Pause job
+      - POST /api/jobs/:id/resume - Resume job
+      - GET /api/jobs/:id/progress - Get live progress (SSE)
+      - GET /api/jobs/:id/logs - Get training logs
+    </optimization>
+
+    <models>
+      - GET /api/models - List all models
+      - GET /api/models/:id - Get model details
+      - DELETE /api/models/:id - Delete model
+      - POST /api/models/:id/export - Export model
+      - GET /api/models/:id/predictions - Get model predictions on test data
+    </models>
+
+    <backtesting>
+      - GET /api/backtests - List backtests
+      - POST /api/backtests - Create and run backtest
+      - GET /api/backtests/:id - Get backtest results
+      - DELETE /api/backtests/:id - Delete backtest
+      - POST /api/backtests/:id/export - Export backtest results
+      - POST /api/backtests/compare - Compare multiple backtests
+    </backtesting>
+
+    <profiles>
+      - GET /api/profiles - List optimization profiles
+      - POST /api/profiles - Create profile
+      - GET /api/profiles/:id - Get profile
+      - PUT /api/profiles/:id - Update profile
+      - DELETE /api/profiles/:id - Delete profile
+      - POST /api/profiles/:id/export - Export profile
+      - POST /api/profiles/import - Import profile
+    </profiles>
+
+    <data_providers>
+      - GET /api/providers - List available providers
+      - POST /api/providers/test - Test provider connection
+      - GET /api/providers/:provider/search - Search for tickers
+      - GET /api/providers/:provider/data - Fetch OHLC data
+      - GET /api/providers/:provider/indicators - Get available indicators
+    </data_providers>
+
+    <settings>
+      - GET /api/settings - Get all settings
+      - PUT /api/settings - Update settings
+      - POST /api/settings/api-keys - Add/update API key
+      - DELETE /api/settings/api-keys/:provider - Remove API key
+      - GET /api/settings/gpu-info - Get GPU information
+    </settings>
+
+    <backend_auth>
+      - GET /api/health - Health check with auth info { status, version, auth_required }
+      - POST /api/auth/validate - Validate API key (returns 200 if valid, 401 if not)
+      - GET /api/auth/info - Get current auth status and permissions
+      Note: Backend API key authentication is optional and configurable via environment
+            When REQUIRE_API_KEY=true in backend .env, all endpoints require X-API-Key header
+            Local development can set REQUIRE_API_KEY=false to skip authentication
+    </backend_auth>
+  </api_endpoints>
+
+  <implementation_steps>
+    <step number="1">
+      <title>Setup Project Foundation and Data Providers</title>
+      <tasks>
+        - Initialize Python backend with FastAPI
+        - Set up React frontend with TypeScript and Vite
+        - Copy dataproviders package from BA2TradePlatform
+        - Refactor dataproviders into standalone, reusable package
+        - Remove AI providers, keep only API-based providers
+        - Test data provider connections with sample API keys
+        - Create database schema
+        - Set up .env configuration
+      </tasks>
+    </step>
+
+    <step number="2">
+      <title>Dataset Preparation Module</title>
+      <tasks>
+        - Implement dataset creation workflow
+        - Integrate data providers for OHLC data fetching
+        - Implement technical indicator calculations (multi-timeframe)
+        - Implement fundamentals/macro data integration
+        - Implement news sentiment analysis integration
+        - Create dataset storage (Parquet/CSV)
+        - Build dataset preview/visualization UI
+        - Create dataset management API endpoints
+      </tasks>
+    </step>
+
+    <step number="3">
+      <title>Model Builder - Core Architecture</title>
+      <tasks>
+        - Set up PyTorch environment with GPU support
+        - Integrate Darts library for timeseries models
+        - Implement LSTM, RCNN, N-BEATS model architectures
+        - Create model training pipeline
+        - Implement prediction target calculation
+        - Create model evaluation metrics
+        - Set up model serialization/deserialization
+      </tasks>
+    </step>
+
+    <step number="4">
+      <title>Genetic Optimization Engine</title>
+      <tasks>
+        - Create abstraction layer for genetic algorithm libraries
+        - Integrate DEAP for classic genetic algorithms
+        - Integrate PyGAD for NumPy-focused genetic algorithms
+        - Integrate shinkaEvolve for advanced evolutionary strategies
+        - Define chromosome encoding for model hyperparameters
+        - Implement fitness function (validation accuracy/loss)
+        - Create crossover and mutation operators for each library
+        - Implement population evolution logic
+        - Add early stopping and convergence detection
+        - Create optimization job queue with Celery
+        - UI selector for genetic library choice
+      </tasks>
+    </step>
+
+    <step number="5">
+      <title>Training UI and Live Progress</title>
+      <tasks>
+        - Create optimization job creation form
+        - Build optimization profile editor
+        - Implement WebSocket/SSE for live progress
+        - Create real-time training charts (loss, accuracy)
+        - Add job control UI (pause, resume, cancel)
+        - Display GPU utilization
+        - Show training logs
+        - Implement job queue management UI
+      </tasks>
+    </step>
+
+    <step number="6">
+      <title>Model Library and Management</title>
+      <tasks>
+        - Create model grid/list view UI
+        - Implement model details page
+        - Add model filtering and sorting
+        - Create model architecture visualization
+        - Build prediction visualization
+        - Implement model export (ONNX, PyTorch)
+        - Add model comparison functionality
+      </tasks>
+    </step>
+
+    <step number="7">
+      <title>Strategy Backtester Core</title>
+      <tasks>
+        - Integrate Backtesting.py or VectorBT
+        - Implement strategy class based on model predictions
+        - Create entry/exit logic with configurable conditions
+        - Implement risk management (position sizing, stop loss)
+        - Add commission and slippage modeling
+        - Calculate performance metrics
+        - Generate trade log
+      </tasks>
+    </step>
+
+    <step number="8">
+      <title>Backtesting UI and Visualization</title>
+      <tasks>
+        - Create backtest configuration form
+        - Build interactive equity curve chart
+        - Add trade markers on price chart
+        - Display performance metrics dashboard
+        - Implement trade list with filtering
+        - Create backtest comparison view
+        - Add export functionality (CSV, PDF)
+      </tasks>
+    </step>
+
+    <step number="9">
+      <title>Genetic Optimization for Backtesting</title>
+      <tasks>
+        - Extend genetic algorithm for strategy parameters
+        - Implement walk-forward optimization
+        - Add overfitting detection
+        - Create optimization progress visualization
+        - Build optimized strategy comparison
+      </tasks>
+    </step>
+
+    <step number="10">
+      <title>Polish and Production Readiness</title>
+      <tasks>
+        - Comprehensive error handling
+        - Input validation across all forms
+        - Loading states and progress indicators
+        - Responsive design for all screen sizes
+        - Dark/light theme implementation
+        - Performance optimization (lazy loading, caching)
+        - Documentation and help tooltips
+        - End-to-end testing
+      </tasks>
+    </step>
+  </implementation_steps>
+
+  <success_criteria>
+    <functionality>
+      - Data providers successfully fetch 1 year of historical data
+      - Technical indicators calculated correctly across timeframes
+      - Sentiment analysis produces meaningful features
+      - Genetic optimization successfully finds good model architectures
+      - Models train with GPU acceleration
+      - Training progress updates in real-time
+      - Backtesting produces accurate performance metrics
+      - All CRUD operations work correctly
+    </functionality>
+
+    <performance>
+      - Dataset creation completes within reasonable time
+      - Model training utilizes GPU efficiently
+      - Multiple optimization jobs can run concurrently
+      - UI remains responsive during training
+      - Charts render smoothly with large datasets
+    </performance>
+
+    <user_experience>
+      - Modern, clean interface
+      - Intuitive workflow from dataset creation to backtesting
+      - Clear visualization of complex data
+      - Helpful error messages and validation
+      - Responsive on different screen sizes
+      - Fast, fluid interactions
+    </user_experience>
+
+    <technical_quality>
+      - Clean, maintainable code
+      - Proper separation of concerns
+      - Comprehensive error handling
+      - Secure API key storage
+      - Efficient database queries
+      - GPU memory management
+      - Proper async/await usage
+      - Type safety (TypeScript frontend, type hints backend)
+    </technical_quality>
+  </success_criteria>
+
+  <notes>
+    <windows_compatibility>
+      All paths and file operations must be Windows-compatible.
+      Use os.path or pathlib for cross-platform path handling.
+      Security hooks must work in Windows environment.
+    </windows_compatibility>
+
+    <data_provider_refactoring>
+      The dataproviders package from BA2TradePlatform needs refactoring:
+      - Make it a standalone, reusable package
+      - Remove AI-specific providers
+      - Ensure consistent API across all providers
+      - Add proper error handling and logging
+      - Test with actual API keys from .env
+    </data_provider_refactoring>
+
+    <sentiment_integration>
+      News sentiment cannot be directly in dataset rows.
+      Aggregate into features like: news_1d_count_positive_short, etc.
+      This maintains tabular structure required for ML models.
+    </sentiment_integration>
+
+    <optimization_constraints>
+      User defines the specific prediction outputs for each job (profit %, max DD, period).
+      Genetic algorithm optimizes the model architecture and hyperparameters to predict those outputs.
+      The prediction targets themselves are NOT optimized - they are user-specified.
+      Maintain symmetry constraint (same up/down scenarios).
+      UI should provide presets and suggestions but allow full customization.
+    </optimization_constraints>
+  </notes>
+</project_specification>

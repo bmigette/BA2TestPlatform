@@ -1,0 +1,450 @@
+"""
+Database-backed Task Queue Service
+
+Provides task queue functionality using the database instead of Redis/Celery.
+Tasks are processed by background threads within the same application.
+"""
+
+import logging
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Callable
+from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_
+
+from app.models.database import SessionLocal
+from app.models.task_queue import TaskQueue, TaskStatus, TaskPriority
+
+logger = logging.getLogger(__name__)
+
+
+class TaskQueueService:
+    """
+    Database-backed task queue service.
+
+    Provides:
+    - Task creation and queuing
+    - Background task processing
+    - Progress tracking
+    - Retry logic
+    - Task cancellation
+
+    Usage:
+        # Initialize service
+        task_service = TaskQueueService()
+        task_service.start()
+
+        # Register task handlers
+        task_service.register_handler('training', training_handler)
+
+        # Queue a task
+        task_id = task_service.queue_task(
+            task_type='training',
+            name='Train LSTM Model',
+            payload={'dataset_id': 1, 'model_type': 'lstm'}
+        )
+
+        # Check task status
+        status = task_service.get_task_status(task_id)
+    """
+
+    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0):
+        """
+        Initialize task queue service.
+
+        Args:
+            max_workers: Maximum concurrent task workers
+            poll_interval: Seconds between queue polls
+        """
+        self.max_workers = max_workers
+        self.poll_interval = poll_interval
+        self._handlers: Dict[str, Callable] = {}
+        self._running = False
+        self._workers: List[threading.Thread] = []
+        self._lock = threading.Lock()
+        self._active_tasks: Dict[str, threading.Thread] = {}
+
+    def register_handler(self, task_type: str, handler: Callable):
+        """
+        Register a handler function for a task type.
+
+        Args:
+            task_type: Type of task (e.g., 'training', 'backtest')
+            handler: Function to handle the task. Should accept (task_id, payload) and return result dict.
+        """
+        self._handlers[task_type] = handler
+        logger.info(f"Registered handler for task type: {task_type}")
+
+    def start(self):
+        """Start the task queue worker threads."""
+        if self._running:
+            logger.warning("Task queue already running")
+            return
+
+        self._running = True
+
+        # Start worker threads
+        for i in range(self.max_workers):
+            worker = threading.Thread(
+                target=self._worker_loop,
+                name=f"TaskWorker-{i}",
+                daemon=True
+            )
+            worker.start()
+            self._workers.append(worker)
+
+        logger.info(f"Started task queue with {self.max_workers} workers")
+
+    def stop(self):
+        """Stop the task queue."""
+        self._running = False
+        logger.info("Stopping task queue...")
+
+        # Wait for workers to finish
+        for worker in self._workers:
+            worker.join(timeout=5.0)
+
+        self._workers.clear()
+        logger.info("Task queue stopped")
+
+    def queue_task(
+        self,
+        task_type: str,
+        name: str,
+        payload: Optional[Dict[str, Any]] = None,
+        description: Optional[str] = None,
+        priority: TaskPriority = TaskPriority.NORMAL,
+        scheduled_at: Optional[datetime] = None,
+        max_retries: int = 3,
+        timeout_seconds: int = 3600
+    ) -> str:
+        """
+        Queue a new task for processing.
+
+        Args:
+            task_type: Type of task
+            name: Task name/title
+            payload: Task parameters
+            description: Optional description
+            priority: Task priority
+            scheduled_at: Optional delayed execution time
+            max_retries: Maximum retry attempts
+            timeout_seconds: Task timeout
+
+        Returns:
+            Task ID
+        """
+        task_id = str(uuid.uuid4())[:12]
+
+        db = SessionLocal()
+        try:
+            task = TaskQueue(
+                task_id=task_id,
+                task_type=task_type,
+                name=name,
+                description=description,
+                payload=payload or {},
+                status=TaskStatus.QUEUED.value,
+                priority=priority.value if isinstance(priority, TaskPriority) else priority,
+                scheduled_at=scheduled_at,
+                queued_at=datetime.now(),
+                max_retries=max_retries,
+                timeout_seconds=timeout_seconds
+            )
+            db.add(task)
+            db.commit()
+
+            logger.info(f"Queued task {task_id}: {name} (type={task_type})")
+            return task_id
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to queue task: {e}")
+            raise
+        finally:
+            db.close()
+
+    def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get task status and details."""
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if task:
+                return task.to_dict()
+            return None
+        finally:
+            db.close()
+
+    def get_task_progress(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get task progress information."""
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if task:
+                return {
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "progress": task.progress,
+                    "progress_message": task.progress_message,
+                    "started_at": task.started_at.isoformat() if task.started_at else None,
+                    "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                }
+            return None
+        finally:
+            db.close()
+
+    def cancel_task(self, task_id: str) -> bool:
+        """
+        Cancel a pending or running task.
+
+        Returns:
+            True if task was cancelled
+        """
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if not task:
+                return False
+
+            if task.status in [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value]:
+                return False
+
+            task.status = TaskStatus.CANCELLED.value
+            task.completed_at = datetime.now()
+            db.commit()
+
+            logger.info(f"Cancelled task {task_id}")
+            return True
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to cancel task {task_id}: {e}")
+            return False
+        finally:
+            db.close()
+
+    def update_progress(self, task_id: str, progress: float, message: Optional[str] = None):
+        """Update task progress."""
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if task:
+                task.progress = min(100.0, max(0.0, progress))
+                if message:
+                    task.progress_message = message
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to update progress for {task_id}: {e}")
+        finally:
+            db.close()
+
+    def list_tasks(
+        self,
+        status: Optional[str] = None,
+        task_type: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """List tasks with optional filters."""
+        db = SessionLocal()
+        try:
+            query = db.query(TaskQueue)
+
+            if status:
+                query = query.filter(TaskQueue.status == status)
+            if task_type:
+                query = query.filter(TaskQueue.task_type == task_type)
+
+            query = query.order_by(TaskQueue.created_at.desc()).limit(limit)
+
+            return [task.to_dict() for task in query.all()]
+        finally:
+            db.close()
+
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get queue statistics."""
+        db = SessionLocal()
+        try:
+            total = db.query(TaskQueue).count()
+            pending = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.PENDING.value).count()
+            queued = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.QUEUED.value).count()
+            running = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.RUNNING.value).count()
+            completed = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.COMPLETED.value).count()
+            failed = db.query(TaskQueue).filter(TaskQueue.status == TaskStatus.FAILED.value).count()
+
+            return {
+                "total": total,
+                "pending": pending,
+                "queued": queued,
+                "running": running,
+                "completed": completed,
+                "failed": failed,
+                "workers": self.max_workers,
+                "active_workers": len(self._active_tasks)
+            }
+        finally:
+            db.close()
+
+    def cleanup_old_tasks(self, days: int = 30) -> int:
+        """
+        Remove completed/failed tasks older than specified days.
+
+        Returns:
+            Number of tasks removed
+        """
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now() - timedelta(days=days)
+            result = db.query(TaskQueue).filter(
+                and_(
+                    TaskQueue.status.in_([TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value]),
+                    TaskQueue.completed_at < cutoff
+                )
+            ).delete(synchronize_session=False)
+            db.commit()
+
+            if result > 0:
+                logger.info(f"Cleaned up {result} old tasks")
+            return result
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to cleanup old tasks: {e}")
+            return 0
+        finally:
+            db.close()
+
+    def _worker_loop(self):
+        """Worker thread main loop."""
+        worker_name = threading.current_thread().name
+        logger.debug(f"{worker_name} started")
+
+        while self._running:
+            try:
+                task = self._claim_next_task(worker_name)
+                if task:
+                    self._process_task(task, worker_name)
+                else:
+                    time.sleep(self.poll_interval)
+
+            except Exception as e:
+                logger.error(f"{worker_name} error: {e}")
+                time.sleep(self.poll_interval)
+
+        logger.debug(f"{worker_name} stopped")
+
+    def _claim_next_task(self, worker_name: str) -> Optional[TaskQueue]:
+        """Claim the next available task from the queue."""
+        db = SessionLocal()
+        try:
+            with self._lock:
+                # Find next queued task ordered by priority and queue time
+                now = datetime.now()
+                task = db.query(TaskQueue).filter(
+                    and_(
+                        TaskQueue.status == TaskStatus.QUEUED.value,
+                        or_(
+                            TaskQueue.scheduled_at.is_(None),
+                            TaskQueue.scheduled_at <= now
+                        )
+                    )
+                ).order_by(
+                    TaskQueue.priority.desc(),
+                    TaskQueue.queued_at.asc()
+                ).first()
+
+                if task:
+                    # Claim the task
+                    task.status = TaskStatus.RUNNING.value
+                    task.started_at = datetime.now()
+                    task.worker_name = worker_name
+                    db.commit()
+                    db.refresh(task)
+                    return task
+
+                return None
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error claiming task: {e}")
+            return None
+        finally:
+            db.close()
+
+    def _process_task(self, task: TaskQueue, worker_name: str):
+        """Process a claimed task."""
+        task_id = task.task_id
+        task_type = task.task_type
+
+        logger.info(f"{worker_name} processing task {task_id}: {task.name}")
+
+        # Track active task
+        self._active_tasks[task_id] = threading.current_thread()
+
+        db = SessionLocal()
+        try:
+            # Get handler
+            handler = self._handlers.get(task_type)
+            if not handler:
+                raise ValueError(f"No handler registered for task type: {task_type}")
+
+            # Execute handler
+            result = handler(task_id, task.payload or {})
+
+            # Mark completed
+            db_task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if db_task:
+                db_task.status = TaskStatus.COMPLETED.value
+                db_task.progress = 100.0
+                db_task.result = result
+                db_task.completed_at = datetime.now()
+                db.commit()
+
+            logger.info(f"Task {task_id} completed successfully")
+
+        except Exception as e:
+            logger.error(f"Task {task_id} failed: {e}")
+
+            # Handle failure
+            db_task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if db_task:
+                db_task.error_message = str(e)
+
+                # Check for retry
+                if db_task.retry_count < db_task.max_retries:
+                    db_task.retry_count += 1
+                    db_task.status = TaskStatus.QUEUED.value
+                    db_task.scheduled_at = datetime.now() + timedelta(seconds=db_task.retry_delay_seconds)
+                    logger.info(f"Task {task_id} scheduled for retry {db_task.retry_count}/{db_task.max_retries}")
+                else:
+                    db_task.status = TaskStatus.FAILED.value
+                    db_task.completed_at = datetime.now()
+
+                db.commit()
+
+        finally:
+            db.close()
+            # Remove from active tasks
+            self._active_tasks.pop(task_id, None)
+
+
+# Global task queue instance
+_task_queue: Optional[TaskQueueService] = None
+
+
+def get_task_queue() -> TaskQueueService:
+    """Get the global task queue instance."""
+    global _task_queue
+    if _task_queue is None:
+        _task_queue = TaskQueueService()
+    return _task_queue
+
+
+def init_task_queue(max_workers: int = 2):
+    """Initialize and start the task queue."""
+    global _task_queue
+    _task_queue = TaskQueueService(max_workers=max_workers)
+    _task_queue.start()
+    return _task_queue

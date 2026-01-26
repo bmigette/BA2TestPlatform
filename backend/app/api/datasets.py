@@ -1,0 +1,1365 @@
+"""
+Dataset API endpoints
+Updated for preview endpoint and Parquet export
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from typing import List
+import logging
+from datetime import datetime, timedelta
+import pandas as pd
+from pathlib import Path
+
+from app.models.database import get_db
+from app.models.dataset import Dataset
+from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse
+from app.indicators import TechnicalIndicators
+from app.services.fundamentals import FundamentalsService
+from app.services.macro import MacroService
+from app.services.sentiment import SentimentService
+from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
+
+logger = logging.getLogger(__name__)
+
+# Timeframe configuration for multi-timeframe indicators
+SUPPORTED_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+from typing import Dict, Any, Optional
+TIMEFRAME_INTERVAL_MAP = {
+    "15m": "15m",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1d",
+    "D1": "1d"
+}
+
+# Default indicators configuration for each timeframe
+DEFAULT_INDICATORS = {
+    "sma_20": {"type": "sma", "period": 20},
+    "sma_50": {"type": "sma", "period": 50},
+    "ema_12": {"type": "ema", "period": 12},
+    "ema_26": {"type": "ema", "period": 26},
+    "rsi_14": {"type": "rsi", "period": 14},
+    "macd": {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
+    "bbands": {"type": "bollinger", "period": 20, "std_dev": 2.0},
+    "atr_14": {"type": "atr", "period": 14},
+    "stoch": {"type": "stochastic", "k_period": 14, "d_period": 3, "smooth_k": 3}
+}
+
+router = APIRouter()
+
+
+@router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+async def create_dataset(
+    dataset_create: DatasetCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new dataset by fetching data from a provider and saving it.
+
+    Args:
+        dataset_create: Dataset creation parameters
+        db: Database session
+
+    Returns:
+        Created dataset with metadata
+    """
+    try:
+        logger.info(f"Creating dataset for {dataset_create.ticker} with timeframe {dataset_create.timeframe}")
+
+        # Generate dataset name if not provided
+        if not dataset_create.name:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dataset_create.name = f"{dataset_create.ticker}_{dataset_create.timeframe}_{timestamp}"
+
+        # Calculate date range if not provided (default to 1 year)
+        if not dataset_create.end_date:
+            end_date = datetime.now()
+        else:
+            end_date = datetime.strptime(dataset_create.end_date, "%Y-%m-%d")
+
+        if not dataset_create.start_date:
+            start_date = end_date - timedelta(days=365)
+        else:
+            start_date = datetime.strptime(dataset_create.start_date, "%Y-%m-%d")
+
+        # Fetch data using YFinance provider
+        provider = YFinanceDataProvider()
+        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()}")
+
+        # Convert timeframe to YFinance interval format
+        interval_map = {
+            "1m": "1m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "1h",
+            "4h": "4h",
+            "1d": "1d",
+            "1w": "1wk",
+            "1mo": "1mo"
+        }
+        interval = interval_map.get(dataset_create.timeframe, "1d")
+
+        data_points = provider.get_data(
+            symbol=dataset_create.ticker,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
+        )
+
+        if not data_points:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No data available for {dataset_create.ticker}"
+            )
+
+        # Convert data points to DataFrame
+        df = pd.DataFrame([{
+            'Date': dp.timestamp,
+            'Open': dp.open,
+            'High': dp.high,
+            'Low': dp.low,
+            'Close': dp.close,
+            'Volume': dp.volume
+        } for dp in data_points])
+
+        df = df.sort_values('Date').reset_index(drop=True)
+
+        # Create datasets directory if it doesn't exist
+        datasets_dir = Path("datasets")
+        datasets_dir.mkdir(exist_ok=True)
+
+        # Save dataset to file
+        file_path = datasets_dir / f"{dataset_create.name}.csv"
+        df.to_csv(file_path, index=False)
+        logger.info(f"Saved dataset to {file_path}")
+
+        # Create database record
+        db_dataset = Dataset(
+            name=dataset_create.name,
+            ticker=dataset_create.ticker,
+            timeframe=dataset_create.timeframe,
+            start_date=df['Date'].min(),
+            end_date=df['Date'].max(),
+            rows_count=len(df),
+            technical_indicators=dataset_create.technical_indicators,
+            fundamentals_config=dataset_create.fundamentals_config,
+            sentiment_config=dataset_create.sentiment_config,
+            file_path=str(file_path)
+        )
+
+        db.add(db_dataset)
+        db.commit()
+        db.refresh(db_dataset)
+
+        logger.info(f"Created dataset with ID {db_dataset.id}")
+
+        return db_dataset
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating dataset: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create dataset: {str(e)}"
+        )
+
+
+@router.get("", response_model=DatasetListResponse)
+async def list_datasets(db: Session = Depends(get_db)):
+    """
+    List all datasets
+
+    Args:
+        db: Database session
+
+    Returns:
+        List of all datasets
+    """
+    try:
+        datasets = db.query(Dataset).order_by(Dataset.created_at.desc()).all()
+        return {
+            "datasets": datasets,
+            "total": len(datasets)
+        }
+    except Exception as e:
+        logger.error(f"Error listing datasets: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list datasets: {str(e)}"
+        )
+
+
+@router.get("/{dataset_id}/preview")
+async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Get dataset preview data for charting
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Dataset preview data (OHLC values)
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load CSV file
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+
+        # Convert DataFrame to list of dicts for JSON serialization
+        data = df.to_dict(orient='records')
+
+        return {
+            "dataset_id": dataset_id,
+            "rows": len(data),
+            "data": data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting dataset preview: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get dataset preview: {str(e)}"
+        )
+
+
+@router.get("/{dataset_id}/stats")
+async def get_dataset_stats(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Get comprehensive statistics for a dataset
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Dataset statistics including row count, column count, date range,
+        missing data percentages, and basic statistics for numeric columns
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load CSV file
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+
+        # Basic counts
+        total_rows = len(df)
+        total_columns = len(df.columns)
+
+        # Date range
+        date_column = 'Date' if 'Date' in df.columns else df.columns[0]
+        if date_column in df.columns:
+            df[date_column] = pd.to_datetime(df[date_column])
+            date_range = {
+                "start": str(df[date_column].min()),
+                "end": str(df[date_column].max())
+            }
+        else:
+            date_range = None
+
+        # Missing data percentage per column
+        missing_data = {}
+        for col in df.columns:
+            missing_count = df[col].isna().sum()
+            missing_pct = (missing_count / total_rows * 100) if total_rows > 0 else 0
+            missing_data[col] = {
+                "count": int(missing_count),
+                "percentage": round(missing_pct, 2)
+            }
+
+        # Basic statistics for numeric columns
+        numeric_stats = {}
+        numeric_columns = df.select_dtypes(include=['int64', 'float64']).columns
+
+        for col in numeric_columns:
+            col_data = df[col].dropna()
+            if len(col_data) > 0:
+                numeric_stats[col] = {
+                    "count": int(len(col_data)),
+                    "mean": round(float(col_data.mean()), 4),
+                    "std": round(float(col_data.std()), 4),
+                    "min": round(float(col_data.min()), 4),
+                    "max": round(float(col_data.max()), 4),
+                    "median": round(float(col_data.median()), 4)
+                }
+
+        # Column types
+        column_types = {col: str(dtype) for col, dtype in df.dtypes.items()}
+
+        return {
+            "dataset_id": dataset_id,
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "date_range": date_range,
+            "columns": list(df.columns),
+            "column_types": column_types,
+            "missing_data": missing_data,
+            "numeric_statistics": numeric_stats
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating dataset statistics: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate dataset statistics: {str(e)}"
+        )
+
+
+@router.get("/{dataset_id}", response_model=DatasetResponse)
+async def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Get dataset details by ID
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Dataset details
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        return dataset
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting dataset: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get dataset: {str(e)}"
+        )
+
+
+@router.get("/{dataset_id}/export")
+async def export_dataset(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Export dataset as CSV file for download
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        CSV file download
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Check if file exists
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        logger.info(f"Exporting dataset {dataset_id}: {file_path}")
+
+        # Return the CSV file as a download
+        return FileResponse(
+            path=str(file_path),
+            media_type="text/csv",
+            filename=f"{dataset.name}.csv",
+            headers={"Content-Disposition": f"attachment; filename={dataset.name}.csv"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting dataset: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to export dataset: {str(e)}"
+        )
+
+
+@router.get("/{dataset_id}/export/parquet")
+async def export_dataset_parquet(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Export dataset as Parquet file for download
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Parquet file download
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Check if CSV file exists
+        csv_path = Path(dataset.file_path)
+        if not csv_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {csv_path}"
+            )
+
+        logger.info(f"Exporting dataset {dataset_id} to Parquet: {csv_path}")
+
+        # Read CSV and convert to Parquet
+        df = pd.read_csv(csv_path)
+
+        # Create temporary Parquet file
+        parquet_path = csv_path.with_suffix('.parquet')
+        df.to_parquet(parquet_path, engine='pyarrow', compression='snappy', index=False)
+
+        logger.info(f"Created Parquet file: {parquet_path}")
+
+        # Return the Parquet file as a download
+        return FileResponse(
+            path=str(parquet_path),
+            media_type="application/octet-stream",
+            filename=f"{dataset.name}.parquet",
+            headers={"Content-Disposition": f"attachment; filename={dataset.name}.parquet"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting dataset to Parquet: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to export dataset to Parquet: {str(e)}"
+        )
+
+
+@router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_dataset(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a dataset
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Delete file from disk
+        file_path = Path(dataset.file_path)
+        if file_path.exists():
+            file_path.unlink()
+            logger.info(f"Deleted file: {file_path}")
+
+        # Delete from database
+        db.delete(dataset)
+        db.commit()
+
+        logger.info(f"Deleted dataset with ID {dataset_id}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting dataset: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete dataset: {str(e)}"
+        )
+
+
+@router.post("/{dataset_id}/calculate-indicators")
+async def calculate_multi_timeframe_indicators(
+    dataset_id: int,
+    timeframes: List[str] = None,
+    indicators: dict = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate multi-timeframe technical indicators for a dataset.
+
+    This endpoint fetches data at multiple timeframes (15m, 1h, 4h, D1) and calculates
+    technical indicators for each, then merges them into the dataset.
+
+    Args:
+        dataset_id: Dataset ID to add indicators to
+        timeframes: List of timeframes to calculate (default: ["15m", "1h", "4h", "1d"])
+        indicators: Custom indicator configuration (default: uses DEFAULT_INDICATORS)
+        db: Database session
+
+    Returns:
+        Updated dataset with indicator columns
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Use default timeframes if not specified
+        if timeframes is None:
+            timeframes = SUPPORTED_TIMEFRAMES
+
+        # Validate timeframes
+        invalid_timeframes = [tf for tf in timeframes if tf not in TIMEFRAME_INTERVAL_MAP]
+        if invalid_timeframes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid timeframes: {invalid_timeframes}. Supported: {list(TIMEFRAME_INTERVAL_MAP.keys())}"
+            )
+
+        # Use default indicators if not specified
+        if indicators is None:
+            indicators = DEFAULT_INDICATORS
+
+        # Load the dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        logger.info(f"Calculating multi-timeframe indicators for dataset {dataset_id}")
+        logger.info(f"Timeframes: {timeframes}, Indicators: {list(indicators.keys())}")
+
+        # Get base timeframe data range
+        start_date = df['Date'].min()
+        end_date = df['Date'].max()
+
+        # Initialize provider
+        provider = YFinanceDataProvider()
+
+        # Calculate indicators for each timeframe
+        all_indicators = {}
+
+        for tf in timeframes:
+            logger.info(f"Fetching data for timeframe {tf}")
+
+            # Fetch data at this timeframe
+            interval = TIMEFRAME_INTERVAL_MAP[tf]
+            try:
+                data_points = provider.get_data(
+                    symbol=dataset.ticker,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval=interval
+                )
+
+                if not data_points:
+                    logger.warning(f"No data available for timeframe {tf}")
+                    continue
+
+                # Convert to DataFrame
+                tf_df = pd.DataFrame([{
+                    'Date': dp.timestamp,
+                    'Open': dp.open,
+                    'High': dp.high,
+                    'Low': dp.low,
+                    'Close': dp.close,
+                    'Volume': dp.volume
+                } for dp in data_points])
+
+                tf_df = tf_df.sort_values('Date').reset_index(drop=True)
+
+                # Prepare indicators config with timeframe prefix
+                tf_indicators = {}
+                for ind_name, ind_config in indicators.items():
+                    prefixed_name = f"{ind_name}_{tf}"
+                    tf_indicators[prefixed_name] = ind_config
+
+                # Calculate indicators for this timeframe
+                tf_df_with_indicators = TechnicalIndicators.add_indicators_to_dataframe(
+                    tf_df, tf_indicators
+                )
+
+                # Extract indicator columns (exclude OHLCV)
+                ohlcv_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+                indicator_cols = [col for col in tf_df_with_indicators.columns if col not in ohlcv_cols]
+
+                # Store indicator data with dates
+                for col in indicator_cols:
+                    all_indicators[col] = tf_df_with_indicators[['Date', col]].copy()
+
+                logger.info(f"Calculated {len(indicator_cols)} indicators for timeframe {tf}")
+
+            except Exception as e:
+                logger.warning(f"Failed to calculate indicators for timeframe {tf}: {e}")
+                continue
+
+        # Merge indicators into main dataset
+        result_df = df.copy()
+
+        for ind_name, ind_df in all_indicators.items():
+            # Merge on Date using forward fill for different timeframe resolutions
+            ind_df = ind_df.rename(columns={ind_name: ind_name})
+            ind_df = ind_df.set_index('Date')
+
+            # Resample to match main dataset timeframe and forward fill
+            result_df = result_df.set_index('Date') if 'Date' not in result_df.index.names else result_df
+
+            # Align indicator data to main dataset dates
+            aligned_indicator = ind_df.reindex(result_df.index, method='ffill')
+            result_df[ind_name] = aligned_indicator[ind_name]
+            result_df = result_df.reset_index()
+
+        # Save updated dataset
+        result_df.to_csv(file_path, index=False)
+
+        # Update dataset metadata
+        indicator_config = dataset.technical_indicators or {}
+        indicator_config['multi_timeframe'] = {
+            'timeframes': timeframes,
+            'indicators': list(indicators.keys()),
+            'calculated_at': datetime.now().isoformat()
+        }
+        dataset.technical_indicators = indicator_config
+        db.commit()
+        db.refresh(dataset)
+
+        logger.info(f"Successfully calculated multi-timeframe indicators for dataset {dataset_id}")
+
+        return {
+            "dataset_id": dataset_id,
+            "timeframes": timeframes,
+            "indicators_added": list(all_indicators.keys()),
+            "total_columns": len(result_df.columns),
+            "rows": len(result_df),
+            "message": f"Successfully calculated {len(all_indicators)} indicator columns across {len(timeframes)} timeframes"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating multi-timeframe indicators: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate indicators: {str(e)}"
+        )
+
+
+@router.get("/supported-indicators")
+async def get_supported_indicators():
+    """
+    Get list of supported technical indicators and timeframes.
+
+    Returns:
+        Dictionary with supported timeframes and indicators
+    """
+    return {
+        "timeframes": SUPPORTED_TIMEFRAMES,
+        "indicators": DEFAULT_INDICATORS,
+        "description": "Multi-timeframe technical indicators for financial datasets"
+    }
+
+
+@router.post("/{dataset_id}/calculate-fundamentals")
+async def calculate_fundamental_features(
+    dataset_id: int,
+    metrics: List[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate fundamental-derived features for a dataset.
+
+    Creates features for each fundamental metric:
+    - days_to_last_{metric}: Days since last reported value
+    - last_{metric}: Most recent value
+    - last_{metric}_percent: Percent change from previous period
+    - days_to_next_{metric}: Estimated days to next report
+    - next_{metric}_forecast: Simple forecast based on trend
+
+    Args:
+        dataset_id: Dataset ID
+        metrics: List of metrics (default: ['fcf', 'pe', 'eps', 'revenue'])
+        db: Database session
+
+    Returns:
+        Updated dataset with fundamental features
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Default metrics
+        if metrics is None:
+            metrics = ['fcf', 'pe', 'eps', 'revenue', 'de', 'roe']
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        logger.info(f"Calculating fundamental features for dataset {dataset_id}, ticker: {dataset.ticker}")
+
+        # Calculate fundamental features
+        result_df = FundamentalsService.create_fundamental_features(
+            df, dataset.ticker, metrics
+        )
+
+        # Save updated dataset
+        result_df.to_csv(file_path, index=False)
+
+        # Count added columns
+        added_columns = [col for col in result_df.columns if col not in df.columns]
+
+        # Update dataset metadata
+        fundamentals_config = dataset.fundamentals_config or {}
+        fundamentals_config['calculated_metrics'] = metrics
+        fundamentals_config['calculated_at'] = datetime.now().isoformat()
+        fundamentals_config['feature_columns'] = added_columns
+        dataset.fundamentals_config = fundamentals_config
+        db.commit()
+        db.refresh(dataset)
+
+        logger.info(f"Successfully calculated {len(added_columns)} fundamental features for dataset {dataset_id}")
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "metrics": metrics,
+            "features_added": added_columns,
+            "total_columns": len(result_df.columns),
+            "rows": len(result_df),
+            "message": f"Successfully calculated {len(added_columns)} fundamental features"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating fundamental features: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate fundamental features: {str(e)}"
+        )
+
+
+@router.get("/{dataset_id}/fundamentals")
+async def get_fundamental_data(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Get fundamental data for the ticker in a dataset.
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Fundamental data for the ticker
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        fund_data = FundamentalsService.get_fundamental_data(dataset.ticker)
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "fundamentals": fund_data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fundamental data: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get fundamental data: {str(e)}"
+        )
+
+
+@router.post("/{dataset_id}/calculate-macro")
+async def calculate_macro_features(
+    dataset_id: int,
+    indicators: List[str] = None,
+    include_yield_curve: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    Integrate macro economic data with OHLC dataset using forward-fill.
+
+    Fetches macroeconomic indicators (interest rates, GDP, inflation, etc.)
+    and aligns them with the dataset's time series using forward-fill.
+
+    Args:
+        dataset_id: Dataset ID
+        indicators: List of indicators (default: all available)
+        include_yield_curve: Include yield curve features (default: True)
+        db: Database session
+
+    Returns:
+        Updated dataset with macro features
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        logger.info(f"Calculating macro features for dataset {dataset_id}")
+
+        # Initialize macro service
+        macro_service = MacroService()
+
+        # Integrate macro data
+        result_df = macro_service.integrate_macro_with_ohlc(df, indicators)
+
+        # Add yield curve features if requested
+        if include_yield_curve:
+            result_df = macro_service.create_yield_curve_features(result_df)
+
+        # Save updated dataset
+        result_df.to_csv(file_path, index=False)
+
+        # Count added columns
+        added_columns = [col for col in result_df.columns if col not in df.columns]
+
+        logger.info(f"Successfully calculated {len(added_columns)} macro features for dataset {dataset_id}")
+
+        return {
+            "dataset_id": dataset_id,
+            "indicators": indicators or list(MacroService.MACRO_INDICATORS.keys()),
+            "include_yield_curve": include_yield_curve,
+            "features_added": added_columns,
+            "total_columns": len(result_df.columns),
+            "rows": len(result_df),
+            "message": f"Successfully calculated {len(added_columns)} macro features"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating macro features: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate macro features: {str(e)}"
+        )
+
+
+@router.get("/supported-macro-indicators")
+async def get_supported_macro_indicators():
+    """
+    Get list of supported macroeconomic indicators.
+
+    Returns:
+        Dictionary of available macro indicators with metadata
+    """
+    return {
+        "indicators": MacroService.get_supported_indicators(),
+        "description": "Macroeconomic indicators from FRED (Federal Reserve Economic Data)"
+    }
+
+
+@router.post("/{dataset_id}/calculate-sentiment")
+async def calculate_sentiment_features(
+    dataset_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate sentiment features for a dataset.
+
+    Fetches news articles for the ticker, runs sentiment analysis using
+    Transformers (FinBERT), and creates aggregated sentiment features:
+    - news_1d_positive_short, news_1d_positive_medium, news_1d_positive_long
+    - news_1w_negative_short, news_1w_negative_medium, news_1w_negative_long
+    - And combinations for 1d, 1w, 1m, 6m periods
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Updated dataset with sentiment features
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        logger.info(f"Calculating sentiment features for dataset {dataset_id}, ticker: {dataset.ticker}")
+
+        # Initialize sentiment service
+        sentiment_service = SentimentService()
+
+        # Get date range
+        start_date = df['Date'].min()
+        end_date = df['Date'].max()
+
+        # Fetch news articles
+        news_articles = sentiment_service.fetch_news_for_ticker(
+            dataset.ticker, start_date, end_date
+        )
+
+        # Analyze sentiment
+        analyzed_articles = sentiment_service.analyze_news_articles(news_articles)
+
+        # Create sentiment features
+        result_df = sentiment_service.create_sentiment_features(df, analyzed_articles)
+
+        # Save updated dataset
+        result_df.to_csv(file_path, index=False)
+
+        # Count added columns
+        added_columns = [col for col in result_df.columns if col not in df.columns]
+
+        # Update dataset metadata
+        sentiment_config = dataset.sentiment_config or {}
+        sentiment_config['calculated_at'] = datetime.now().isoformat()
+        sentiment_config['articles_analyzed'] = len(analyzed_articles)
+        sentiment_config['feature_columns'] = added_columns
+        dataset.sentiment_config = sentiment_config
+        db.commit()
+        db.refresh(dataset)
+
+        logger.info(f"Successfully calculated {len(added_columns)} sentiment features for dataset {dataset_id}")
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "articles_analyzed": len(analyzed_articles),
+            "features_added": added_columns,
+            "total_columns": len(result_df.columns),
+            "rows": len(result_df),
+            "message": f"Successfully calculated {len(added_columns)} sentiment features from {len(analyzed_articles)} articles"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating sentiment features: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate sentiment features: {str(e)}"
+        )
+
+
+@router.get("/sentiment-feature-descriptions")
+async def get_sentiment_feature_descriptions():
+    """
+    Get descriptions for all sentiment features.
+
+    Returns:
+        Dictionary mapping feature names to descriptions
+    """
+    return {
+        "features": SentimentService.get_feature_descriptions(),
+        "lookback_periods": SentimentService.LOOKBACK_PERIODS,
+        "sentiment_categories": SentimentService.SENTIMENT_CATEGORIES,
+        "impact_timeframes": SentimentService.IMPACT_TIMEFRAMES,
+        "description": "Aggregated news sentiment features for ML model training"
+    }
+
+
+@router.post("/{dataset_id}/analyze-news")
+async def analyze_news_for_dataset(
+    dataset_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch and analyze news articles for a dataset's ticker.
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Analyzed news articles with sentiment
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset to get date range
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        start_date = df['Date'].min()
+        end_date = df['Date'].max()
+
+        # Fetch and analyze news
+        sentiment_service = SentimentService()
+        news_articles = sentiment_service.fetch_news_for_ticker(
+            dataset.ticker, start_date, end_date
+        )
+        analyzed_articles = sentiment_service.analyze_news_articles(news_articles)
+
+        # Convert dates to strings for JSON serialization
+        for article in analyzed_articles:
+            if isinstance(article.get('date'), datetime):
+                article['date'] = article['date'].isoformat()
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "article_count": len(analyzed_articles),
+            "articles": analyzed_articles
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error analyzing news: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze news: {str(e)}"
+        )
+
+
+# ============= Multi-Dataset Endpoints =============
+
+@router.post("/validate-compatibility")
+async def validate_dataset_compatibility(
+    dataset_ids: List[int],
+    db: Session = Depends(get_db)
+):
+    """
+    Validate compatibility of multiple datasets for combined training.
+
+    Checks:
+    - All datasets exist
+    - Timeframes match
+    - Compatible date ranges
+    - Compatible feature columns
+
+    Args:
+        dataset_ids: List of dataset IDs to validate
+        db: Database session
+
+    Returns:
+        Compatibility report with warnings and combined statistics
+    """
+    if len(dataset_ids) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least 2 datasets required for compatibility check"
+        )
+
+    datasets = []
+    for dataset_id in dataset_ids:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+        datasets.append(dataset)
+
+    # Check timeframe compatibility
+    timeframes = set(d.timeframe for d in datasets)
+    timeframe_compatible = len(timeframes) == 1
+
+    # Check tickers
+    tickers = list(set(d.ticker for d in datasets))
+
+    # Load and analyze features
+    feature_sets = []
+    date_ranges = []
+    total_rows = 0
+
+    for dataset in datasets:
+        file_path = Path(dataset.file_path)
+        if file_path.exists():
+            df = pd.read_csv(file_path)
+            feature_sets.append(set(df.columns.tolist()))
+            total_rows += len(df)
+
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                date_ranges.append({
+                    'dataset_id': dataset.id,
+                    'ticker': dataset.ticker,
+                    'start': df['Date'].min().isoformat(),
+                    'end': df['Date'].max().isoformat(),
+                    'rows': len(df)
+                })
+
+    # Find common features
+    if feature_sets:
+        common_features = set.intersection(*feature_sets)
+        all_features = set.union(*feature_sets)
+        missing_features = {ds.id: list(all_features - fs) for ds, fs in zip(datasets, feature_sets)}
+    else:
+        common_features = set()
+        all_features = set()
+        missing_features = {}
+
+    # Build warnings
+    warnings = []
+    if not timeframe_compatible:
+        warnings.append(f"Timeframes do not match: {', '.join(timeframes)}")
+    if len(tickers) > 1:
+        warnings.append(f"Multiple tickers: {', '.join(tickers)} - training will handle each separately")
+    if len(common_features) < len(all_features):
+        warnings.append(f"{len(all_features) - len(common_features)} features not present in all datasets")
+
+    return {
+        "compatible": timeframe_compatible and len(common_features) > 5,
+        "dataset_count": len(datasets),
+        "tickers": tickers,
+        "timeframe_match": timeframe_compatible,
+        "timeframe": list(timeframes)[0] if timeframe_compatible else None,
+        "common_features": len(common_features),
+        "total_features": len(all_features),
+        "total_rows": total_rows,
+        "date_ranges": date_ranges,
+        "missing_features_by_dataset": missing_features,
+        "warnings": warnings
+    }
+
+
+@router.post("/combine-preview")
+async def combine_datasets_preview(
+    dataset_ids: List[int],
+    db: Session = Depends(get_db)
+):
+    """
+    Preview combined statistics for multiple datasets.
+
+    Args:
+        dataset_ids: List of dataset IDs to combine
+        db: Database session
+
+    Returns:
+        Combined statistics and chronological overview
+    """
+    if len(dataset_ids) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least 2 datasets required"
+        )
+
+    datasets = []
+    for dataset_id in dataset_ids:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+        datasets.append(dataset)
+
+    # Load and combine data
+    combined_stats = []
+    all_dates = []
+    total_rows = 0
+
+    for dataset in datasets:
+        file_path = Path(dataset.file_path)
+        if file_path.exists():
+            df = pd.read_csv(file_path)
+            df['Date'] = pd.to_datetime(df['Date'])
+
+            stats = {
+                'dataset_id': dataset.id,
+                'name': dataset.name,
+                'ticker': dataset.ticker,
+                'timeframe': dataset.timeframe,
+                'rows': len(df),
+                'start_date': df['Date'].min().isoformat(),
+                'end_date': df['Date'].max().isoformat(),
+                'columns': len(df.columns)
+            }
+
+            # Add numeric column stats
+            numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+            if 'Close' in df.columns:
+                stats['price_range'] = {
+                    'min': float(df['Close'].min()),
+                    'max': float(df['Close'].max()),
+                    'mean': float(df['Close'].mean())
+                }
+
+            combined_stats.append(stats)
+            all_dates.extend(df['Date'].tolist())
+            total_rows += len(df)
+
+    # Calculate combined timeline
+    if all_dates:
+        all_dates = sorted(set(all_dates))
+        timeline = {
+            'start': all_dates[0].isoformat(),
+            'end': all_dates[-1].isoformat(),
+            'unique_dates': len(all_dates)
+        }
+    else:
+        timeline = None
+
+    return {
+        "datasets": combined_stats,
+        "combined": {
+            "total_datasets": len(datasets),
+            "total_rows": total_rows,
+            "timeline": timeline,
+            "unique_tickers": list(set(d.ticker for d in datasets))
+        }
+    }
+
+
+@router.post("/check-timeframe-match")
+async def check_timeframe_match(
+    dataset_ids: List[int],
+    db: Session = Depends(get_db)
+):
+    """
+    Check if datasets have matching timeframes.
+
+    Args:
+        dataset_ids: List of dataset IDs to check
+        db: Database session
+
+    Returns:
+        Timeframe compatibility status
+    """
+    if len(dataset_ids) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least 2 datasets required"
+        )
+
+    timeframe_info = []
+    for dataset_id in dataset_ids:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+        timeframe_info.append({
+            'dataset_id': dataset.id,
+            'name': dataset.name,
+            'ticker': dataset.ticker,
+            'timeframe': dataset.timeframe
+        })
+
+    timeframes = set(d['timeframe'] for d in timeframe_info)
+
+    return {
+        "match": len(timeframes) == 1,
+        "common_timeframe": list(timeframes)[0] if len(timeframes) == 1 else None,
+        "timeframes_found": list(timeframes),
+        "datasets": timeframe_info,
+        "message": (
+            f"All datasets use {list(timeframes)[0]} timeframe"
+            if len(timeframes) == 1
+            else f"Timeframe mismatch: {', '.join(timeframes)}"
+        )
+    }

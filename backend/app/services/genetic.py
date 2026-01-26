@@ -1,0 +1,425 @@
+"""
+Genetic Optimization Service
+
+Implements genetic algorithm optimization for model hyperparameters
+using DEAP (Distributed Evolutionary Algorithms in Python).
+"""
+
+import numpy as np
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Callable, Tuple
+import logging
+import random
+import json
+
+logger = logging.getLogger(__name__)
+
+# Check for DEAP availability
+try:
+    from deap import base, creator, tools, algorithms
+    DEAP_AVAILABLE = True
+    logger.info("DEAP library available")
+except ImportError:
+    DEAP_AVAILABLE = False
+    logger.warning("DEAP not available. Install with: pip install deap")
+
+
+class GeneticOptimizer:
+    """
+    Genetic algorithm optimizer for model hyperparameters.
+
+    Uses DEAP to evolve populations of hyperparameter configurations
+    to find optimal model architectures.
+    """
+
+    # Default hyperparameter ranges
+    DEFAULT_PARAM_RANGES = {
+        'hidden_dim': {'min': 16, 'max': 256, 'step': 16, 'type': 'int'},
+        'n_rnn_layers': {'min': 1, 'max': 4, 'step': 1, 'type': 'int'},
+        'dropout': {'min': 0.0, 'max': 0.5, 'step': 0.1, 'type': 'float'},
+        'learning_rate': {'min': 0.0001, 'max': 0.01, 'step': 0.0001, 'type': 'float'},
+        'batch_size': {'min': 16, 'max': 128, 'step': 16, 'type': 'int'},
+        'input_chunk_length': {'min': 10, 'max': 60, 'step': 5, 'type': 'int'}
+    }
+
+    def __init__(
+        self,
+        param_ranges: Dict = None,
+        population_size: int = 20,
+        n_generations: int = 10,
+        crossover_prob: float = 0.7,
+        mutation_prob: float = 0.2,
+        early_stopping_generations: int = 3
+    ):
+        """
+        Initialize GeneticOptimizer.
+
+        Args:
+            param_ranges: Dictionary of parameter ranges to optimize
+            population_size: Number of individuals in population
+            n_generations: Number of generations to evolve
+            crossover_prob: Probability of crossover
+            mutation_prob: Probability of mutation
+            early_stopping_generations: Stop if no improvement for this many generations
+        """
+        if not DEAP_AVAILABLE:
+            raise RuntimeError("DEAP library not available. Install with: pip install deap")
+
+        self.param_ranges = param_ranges or self.DEFAULT_PARAM_RANGES
+        self.population_size = population_size
+        self.n_generations = n_generations
+        self.crossover_prob = crossover_prob
+        self.mutation_prob = mutation_prob
+        self.early_stopping_generations = early_stopping_generations
+
+        self.toolbox = None
+        self.best_individual = None
+        self.best_fitness = None
+        self.history = []
+
+        self._setup_deap()
+
+    def _setup_deap(self):
+        """Set up DEAP toolbox with genetic operators."""
+        # Create fitness and individual classes
+        if not hasattr(creator, 'FitnessMax'):
+            creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+        if not hasattr(creator, 'Individual'):
+            creator.create("Individual", list, fitness=creator.FitnessMax)
+
+        self.toolbox = base.Toolbox()
+
+        # Register attribute generators for each parameter
+        self.param_names = list(self.param_ranges.keys())
+        for i, (param_name, config) in enumerate(self.param_ranges.items()):
+            if config['type'] == 'int':
+                self.toolbox.register(
+                    f"attr_{i}",
+                    random.randint,
+                    config['min'],
+                    config['max']
+                )
+            else:
+                self.toolbox.register(
+                    f"attr_{i}",
+                    random.uniform,
+                    config['min'],
+                    config['max']
+                )
+
+        # Register individual and population creators
+        n_params = len(self.param_ranges)
+        self.toolbox.register(
+            "individual",
+            self._create_individual
+        )
+        self.toolbox.register(
+            "population",
+            tools.initRepeat,
+            list,
+            self.toolbox.individual
+        )
+
+        # Register genetic operators
+        self.toolbox.register("mate", tools.cxTwoPoint)
+        self.toolbox.register("mutate", self._mutate_individual)
+        self.toolbox.register("select", tools.selTournament, tournsize=3)
+
+    def _create_individual(self) -> List:
+        """Create a random individual (chromosome)."""
+        individual = []
+        for i, (param_name, config) in enumerate(self.param_ranges.items()):
+            if config['type'] == 'int':
+                value = random.randint(config['min'], config['max'])
+            else:
+                value = random.uniform(config['min'], config['max'])
+            individual.append(value)
+        return creator.Individual(individual)
+
+    def _mutate_individual(self, individual: List, indpb: float = 0.2) -> Tuple[List]:
+        """
+        Mutate an individual with probability indpb for each gene.
+
+        Args:
+            individual: Individual to mutate
+            indpb: Independent probability for each gene
+
+        Returns:
+            Mutated individual (tuple for DEAP compatibility)
+        """
+        for i, (param_name, config) in enumerate(self.param_ranges.items()):
+            if random.random() < indpb:
+                if config['type'] == 'int':
+                    # Gaussian mutation for integers
+                    sigma = (config['max'] - config['min']) / 6
+                    individual[i] = int(np.clip(
+                        individual[i] + random.gauss(0, sigma),
+                        config['min'],
+                        config['max']
+                    ))
+                else:
+                    # Gaussian mutation for floats
+                    sigma = (config['max'] - config['min']) / 6
+                    individual[i] = np.clip(
+                        individual[i] + random.gauss(0, sigma),
+                        config['min'],
+                        config['max']
+                    )
+        return (individual,)
+
+    def decode_individual(self, individual: List) -> Dict:
+        """
+        Decode individual (chromosome) to parameter dictionary.
+
+        Args:
+            individual: List of gene values
+
+        Returns:
+            Dictionary of parameter names to values
+        """
+        params = {}
+        for i, (param_name, config) in enumerate(self.param_ranges.items()):
+            value = individual[i]
+            if config['type'] == 'int':
+                # Round to step size
+                step = config.get('step', 1)
+                value = int(round(value / step) * step)
+            else:
+                # Round to step size
+                step = config.get('step', 0.01)
+                value = round(value / step) * step
+            params[param_name] = value
+        return params
+
+    def encode_params(self, params: Dict) -> List:
+        """
+        Encode parameter dictionary to individual (chromosome).
+
+        Args:
+            params: Dictionary of parameter values
+
+        Returns:
+            List of gene values
+        """
+        individual = []
+        for param_name in self.param_names:
+            individual.append(params.get(param_name, self.param_ranges[param_name]['min']))
+        return creator.Individual(individual)
+
+    def optimize(
+        self,
+        fitness_function: Callable[[Dict], float],
+        callback: Callable[[int, float, Dict], None] = None
+    ) -> Dict:
+        """
+        Run genetic algorithm optimization.
+
+        Args:
+            fitness_function: Function that takes params dict and returns fitness score
+            callback: Optional callback(generation, best_fitness, best_params)
+
+        Returns:
+            Dictionary with best parameters and optimization history
+        """
+        logger.info(f"Starting genetic optimization: pop={self.population_size}, gen={self.n_generations}")
+
+        # Create initial population
+        population = self.toolbox.population(n=self.population_size)
+
+        # Evaluate fitness function wrapper
+        def evaluate(individual):
+            params = self.decode_individual(individual)
+            try:
+                fitness = fitness_function(params)
+                return (fitness,)
+            except Exception as e:
+                logger.warning(f"Fitness evaluation failed: {e}")
+                return (0.0,)
+
+        self.toolbox.register("evaluate", evaluate)
+
+        # Statistics tracking
+        stats = tools.Statistics(lambda ind: ind.fitness.values)
+        stats.register("avg", np.mean)
+        stats.register("max", np.max)
+        stats.register("min", np.min)
+
+        # Track best fitness for early stopping
+        best_fitness_history = []
+        no_improvement_count = 0
+
+        # Evolution loop
+        for gen in range(self.n_generations):
+            # Evaluate fitness for all individuals
+            fitnesses = list(map(self.toolbox.evaluate, population))
+            for ind, fit in zip(population, fitnesses):
+                ind.fitness.values = fit
+
+            # Record statistics
+            record = stats.compile(population)
+            logger.info(f"Gen {gen}: avg={record['avg']:.4f}, max={record['max']:.4f}")
+
+            # Track best individual
+            best_ind = tools.selBest(population, 1)[0]
+            best_fit = best_ind.fitness.values[0]
+            best_params = self.decode_individual(best_ind)
+
+            self.history.append({
+                'generation': gen,
+                'best_fitness': best_fit,
+                'best_params': best_params,
+                'stats': record
+            })
+
+            # Call callback if provided
+            if callback:
+                callback(gen, best_fit, best_params)
+
+            # Update best overall
+            if self.best_fitness is None or best_fit > self.best_fitness:
+                self.best_fitness = best_fit
+                self.best_individual = list(best_ind)
+
+            # Early stopping check
+            best_fitness_history.append(best_fit)
+            if len(best_fitness_history) > self.early_stopping_generations:
+                recent = best_fitness_history[-self.early_stopping_generations:]
+                if max(recent) == min(recent):
+                    no_improvement_count += 1
+                    if no_improvement_count >= 2:
+                        logger.info(f"Early stopping at generation {gen} - no improvement")
+                        break
+                else:
+                    no_improvement_count = 0
+
+            # Selection and reproduction
+            offspring = self.toolbox.select(population, len(population))
+            offspring = list(map(self.toolbox.clone, offspring))
+
+            # Crossover
+            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                if random.random() < self.crossover_prob:
+                    self.toolbox.mate(child1, child2)
+                    del child1.fitness.values
+                    del child2.fitness.values
+
+            # Mutation
+            for mutant in offspring:
+                if random.random() < self.mutation_prob:
+                    self.toolbox.mutate(mutant)
+                    del mutant.fitness.values
+
+            population[:] = offspring
+
+        # Final best
+        best_params = self.decode_individual(self.best_individual)
+
+        logger.info(f"Optimization complete. Best fitness: {self.best_fitness:.4f}")
+        logger.info(f"Best params: {best_params}")
+
+        return {
+            'best_params': best_params,
+            'best_fitness': self.best_fitness,
+            'generations_run': len(self.history),
+            'history': self.history
+        }
+
+    def get_progress(self) -> Dict:
+        """
+        Get current optimization progress.
+
+        Returns:
+            Progress information
+        """
+        return {
+            'generations_completed': len(self.history),
+            'total_generations': self.n_generations,
+            'best_fitness': self.best_fitness,
+            'best_params': self.decode_individual(self.best_individual) if self.best_individual else None,
+            'history': self.history[-5:] if self.history else []  # Last 5 generations
+        }
+
+
+class FitnessEvaluator:
+    """
+    Fitness function implementations for genetic optimization.
+    """
+
+    @staticmethod
+    def create_model_fitness(
+        train_fn: Callable,
+        eval_fn: Callable,
+        train_data: Any,
+        test_data: Any,
+        metric: str = 'accuracy'
+    ) -> Callable:
+        """
+        Create a fitness function for model optimization.
+
+        Args:
+            train_fn: Function to train model with params
+            eval_fn: Function to evaluate model
+            train_data: Training data
+            test_data: Test data
+            metric: Metric to optimize ('accuracy', 'mape', etc.)
+
+        Returns:
+            Fitness function that takes params and returns score
+        """
+        def fitness(params: Dict) -> float:
+            try:
+                # Train model
+                model = train_fn(params, train_data)
+
+                # Evaluate
+                metrics = eval_fn(model, test_data)
+
+                # Get fitness score
+                if metric == 'accuracy':
+                    return metrics.get('accuracy', 0.0)
+                elif metric == 'mape':
+                    # Lower MAPE is better, so invert
+                    mape = metrics.get('mape', 100.0)
+                    return 1.0 / (1.0 + mape)
+                else:
+                    return metrics.get(metric, 0.0)
+
+            except Exception as e:
+                logger.warning(f"Fitness evaluation error: {e}")
+                return 0.0
+
+        return fitness
+
+    @staticmethod
+    def dummy_fitness(params: Dict) -> float:
+        """
+        Dummy fitness function for testing.
+
+        Args:
+            params: Model parameters
+
+        Returns:
+            Fitness score based on parameter values
+        """
+        # Simple fitness based on some parameter heuristics
+        score = 0.5
+
+        # Prefer moderate hidden dim
+        hidden_dim = params.get('hidden_dim', 64)
+        if 64 <= hidden_dim <= 128:
+            score += 0.2
+
+        # Prefer 2 layers
+        n_layers = params.get('n_rnn_layers', 2)
+        if n_layers == 2:
+            score += 0.15
+
+        # Prefer moderate dropout
+        dropout = params.get('dropout', 0.1)
+        if 0.1 <= dropout <= 0.3:
+            score += 0.15
+
+        # Add some noise
+        score += random.uniform(-0.1, 0.1)
+
+        return max(0.0, min(1.0, score))

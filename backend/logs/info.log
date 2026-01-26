@@ -1,0 +1,14 @@
+2026-01-26 08:35:19 - INFO - app.services.ml_models - PyTorch available. CUDA: False, GPU: None
+2026-01-26 08:35:20 - WARNING - darts.models - The StatsForecast module could not be imported. To enable support for the AutoARIMA, AutoETS and Croston models, please consider installing it.
+2026-01-26 08:35:20 - WARNING - darts.utils.utils - The `XGBoost` module could not be imported. To enable XGBoost support in Darts, follow the detailed instructions in the installation guide: https://github.com/unit8co/darts/blob/master/INSTALL.md
+2026-01-26 08:35:20 - WARNING - darts.utils.utils - The `XGBoost` module could not be imported. To enable XGBoost support in Darts, follow the detailed instructions in the installation guide: https://github.com/unit8co/darts/blob/master/INSTALL.md
+2026-01-26 08:35:20 - INFO - app.services.ml_models - Darts library available
+2026-01-26 08:35:20 - INFO - app.services.genetic - DEAP library available
+2026-01-26 08:35:20 - INFO - app.services.genetic_optimizer_base - Registered genetic optimizer adapter for deap
+2026-01-26 08:35:20 - INFO - app.services.genetic_optimizer_base - Registered genetic optimizer adapter for pygad
+2026-01-26 08:35:20 - INFO - app.services.genetic_optimizer_base - Registered genetic optimizer adapter for shinka_evolve
+2026-01-26 08:35:20 - WARNING - app.services.encryption - cryptography library not available - using basic obfuscation
+2026-01-26 08:35:20 - INFO - app.main - Starting Deep Learning Financial Forecasting Platform API
+2026-01-26 08:35:20 - INFO - app.services.task_queue - Started task queue with 2 workers
+2026-01-26 08:35:20 - INFO - app.main - Task queue initialized with 2 workers
+2026-01-26 08:35:20 - INFO - app.main - Application startup complete
