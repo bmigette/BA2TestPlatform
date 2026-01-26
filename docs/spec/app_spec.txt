@@ -197,6 +197,41 @@
           * Default smart steps provided (e.g., power-of-2 for neurons)
       </optimization_parameters>
 
+      <class_imbalance_handling>
+        Prediction targets often have severe class imbalance (e.g., 5% positive, 95% negative).
+        A model predicting "negative" 100% of time gets 95% accuracy but is useless.
+
+        User-configurable options in optimization job:
+
+        <fitness_metric>
+          The metric used by genetic algorithm to evaluate model quality:
+          - accuracy: Standard accuracy (NOT recommended for imbalanced data)
+          - f1_score: Harmonic mean of precision and recall (RECOMMENDED)
+          - precision: Minimize false positives
+          - recall: Minimize false negatives (catch all positive cases)
+          - auc_roc: Area under ROC curve (good for ranking)
+          - balanced_accuracy: Average of recall for each class
+          Default: f1_score
+        </fitness_metric>
+
+        <loss_function>
+          The loss function used during model training:
+          - cross_entropy: Standard cross-entropy loss
+          - weighted_cross_entropy: Auto-weighted based on class distribution
+          - focal_loss: Down-weights easy examples, focuses on hard ones
+            * gamma parameter (default 2.0): focusing strength
+            * alpha parameter (auto): class weight balancing
+          Default: focal_loss (best for imbalanced classification)
+        </loss_function>
+
+        <ui_warnings>
+          - Show imbalance ratio in target statistics
+          - Warning icon when positive class < 10%
+          - Suggest focal_loss when imbalance detected
+          - Display selected metric prominently in results (not accuracy)
+        </ui_warnings>
+      </class_imbalance_handling>
+
       <prediction_targets>
         - User-configurable output fields for each optimization job
         - Symmetric up/down predictions (must be balanced)

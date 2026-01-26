@@ -1353,6 +1353,19 @@ const DatasetDetails: React.FC = () => {
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
               Number of data points where each target condition was detected
             </p>
+            {/* Class imbalance warning */}
+            {Object.values(predictionPreview.statistics).some(s => s.positive_pct < 10) && (
+              <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-medium text-amber-800 dark:text-amber-200">Class Imbalance Detected</p>
+                  <p className="text-amber-700 dark:text-amber-300 mt-1">
+                    Some targets have less than 10% positive samples. During training, use <strong>F1-score</strong> as
+                    the fitness metric and <strong>Focal Loss</strong> to prevent the model from always predicting "no target".
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {Object.entries(predictionPreview.statistics).map(([col, stats]) => (
                 <div key={col} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
