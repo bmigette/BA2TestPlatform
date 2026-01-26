@@ -164,11 +164,27 @@ class SentimentService:
         """
         results = []
 
-        for article in articles:
+        for i, article in enumerate(articles):
             # Combine title and content for analysis
-            text = f"{article.get('title', '')} {article.get('content', '')[:500]}"
+            title = article.get('title', '')
+            content = article.get('content', '')[:500]
+            text = f"{title} {content}"
+
+            # Debug log: article content
+            logger.debug(f"[Article {i+1}/{len(articles)}] Title: {title}")
+            logger.debug(f"[Article {i+1}/{len(articles)}] Content preview: {content[:200]}...")
 
             sentiment = self.analyze_text(text)
+
+            # Debug log: sentiment result
+            logger.debug(
+                f"[Article {i+1}/{len(articles)}] Sentiment: {sentiment['label']} "
+                f"(score={sentiment['score']:.3f}, pos={sentiment['positive_prob']:.3f}, "
+                f"neu={sentiment['neutral_prob']:.3f}, neg={sentiment['negative_prob']:.3f})"
+            )
+
+            impact = self._estimate_impact_timeframe(text)
+            logger.debug(f"[Article {i+1}/{len(articles)}] Impact timeframe: {impact}")
 
             result = {
                 **article,
@@ -177,11 +193,11 @@ class SentimentService:
                 'positive_prob': sentiment['positive_prob'],
                 'neutral_prob': sentiment['neutral_prob'],
                 'negative_prob': sentiment['negative_prob'],
-                # Estimate impact timeframe based on content
-                'impact_timeframe': self._estimate_impact_timeframe(text)
+                'impact_timeframe': impact
             }
             results.append(result)
 
+        logger.info(f"Analyzed sentiment for {len(results)} articles")
         return results
 
     def _estimate_impact_timeframe(self, text: str) -> str:
@@ -299,63 +315,66 @@ class SentimentService:
 
         Returns:
             List of news articles with title, content, date, source
+
+        Raises:
+            ValueError: If provider is not available or unknown
+            Exception: If news fetching fails (no fallback to mock data)
         """
         logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider}")
 
+        # Get the news provider - fail if not available
+        news_provider = self._get_news_provider(provider)
+        if news_provider is None:
+            raise ValueError(f"News provider '{provider}' is not available or not configured")
+
+        # Fetch news using the provider - no fallback on error
+        result = news_provider.get_company_news(
+            symbol=ticker,
+            end_date=end_date,
+            start_date=start_date,
+            format_type="dict"
+        )
+
+        raw_articles = result.get("articles", [])
+        logger.info(f"Received {len(raw_articles)} raw articles from {provider}")
+
+        # Debug log: raw articles
+        for i, article in enumerate(raw_articles):
+            logger.debug(f"[Raw {i+1}/{len(raw_articles)}] Title: {article.get('title', 'N/A')}")
+            logger.debug(f"[Raw {i+1}/{len(raw_articles)}] URL: {article.get('url', 'N/A')}")
+            summary = article.get('summary', article.get('snippet', ''))
+            logger.debug(f"[Raw {i+1}/{len(raw_articles)}] Summary length: {len(summary)} chars")
+
+        # Enrich articles with short summaries using trafilatura
+        if enrich_content and hasattr(news_provider, 'enrich_articles_with_content'):
+            logger.info("Enriching articles with URL content via trafilatura...")
+            raw_articles = news_provider.enrich_articles_with_content(
+                raw_articles,
+                max_workers=5,
+                min_summary_length=100
+            )
+
+        # Convert to standard format
         articles = []
+        for article in raw_articles:
+            pub_date = article.get("published_at", "")
+            # Parse date string to datetime if needed
+            if isinstance(pub_date, str) and pub_date:
+                try:
+                    pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
+                except ValueError:
+                    pub_date = start_date
 
-        try:
-            # Try to use the real news providers
-            news_provider = self._get_news_provider(provider)
+            articles.append({
+                'title': article.get('title', ''),
+                'content': article.get('summary', article.get('snippet', '')),
+                'date': pub_date,
+                'source': article.get('source', provider.upper()),
+                'url': article.get('url', ''),
+                'content_fetched': article.get('content_fetched', False)
+            })
 
-            if news_provider:
-                # Fetch news using the provider
-                result = news_provider.get_company_news(
-                    symbol=ticker,
-                    end_date=end_date,
-                    start_date=start_date,
-                    format_type="dict"
-                )
-
-                raw_articles = result.get("articles", [])
-
-                # Enrich articles with short summaries using trafilatura
-                if enrich_content and hasattr(news_provider, 'enrich_articles_with_content'):
-                    raw_articles = news_provider.enrich_articles_with_content(
-                        raw_articles,
-                        max_workers=5,
-                        min_summary_length=100
-                    )
-
-                # Convert to standard format
-                for article in raw_articles:
-                    pub_date = article.get("published_at", "")
-                    # Parse date string to datetime if needed
-                    if isinstance(pub_date, str) and pub_date:
-                        try:
-                            pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
-                        except ValueError:
-                            pub_date = start_date
-
-                    articles.append({
-                        'title': article.get('title', ''),
-                        'content': article.get('summary', article.get('snippet', '')),
-                        'date': pub_date,
-                        'source': article.get('source', provider.upper()),
-                        'content_fetched': article.get('content_fetched', False)
-                    })
-
-                logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
-            else:
-                # Fall back to mock data if provider not available
-                logger.warning(f"Provider {provider} not available, using mock data")
-                articles = self._generate_mock_news(ticker, start_date, end_date)
-
-        except Exception as e:
-            logger.error(f"Error fetching news from {provider}: {e}")
-            # Fall back to mock data on error
-            articles = self._generate_mock_news(ticker, start_date, end_date)
-
+        logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
         return articles
 
     def _get_news_provider(self, provider: str):
@@ -366,79 +385,44 @@ class SentimentService:
             provider: Provider name ('fmp', 'alphavantage', 'finnhub', 'alpaca')
 
         Returns:
-            News provider instance or None if not available
+            News provider instance
+
+        Raises:
+            ValueError: If provider is unknown
+            ImportError: If provider dependencies are not installed
+            Exception: If provider initialization fails
 
         Note:
             GoogleNewsProvider has been removed (scraping unreliable).
             AINewsProvider requires ModelFactory dependency.
         """
-        try:
-            if provider == "fmp":
-                from dataproviders.news import FMPNewsProvider
-                return FMPNewsProvider()
-            elif provider == "alphavantage":
-                from dataproviders.news import AlphaVantageNewsProvider
-                return AlphaVantageNewsProvider()
-            elif provider == "finnhub":
-                from dataproviders.news import FinnhubNewsProvider
-                return FinnhubNewsProvider()
-            elif provider == "alpaca":
-                from dataproviders.news import AlpacaNewsProvider
-                return AlpacaNewsProvider()
-            else:
-                logger.warning(f"Unknown news provider: {provider}")
-                return None
-        except ImportError as e:
-            logger.warning(f"Could not import {provider} news provider: {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"Could not initialize {provider} news provider: {e}")
-            return None
+        valid_providers = ['fmp', 'alphavantage', 'finnhub', 'alpaca']
 
-    def _generate_mock_news(
-        self,
-        ticker: str,
-        start_date: datetime,
-        end_date: datetime
-    ) -> List[Dict[str, Any]]:
-        """
-        Generate mock news data as fallback.
+        if provider not in valid_providers:
+            raise ValueError(f"Unknown news provider: '{provider}'. Valid providers: {valid_providers}")
 
-        Args:
-            ticker: Stock ticker symbol
-            start_date: Start date
-            end_date: End date
+        logger.debug(f"Initializing news provider: {provider}")
 
-        Returns:
-            List of mock news articles
-        """
-        mock_news = []
-        current_date = start_date
-
-        # Generate some mock news articles
-        while current_date <= end_date:
-            # Add a few articles per week
-            if current_date.weekday() == 0:  # Monday
-                mock_news.append({
-                    'title': f'{ticker} shows strong quarterly results',
-                    'content': f'Company {ticker} reported earnings that beat expectations. '
-                               'Annual revenue growth continues. Strategic initiatives show promise.',
-                    'date': current_date,
-                    'source': 'Mock Financial News'
-                })
-            elif current_date.weekday() == 3:  # Thursday
-                mock_news.append({
-                    'title': f'Market analysis: {ticker} trading update',
-                    'content': f'Intraday trading shows volatility for {ticker}. '
-                               'Breaking news about sector performance.',
-                    'date': current_date,
-                    'source': 'Mock Market Update'
-                })
-
-            current_date += timedelta(days=1)
-
-        logger.info(f"Generated {len(mock_news)} mock news articles for {ticker}")
-        return mock_news
+        if provider == "fmp":
+            from dataproviders.news import FMPNewsProvider
+            if FMPNewsProvider is None:
+                raise ImportError("FMPNewsProvider not available - check if fmpsdk is installed")
+            return FMPNewsProvider()
+        elif provider == "alphavantage":
+            from dataproviders.news import AlphaVantageNewsProvider
+            if AlphaVantageNewsProvider is None:
+                raise ImportError("AlphaVantageNewsProvider not available - check dependencies")
+            return AlphaVantageNewsProvider()
+        elif provider == "finnhub":
+            from dataproviders.news import FinnhubNewsProvider
+            if FinnhubNewsProvider is None:
+                raise ImportError("FinnhubNewsProvider not available - check if finnhub-python is installed")
+            return FinnhubNewsProvider()
+        elif provider == "alpaca":
+            from dataproviders.news import AlpacaNewsProvider
+            if AlpacaNewsProvider is None:
+                raise ImportError("AlpacaNewsProvider not available - check if alpaca-py is installed")
+            return AlpacaNewsProvider()
 
     @staticmethod
     def get_feature_descriptions() -> Dict[str, str]:
