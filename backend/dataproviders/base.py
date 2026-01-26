@@ -135,8 +135,19 @@ class MarketDataProviderInterface(ABC):
                     df = pd.read_csv(cache_file)
                     df['Date'] = pd.to_datetime(df['Date'])
 
+                    # Handle timezone-aware comparison
+                    # Convert dates to match DataFrame timezone (or make both naive)
+                    if df['Date'].dt.tz is not None:
+                        # DataFrame is timezone-aware, make comparison dates timezone-aware
+                        start_dt = pd.Timestamp(start_date).tz_localize('UTC') if start_date.tzinfo is None else pd.Timestamp(start_date)
+                        end_dt = pd.Timestamp(end_date).tz_localize('UTC') if end_date.tzinfo is None else pd.Timestamp(end_date)
+                    else:
+                        # DataFrame is timezone-naive
+                        start_dt = pd.Timestamp(start_date).tz_localize(None) if hasattr(start_date, 'tzinfo') and start_date.tzinfo else pd.Timestamp(start_date)
+                        end_dt = pd.Timestamp(end_date).tz_localize(None) if hasattr(end_date, 'tzinfo') and end_date.tzinfo else pd.Timestamp(end_date)
+
                     # Filter by date range
-                    df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+                    df = df[(df['Date'] >= start_dt) & (df['Date'] <= end_dt)]
                     return df
 
         # Fetch fresh data
