@@ -127,6 +127,7 @@ const DatasetDetails: React.FC = () => {
   const [sentimentMarkers, setSentimentMarkers] = useState<SentimentMarker[]>([]);
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [sentimentIsMock, setSentimentIsMock] = useState(false);
+  const [sentimentError, setSentimentError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialZoomSet, setInitialZoomSet] = useState(false);
@@ -154,19 +155,32 @@ const DatasetDetails: React.FC = () => {
   // Fetch real sentiment markers from API
   const fetchSentimentMarkers = async (datasetId: number) => {
     setSentimentLoading(true);
+    setSentimentError(null);
     try {
       const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/sentiment?provider=fmp`);
       if (response.ok) {
         const data = await response.json();
         setSentimentMarkers(data.markers || []);
         setSentimentIsMock(data.is_mock || false);
+        setSentimentError(null);
       } else {
-        console.error('Failed to fetch sentiment markers');
+        // Try to extract error message from response
+        let errorMsg = 'Failed to fetch sentiment markers';
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.detail || errorMsg;
+        } catch {
+          // Ignore JSON parse errors
+        }
+        console.error('Failed to fetch sentiment markers:', errorMsg);
         setSentimentMarkers([]);
+        setSentimentError(errorMsg);
       }
     } catch (err) {
-      console.error('Error fetching sentiment:', err);
+      const errorMsg = err instanceof Error ? err.message : 'Network error';
+      console.error('Error fetching sentiment:', errorMsg);
       setSentimentMarkers([]);
+      setSentimentError(errorMsg);
     } finally {
       setSentimentLoading(false);
     }
@@ -689,23 +703,38 @@ const DatasetDetails: React.FC = () => {
           {/* Sentiment Legend */}
           {indicators.showSentiment && (
             <div className="flex items-center gap-3 ml-3 text-xs">
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                <span className="text-gray-500 dark:text-gray-400">Positive</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                <span className="text-gray-500 dark:text-gray-400">Neutral</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                <span className="text-gray-500 dark:text-gray-400">Negative</span>
-              </div>
-              {sentimentIsMock && (
-                <span className="text-orange-500 text-xs">(Mock Data)</span>
-              )}
-              {!sentimentIsMock && sentimentMarkers.length > 0 && (
-                <span className="text-gray-400 text-xs">({sentimentMarkers.length} articles)</span>
+              {sentimentError ? (
+                <>
+                  <span className="text-red-500">Error: {sentimentError}</span>
+                  <button
+                    onClick={() => dataset && fetchSentimentMarkers(dataset.id)}
+                    disabled={sentimentLoading}
+                    className="px-2 py-0.5 bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800/50 disabled:opacity-50"
+                  >
+                    {sentimentLoading ? 'Retrying...' : 'Retry'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                    <span className="text-gray-500 dark:text-gray-400">Positive</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                    <span className="text-gray-500 dark:text-gray-400">Neutral</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                    <span className="text-gray-500 dark:text-gray-400">Negative</span>
+                  </div>
+                  {sentimentIsMock && (
+                    <span className="text-orange-500 text-xs">(Mock Data)</span>
+                  )}
+                  {!sentimentIsMock && sentimentMarkers.length > 0 && (
+                    <span className="text-gray-400 text-xs">({sentimentMarkers.length} articles)</span>
+                  )}
+                </>
               )}
             </div>
           )}
