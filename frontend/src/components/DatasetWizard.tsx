@@ -59,6 +59,8 @@ interface FundamentalsConfig {
   enabled: boolean;
   metrics: string[];
   macroIndicators: string[];
+  fundamentalsProvider: string;
+  macroProvider: string;
 }
 
 interface WizardData {
@@ -117,7 +119,9 @@ const getDefaultWizardData = (): WizardData => ({
   fundamentals: {
     enabled: false,
     metrics: ['fcf', 'pe', 'eps', 'revenue'],
-    macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment']
+    macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment'],
+    fundamentalsProvider: 'yfinance',
+    macroProvider: 'fred'
   }
 });
 
@@ -161,7 +165,9 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         fundamentals: {
           enabled: false,
           metrics: ['fcf', 'pe', 'eps', 'revenue'],
-          macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment']
+          macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment'],
+          fundamentalsProvider: 'yfinance',
+          macroProvider: 'fred'
         }
       });
     } else if (isOpen && mode === 'create') {
@@ -987,6 +993,42 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                   <span>{indicator.label}</span>
                 </label>
               ))}
+            </div>
+          </div>
+
+          {/* Data Provider Selection */}
+          <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Data Providers</label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Fundamentals Provider</label>
+                <select
+                  value={wizardData.fundamentals.fundamentalsProvider}
+                  onChange={(e) => setWizardData({
+                    ...wizardData,
+                    fundamentals: { ...wizardData.fundamentals, fundamentalsProvider: e.target.value }
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
+                >
+                  <option value="yfinance">Yahoo Finance (Free)</option>
+                  <option value="alphavantage">Alpha Vantage (API Key)</option>
+                  <option value="fmp">Financial Modeling Prep (API Key)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Macro Data Provider</label>
+                <select
+                  value={wizardData.fundamentals.macroProvider}
+                  onChange={(e) => setWizardData({
+                    ...wizardData,
+                    fundamentals: { ...wizardData.fundamentals, macroProvider: e.target.value }
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
+                >
+                  <option value="fred">FRED (Federal Reserve)</option>
+                  <option value="alphavantage">Alpha Vantage (API Key)</option>
+                </select>
+              </div>
             </div>
           </div>
 

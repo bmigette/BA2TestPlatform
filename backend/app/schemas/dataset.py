@@ -48,7 +48,7 @@ class DatasetResponse(BaseModel):
     start_date: datetime
     end_date: datetime
     rows_count: int
-    technical_indicators: Optional[Dict[str, Any]]
+    technical_indicators: Optional[List[Dict[str, Any]]]
     fundamentals_config: Optional[Dict[str, Any]]
     sentiment_config: Optional[Dict[str, Any]]
     generation_config: Optional[Dict[str, Any]]
