@@ -47,8 +47,46 @@
     </frontend>
     <data_providers>
       Custom data provider package copied from BA2TradePlatform
-      Includes: Alpha Vantage, Yahoo Finance, Polygon.io, EODHD, and other API-based providers
-      NOTE: Only include API-based providers, exclude AI providers
+
+      <ohlcv_providers>
+        - Alpha Vantage, Yahoo Finance, Polygon.io, EODHD
+        - NOTE: Only include API-based providers, exclude AI providers
+      </ohlcv_providers>
+
+      <news_providers>
+        - FMP (Financial Modeling Prep): Company and market news
+        - AlphaVantage: News with built-in sentiment analysis (Bullish/Bearish/Neutral)
+        - Finnhub: Company and global market news
+        - Alpaca: News from Alpaca trading platform
+        - LocalFiles: Read from previously exported JSON files
+
+        Each provider exposes:
+        - has_sentiment: Whether provider includes built-in sentiment
+        - features: List of supported capabilities (company_news, global_news, etc.)
+        - api_key_configured: Status of API key configuration
+      </news_providers>
+
+      <news_export_format>
+        Standardized JSON export format for news articles:
+        {
+          "version": "1.0",
+          "export_date": "ISO datetime",
+          "symbol": "TICKER",
+          "provider": "provider_id",
+          "article_count": N,
+          "articles": [
+            {
+              "title": "...",
+              "summary": "...",
+              "source": "...",
+              "url": "...",
+              "published_at": "ISO datetime",
+              "sentiment": "...",  // Provider's sentiment if available
+              "sentiment_score": 0.0-1.0
+            }
+          ]
+        }
+      </news_export_format>
     </data_providers>
   </technology_stack>
 
@@ -99,9 +137,18 @@
 
       <dataset_visualization>
         - Interactive chart showing price action with OHLC candlesticks
-        - Overlay technical indicators
+        - Overlay technical indicators (SMA, EMA, Bollinger Bands, etc.)
         - Display news events with sentiment markers
-        - Timeline slider to navigate historical data
+        - Prediction target overlay:
+          * Toggle to show/hide prediction target markers
+          * Green diamond markers for detected "up" targets (below price)
+          * Red diamond markers for detected "down" targets (above price)
+          * Legend explaining marker meanings
+        - Target statistics display:
+          * Clear "Detected" / "Not detected" labels (not progress bars)
+          * Count and percentage for each target type
+          * Explanatory text about what statistics represent
+        - Timeline slider to navigate historical data (brush component)
         - Zoom and pan functionality
         - Export dataset to CSV/Parquet
       </dataset_visualization>
@@ -359,6 +406,29 @@
         - Duplicate profile
         - Import/export profiles (JSON)
       </optimization_profiles>
+
+      <tools_page>
+        - Developer/testing tools for debugging data providers
+        - News Provider Testing:
+          * Symbol input for stock ticker
+          * Provider selector dropdown (FMP, AlphaVantage, Finnhub, Alpaca, LocalFiles)
+          * Date range picker (start/end dates, defaults to last 30 days)
+          * Fetch news button with loading state
+          * Results display with article cards:
+            - Title, source, date, summary
+            - Provider's built-in sentiment (if available, e.g., AlphaVantage)
+            - FinBERT sentiment analysis button per article
+            - "Analyze All" bulk sentiment analysis
+          * Export to JSON button:
+            - Saves articles to news_exports/ directory
+            - Standardized format for reuse across providers
+            - Includes metadata (symbol, provider, export date)
+          * Provider status indicators (API key configured, features supported)
+        - LocalFiles provider:
+          * Reads from previously exported JSON files
+          * Enables offline news testing
+          * Preserves cached sentiment from original provider
+      </tools_page>
     </user_interface>
 
     <settings_configuration>
@@ -560,6 +630,19 @@
             When REQUIRE_API_KEY=true in backend .env, all endpoints require X-API-Key header
             Local development can set REQUIRE_API_KEY=false to skip authentication
     </backend_auth>
+
+    <tools>
+      - GET /api/tools/news/providers - List available news providers with status
+      - GET /api/tools/news/fetch - Fetch news articles for a symbol
+        * Query params: symbol, provider, start_date, end_date, limit
+        * Returns articles with optional provider sentiment
+      - POST /api/tools/news/export - Export articles to JSON file
+        * Query params: symbol, provider
+        * Body: array of articles
+        * Saves to news_exports/ directory with standardized format
+      - GET /api/tools/news/exports - List all exported news files
+      - POST /api/tools/news/analyze-single - Analyze sentiment for single article
+    </tools>
   </api_endpoints>
 
   <implementation_steps>
