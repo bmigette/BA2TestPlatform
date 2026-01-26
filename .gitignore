@@ -1,0 +1,97 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# Cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# ML/Data
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Datasets (large files)
+backend/datasets/*.csv
+backend/datasets/*.parquet
+!backend/datasets/.gitkeep
+
+# Model files (large)
+backend/models/*.pt
+backend/models/*.pth
+backend/models/*.onnx
+!backend/models/.gitkeep
+
+# Node (frontend)
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Build artifacts
+*.egg-info/
+*.manifest
+*.spec
+
+# Secrets
+*.pem
+*.key
+credentials.json
