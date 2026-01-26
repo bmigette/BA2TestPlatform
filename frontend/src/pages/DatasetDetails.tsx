@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import {
@@ -461,6 +461,7 @@ const DatasetDetails: React.FC = () => {
     const newStart = Math.max(0, center - Math.floor(newRange / 2));
     const newEnd = Math.min(candlestickData.length - 1, newStart + newRange);
     setZoomDomain({ startIndex: newStart, endIndex: newEnd });
+    setBrushKey(prev => prev + 1);
   };
 
   const handleZoomOut = () => {
@@ -477,17 +478,31 @@ const DatasetDetails: React.FC = () => {
     } else {
       setZoomDomain({ startIndex: newStart, endIndex: newEnd });
     }
+    setBrushKey(prev => prev + 1);
   };
 
   const handleResetZoom = () => {
     setZoomDomain(null);
+    setBrushKey(prev => prev + 1); // Force brush to reset
   };
 
-  const handleBrushChange = (domain: any) => {
+  // Brush key to force re-creation when zoom buttons are used
+  const [brushKey, setBrushKey] = useState(0);
+
+  // Debounce timer ref
+  const brushDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleBrushChange = useCallback((domain: any) => {
     if (domain && domain.startIndex !== undefined && domain.endIndex !== undefined) {
-      setZoomDomain({ startIndex: domain.startIndex, endIndex: domain.endIndex });
+      // Debounce the state update to prevent rapid re-renders
+      if (brushDebounceRef.current) {
+        clearTimeout(brushDebounceRef.current);
+      }
+      brushDebounceRef.current = setTimeout(() => {
+        setZoomDomain({ startIndex: domain.startIndex, endIndex: domain.endIndex });
+      }, 50);
     }
-  };
+  }, []);
 
   const handleExport = async () => {
     try {
@@ -997,6 +1012,7 @@ const DatasetDetails: React.FC = () => {
                 );
               })}
               <Brush
+                key={brushKey}
                 dataKey="Date"
                 height={30}
                 stroke="#8B5CF6"
