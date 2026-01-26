@@ -257,7 +257,11 @@ async def preview_prediction_targets(
 
         # Convert dates to strings for JSON serialization
         sample_df['Date'] = sample_df['Date'].astype(str)
-        sample_data = sample_df.to_dict(orient='records')
+
+        # Use pandas to_json with proper NaN handling, then parse back
+        import json
+        json_str = sample_df.to_json(orient='records', date_format='iso')
+        sample_data = json.loads(json_str)
 
         logger.info(f"Preview complete: {len(target_cols)} target columns calculated")
 
