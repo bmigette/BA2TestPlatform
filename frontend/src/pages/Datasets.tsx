@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, RefreshCw, Copy, Edit } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Copy, Edit, CheckCircle, AlertCircle, Loader } from 'lucide-react';
 import DatasetWizard from '../components/DatasetWizard';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Toast from '../components/Toast';
@@ -13,6 +13,8 @@ interface Dataset {
   start_date: string;
   end_date: string;
   rows_count: number;
+  status: 'pending' | 'building' | 'ready' | 'error';
+  error_message: string | null;
   created_at: string;
   normalization_buffer_pct?: number;
   technical_indicators?: any;
@@ -169,6 +171,9 @@ const Datasets: React.FC = () => {
                   Name
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Ticker
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
@@ -197,6 +202,32 @@ const Datasets: React.FC = () => {
                 >
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
                     {dataset.name}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    {dataset.status === 'ready' && (
+                      <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded-full inline-flex items-center gap-1">
+                        <CheckCircle size={10} />
+                        Ready
+                      </span>
+                    )}
+                    {dataset.status === 'building' && (
+                      <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded-full inline-flex items-center gap-1">
+                        <Loader size={10} className="animate-spin" />
+                        Building
+                      </span>
+                    )}
+                    {dataset.status === 'pending' && (
+                      <span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded-full inline-flex items-center gap-1">
+                        <Loader size={10} />
+                        Pending
+                      </span>
+                    )}
+                    {dataset.status === 'error' && (
+                      <span className="px-2 py-1 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 rounded-full inline-flex items-center gap-1" title={dataset.error_message || 'Error'}>
+                        <AlertCircle size={10} />
+                        Error
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                     {dataset.ticker}

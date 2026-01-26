@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save } from 'lucide-react';
+import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import {
   XAxis,
   YAxis,
@@ -23,6 +23,8 @@ interface Dataset {
   start_date: string;
   end_date: string;
   rows_count: number;
+  status: 'pending' | 'building' | 'ready' | 'error';
+  error_message: string | null;
   technical_indicators: any;
   fundamentals_config: any;
   sentiment_config: any;
@@ -131,6 +133,7 @@ const DatasetDetails: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialZoomSet, setInitialZoomSet] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   // Prediction targets state
   const [predictionTargets, setPredictionTargets] = useState<PredictionTarget[]>([]);
@@ -183,6 +186,48 @@ const DatasetDetails: React.FC = () => {
       setSentimentError(errorMsg);
     } finally {
       setSentimentLoading(false);
+    }
+  };
+
+  // Handle dataset regeneration
+  const handleRegenerate = async () => {
+    if (!dataset) return;
+
+    setIsRegenerating(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/regenerate`, {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        const updatedDataset = await response.json();
+        setDataset(updatedDataset);
+
+        // Refetch chart data if successful
+        if (updatedDataset.status === 'ready') {
+          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/preview`);
+          if (csvResponse.ok) {
+            const csvData = await csvResponse.json();
+            const rawData = csvData.data || [];
+            const enrichedData = addIndicatorsToData(rawData);
+            setChartData(enrichedData);
+          }
+        }
+      } else {
+        const errorData = await response.json();
+        setError(errorData.detail || 'Failed to regenerate dataset');
+        // Refetch dataset to get updated status
+        const refreshResponse = await fetch(`http://localhost:8002/api/datasets/${dataset.id}`);
+        if (refreshResponse.ok) {
+          setDataset(await refreshResponse.json());
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setIsRegenerating(false);
     }
   };
 
@@ -539,25 +584,82 @@ const DatasetDetails: React.FC = () => {
           </button>
           <div className="flex space-x-2">
             <button
+              onClick={handleRegenerate}
+              disabled={isRegenerating}
+              className="px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 flex items-center space-x-2"
+            >
+              <RefreshCw size={16} className={isRegenerating ? 'animate-spin' : ''} />
+              <span>{isRegenerating ? 'Regenerating...' : 'Regenerate'}</span>
+            </button>
+            <button
               onClick={handleExport}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2"
+              disabled={dataset.status !== 'ready'}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center space-x-2"
             >
               <Download size={16} />
               <span>Export CSV</span>
             </button>
             <button
               onClick={handleExportParquet}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center space-x-2"
+              disabled={dataset.status !== 'ready'}
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center space-x-2"
             >
               <Download size={16} />
               <span>Export Parquet</span>
             </button>
           </div>
         </div>
-        <h1 className="text-3xl font-bold mb-2 text-gray-900 dark:text-gray-100">{dataset.name}</h1>
+        <div className="flex items-center gap-3 mb-2">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">{dataset.name}</h1>
+          {/* Status Badge */}
+          {dataset.status === 'ready' && (
+            <span className="px-2.5 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded-full flex items-center gap-1">
+              <CheckCircle size={12} />
+              Ready
+            </span>
+          )}
+          {dataset.status === 'building' && (
+            <span className="px-2.5 py-1 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded-full flex items-center gap-1">
+              <Loader size={12} className="animate-spin" />
+              Building
+            </span>
+          )}
+          {dataset.status === 'pending' && (
+            <span className="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded-full flex items-center gap-1">
+              <Loader size={12} />
+              Pending
+            </span>
+          )}
+          {dataset.status === 'error' && (
+            <span className="px-2.5 py-1 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 rounded-full flex items-center gap-1">
+              <AlertCircle size={12} />
+              Error
+            </span>
+          )}
+        </div>
         <p className="text-gray-600 dark:text-gray-400">
           {dataset.ticker} • {dataset.timeframe}
         </p>
+        {/* Error Message Banner */}
+        {dataset.status === 'error' && dataset.error_message && (
+          <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-red-700 dark:text-red-300">Dataset Generation Failed</p>
+                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{dataset.error_message}</p>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={isRegenerating}
+                  className="mt-2 px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 flex items-center gap-1"
+                >
+                  <RefreshCw size={14} className={isRegenerating ? 'animate-spin' : ''} />
+                  {isRegenerating ? 'Retrying...' : 'Retry Generation'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Stats Grid */}

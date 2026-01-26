@@ -13,7 +13,7 @@ import pandas as pd
 from pathlib import Path
 
 from app.models.database import get_db
-from app.models.dataset import Dataset
+from app.models.dataset import Dataset, DatasetStatus
 from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate
 from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
@@ -65,6 +65,7 @@ async def create_dataset(
     Returns:
         Created dataset with metadata
     """
+    db_dataset = None
     try:
         logger.info(f"Creating dataset for {dataset_create.ticker} with timeframe {dataset_create.timeframe}")
 
@@ -84,7 +85,43 @@ async def create_dataset(
         else:
             start_date = datetime.strptime(dataset_create.start_date, "%Y-%m-%d")
 
-        # Fetch data using YFinance provider
+        # Build generation config for regeneration capability
+        generation_config = {
+            "data_provider": dataset_create.data_provider or "yfinance",
+            "original_start_date": dataset_create.start_date,
+            "original_end_date": dataset_create.end_date,
+            "indicator_collection_id": dataset_create.indicator_collection_id,
+            "created_at": datetime.now().isoformat()
+        }
+
+        # Create datasets directory if it doesn't exist
+        datasets_dir = Path("datasets")
+        datasets_dir.mkdir(exist_ok=True)
+        file_path = datasets_dir / f"{dataset_create.name}.csv"
+
+        # Create database record in PENDING status first
+        db_dataset = Dataset(
+            name=dataset_create.name,
+            ticker=dataset_create.ticker,
+            timeframe=dataset_create.timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            rows_count=0,
+            status=DatasetStatus.BUILDING.value,
+            technical_indicators=dataset_create.technical_indicators,
+            fundamentals_config=dataset_create.fundamentals_config,
+            sentiment_config=dataset_create.sentiment_config,
+            generation_config=generation_config,
+            normalization_buffer_pct=dataset_create.normalization_buffer_pct,
+            file_path=str(file_path)
+        )
+
+        db.add(db_dataset)
+        db.commit()
+        db.refresh(db_dataset)
+        logger.info(f"Created dataset record with ID {db_dataset.id} in BUILDING status")
+
+        # Now fetch data - if this fails, dataset will remain in BUILDING or ERROR status
         provider = YFinanceDataProvider()
         logger.info(f"Fetching data from {start_date.date()} to {end_date.date()}")
 
@@ -110,6 +147,9 @@ async def create_dataset(
         )
 
         if not data_points:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"No data available for {dataset_create.ticker}"
+            db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No data available for {dataset_create.ticker}"
@@ -127,45 +167,20 @@ async def create_dataset(
 
         df = df.sort_values('Date').reset_index(drop=True)
 
-        # Create datasets directory if it doesn't exist
-        datasets_dir = Path("datasets")
-        datasets_dir.mkdir(exist_ok=True)
-
         # Save dataset to file
-        file_path = datasets_dir / f"{dataset_create.name}.csv"
         df.to_csv(file_path, index=False)
         logger.info(f"Saved dataset to {file_path}")
 
-        # Build generation config for regeneration capability
-        generation_config = {
-            "data_provider": dataset_create.data_provider or "yfinance",
-            "original_start_date": dataset_create.start_date,
-            "original_end_date": dataset_create.end_date,
-            "indicator_collection_id": dataset_create.indicator_collection_id,
-            "created_at": datetime.now().isoformat()
-        }
-
-        # Create database record
-        db_dataset = Dataset(
-            name=dataset_create.name,
-            ticker=dataset_create.ticker,
-            timeframe=dataset_create.timeframe,
-            start_date=df['Date'].min(),
-            end_date=df['Date'].max(),
-            rows_count=len(df),
-            technical_indicators=dataset_create.technical_indicators,
-            fundamentals_config=dataset_create.fundamentals_config,
-            sentiment_config=dataset_create.sentiment_config,
-            generation_config=generation_config,
-            normalization_buffer_pct=dataset_create.normalization_buffer_pct,
-            file_path=str(file_path)
-        )
-
-        db.add(db_dataset)
+        # Update dataset with actual data and set to READY
+        db_dataset.start_date = df['Date'].min()
+        db_dataset.end_date = df['Date'].max()
+        db_dataset.rows_count = len(df)
+        db_dataset.status = DatasetStatus.READY.value
+        db_dataset.error_message = None
         db.commit()
         db.refresh(db_dataset)
 
-        logger.info(f"Created dataset with ID {db_dataset.id}")
+        logger.info(f"Dataset {db_dataset.id} is now READY with {len(df)} rows")
 
         return db_dataset
 
@@ -173,7 +188,16 @@ async def create_dataset(
         raise
     except Exception as e:
         logger.error(f"Error creating dataset: {e}", exc_info=True)
-        db.rollback()
+        # If we have a dataset record, mark it as error
+        if db_dataset and db_dataset.id:
+            try:
+                db_dataset.status = DatasetStatus.ERROR.value
+                db_dataset.error_message = str(e)
+                db.commit()
+            except Exception:
+                db.rollback()
+        else:
+            db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create dataset: {str(e)}"
@@ -530,6 +554,133 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete dataset: {str(e)}"
+        )
+
+
+@router.post("/{dataset_id}/regenerate", response_model=DatasetResponse)
+async def regenerate_dataset(
+    dataset_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Regenerate a dataset by re-fetching data from the provider.
+
+    This endpoint can be used to:
+    - Retry a failed dataset generation
+    - Refresh data for an existing dataset
+    - Reset a dataset that's stuck in BUILDING status
+
+    Args:
+        dataset_id: Dataset ID to regenerate
+        db: Database session
+
+    Returns:
+        Regenerated dataset
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        logger.info(f"Regenerating dataset {dataset_id} ({dataset.name})")
+
+        # Set status to BUILDING
+        dataset.status = DatasetStatus.BUILDING.value
+        dataset.error_message = None
+        db.commit()
+
+        # Get generation config
+        gen_config = dataset.generation_config or {}
+
+        # Parse dates
+        if gen_config.get("original_start_date"):
+            start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
+        else:
+            start_date = dataset.start_date
+
+        if gen_config.get("original_end_date"):
+            end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
+        else:
+            end_date = dataset.end_date
+
+        # Fetch data
+        provider = YFinanceDataProvider()
+        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()}")
+
+        interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+        }
+        interval = interval_map.get(dataset.timeframe, "1d")
+
+        data_points = provider.get_data(
+            symbol=dataset.ticker,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
+        )
+
+        if not data_points:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = f"No data available for {dataset.ticker}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No data available for {dataset.ticker}"
+            )
+
+        # Convert to DataFrame
+        df = pd.DataFrame([{
+            'Date': dp.timestamp,
+            'Open': dp.open,
+            'High': dp.high,
+            'Low': dp.low,
+            'Close': dp.close,
+            'Volume': dp.volume
+        } for dp in data_points])
+        df = df.sort_values('Date').reset_index(drop=True)
+
+        # Save to file
+        file_path = Path(dataset.file_path)
+        file_path.parent.mkdir(exist_ok=True)
+        df.to_csv(file_path, index=False)
+        logger.info(f"Saved regenerated dataset to {file_path}")
+
+        # Update dataset record
+        dataset.start_date = df['Date'].min()
+        dataset.end_date = df['Date'].max()
+        dataset.rows_count = len(df)
+        dataset.status = DatasetStatus.READY.value
+        dataset.error_message = None
+
+        # Update generation config
+        gen_config["regenerated_at"] = datetime.now().isoformat()
+        dataset.generation_config = gen_config
+
+        db.commit()
+        db.refresh(dataset)
+
+        logger.info(f"Dataset {dataset_id} regenerated successfully with {len(df)} rows")
+
+        return dataset
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating dataset: {e}", exc_info=True)
+        # Mark as error
+        try:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = str(e)
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to regenerate dataset: {str(e)}"
         )
 
 

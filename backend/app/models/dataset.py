@@ -2,9 +2,18 @@
 Dataset model for storing dataset metadata
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Text, Float
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Text, Float, Enum
 from sqlalchemy.sql import func
 from .database import Base
+import enum
+
+
+class DatasetStatus(str, enum.Enum):
+    """Dataset generation status"""
+    PENDING = "pending"      # Created but not yet processed
+    BUILDING = "building"    # Currently being generated
+    READY = "ready"          # Successfully generated
+    ERROR = "error"          # Generation failed
 
 
 class Dataset(Base):
@@ -19,6 +28,10 @@ class Dataset(Base):
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime, nullable=False)
     rows_count = Column(Integer, nullable=False, default=0)
+
+    # Status tracking
+    status = Column(String(20), nullable=False, default=DatasetStatus.READY.value)
+    error_message = Column(Text, nullable=True)
 
     # JSON fields for configuration
     technical_indicators = Column(JSON, nullable=True)

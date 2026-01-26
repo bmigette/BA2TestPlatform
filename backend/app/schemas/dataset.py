@@ -50,6 +50,8 @@ class DatasetResponse(BaseModel):
     start_date: datetime
     end_date: datetime
     rows_count: int
+    status: str = "ready"
+    error_message: Optional[str] = None
     technical_indicators: Optional[List[Dict[str, Any]]]
     fundamentals_config: Optional[Dict[str, Any]]
     sentiment_config: Optional[Dict[str, Any]]
