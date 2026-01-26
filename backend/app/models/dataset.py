@@ -25,6 +25,11 @@ class Dataset(Base):
     fundamentals_config = Column(JSON, nullable=True)
     sentiment_config = Column(JSON, nullable=True)
 
+    # Complete generation config for regeneration
+    # Stores: data_provider, original_start_date, original_end_date,
+    # indicator_collection_id, and all parameters used during creation
+    generation_config = Column(JSON, nullable=True)
+
     # File storage
     file_path = Column(String(500), nullable=False)
 

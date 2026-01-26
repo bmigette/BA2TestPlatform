@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle, Plus, Trash2, Save, FolderOpen } from 'lucide-react';
 
 interface DatasetWizardProps {
   isOpen: boolean;
@@ -7,11 +7,28 @@ interface DatasetWizardProps {
   onComplete: () => void;
 }
 
+// Updated indicator config with individual timeframe
 interface IndicatorConfig {
+  id: string;  // Unique ID for React keys
   name: string;
   type: string;
+  timeframe: string;
   period?: number;
-  enabled: boolean;
+  fast?: number;
+  slow?: number;
+  signal?: number;
+  std_dev?: number;
+  k_period?: number;
+  d_period?: number;
+  smooth_k?: number;
+}
+
+interface IndicatorCollection {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  indicators: IndicatorConfig[];
 }
 
 interface SentimentConfig {
@@ -39,6 +56,32 @@ interface WizardData {
   fundamentals: FundamentalsConfig;
 }
 
+// Timeframe ordering for validation
+const TIMEFRAME_ORDER = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo'];
+
+const TIMEFRAME_LABELS: Record<string, string> = {
+  '1m': '1 Minute',
+  '5m': '5 Minutes',
+  '15m': '15 Minutes',
+  '30m': '30 Minutes',
+  '1h': '1 Hour',
+  '4h': '4 Hours',
+  '1d': '1 Day',
+  '1w': '1 Week',
+  '1mo': '1 Month'
+};
+
+// Available indicator types
+const INDICATOR_TYPES = [
+  { type: 'sma', name: 'SMA (Simple Moving Average)', hasPeriod: true, defaultPeriod: 20 },
+  { type: 'ema', name: 'EMA (Exponential Moving Average)', hasPeriod: true, defaultPeriod: 20 },
+  { type: 'rsi', name: 'RSI (Relative Strength Index)', hasPeriod: true, defaultPeriod: 14 },
+  { type: 'macd', name: 'MACD', hasPeriod: false },
+  { type: 'bbands', name: 'Bollinger Bands', hasPeriod: true, defaultPeriod: 20 },
+  { type: 'atr', name: 'ATR (Average True Range)', hasPeriod: true, defaultPeriod: 14 },
+  { type: 'stochastic', name: 'Stochastic Oscillator', hasPeriod: false },
+];
+
 const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComplete }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [wizardData, setWizardData] = useState<WizardData>({
@@ -47,15 +90,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
     startDate: '',
     endDate: '',
     dataProvider: 'yfinance',
-    indicators: [
-      { name: 'SMA', type: 'sma', period: 20, enabled: false },
-      { name: 'EMA', type: 'ema', period: 20, enabled: false },
-      { name: 'RSI', type: 'rsi', period: 14, enabled: false },
-      { name: 'MACD', type: 'macd', enabled: false },
-      { name: 'Bollinger Bands', type: 'bbands', period: 20, enabled: false },
-      { name: 'ATR', type: 'atr', period: 14, enabled: false },
-      { name: 'Stochastic', type: 'stochastic', enabled: false },
-    ],
+    indicators: [],
     sentiment: {
       enabled: false,
       newsSources: ['google_news', 'fmp_news'],
@@ -72,10 +107,167 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Indicator add form state
+  const [newIndicatorType, setNewIndicatorType] = useState('sma');
+  const [newIndicatorTimeframe, setNewIndicatorTimeframe] = useState('1d');
+  const [newIndicatorPeriod, setNewIndicatorPeriod] = useState(20);
+
+  // Collections state
+  const [collections, setCollections] = useState<IndicatorCollection[]>([]);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
+  const [saveCollectionName, setSaveCollectionName] = useState('');
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+
+  // Fetch collections on mount
+  useEffect(() => {
+    if (isOpen) {
+      fetchCollections();
+    }
+  }, [isOpen]);
+
+  // Update indicator timeframe dropdown when dataset timeframe changes
+  useEffect(() => {
+    const validTimeframes = getAvailableTimeframes();
+    if (!validTimeframes.includes(newIndicatorTimeframe)) {
+      setNewIndicatorTimeframe(wizardData.timeframe);
+    }
+  }, [wizardData.timeframe]);
+
+  const fetchCollections = async () => {
+    try {
+      const response = await fetch('http://localhost:8002/api/indicator-collections');
+      if (response.ok) {
+        const data = await response.json();
+        setCollections(data.collections);
+      }
+    } catch (err) {
+      console.error('Failed to fetch collections:', err);
+    }
+  };
+
+  const getAvailableTimeframes = () => {
+    const datasetIdx = TIMEFRAME_ORDER.indexOf(wizardData.timeframe);
+    if (datasetIdx === -1) return TIMEFRAME_ORDER;
+    return TIMEFRAME_ORDER.slice(datasetIdx);
+  };
+
+  const generateIndicatorId = () => {
+    return `ind_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  const getIndicatorDisplayName = (indicator: IndicatorConfig) => {
+    const typeInfo = INDICATOR_TYPES.find(t => t.type === indicator.type);
+    let name = typeInfo?.name.split(' ')[0] || indicator.type.toUpperCase();
+
+    if (indicator.period) {
+      name += ` ${indicator.period}`;
+    }
+
+    return `${name} @ ${indicator.timeframe.toUpperCase()}`;
+  };
+
+  const addIndicator = () => {
+    const typeInfo = INDICATOR_TYPES.find(t => t.type === newIndicatorType);
+    if (!typeInfo) return;
+
+    const newIndicator: IndicatorConfig = {
+      id: generateIndicatorId(),
+      type: newIndicatorType,
+      name: typeInfo.name,
+      timeframe: newIndicatorTimeframe,
+    };
+
+    // Add type-specific parameters
+    if (typeInfo.hasPeriod) {
+      newIndicator.period = newIndicatorPeriod;
+    }
+
+    if (newIndicatorType === 'macd') {
+      newIndicator.fast = 12;
+      newIndicator.slow = 26;
+      newIndicator.signal = 9;
+    } else if (newIndicatorType === 'bbands') {
+      newIndicator.std_dev = 2.0;
+    } else if (newIndicatorType === 'stochastic') {
+      newIndicator.k_period = 14;
+      newIndicator.d_period = 3;
+      newIndicator.smooth_k = 3;
+    }
+
+    setWizardData({
+      ...wizardData,
+      indicators: [...wizardData.indicators, newIndicator]
+    });
+  };
+
+  const removeIndicator = (id: string) => {
+    setWizardData({
+      ...wizardData,
+      indicators: wizardData.indicators.filter(i => i.id !== id)
+    });
+  };
+
+  const loadCollection = (collectionId: number) => {
+    const collection = collections.find(c => c.id === collectionId);
+    if (!collection) return;
+
+    // Filter indicators to only include those with valid timeframes
+    const validTimeframes = getAvailableTimeframes();
+    const validIndicators = collection.indicators
+      .filter(ind => validTimeframes.includes(ind.timeframe))
+      .map(ind => ({
+        ...ind,
+        id: generateIndicatorId()
+      }));
+
+    const invalidCount = collection.indicators.length - validIndicators.length;
+
+    setWizardData({
+      ...wizardData,
+      indicators: validIndicators
+    });
+
+    setSelectedCollectionId(collectionId);
+
+    if (invalidCount > 0) {
+      setError(`${invalidCount} indicators were skipped because their timeframe is smaller than the dataset timeframe (${wizardData.timeframe})`);
+    }
+  };
+
+  const saveCollection = async () => {
+    if (!saveCollectionName.trim()) {
+      setError('Please enter a collection name');
+      return;
+    }
+
+    try {
+      const response = await fetch('http://localhost:8002/api/indicator-collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: saveCollectionName,
+          description: `Custom collection with ${wizardData.indicators.length} indicators`,
+          indicators: wizardData.indicators.map(({ id, ...rest }) => rest)
+        })
+      });
+
+      if (response.ok) {
+        setShowSaveDialog(false);
+        setSaveCollectionName('');
+        fetchCollections();
+        setError(null);
+      } else {
+        const data = await response.json();
+        setError(data.detail || 'Failed to save collection');
+      }
+    } catch (err) {
+      setError('Failed to save collection');
+    }
+  };
+
   if (!isOpen) return null;
 
   const validateTicker = (ticker: string): boolean => {
-    // Ticker should be 1-5 uppercase letters, optionally with numbers
     const tickerRegex = /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/;
     return tickerRegex.test(ticker);
   };
@@ -90,7 +282,6 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         setError('Invalid ticker format. Use 1-5 uppercase letters (e.g., AAPL, MSFT)');
         return;
       }
-      // Validate date range
       if (wizardData.startDate && wizardData.endDate) {
         const start = new Date(wizardData.startDate);
         const end = new Date(wizardData.endDate);
@@ -122,20 +313,19 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
     setError(null);
 
     try {
+      // Convert indicators to API format
+      const technicalIndicators = wizardData.indicators.map(({ id, name, ...rest }) => rest);
+
       const response = await fetch('http://localhost:8002/api/datasets', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ticker: wizardData.ticker,
           timeframe: wizardData.timeframe,
           start_date: wizardData.startDate || undefined,
           end_date: wizardData.endDate || undefined,
-          technical_indicators: wizardData.indicators.filter(i => i.enabled).map(i => ({
-            type: i.type,
-            period: i.period
-          })),
+          data_provider: wizardData.dataProvider,
+          technical_indicators: technicalIndicators,
           sentiment_config: wizardData.sentiment.enabled ? wizardData.sentiment : null,
           fundamentals_config: wizardData.fundamentals.enabled ? wizardData.fundamentals : null
         }),
@@ -157,15 +347,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         startDate: '',
         endDate: '',
         dataProvider: 'yfinance',
-        indicators: [
-          { name: 'SMA', type: 'sma', period: 20, enabled: false },
-          { name: 'EMA', type: 'ema', period: 20, enabled: false },
-          { name: 'RSI', type: 'rsi', period: 14, enabled: false },
-          { name: 'MACD', type: 'macd', enabled: false },
-          { name: 'Bollinger Bands', type: 'bbands', period: 20, enabled: false },
-          { name: 'ATR', type: 'atr', period: 14, enabled: false },
-          { name: 'Stochastic', type: 'stochastic', enabled: false },
-        ],
+        indicators: [],
         sentiment: {
           enabled: false,
           newsSources: ['google_news', 'fmp_news'],
@@ -211,7 +393,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
   const renderStep1 = () => (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium mb-2">
+        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
           Ticker Symbol <span className="text-red-500">*</span>
         </label>
         <input
@@ -219,7 +401,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           value={wizardData.ticker}
           onChange={(e) => setWizardData({ ...wizardData, ticker: e.target.value.toUpperCase() })}
           placeholder="e.g., AAPL, MSFT, GOOGL"
-          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 ${
+          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100 ${
             tickerError
               ? 'border-red-500 focus:ring-red-500'
               : 'border-gray-300 dark:border-gray-600'
@@ -231,46 +413,40 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2">Timeframe</label>
+        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Timeframe</label>
         <select
           value={wizardData.timeframe}
           onChange={(e) => setWizardData({ ...wizardData, timeframe: e.target.value })}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
         >
-          <option value="1m">1 Minute</option>
-          <option value="5m">5 Minutes</option>
-          <option value="15m">15 Minutes</option>
-          <option value="30m">30 Minutes</option>
-          <option value="1h">1 Hour</option>
-          <option value="4h">4 Hours</option>
-          <option value="1d">1 Day</option>
-          <option value="1w">1 Week</option>
-          <option value="1mo">1 Month</option>
+          {TIMEFRAME_ORDER.map(tf => (
+            <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf]}</option>
+          ))}
         </select>
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2">Start Date (optional)</label>
+        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Start Date (optional)</label>
         <input
           type="date"
           value={wizardData.startDate}
           onChange={(e) => setWizardData({ ...wizardData, startDate: e.target.value })}
-          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 ${
+          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100 ${
             dateError
               ? 'border-red-500 focus:ring-red-500'
               : 'border-gray-300 dark:border-gray-600'
           }`}
         />
-        <p className="text-xs text-gray-500 mt-1">Leave empty for 1 year of data</p>
+        <p className="text-xs text-gray-400 dark:text-gray-400 mt-1">Leave empty for 1 year of data</p>
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2">End Date (optional)</label>
+        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">End Date (optional)</label>
         <input
           type="date"
           value={wizardData.endDate}
           onChange={(e) => setWizardData({ ...wizardData, endDate: e.target.value })}
-          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 ${
+          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100 ${
             dateError
               ? 'border-red-500 focus:ring-red-500'
               : 'border-gray-300 dark:border-gray-600'
@@ -279,7 +455,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         {dateError ? (
           <p className="text-xs text-red-500 mt-1">{dateError}</p>
         ) : (
-          <p className="text-xs text-gray-500 mt-1">Leave empty for today</p>
+          <p className="text-xs text-gray-400 dark:text-gray-400 mt-1">Leave empty for today</p>
         )}
       </div>
     </div>
@@ -287,7 +463,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const renderStep2 = () => (
     <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
         Select a data provider to fetch historical market data:
       </p>
 
@@ -311,15 +487,15 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               onChange={(e) => setWizardData({ ...wizardData, dataProvider: e.target.value })}
               className="sr-only"
             />
-            <div className="font-semibold text-lg mb-1">{provider.name}</div>
-            <p className="text-sm text-gray-600 dark:text-gray-400">{provider.desc}</p>
+            <div className="font-semibold text-lg mb-1 text-gray-900 dark:text-gray-100">{provider.name}</div>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{provider.desc}</p>
             <div className="mt-2 flex items-center space-x-2 text-xs">
               {provider.tags.map(tag => (
                 <span key={tag} className={`px-2 py-1 rounded ${tag.includes('Free') ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'}`}>
                   {tag}
                 </span>
               ))}
-              {provider.recommended && <span className="text-gray-500">Recommended</span>}
+              {provider.recommended && <span className="text-gray-400 dark:text-gray-400">Recommended</span>}
             </div>
           </label>
         ))}
@@ -327,65 +503,170 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
     </div>
   );
 
-  const toggleIndicator = (index: number) => {
-    const newIndicators = [...wizardData.indicators];
-    newIndicators[index].enabled = !newIndicators[index].enabled;
-    setWizardData({ ...wizardData, indicators: newIndicators });
-  };
+  const renderStep3 = () => {
+    const availableTimeframes = getAvailableTimeframes();
+    const selectedTypeInfo = INDICATOR_TYPES.find(t => t.type === newIndicatorType);
 
-  const updateIndicatorPeriod = (index: number, period: number) => {
-    const newIndicators = [...wizardData.indicators];
-    newIndicators[index].period = period;
-    setWizardData({ ...wizardData, indicators: newIndicators });
-  };
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">
+          Add technical indicators with individual timeframes. Indicator timeframe must be equal or greater than the dataset timeframe ({wizardData.timeframe}).
+        </p>
 
-  const renderStep3 = () => (
-    <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        Select technical indicators to calculate for your dataset:
-      </p>
+        {/* Collection load/save controls */}
+        <div className="flex items-center gap-2 pb-2 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex-1">
+            <select
+              value={selectedCollectionId || ''}
+              onChange={(e) => {
+                const id = parseInt(e.target.value);
+                if (id) loadCollection(id);
+              }}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
+            >
+              <option value="">Load collection...</option>
+              {collections.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name} {c.is_default ? '(Default)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={() => setShowSaveDialog(true)}
+            disabled={wizardData.indicators.length === 0}
+            className="flex items-center gap-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-200"
+          >
+            <Save className="w-4 h-4" />
+            Save
+          </button>
+        </div>
 
-      <div className="space-y-3 max-h-80 overflow-y-auto">
-        {wizardData.indicators.map((indicator, index) => (
-          <div key={indicator.type} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <input
-                  type="checkbox"
-                  id={`indicator-${indicator.type}`}
-                  checked={indicator.enabled}
-                  onChange={() => toggleIndicator(index)}
-                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                />
-                <label htmlFor={`indicator-${indicator.type}`} className="font-medium cursor-pointer">
-                  {indicator.name}
-                </label>
-              </div>
-              {indicator.period && indicator.enabled && (
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">Period:</span>
+        {/* Save collection dialog */}
+        {showSaveDialog && (
+          <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-2">
+            <input
+              type="text"
+              value={saveCollectionName}
+              onChange={(e) => setSaveCollectionName(e.target.value)}
+              placeholder="Collection name..."
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={saveCollection}
+                className="px-3 py-1 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600"
+              >
+                Save Collection
+              </button>
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                className="px-3 py-1 text-gray-600 dark:text-gray-300 text-sm hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Add indicator form */}
+        <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-3">
+          <div className="font-medium text-sm text-gray-700 dark:text-gray-200">Add Indicator</div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Type</label>
+              <select
+                value={newIndicatorType}
+                onChange={(e) => {
+                  setNewIndicatorType(e.target.value);
+                  const typeInfo = INDICATOR_TYPES.find(t => t.type === e.target.value);
+                  if (typeInfo?.defaultPeriod) {
+                    setNewIndicatorPeriod(typeInfo.defaultPeriod);
+                  }
+                }}
+                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
+              >
+                {INDICATOR_TYPES.map(type => (
+                  <option key={type.type} value={type.type}>{type.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Timeframe</label>
+              <select
+                value={newIndicatorTimeframe}
+                onChange={(e) => setNewIndicatorTimeframe(e.target.value)}
+                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
+              >
+                {availableTimeframes.map(tf => (
+                  <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              {selectedTypeInfo?.hasPeriod && (
+                <>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Period</label>
                   <input
                     type="number"
                     min="1"
-                    max="200"
-                    value={indicator.period}
-                    onChange={(e) => updateIndicatorPeriod(index, parseInt(e.target.value) || 1)}
-                    className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm"
+                    max="500"
+                    value={newIndicatorPeriod}
+                    onChange={(e) => setNewIndicatorPeriod(parseInt(e.target.value) || 1)}
+                    className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
                   />
-                </div>
+                </>
               )}
             </div>
           </div>
-        ))}
-      </div>
+          <button
+            onClick={addIndicator}
+            className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600"
+          >
+            <Plus className="w-4 h-4" />
+            Add Indicator
+          </button>
+        </div>
 
-      <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
-        <p className="text-sm text-blue-800 dark:text-blue-200">
-          Selected: <strong>{wizardData.indicators.filter(i => i.enabled).length}</strong> indicators
-        </p>
+        {/* List of added indicators */}
+        <div className="space-y-2 max-h-48 overflow-y-auto">
+          {wizardData.indicators.length === 0 ? (
+            <div className="text-center py-6 text-gray-400 dark:text-gray-500 text-sm">
+              No indicators added yet. Use the form above to add indicators.
+            </div>
+          ) : (
+            wizardData.indicators.map((indicator) => (
+              <div
+                key={indicator.id}
+                className="flex items-center justify-between p-3 border border-gray-200 dark:border-gray-700 rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  <TrendingUp className="w-4 h-4 text-blue-500" />
+                  <div>
+                    <span className="font-medium text-gray-900 dark:text-gray-100">
+                      {getIndicatorDisplayName(indicator)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeIndicator(indicator.id)}
+                  className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
+          <p className="text-sm text-blue-800 dark:text-blue-200">
+            Added: <strong>{wizardData.indicators.length}</strong> indicators
+          </p>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderStep4 = () => (
     <div className="space-y-4">
@@ -393,8 +674,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         <div className="flex items-center gap-3">
           <MessageSquare className="w-6 h-6 text-purple-500" />
           <div>
-            <h3 className="font-semibold">Enable Sentiment Analysis</h3>
-            <p className="text-sm text-gray-500">Analyze news sentiment for the ticker</p>
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100">Enable Sentiment Analysis</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Analyze news sentiment for the ticker</p>
           </div>
         </div>
         <label className="relative inline-flex items-center cursor-pointer">
@@ -414,13 +695,13 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       {wizardData.sentiment.enabled && (
         <div className="space-y-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
           <div>
-            <label className="block text-sm font-medium mb-2">News Sources</label>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">News Sources</label>
             <div className="flex flex-wrap gap-2">
               {['google_news', 'fmp_news', 'alpaca_news'].map(source => (
-                <label key={source} className={`px-3 py-2 rounded-lg cursor-pointer border ${
+                <label key={source} className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
                   wizardData.sentiment.newsSources.includes(source)
-                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
-                    : 'border-gray-300 dark:border-gray-600'
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
+                    : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}>
                   <input
                     type="checkbox"
@@ -436,20 +717,20 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                     }}
                     className="sr-only"
                   />
-                  <span className="text-sm capitalize">{source.replace('_', ' ')}</span>
+                  <span className="capitalize">{source.replace('_', ' ')}</span>
                 </label>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">Lookback Periods</label>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Lookback Periods</label>
             <div className="flex flex-wrap gap-2">
               {['1d', '1w', '1m', '6m'].map(period => (
-                <label key={period} className={`px-3 py-2 rounded-lg cursor-pointer border ${
+                <label key={period} className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
                   wizardData.sentiment.lookbackPeriods.includes(period)
-                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
-                    : 'border-gray-300 dark:border-gray-600'
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
+                    : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}>
                   <input
                     type="checkbox"
@@ -465,7 +746,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                     }}
                     className="sr-only"
                   />
-                  <span className="text-sm">{period}</span>
+                  <span>{period}</span>
                 </label>
               ))}
             </div>
@@ -488,8 +769,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         <div className="flex items-center gap-3">
           <BarChart3 className="w-6 h-6 text-green-500" />
           <div>
-            <h3 className="font-semibold">Enable Fundamentals & Macro Data</h3>
-            <p className="text-sm text-gray-500">Add company fundamentals and macroeconomic indicators</p>
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100">Enable Fundamentals & Macro Data</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Add company fundamentals and macroeconomic indicators</p>
           </div>
         </div>
         <label className="relative inline-flex items-center cursor-pointer">
@@ -509,7 +790,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       {wizardData.fundamentals.enabled && (
         <div className="space-y-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
           <div>
-            <label className="block text-sm font-medium mb-2">Fundamental Metrics</label>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Fundamental Metrics</label>
             <div className="grid grid-cols-2 gap-2">
               {[
                 { id: 'fcf', label: 'Free Cash Flow (FCF)' },
@@ -519,10 +800,10 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                 { id: 'debt_equity', label: 'Debt/Equity Ratio' },
                 { id: 'roe', label: 'Return on Equity (ROE)' }
               ].map(metric => (
-                <label key={metric.id} className={`p-3 rounded-lg cursor-pointer border ${
+                <label key={metric.id} className={`p-3 rounded-lg cursor-pointer border text-sm ${
                   wizardData.fundamentals.metrics.includes(metric.id)
-                    ? 'border-green-500 bg-green-50 dark:bg-green-900/30'
-                    : 'border-gray-300 dark:border-gray-600'
+                    ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                    : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}>
                   <input
                     type="checkbox"
@@ -538,14 +819,14 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                     }}
                     className="sr-only"
                   />
-                  <span className="text-sm">{metric.label}</span>
+                  <span>{metric.label}</span>
                 </label>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">Macro Economic Indicators</label>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Macro Economic Indicators</label>
             <div className="grid grid-cols-2 gap-2">
               {[
                 { id: 'interest_rate', label: 'Interest Rates' },
@@ -553,10 +834,10 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                 { id: 'inflation', label: 'Inflation Rate (CPI)' },
                 { id: 'unemployment', label: 'Unemployment Rate' }
               ].map(indicator => (
-                <label key={indicator.id} className={`p-3 rounded-lg cursor-pointer border ${
+                <label key={indicator.id} className={`p-3 rounded-lg cursor-pointer border text-sm ${
                   wizardData.fundamentals.macroIndicators.includes(indicator.id)
-                    ? 'border-green-500 bg-green-50 dark:bg-green-900/30'
-                    : 'border-gray-300 dark:border-gray-600'
+                    ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                    : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}>
                   <input
                     type="checkbox"
@@ -572,7 +853,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                     }}
                     className="sr-only"
                   />
-                  <span className="text-sm">{indicator.label}</span>
+                  <span>{indicator.label}</span>
                 </label>
               ))}
             </div>
@@ -591,41 +872,40 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const renderStep6 = () => (
     <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
         Review your dataset configuration:
       </p>
       <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-md space-y-3 max-h-96 overflow-y-auto">
         <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-600">
-          <span className="font-medium">Ticker:</span>
-          <span className="font-mono">{wizardData.ticker}</span>
+          <span className="font-medium text-gray-700 dark:text-gray-200">Ticker:</span>
+          <span className="font-mono text-gray-900 dark:text-gray-100">{wizardData.ticker}</span>
         </div>
         <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-600">
-          <span className="font-medium">Timeframe:</span>
-          <span>{wizardData.timeframe}</span>
+          <span className="font-medium text-gray-700 dark:text-gray-200">Timeframe:</span>
+          <span className="text-gray-900 dark:text-gray-100">{TIMEFRAME_LABELS[wizardData.timeframe]}</span>
         </div>
         <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-600">
-          <span className="font-medium">Data Provider:</span>
-          <span className="capitalize">{wizardData.dataProvider}</span>
+          <span className="font-medium text-gray-700 dark:text-gray-200">Data Provider:</span>
+          <span className="capitalize text-gray-900 dark:text-gray-100">{wizardData.dataProvider}</span>
         </div>
         <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-600">
-          <span className="font-medium">Date Range:</span>
-          <span>{wizardData.startDate || '1 year ago'} - {wizardData.endDate || 'Today'}</span>
+          <span className="font-medium text-gray-700 dark:text-gray-200">Date Range:</span>
+          <span className="text-gray-900 dark:text-gray-100">{wizardData.startDate || '1 year ago'} - {wizardData.endDate || 'Today'}</span>
         </div>
 
         <div className="py-2 border-b border-gray-200 dark:border-gray-600">
           <div className="flex justify-between items-center">
-            <span className="font-medium flex items-center gap-2">
+            <span className="font-medium flex items-center gap-2 text-gray-700 dark:text-gray-200">
               <TrendingUp className="w-4 h-4 text-blue-500" />
               Technical Indicators:
             </span>
-            <span>{wizardData.indicators.filter(i => i.enabled).length} selected</span>
+            <span className="text-gray-900 dark:text-gray-100">{wizardData.indicators.length} selected</span>
           </div>
-          {wizardData.indicators.filter(i => i.enabled).length > 0 && (
-            <div className="mt-2 text-sm text-gray-600 dark:text-gray-400 space-y-1">
-              {wizardData.indicators.filter(i => i.enabled).map(indicator => (
-                <div key={indicator.type} className="flex justify-between pl-6">
-                  <span>{indicator.name}</span>
-                  {indicator.period && <span>Period: {indicator.period}</span>}
+          {wizardData.indicators.length > 0 && (
+            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 space-y-1">
+              {wizardData.indicators.map(indicator => (
+                <div key={indicator.id} className="pl-6">
+                  {getIndicatorDisplayName(indicator)}
                 </div>
               ))}
             </div>
@@ -634,16 +914,16 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
         <div className="py-2 border-b border-gray-200 dark:border-gray-600">
           <div className="flex justify-between items-center">
-            <span className="font-medium flex items-center gap-2">
+            <span className="font-medium flex items-center gap-2 text-gray-700 dark:text-gray-200">
               <MessageSquare className="w-4 h-4 text-purple-500" />
               Sentiment Analysis:
             </span>
-            <span className={wizardData.sentiment.enabled ? 'text-green-600' : 'text-gray-500'}>
+            <span className={wizardData.sentiment.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
               {wizardData.sentiment.enabled ? 'Enabled' : 'Disabled'}
             </span>
           </div>
           {wizardData.sentiment.enabled && (
-            <div className="mt-2 text-sm text-gray-600 dark:text-gray-400 pl-6">
+            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 pl-6">
               <div>Sources: {wizardData.sentiment.newsSources.join(', ')}</div>
               <div>Periods: {wizardData.sentiment.lookbackPeriods.join(', ')}</div>
             </div>
@@ -652,16 +932,16 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
         <div className="py-2">
           <div className="flex justify-between items-center">
-            <span className="font-medium flex items-center gap-2">
+            <span className="font-medium flex items-center gap-2 text-gray-700 dark:text-gray-200">
               <BarChart3 className="w-4 h-4 text-green-500" />
               Fundamentals & Macro:
             </span>
-            <span className={wizardData.fundamentals.enabled ? 'text-green-600' : 'text-gray-500'}>
+            <span className={wizardData.fundamentals.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
               {wizardData.fundamentals.enabled ? 'Enabled' : 'Disabled'}
             </span>
           </div>
           {wizardData.fundamentals.enabled && (
-            <div className="mt-2 text-sm text-gray-600 dark:text-gray-400 pl-6">
+            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 pl-6">
               <div>Metrics: {wizardData.fundamentals.metrics.join(', ')}</div>
               <div>Macro: {wizardData.fundamentals.macroIndicators.join(', ')}</div>
             </div>
@@ -691,7 +971,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-2xl font-bold">Create New Dataset</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Create New Dataset</h2>
           <button
             onClick={onClose}
             className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
@@ -707,16 +987,16 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               <React.Fragment key={step.num}>
                 <div className="flex flex-col items-center">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    currentStep >= step.num ? 'bg-blue-500 text-white' : 'bg-gray-300 text-gray-600'
+                    currentStep >= step.num ? 'bg-blue-500 text-white' : 'bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-400'
                   }`}>
                     <step.icon className="w-4 h-4" />
                   </div>
-                  <span className={`text-xs mt-1 ${currentStep >= step.num ? 'font-medium' : 'text-gray-500'}`}>
+                  <span className={`text-xs mt-1 ${currentStep >= step.num ? 'font-medium text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}>
                     {step.label}
                   </span>
                 </div>
                 {index < steps.length - 1 && (
-                  <div className={`flex-1 h-0.5 mx-2 ${currentStep > step.num ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+                  <div className={`flex-1 h-0.5 mx-2 ${currentStep > step.num ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}></div>
                 )}
               </React.Fragment>
             ))}

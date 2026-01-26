@@ -136,6 +136,15 @@ async def create_dataset(
         df.to_csv(file_path, index=False)
         logger.info(f"Saved dataset to {file_path}")
 
+        # Build generation config for regeneration capability
+        generation_config = {
+            "data_provider": dataset_create.data_provider or "yfinance",
+            "original_start_date": dataset_create.start_date,
+            "original_end_date": dataset_create.end_date,
+            "indicator_collection_id": dataset_create.indicator_collection_id,
+            "created_at": datetime.now().isoformat()
+        }
+
         # Create database record
         db_dataset = Dataset(
             name=dataset_create.name,
@@ -147,6 +156,7 @@ async def create_dataset(
             technical_indicators=dataset_create.technical_indicators,
             fundamentals_config=dataset_create.fundamentals_config,
             sentiment_config=dataset_create.sentiment_config,
+            generation_config=generation_config,
             file_path=str(file_path)
         )
 

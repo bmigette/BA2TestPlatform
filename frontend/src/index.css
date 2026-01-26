@@ -305,3 +305,132 @@ body {
 .dark .truncate {
   color: inherit;
 }
+
+/* ============================================================================
+   Additional comprehensive dark mode text fixes
+   ============================================================================ */
+
+/* Ensure all paragraph text is visible in dark mode */
+.dark p {
+  color: rgb(209 213 219); /* gray-300 */
+}
+
+/* Fix span elements that inherit dark colors */
+.dark span {
+  color: inherit;
+}
+
+/* Specific fixes for spans with gray text classes */
+.dark span.text-gray-500,
+.dark span.text-gray-600 {
+  color: rgb(156 163 175) !important; /* gray-400 */
+}
+
+/* Fix text in modals and dialogs */
+.dark .fixed p,
+.dark .fixed span,
+.dark [role="dialog"] p,
+.dark [role="dialog"] span {
+  color: rgb(209 213 219); /* gray-300 */
+}
+
+/* Fix description text in forms */
+.dark .text-xs.text-gray-500,
+.dark .text-sm.text-gray-500,
+.dark .text-xs.text-gray-600,
+.dark .text-sm.text-gray-600 {
+  color: rgb(156 163 175) !important; /* gray-400 */
+}
+
+/* Fix text in cards and panels */
+.dark .bg-gray-50 p,
+.dark .bg-gray-100 p {
+  color: rgb(55 65 81); /* gray-700 - dark text on light bg in dark mode */
+}
+
+.dark .bg-gray-700 p,
+.dark .bg-gray-800 p,
+.dark .bg-gray-900 p {
+  color: rgb(209 213 219) !important; /* gray-300 */
+}
+
+/* Fix secondary text colors */
+.dark .text-muted-foreground {
+  color: rgb(156 163 175) !important; /* gray-400 */
+}
+
+/* Fix form helper text */
+.dark .mt-1.text-xs,
+.dark .mt-2.text-xs,
+.dark .mt-1.text-sm,
+.dark .mt-2.text-sm {
+  color: rgb(156 163 175); /* gray-400 */
+}
+
+/* Fix capitalize and other text transforms */
+.dark .capitalize {
+  color: inherit;
+}
+
+/* Fix border colors being too dark */
+.dark .border-gray-200 {
+  border-color: rgb(55 65 81); /* gray-700 */
+}
+
+.dark .border-gray-300 {
+  border-color: rgb(75 85 99); /* gray-600 */
+}
+
+/* Fix divide colors */
+.dark .divide-gray-200 > * + * {
+  border-color: rgb(55 65 81); /* gray-700 */
+}
+
+/* Fix text on colored backgrounds in dark mode */
+.dark .bg-blue-50 p,
+.dark .bg-blue-50 span {
+  color: rgb(30 64 175); /* blue-800 */
+}
+
+.dark .bg-green-50 p,
+.dark .bg-green-50 span {
+  color: rgb(22 101 52); /* green-800 */
+}
+
+.dark .bg-purple-50 p,
+.dark .bg-purple-50 span {
+  color: rgb(107 33 168); /* purple-800 */
+}
+
+/* Fix code blocks in dark mode */
+.dark code {
+  color: rgb(209 213 219); /* gray-300 */
+  background-color: rgb(55 65 81); /* gray-700 */
+}
+
+/* Fix text in info boxes */
+.dark .bg-blue-900\/20 p,
+.dark .bg-green-900\/20 p,
+.dark .bg-purple-900\/20 p {
+  color: rgb(209 213 219) !important; /* gray-300 */
+}
+
+/* Fix button text */
+.dark button:not(.bg-blue-500):not(.bg-red-500):not(.bg-green-500) {
+  color: inherit;
+}
+
+/* Fix list items */
+.dark li {
+  color: rgb(209 213 219); /* gray-300 */
+}
+
+/* Fix disabled state text */
+.dark .opacity-50 {
+  color: inherit;
+}
+
+/* Fix tooltip text */
+.dark [data-tooltip] {
+  color: rgb(209 213 219); /* gray-300 */
+}

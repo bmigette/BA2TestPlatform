@@ -4,10 +4,13 @@ Deep Learning Financial Forecasting Platform - Main API Application
 This is the entry point for the FastAPI application.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.middleware.base import BaseHTTPMiddleware
 from pathlib import Path
+import time
 
 # Import and initialize logging configuration
 from app.logging_config import setup_logging, get_logger
@@ -21,6 +24,31 @@ setup_logging(
 )
 
 logger = get_logger(__name__)
+
+
+class APILoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to log all API requests and responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+
+        # Log the incoming request
+        logger.info(f"API Request: {request.method} {request.url.path}")
+
+        # Process the request
+        response = await call_next(request)
+
+        # Calculate duration
+        duration = time.time() - start_time
+
+        # Log the response
+        logger.info(
+            f"API Response: {request.method} {request.url.path} - "
+            f"Status: {response.status_code} - Duration: {duration:.3f}s"
+        )
+
+        return response
+
 
 # Create FastAPI app
 app = FastAPI(
@@ -39,6 +67,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add API logging middleware
+app.add_middleware(APILoggingMiddleware)
 
 
 @app.get("/")
@@ -62,6 +93,61 @@ async def health_check():
     }
 
 
+def _create_default_indicator_collections(db):
+    """Create default indicator collections synchronously during startup."""
+    from app.models.indicator_collection import IndicatorCollection
+
+    default_timeframes = ['15m', '1h', '4h', '1d']
+
+    for tf in default_timeframes:
+        collection_name = f"All Indicators - {tf.upper()}"
+
+        # Check if already exists
+        existing = db.query(IndicatorCollection).filter(
+            IndicatorCollection.name == collection_name
+        ).first()
+
+        if existing:
+            continue
+
+        # Create all indicators for this timeframe
+        indicators = []
+
+        # SMA variations
+        for period in [10, 20, 50, 100, 200]:
+            indicators.append({
+                "type": "sma", "name": f"SMA {period}",
+                "period": period, "timeframe": tf
+            })
+
+        # EMA variations
+        for period in [12, 26, 50, 100, 200]:
+            indicators.append({
+                "type": "ema", "name": f"EMA {period}",
+                "period": period, "timeframe": tf
+            })
+
+        # RSI, MACD, Bollinger, ATR, Stochastic
+        indicators.extend([
+            {"type": "rsi", "name": "RSI 14", "period": 14, "timeframe": tf},
+            {"type": "macd", "name": "MACD (12,26,9)", "fast": 12, "slow": 26, "signal": 9, "timeframe": tf},
+            {"type": "bbands", "name": "Bollinger Bands (20,2)", "period": 20, "std_dev": 2.0, "timeframe": tf},
+            {"type": "atr", "name": "ATR 14", "period": 14, "timeframe": tf},
+            {"type": "stochastic", "name": "Stochastic (14,3,3)", "k_period": 14, "d_period": 3, "smooth_k": 3, "timeframe": tf},
+        ])
+
+        collection = IndicatorCollection(
+            name=collection_name,
+            description=f"Default collection with all standard indicators at {tf.upper()} timeframe",
+            indicators=indicators,
+            is_default=True
+        )
+        db.add(collection)
+
+    db.commit()
+    logger.info("Default indicator collections initialized")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Run on application startup"""
@@ -81,6 +167,22 @@ async def startup_event():
     from app.models.database import init_db
     init_db()
 
+    # Initialize default indicator collections
+    from app.models.database import SessionLocal
+    from app.models.indicator_collection import IndicatorCollection
+    try:
+        db = SessionLocal()
+        # Check if default collections exist
+        existing_defaults = db.query(IndicatorCollection).filter(
+            IndicatorCollection.is_default == True
+        ).count()
+        if existing_defaults == 0:
+            logger.info("Initializing default indicator collections...")
+            _create_default_indicator_collections(db)
+        db.close()
+    except Exception as e:
+        logger.warning(f"Could not initialize default collections: {e}")
+
     # Initialize task queue
     from app.services.task_queue import init_task_queue
     init_task_queue(max_workers=2)
@@ -96,6 +198,19 @@ async def shutdown_event():
 
 
 # Exception handlers
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors (422) and log them"""
+    errors = exc.errors()
+    logger.warning(
+        f"Validation error on {request.method} {request.url.path}: {errors}"
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors}
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Global exception handler"""
@@ -110,7 +225,7 @@ async def global_exception_handler(request, exc):
 
 
 # Import and include routers
-from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks
+from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections
 
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["optimization"])
@@ -122,6 +237,7 @@ app.include_router(ml.router, prefix="/api/ml", tags=["machine-learning"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(websocket.router, prefix="/api", tags=["websocket"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["task-queue"])
+app.include_router(indicator_collections.router, prefix="/api/indicator-collections", tags=["indicator-collections"])
 
 # Additional routers (will be added as we build features)
 # from app.api import models, backtests, profiles, providers, settings

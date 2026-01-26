@@ -14,9 +14,11 @@ class DatasetCreate(BaseModel):
     start_date: Optional[str] = Field(None, description="Start date for data (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="End date for data (YYYY-MM-DD)")
     name: Optional[str] = Field(None, description="Custom name for dataset")
+    data_provider: Optional[str] = Field("yfinance", description="Data provider to use")
     technical_indicators: Optional[Dict[str, Any]] = Field(None, description="Technical indicators configuration")
     fundamentals_config: Optional[Dict[str, Any]] = Field(None, description="Fundamentals configuration")
     sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")
+    indicator_collection_id: Optional[int] = Field(None, description="ID of indicator collection to use")
 
 
 class DatasetResponse(BaseModel):
@@ -31,6 +33,7 @@ class DatasetResponse(BaseModel):
     technical_indicators: Optional[Dict[str, Any]]
     fundamentals_config: Optional[Dict[str, Any]]
     sentiment_config: Optional[Dict[str, Any]]
+    generation_config: Optional[Dict[str, Any]]
     file_path: str
     created_at: datetime
     updated_at: Optional[datetime]
