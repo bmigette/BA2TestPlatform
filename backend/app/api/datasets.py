@@ -327,6 +327,10 @@ async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
 
         df = pd.read_csv(file_path)
 
+        # Replace NaN/inf values with None for JSON serialization
+        df = df.replace([float('inf'), float('-inf')], None)
+        df = df.where(pd.notnull(df), None)
+
         # Convert DataFrame to list of dicts for JSON serialization
         data = df.to_dict(orient='records')
 
@@ -944,9 +948,10 @@ async def update_dataset(
     db: Session = Depends(get_db)
 ):
     """
-    Update dataset properties.
+    Update dataset properties and regenerate the dataset.
 
-    If ticker, dates, or timeframe change, the data will be regenerated.
+    Always regenerates the dataset with the updated configuration to ensure
+    all indicators, sentiment, and fundamentals are applied.
 
     Args:
         dataset_id: Dataset ID to update
@@ -964,88 +969,9 @@ async def update_dataset(
                 detail=f"Dataset with ID {dataset_id} not found"
             )
 
-        # Check if we need to regenerate data
-        needs_regeneration = False
-        if dataset_update.ticker and dataset_update.ticker != dataset.ticker:
-            needs_regeneration = True
-        if dataset_update.timeframe and dataset_update.timeframe != dataset.timeframe:
-            needs_regeneration = True
-        if dataset_update.start_date or dataset_update.end_date:
-            needs_regeneration = True
+        logger.info(f"Updating and regenerating dataset {dataset_id}")
 
-        if needs_regeneration:
-            logger.info(f"Regenerating data for dataset {dataset_id}")
-
-            # Fetch new data
-            provider = YFinanceDataProvider()
-
-            new_ticker = dataset_update.ticker or dataset.ticker
-            new_timeframe = dataset_update.timeframe or dataset.timeframe
-
-            # Parse dates
-            gen_config = dataset.generation_config or {}
-            if dataset_update.start_date:
-                start_date = datetime.strptime(dataset_update.start_date, "%Y-%m-%d")
-            elif gen_config.get("original_start_date"):
-                start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
-            else:
-                start_date = dataset.start_date
-
-            if dataset_update.end_date:
-                end_date = datetime.strptime(dataset_update.end_date, "%Y-%m-%d")
-            elif gen_config.get("original_end_date"):
-                end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
-            else:
-                end_date = dataset.end_date
-
-            interval_map = {
-                "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-                "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
-            }
-            interval = interval_map.get(new_timeframe, "1d")
-
-            data_points = provider.get_data(
-                symbol=new_ticker,
-                start_date=start_date,
-                end_date=end_date,
-                interval=interval
-            )
-
-            if not data_points:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"No data available for {new_ticker}"
-                )
-
-            # Convert to DataFrame
-            df = pd.DataFrame([{
-                'Date': dp.timestamp,
-                'Open': dp.open,
-                'High': dp.high,
-                'Low': dp.low,
-                'Close': dp.close,
-                'Volume': dp.volume
-            } for dp in data_points])
-            df = df.sort_values('Date').reset_index(drop=True)
-
-            # Save to file (keep same path)
-            file_path = Path(dataset.file_path)
-            df.to_csv(file_path, index=False)
-
-            # Update dataset fields
-            dataset.ticker = new_ticker
-            dataset.timeframe = new_timeframe
-            dataset.start_date = df['Date'].min()
-            dataset.end_date = df['Date'].max()
-            dataset.rows_count = len(df)
-
-            # Update generation config
-            gen_config["original_start_date"] = dataset_update.start_date or gen_config.get("original_start_date")
-            gen_config["original_end_date"] = dataset_update.end_date or gen_config.get("original_end_date")
-            gen_config["updated_at"] = datetime.now().isoformat()
-            dataset.generation_config = gen_config
-
-        # Update simple fields
+        # Update simple fields first
         if dataset_update.name:
             dataset.name = dataset_update.name
 
@@ -1061,17 +987,165 @@ async def update_dataset(
         if dataset_update.fundamentals_config is not None:
             dataset.fundamentals_config = dataset_update.fundamentals_config
 
+        # Update ticker/timeframe if provided
+        new_ticker = dataset_update.ticker or dataset.ticker
+        new_timeframe = dataset_update.timeframe or dataset.timeframe
+        dataset.ticker = new_ticker
+        dataset.timeframe = new_timeframe
+
+        # Parse dates
+        gen_config = dataset.generation_config or {}
+        if dataset_update.start_date:
+            start_date = datetime.strptime(dataset_update.start_date, "%Y-%m-%d")
+            gen_config["original_start_date"] = dataset_update.start_date
+        elif gen_config.get("original_start_date"):
+            start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
+        else:
+            start_date = dataset.start_date
+
+        if dataset_update.end_date:
+            end_date = datetime.strptime(dataset_update.end_date, "%Y-%m-%d")
+            gen_config["original_end_date"] = dataset_update.end_date
+        elif gen_config.get("original_end_date"):
+            end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
+        else:
+            end_date = dataset.end_date
+
+        # Set status to BUILDING
+        dataset.status = DatasetStatus.BUILDING.value
+        dataset.error_message = None
+        db.commit()
+
+        # Fetch OHLC data
+        provider = YFinanceDataProvider()
+        interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+        }
+        interval = interval_map.get(new_timeframe, "1d")
+
+        logger.info(f"Fetching data for {new_ticker} from {start_date.date()} to {end_date.date()}")
+
+        data_points = provider.get_data(
+            symbol=new_ticker,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
+        )
+
+        if not data_points:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = f"No data available for {new_ticker}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No data available for {new_ticker}"
+            )
+
+        # Convert to DataFrame
+        df = pd.DataFrame([{
+            'Date': dp.timestamp,
+            'Open': dp.open,
+            'High': dp.high,
+            'Low': dp.low,
+            'Close': dp.close,
+            'Volume': dp.volume
+        } for dp in data_points])
+        df = df.sort_values('Date').reset_index(drop=True)
+        logger.info(f"Fetched {len(df)} OHLC data points")
+
+        # Apply technical indicators if configured
+        if dataset.technical_indicators:
+            logger.info(f"Applying {len(dataset.technical_indicators)} technical indicators...")
+            try:
+                indicators_dict = {}
+                for indicator in dataset.technical_indicators:
+                    indicator_type = indicator.get('type', indicator.get('name', 'unknown'))
+                    indicator_name = indicator.get('name', f"{indicator_type}_{indicator.get('period', '')}")
+                    indicators_dict[indicator_name] = indicator
+
+                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                logger.info(f"Added technical indicators. DataFrame now has {len(df.columns)} columns")
+            except Exception as e:
+                logger.error(f"Error applying technical indicators: {e}")
+
+        # Fetch and add sentiment features if configured
+        if dataset.sentiment_config and dataset.sentiment_config.get('enabled'):
+            logger.info("Fetching sentiment data...")
+            try:
+                sentiment_service = SentimentService()
+                news_provider = dataset.sentiment_config.get('provider', 'fmp')
+
+                articles = sentiment_service.fetch_news_for_ticker(
+                    ticker=new_ticker,
+                    start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                    end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                    provider=news_provider,
+                    enrich_content=dataset.sentiment_config.get('enrich_content', True)
+                )
+
+                if articles:
+                    df = sentiment_service.create_sentiment_features(df, articles)
+                    logger.info(f"Added sentiment features from {len(articles)} articles")
+                else:
+                    logger.warning("No news articles found for sentiment analysis")
+
+            except Exception as e:
+                logger.error(f"Error fetching sentiment: {e}")
+
+        # Fetch and add fundamentals if configured
+        if dataset.fundamentals_config and dataset.fundamentals_config.get('enabled'):
+            logger.info("Fetching fundamentals data...")
+            try:
+                fundamentals_service = FundamentalsService()
+                fundamentals = fundamentals_service.get_fundamental_data(new_ticker)
+
+                if fundamentals and fundamentals.get('current'):
+                    current = fundamentals['current']
+                    for key, value in current.items():
+                        if value is not None:
+                            df[f'fundamental_{key}'] = value
+                    logger.info(f"Added fundamentals data")
+                else:
+                    logger.warning("No fundamentals data available")
+
+            except Exception as e:
+                logger.error(f"Error fetching fundamentals: {e}")
+
+        # Save to file
+        file_path = Path(dataset.file_path)
+        file_path.parent.mkdir(exist_ok=True)
+        df.to_csv(file_path, index=False)
+        logger.info(f"Saved updated dataset to {file_path} with {len(df.columns)} columns")
+
+        # Update dataset record
+        dataset.start_date = df['Date'].min()
+        dataset.end_date = df['Date'].max()
+        dataset.rows_count = len(df)
+        dataset.status = DatasetStatus.READY.value
+        dataset.error_message = None
+
+        # Update generation config
+        gen_config["updated_at"] = datetime.now().isoformat()
+        dataset.generation_config = gen_config
+
         db.commit()
         db.refresh(dataset)
 
-        logger.info(f"Updated dataset {dataset_id}")
+        logger.info(f"Dataset {dataset_id} updated and regenerated successfully with {len(df)} rows and {len(df.columns)} columns")
         return dataset
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error updating dataset: {e}", exc_info=True)
-        db.rollback()
+        # Mark as error
+        try:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = str(e)
+            db.commit()
+        except Exception:
+            db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update dataset: {str(e)}"

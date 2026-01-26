@@ -113,7 +113,7 @@ const getDefaultWizardData = (): WizardData => ({
   indicators: [],
   sentiment: {
     enabled: false,
-    newsSources: ['google_news', 'fmp_news'],
+    newsSources: ['fmp_news'],
     lookbackPeriods: ['1d', '1w', '1m', '6m'],
     sentimentCategories: ['positive', 'neutral', 'negative'],
     impactTimeframes: ['short', 'medium', 'long']
@@ -153,7 +153,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       const savedSentiment = initialData.sentiment_config || {};
       const sentimentConfig: SentimentConfig = {
         enabled: savedSentiment.enabled || false,
-        newsSources: savedSentiment.newsSources || savedSentiment.news_sources || ['google_news', 'fmp_news'],
+        newsSources: savedSentiment.newsSources || savedSentiment.news_sources || ['fmp_news'],
         lookbackPeriods: savedSentiment.lookbackPeriods || savedSentiment.lookback_periods || ['1d', '1w', '1m', '6m'],
         sentimentCategories: savedSentiment.sentimentCategories || savedSentiment.sentiment_categories || ['positive', 'neutral', 'negative'],
         impactTimeframes: savedSentiment.impactTimeframes || savedSentiment.impact_timeframes || ['short', 'medium', 'long']
@@ -865,7 +865,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">News Sources</label>
             <div className="flex flex-wrap gap-2">
-              {['google_news', 'fmp_news', 'alpaca_news'].map(source => (
+              {['fmp_news', 'alpaca_news'].map(source => (
                 <label key={source} className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
                   wizardData.sentiment.newsSources.includes(source)
                     ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
