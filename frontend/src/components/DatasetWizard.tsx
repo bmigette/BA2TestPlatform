@@ -570,7 +570,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               : 'border-gray-300 dark:border-gray-600'
           }`}
         />
-        <p className="text-xs text-gray-400 dark:text-gray-400 mt-1">Leave empty for 1 year of data</p>
+        <p className="text-xs text-gray-500 dark:text-gray-300 mt-1">Leave empty for 1 year of data</p>
       </div>
 
       <div>
@@ -588,7 +588,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         {dateError ? (
           <p className="text-xs text-red-500 mt-1">{dateError}</p>
         ) : (
-          <p className="text-xs text-gray-400 dark:text-gray-400 mt-1">Leave empty for today</p>
+          <p className="text-xs text-gray-500 dark:text-gray-300 mt-1">Leave empty for today</p>
         )}
       </div>
     </div>
@@ -628,7 +628,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                   {tag}
                 </span>
               ))}
-              {provider.recommended && <span className="text-gray-400 dark:text-gray-400">Recommended</span>}
+              {provider.recommended && <span className="text-gray-500 dark:text-gray-300">Recommended</span>}
             </div>
           </label>
         ))}
@@ -645,7 +645,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
                 Normalization Buffer (%)
               </label>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              <p className="text-xs text-gray-500 dark:text-gray-300 mb-2">
                 Extra headroom above/below observed min/max for live trading. Higher values handle more price growth.
               </p>
               <div className="flex items-center gap-4">
@@ -740,7 +740,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           <div className="font-medium text-sm text-gray-700 dark:text-gray-200">Add Indicator</div>
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Type</label>
+              <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Type</label>
               <select
                 value={newIndicatorType}
                 onChange={(e) => {
@@ -758,7 +758,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Timeframe</label>
+              <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Timeframe</label>
               <select
                 value={newIndicatorTimeframe}
                 onChange={(e) => setNewIndicatorTimeframe(e.target.value)}
@@ -772,7 +772,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             <div>
               {selectedTypeInfo?.hasPeriod && (
                 <>
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Period</label>
+                  <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Period</label>
                   <input
                     type="number"
                     min="1"
@@ -797,7 +797,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         {/* List of added indicators */}
         <div className="space-y-2 max-h-48 overflow-y-auto">
           {wizardData.indicators.length === 0 ? (
-            <div className="text-center py-6 text-gray-400 dark:text-gray-500 text-sm">
+            <div className="text-center py-6 text-gray-500 dark:text-gray-300 text-sm">
               No indicators added yet. Use the form above to add indicators.
             </div>
           ) : (
@@ -841,7 +841,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           <MessageSquare className="w-6 h-6 text-purple-500" />
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-gray-100">Enable Sentiment Analysis</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Analyze news sentiment for the ticker</p>
+            <p className="text-sm text-gray-500 dark:text-gray-300">Analyze news sentiment for the ticker</p>
           </div>
         </div>
         <label className="relative inline-flex items-center cursor-pointer">
@@ -936,7 +936,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           <BarChart3 className="w-6 h-6 text-green-500" />
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-gray-100">Enable Fundamentals & Macro Data</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Add company fundamentals and macroeconomic indicators</p>
+            <p className="text-sm text-gray-500 dark:text-gray-300">Add company fundamentals and macroeconomic indicators</p>
           </div>
         </div>
         <label className="relative inline-flex items-center cursor-pointer">
@@ -1030,7 +1030,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Data Providers</label>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Fundamentals Provider</label>
+                <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Fundamentals Provider</label>
                 <select
                   value={wizardData.fundamentals.fundamentalsProvider}
                   onChange={(e) => setWizardData({
@@ -1045,7 +1045,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Macro Data Provider</label>
+                <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Macro Data Provider</label>
                 <select
                   value={wizardData.fundamentals.macroProvider}
                   onChange={(e) => setWizardData({
@@ -1120,7 +1120,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               <MessageSquare className="w-4 h-4 text-purple-500" />
               Sentiment Analysis:
             </span>
-            <span className={wizardData.sentiment.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+            <span className={wizardData.sentiment.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-300'}>
               {wizardData.sentiment.enabled ? 'Enabled' : 'Disabled'}
             </span>
           </div>
@@ -1138,7 +1138,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               <BarChart3 className="w-4 h-4 text-green-500" />
               Fundamentals & Macro:
             </span>
-            <span className={wizardData.fundamentals.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+            <span className={wizardData.fundamentals.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-300'}>
               {wizardData.fundamentals.enabled ? 'Enabled' : 'Disabled'}
             </span>
           </div>
@@ -1189,11 +1189,11 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               <React.Fragment key={step.num}>
                 <div className="flex flex-col items-center">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    currentStep >= step.num ? 'bg-blue-500 text-white' : 'bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-400'
+                    currentStep >= step.num ? 'bg-blue-500 text-white' : 'bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                   }`}>
                     <step.icon className="w-4 h-4" />
                   </div>
-                  <span className={`text-xs mt-1 ${currentStep >= step.num ? 'font-medium text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}>
+                  <span className={`text-xs mt-1 ${currentStep >= step.num ? 'font-medium text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-300'}`}>
                     {step.label}
                   </span>
                 </div>

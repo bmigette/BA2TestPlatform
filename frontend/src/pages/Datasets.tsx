@@ -149,11 +149,11 @@ const Datasets: React.FC = () => {
 
       {isLoading ? (
         <div className="text-center py-12">
-          <p className="text-gray-600 dark:text-gray-400">Loading datasets...</p>
+          <p className="text-gray-600 dark:text-gray-300">Loading datasets...</p>
         </div>
       ) : datasets.length === 0 ? (
         <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg">
-          <p className="text-gray-600 dark:text-gray-400 mb-4">No datasets yet</p>
+          <p className="text-gray-600 dark:text-gray-300 mb-4">No datasets yet</p>
           <button
             onClick={handleCreateNew}
             className="px-6 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 inline-flex items-center space-x-2"
@@ -229,19 +229,19 @@ const Datasets: React.FC = () => {
                       </span>
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300">
                     {dataset.ticker}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300">
                     {dataset.timeframe}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300">
                     {formatDate(dataset.start_date)} - {formatDate(dataset.end_date)}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300">
                     {dataset.rows_count.toLocaleString()}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300">
                     {formatDate(dataset.created_at)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">

@@ -172,7 +172,7 @@ const Dashboard: React.FC = () => {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow border-l-4 border-l-blue-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Running</h3>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300">Running</h3>
               <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
             </div>
             <p className="text-2xl font-bold text-blue-600 mt-1">{jobStats.running}</p>
@@ -180,7 +180,7 @@ const Dashboard: React.FC = () => {
 
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow border-l-4 border-l-green-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Completed</h3>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300">Completed</h3>
               <CheckCircle className="w-4 h-4 text-green-500" />
             </div>
             <p className="text-2xl font-bold text-green-600 mt-1">{jobStats.completed}</p>
@@ -188,7 +188,7 @@ const Dashboard: React.FC = () => {
 
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow border-l-4 border-l-red-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Failed</h3>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300">Failed</h3>
               <XCircle className="w-4 h-4 text-red-500" />
             </div>
             <p className="text-2xl font-bold text-red-600 mt-1">{jobStats.failed}</p>
@@ -196,7 +196,7 @@ const Dashboard: React.FC = () => {
 
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow border-l-4 border-l-yellow-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Paused</h3>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300">Paused</h3>
               <Pause className="w-4 h-4 text-yellow-500" />
             </div>
             <p className="text-2xl font-bold text-yellow-600 mt-1">{jobStats.paused}</p>
@@ -204,7 +204,7 @@ const Dashboard: React.FC = () => {
 
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow border-l-4 border-l-gray-400">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Queued</h3>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300">Queued</h3>
               <Clock className="w-4 h-4 text-gray-400" />
             </div>
             <p className="text-2xl font-bold text-gray-600 dark:text-gray-300 mt-1">{jobStats.queued}</p>
@@ -212,7 +212,7 @@ const Dashboard: React.FC = () => {
 
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow border-l-4 border-l-purple-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Total</h3>
+              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300">Total</h3>
               <Activity className="w-4 h-4 text-purple-500" />
             </div>
             <p className="text-2xl font-bold text-purple-600 mt-1">{jobStats.total}</p>
@@ -229,7 +229,7 @@ const Dashboard: React.FC = () => {
           </h2>
 
           {recentActivity.length === 0 ? (
-            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+            <div className="text-center py-8 text-gray-500 dark:text-gray-300">
               <Activity className="w-12 h-12 mx-auto mb-2 opacity-50" />
               <p>No recent activity</p>
               <p className="text-sm">Create datasets and run optimization jobs to see activity here</p>
@@ -246,7 +246,7 @@ const Dashboard: React.FC = () => {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{item.title}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                    <p className="text-xs text-gray-500 dark:text-gray-300">
                       {formatTimestamp(item.timestamp)}
                     </p>
                   </div>

@@ -513,7 +513,7 @@ const Backtesting: React.FC = () => {
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Entry Threshold</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Entry Threshold</label>
                       <input
                         type="number"
                         min="0"
@@ -525,7 +525,7 @@ const Backtesting: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Exit Threshold</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Exit Threshold</label>
                       <input
                         type="number"
                         min="0"
@@ -540,7 +540,7 @@ const Backtesting: React.FC = () => {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Stop Loss %</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Stop Loss %</label>
                       <input
                         type="number"
                         min="0"
@@ -551,7 +551,7 @@ const Backtesting: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit %</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Take Profit %</label>
                       <input
                         type="number"
                         min="0"
@@ -571,7 +571,7 @@ const Backtesting: React.FC = () => {
                       onChange={e => setStrategyConfig({ ...strategyConfig, trailingStop: e.target.checked })}
                       className="rounded"
                     />
-                    <label htmlFor="trailingStop" className="text-sm text-gray-600 dark:text-gray-400">
+                    <label htmlFor="trailingStop" className="text-sm text-gray-600 dark:text-gray-300">
                       Trailing Stop
                     </label>
                     {strategyConfig.trailingStop && (
@@ -587,7 +587,7 @@ const Backtesting: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Position Sizing</label>
+                    <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Position Sizing</label>
                     <select
                       value={strategyConfig.positionSizing}
                       onChange={e => setStrategyConfig({ ...strategyConfig, positionSizing: e.target.value })}
@@ -601,7 +601,7 @@ const Backtesting: React.FC = () => {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">
                         {strategyConfig.positionSizing === 'percent' ? 'Position %' : 'Position Size'}
                       </label>
                       <input
@@ -614,7 +614,7 @@ const Backtesting: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Max Positions</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Max Positions</label>
                       <input
                         type="number"
                         min="1"
@@ -628,7 +628,7 @@ const Backtesting: React.FC = () => {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Commission %</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Commission %</label>
                       <input
                         type="number"
                         min="0"
@@ -639,7 +639,7 @@ const Backtesting: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Slippage %</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Slippage %</label>
                       <input
                         type="number"
                         min="0"
@@ -680,7 +680,7 @@ const Backtesting: React.FC = () => {
                   {showLoadDropdown && (
                     <div className="absolute z-10 left-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 max-h-60 overflow-y-auto">
                       {savedStrategies.length === 0 ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-400 text-center py-3">No saved strategies</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-300 dark:text-gray-300 text-center py-3">No saved strategies</p>
                       ) : (
                         savedStrategies.map(strat => (
                           <div
@@ -691,7 +691,7 @@ const Backtesting: React.FC = () => {
                             <div>
                               <p className="text-sm font-medium truncate">{strat.name}</p>
                               {strat.description && (
-                                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{strat.description}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-300 truncate">{strat.description}</p>
                               )}
                             </div>
                             <button
@@ -711,7 +711,7 @@ const Backtesting: React.FC = () => {
               {/* Advanced Options Toggle */}
               <button
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+                className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-200"
               >
                 <Settings className="w-4 h-4" />
                 Advanced Options
@@ -729,7 +729,7 @@ const Backtesting: React.FC = () => {
                       onChange={e => setAdvancedOptions({ ...advancedOptions, useMarginTrading: e.target.checked })}
                       className="rounded"
                     />
-                    <label htmlFor="marginTrading" className="text-sm text-gray-600 dark:text-gray-400">
+                    <label htmlFor="marginTrading" className="text-sm text-gray-600 dark:text-gray-300">
                       Margin Trading
                     </label>
                     {advancedOptions.useMarginTrading && (
@@ -754,7 +754,7 @@ const Backtesting: React.FC = () => {
                       onChange={e => setAdvancedOptions({ ...advancedOptions, requireConfirmation: e.target.checked })}
                       className="rounded"
                     />
-                    <label htmlFor="requireConfirmation" className="text-sm text-gray-600 dark:text-gray-400">
+                    <label htmlFor="requireConfirmation" className="text-sm text-gray-600 dark:text-gray-300">
                       Require Signal Confirmation
                     </label>
                     {advancedOptions.requireConfirmation && (
@@ -771,7 +771,7 @@ const Backtesting: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Cooldown Bars (after exit)</label>
+                    <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Cooldown Bars (after exit)</label>
                     <input
                       type="number"
                       min="0"
@@ -783,7 +783,7 @@ const Backtesting: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
                       <input
                         type="checkbox"
                         checked={advancedOptions.allowShorts}
@@ -792,7 +792,7 @@ const Backtesting: React.FC = () => {
                       />
                       Allow Shorts
                     </label>
-                    <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
                       <input
                         type="checkbox"
                         checked={advancedOptions.hedging}
@@ -834,7 +834,7 @@ const Backtesting: React.FC = () => {
             </h3>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {backtests.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-400 text-center py-4">No backtests yet</p>
+                <p className="text-sm text-gray-500 dark:text-gray-300 dark:text-gray-300 text-center py-4">No backtests yet</p>
               ) : (
                 backtests.map(bt => (
                   <div
@@ -865,7 +865,7 @@ const Backtesting: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{bt.modelName}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-300 mb-2">{bt.modelName}</p>
                     <div className="flex items-center gap-3 text-xs">
                       <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
@@ -889,7 +889,7 @@ const Backtesting: React.FC = () => {
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Total Return</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-300">Total Return</p>
                       <p className={`text-2xl font-bold ${(selectedBacktest.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {(selectedBacktest.totalReturn || 0) >= 0 ? '+' : ''}{selectedBacktest.totalReturn?.toFixed(1)}%
                       </p>
@@ -905,7 +905,7 @@ const Backtesting: React.FC = () => {
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Sharpe Ratio</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-300">Sharpe Ratio</p>
                       <p className="text-2xl font-bold text-blue-600">{selectedBacktest.sharpeRatio?.toFixed(2)}</p>
                     </div>
                     <Activity className="w-8 h-8 text-blue-500" />
@@ -915,7 +915,7 @@ const Backtesting: React.FC = () => {
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Max Drawdown</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-300">Max Drawdown</p>
                       <p className="text-2xl font-bold text-red-600">-{selectedBacktest.maxDrawdown?.toFixed(1)}%</p>
                     </div>
                     <ArrowDownRight className="w-8 h-8 text-red-500" />
@@ -925,7 +925,7 @@ const Backtesting: React.FC = () => {
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Win Rate</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-300">Win Rate</p>
                       <p className="text-2xl font-bold text-purple-600">{selectedBacktest.winRate?.toFixed(1)}%</p>
                     </div>
                     <Award className="w-8 h-8 text-purple-500" />
@@ -936,23 +936,23 @@ const Backtesting: React.FC = () => {
               {/* Additional Metrics */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Profit Factor</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-300">Profit Factor</p>
                   <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.profitFactor?.toFixed(2)}</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Total Trades</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-300">Total Trades</p>
                   <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.totalTrades}</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Avg Duration</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-300">Avg Duration</p>
                   <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.avgTradeDuration?.toFixed(1)} bars</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Best Trade</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-300">Best Trade</p>
                   <p className="text-lg font-bold text-green-600">+{selectedBacktest.bestTrade?.toFixed(1)}%</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Worst Trade</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-300">Worst Trade</p>
                   <p className="text-lg font-bold text-red-600">{selectedBacktest.worstTrade?.toFixed(1)}%</p>
                 </div>
               </div>
@@ -1055,7 +1055,7 @@ const Backtesting: React.FC = () => {
                           </select>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-500 dark:text-gray-400">Sort:</span>
+                          <span className="text-sm text-gray-500 dark:text-gray-300">Sort:</span>
                           <select
                             value={tradeSortField}
                             onChange={e => setTradeSortField(e.target.value as any)}
@@ -1133,8 +1133,8 @@ const Backtesting: React.FC = () => {
           ) : (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
               <BarChart3 className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-600 dark:text-gray-400 mb-2">No Backtest Selected</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <h3 className="text-lg font-medium text-gray-600 dark:text-gray-300 mb-2">No Backtest Selected</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-300">
                 Configure and run a new backtest, or select a previous backtest to view results.
               </p>
             </div>
@@ -1193,7 +1193,7 @@ const Backtesting: React.FC = () => {
 
                 <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-sm">
                   <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Current Configuration:</p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-400">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-300">
                     <span>Entry: {strategyConfig.entryThreshold}</span>
                     <span>Exit: {strategyConfig.exitThreshold}</span>
                     <span>Stop Loss: {strategyConfig.stopLossPercent}%</span>

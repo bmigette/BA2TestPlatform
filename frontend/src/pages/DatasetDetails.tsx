@@ -547,7 +547,7 @@ const DatasetDetails: React.FC = () => {
     return (
       <div className="p-6">
         <div className="text-center py-12">
-          <p className="text-gray-600 dark:text-gray-400">Loading dataset...</p>
+          <p className="text-gray-600 dark:text-gray-300">Loading dataset...</p>
         </div>
       </div>
     );
@@ -637,7 +637,7 @@ const DatasetDetails: React.FC = () => {
             </span>
           )}
         </div>
-        <p className="text-gray-600 dark:text-gray-400">
+        <p className="text-gray-600 dark:text-gray-300">
           {dataset.ticker} • {dataset.timeframe}
         </p>
         {/* Error Message Banner */}
@@ -667,7 +667,7 @@ const DatasetDetails: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
           <div className="flex items-center space-x-2 mb-2">
             <Database size={20} className="text-blue-500" />
-            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-300">
               Data Points
             </h3>
           </div>
@@ -679,7 +679,7 @@ const DatasetDetails: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
           <div className="flex items-center space-x-2 mb-2">
             <Calendar size={20} className="text-green-500" />
-            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-300">
               Start Date
             </h3>
           </div>
@@ -691,7 +691,7 @@ const DatasetDetails: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
           <div className="flex items-center space-x-2 mb-2">
             <Calendar size={20} className="text-orange-500" />
-            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-300">
               End Date
             </h3>
           </div>
@@ -703,7 +703,7 @@ const DatasetDetails: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
           <div className="flex items-center space-x-2 mb-2">
             <TrendingUp size={20} className="text-purple-500" />
-            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-300">
               Timeframe
             </h3>
           </div>
@@ -744,13 +744,13 @@ const DatasetDetails: React.FC = () => {
 
         {/* Indicator Toggle Controls */}
         <div className="flex flex-wrap gap-3 mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-          <span className="text-sm font-medium text-gray-600 dark:text-gray-400 self-center">Overlays:</span>
+          <span className="text-sm font-medium text-gray-600 dark:text-gray-300 self-center">Overlays:</span>
           <button
             onClick={() => toggleIndicator('sma20')}
             className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
               indicators.sma20
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-300'
             }`}
           >
             {indicators.sma20 ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -761,7 +761,7 @@ const DatasetDetails: React.FC = () => {
             className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
               indicators.sma50
                 ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-300'
             }`}
           >
             {indicators.sma50 ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -772,7 +772,7 @@ const DatasetDetails: React.FC = () => {
             className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
               indicators.bollingerBands
                 ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-300'
             }`}
           >
             {indicators.bollingerBands ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -783,7 +783,7 @@ const DatasetDetails: React.FC = () => {
             className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
               indicators.volume
                 ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-300'
             }`}
           >
             {indicators.volume ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -795,7 +795,7 @@ const DatasetDetails: React.FC = () => {
             className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
               indicators.showSentiment
                 ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-300'
             }`}
           >
             <MessageSquare size={14} />
@@ -820,15 +820,15 @@ const DatasetDetails: React.FC = () => {
                 <>
                   <div className="flex items-center gap-1">
                     <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                    <span className="text-gray-500 dark:text-gray-400">Positive</span>
+                    <span className="text-gray-500 dark:text-gray-300">Positive</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                    <span className="text-gray-500 dark:text-gray-400">Neutral</span>
+                    <span className="text-gray-500 dark:text-gray-300">Neutral</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                    <span className="text-gray-500 dark:text-gray-400">Negative</span>
+                    <span className="text-gray-500 dark:text-gray-300">Negative</span>
                   </div>
                   {sentimentIsMock && (
                     <span className="text-orange-500 text-xs">(Mock Data)</span>
@@ -1016,7 +1016,7 @@ const DatasetDetails: React.FC = () => {
           </ResponsiveContainer>
         ) : (
           <div className="text-center py-12">
-            <p className="text-gray-600 dark:text-gray-400">
+            <p className="text-gray-600 dark:text-gray-300">
               No chart data available
             </p>
           </div>
@@ -1029,7 +1029,7 @@ const DatasetDetails: React.FC = () => {
           <h2 className="text-xl font-bold mb-4">Dataset Information</h2>
           <dl className="space-y-3">
             <div>
-              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-300">
                 Dataset ID
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100">
@@ -1037,7 +1037,7 @@ const DatasetDetails: React.FC = () => {
               </dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-300">
                 File Path
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100 font-mono break-all">
@@ -1045,7 +1045,7 @@ const DatasetDetails: React.FC = () => {
               </dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-300">
                 Created At
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100">
@@ -1059,7 +1059,7 @@ const DatasetDetails: React.FC = () => {
           <h2 className="text-xl font-bold mb-4">Configuration</h2>
           <dl className="space-y-3">
             <div>
-              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-300">
                 Technical Indicators
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100">
@@ -1069,7 +1069,7 @@ const DatasetDetails: React.FC = () => {
               </dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-300">
                 Fundamentals
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100">
@@ -1079,7 +1079,7 @@ const DatasetDetails: React.FC = () => {
               </dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-300">
                 Sentiment Analysis
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100">
@@ -1098,7 +1098,7 @@ const DatasetDetails: React.FC = () => {
           <Target size={20} className="text-purple-500" />
           Prediction Targets Preview
         </h2>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
           Define prediction targets to generate training labels. Each target creates binary columns
           indicating whether the price moved by the specified percentage within the time window.
         </p>
@@ -1106,7 +1106,7 @@ const DatasetDetails: React.FC = () => {
         {/* Target configuration form */}
         <div className="flex flex-wrap items-end gap-4 mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
               Profit Target (%)
             </label>
             <input
@@ -1119,7 +1119,7 @@ const DatasetDetails: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
               Max Drawdown (%)
             </label>
             <input
@@ -1132,7 +1132,7 @@ const DatasetDetails: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
               Time Window (days)
             </label>
             <input
@@ -1202,7 +1202,7 @@ const DatasetDetails: React.FC = () => {
             <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
               Training Data Generated
             </h4>
-            <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1">
+            <div className="text-xs text-gray-600 dark:text-gray-300 space-y-1">
               <div><strong>Training file:</strong> {generatedFiles.training}</div>
               {generatedFiles.normalization && (
                 <div><strong>Normalization params:</strong> {generatedFiles.normalization}</div>
@@ -1218,7 +1218,7 @@ const DatasetDetails: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {Object.entries(predictionPreview.statistics).map(([col, stats]) => (
                 <div key={col} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                  <div className="font-mono text-xs text-gray-600 dark:text-gray-400 mb-2 break-all">
+                  <div className="font-mono text-xs text-gray-600 dark:text-gray-300 mb-2 break-all">
                     {col}
                   </div>
                   <div className="flex items-center gap-4 text-sm">

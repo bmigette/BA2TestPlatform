@@ -506,7 +506,7 @@ const Training: React.FC = () => {
         </button>
       </div>
 
-      <p className="text-gray-600 dark:text-gray-400 mb-6">
+      <p className="text-gray-600 dark:text-gray-300 mb-6">
         Create and monitor optimization jobs here.
       </p>
 
@@ -563,7 +563,7 @@ const Training: React.FC = () => {
                       }}
                       className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
                     />
-                    <span className="text-sm text-gray-600 dark:text-gray-400">Multi-Dataset Mode</span>
+                    <span className="text-sm text-gray-600 dark:text-gray-300">Multi-Dataset Mode</span>
                   </label>
                 </div>
                 {isLoading ? (
@@ -595,14 +595,14 @@ const Training: React.FC = () => {
                         />
                         <div className="flex-1">
                           <span className="font-medium">{dataset.name}</span>
-                          <span className="text-sm text-gray-500 dark:text-gray-400 ml-2">
+                          <span className="text-sm text-gray-500 dark:text-gray-300 ml-2">
                             ({dataset.ticker} - {dataset.timeframe} - {dataset.rows_count.toLocaleString()} rows)
                           </span>
                         </div>
                       </label>
                     ))}
                     {selectedDatasetIds.length > 0 && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <p className="text-xs text-gray-500 dark:text-gray-300 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
                         {selectedDatasetIds.length} dataset{selectedDatasetIds.length !== 1 ? 's' : ''} selected
                         {selectedDatasetIds.length > 1 && ' - will be combined chronologically'}
                       </p>
@@ -627,26 +627,26 @@ const Training: React.FC = () => {
               {/* Dataset Details */}
               {selectedDataset && (
                 <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-6">
-                  <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">Dataset Details</h3>
+                  <h3 className="text-sm font-medium text-gray-500 dark:text-gray-300 mb-3">Dataset Details</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="flex items-center space-x-2">
                       <Database size={16} className="text-gray-400" />
                       <div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">Ticker</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-300">Ticker</div>
                         <div className="font-medium">{selectedDataset.ticker}</div>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
                       <BarChart2 size={16} className="text-gray-400" />
                       <div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">Timeframe</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-300">Timeframe</div>
                         <div className="font-medium">{selectedDataset.timeframe}</div>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
                       <Calendar size={16} className="text-gray-400" />
                       <div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">Date Range</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-300">Date Range</div>
                         <div className="font-medium">
                           {formatDate(selectedDataset.start_date)} - {formatDate(selectedDataset.end_date)}
                         </div>
@@ -655,7 +655,7 @@ const Training: React.FC = () => {
                     <div className="flex items-center space-x-2">
                       <BarChart2 size={16} className="text-gray-400" />
                       <div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">Rows</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-300">Rows</div>
                         <div className="font-medium">{selectedDataset.rows_count.toLocaleString()}</div>
                       </div>
                     </div>
@@ -676,7 +676,7 @@ const Training: React.FC = () => {
                       onChange={handleAllModelsToggle}
                       className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
                     />
-                    <span className="text-sm text-gray-600 dark:text-gray-400">All Models</span>
+                    <span className="text-sm text-gray-600 dark:text-gray-300">All Models</span>
                   </label>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -700,13 +700,13 @@ const Training: React.FC = () => {
                           <Cpu size={14} className="text-gray-400" />
                           <span className="font-medium text-sm">{model.name}</span>
                         </div>
-                        <span className="text-xs text-gray-500 dark:text-gray-400">{model.description}</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-300">{model.description}</span>
                       </div>
                     </label>
                   ))}
                 </div>
                 {selectedModels.length > 0 && (
-                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-300">
                     {selectedModels.length} model{selectedModels.length !== 1 ? 's' : ''} selected
                   </p>
                 )}
@@ -728,7 +728,7 @@ const Training: React.FC = () => {
                       onChange={(e) => setShowStepConfig(e.target.checked)}
                       className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
                     />
-                    <span className="text-sm text-gray-600 dark:text-gray-400">Configure Steps</span>
+                    <span className="text-sm text-gray-600 dark:text-gray-300">Configure Steps</span>
                   </label>
                 </div>
 
@@ -747,7 +747,7 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('layersMin', parseInt(e.target.value) || 1)}
                         className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      <span className="text-gray-400">to</span>
+                      <span className="text-gray-400 dark:text-gray-300">to</span>
                       <input
                         type="number"
                         min="1"
@@ -758,7 +758,7 @@ const Training: React.FC = () => {
                       />
                       {showStepConfig && (
                         <>
-                          <span className="text-gray-400">step</span>
+                          <span className="text-gray-400 dark:text-gray-300">step</span>
                           <input
                             type="number"
                             min="1"
@@ -769,7 +769,7 @@ const Training: React.FC = () => {
                           />
                         </>
                       )}
-                      <span className="text-xs text-gray-400">layers</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-300">layers</span>
                     </div>
                     {parameterRanges.layersMin > parameterRanges.layersMax && (
                       <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>
@@ -791,7 +791,7 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('layerSizeMin', parseInt(e.target.value) || 8)}
                         className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      <span className="text-gray-400">to</span>
+                      <span className="text-gray-400 dark:text-gray-300">to</span>
                       <input
                         type="number"
                         min="8"
@@ -803,7 +803,7 @@ const Training: React.FC = () => {
                       />
                       {showStepConfig && (
                         <>
-                          <span className="text-gray-400">step</span>
+                          <span className="text-gray-400 dark:text-gray-300">step</span>
                           <input
                             type="number"
                             min="8"
@@ -815,7 +815,7 @@ const Training: React.FC = () => {
                           />
                         </>
                       )}
-                      <span className="text-xs text-gray-400">neurons</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-300">neurons</span>
                     </div>
                     {parameterRanges.layerSizeMin > parameterRanges.layerSizeMax && (
                       <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>
@@ -837,7 +837,7 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('learningRateMin', parseFloat(e.target.value) || 0.0001)}
                         className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      <span className="text-gray-400">to</span>
+                      <span className="text-gray-400 dark:text-gray-300">to</span>
                       <input
                         type="number"
                         min="0.0001"
@@ -849,7 +849,7 @@ const Training: React.FC = () => {
                       />
                       {showStepConfig && (
                         <>
-                          <span className="text-gray-400">step</span>
+                          <span className="text-gray-400 dark:text-gray-300">step</span>
                           <input
                             type="number"
                             min="0.0001"
@@ -896,7 +896,7 @@ const Training: React.FC = () => {
                       <p className="text-red-500 text-xs mt-1">Select at least one activation function</p>
                     )}
                     {parameterRanges.activationFunctions.length > 0 && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-xs text-gray-500 dark:text-gray-300 mt-1">
                         {parameterRanges.activationFunctions.length} function{parameterRanges.activationFunctions.length !== 1 ? 's' : ''} selected
                       </p>
                     )}
@@ -951,7 +951,7 @@ const Training: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setShowCustomTargetForm(true)}
-                        className="px-3 py-1.5 text-sm rounded-md border border-dashed border-gray-400 dark:border-gray-500 text-gray-600 dark:text-gray-400 hover:border-green-500 hover:text-green-600 dark:hover:text-green-400 transition-colors"
+                        className="px-3 py-1.5 text-sm rounded-md border border-dashed border-gray-400 dark:border-gray-500 text-gray-600 dark:text-gray-300 hover:border-green-500 hover:text-green-600 dark:hover:text-green-400 transition-colors"
                       >
                         + Add Custom Target
                       </button>
@@ -962,7 +962,7 @@ const Training: React.FC = () => {
                         </label>
                         <div className="flex flex-wrap items-end gap-3">
                           <div>
-                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">
                               Profit %
                             </label>
                             <input
@@ -975,7 +975,7 @@ const Training: React.FC = () => {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">
                               Max DD %
                             </label>
                             <input
@@ -988,7 +988,7 @@ const Training: React.FC = () => {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">
                               Days
                             </label>
                             <input
@@ -1016,7 +1016,7 @@ const Training: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => setShowCustomTargetForm(false)}
-                              className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+                              className="px-3 py-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-200"
                             >
                               Cancel
                             </button>
@@ -1026,7 +1026,7 @@ const Training: React.FC = () => {
                           <p className="text-red-500 text-xs mt-2">Max drawdown must be less than profit target</p>
                         )}
                         {isCustomTargetValid() && (
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 font-mono">
+                          <p className="text-xs text-gray-500 dark:text-gray-300 mt-2 font-mono">
                             Will create: <span className="text-green-600 dark:text-green-400">price_up_{customTarget.profitPercent}pct_{customTarget.maxDrawdownPercent}dd_{customTarget.timePeriodDays}d</span>
                             {' | '}
                             <span className="text-red-600 dark:text-red-400">price_down_{customTarget.profitPercent}pct_{customTarget.maxDrawdownPercent}dd_{customTarget.timePeriodDays}d</span>
@@ -1064,7 +1064,7 @@ const Training: React.FC = () => {
                                     {target.timePeriodDays} days
                                   </span>
                                 </div>
-                                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                <div className="mt-1 text-xs text-gray-500 dark:text-gray-300 font-mono">
                                   <span className="text-green-600 dark:text-green-400">{fieldNames.up}</span>
                                   <span className="mx-2">|</span>
                                   <span className="text-red-600 dark:text-red-400">{fieldNames.down}</span>
@@ -1081,14 +1081,14 @@ const Training: React.FC = () => {
                           );
                         })}
                       </div>
-                      <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                      <p className="mt-2 text-xs text-gray-500 dark:text-gray-300">
                         {predictionTargets.length} target pair{predictionTargets.length !== 1 ? 's' : ''} configured ({predictionTargets.length * 2} output fields)
                       </p>
                     </div>
                   )}
 
                   {predictionTargets.length === 0 && !showCustomTargetForm && (
-                    <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+                    <p className="text-sm text-gray-500 dark:text-gray-300 italic">
                       Click a preset or add a custom target to define prediction targets
                     </p>
                   )}
@@ -1124,7 +1124,7 @@ const Training: React.FC = () => {
                       onChange={(e) => setTrainTestSplit(parseInt(e.target.value))}
                       className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-600 accent-blue-600"
                     />
-                    <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <div className="flex justify-between text-xs text-gray-400 dark:text-gray-300 mt-1">
                       <span>50%</span>
                       <span>95%</span>
                     </div>
@@ -1177,7 +1177,7 @@ const Training: React.FC = () => {
                   {/* Dataset Rows Info */}
                   {selectedDataset && (
                     <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                      <p className="text-xs text-gray-500 dark:text-gray-300">
                         With {selectedDataset.rows_count.toLocaleString()} total rows:
                         <span className="text-blue-600 dark:text-blue-400 ml-2">
                           ~{Math.floor(selectedDataset.rows_count * trainTestSplit / 100).toLocaleString()} training
@@ -1240,7 +1240,7 @@ const Training: React.FC = () => {
             </div>
             <div className="p-4 max-h-80 overflow-y-auto">
               {profiles.length === 0 ? (
-                <p className="text-gray-500 dark:text-gray-400 text-center py-8">
+                <p className="text-gray-500 dark:text-gray-300 text-center py-8">
                   No saved profiles yet. Save your first profile to get started.
                 </p>
               ) : (
@@ -1252,12 +1252,12 @@ const Training: React.FC = () => {
                     >
                       <div className="flex-1 cursor-pointer" onClick={() => loadProfile(profile)}>
                         <div className="font-medium">{profile.name}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                        <div className="text-xs text-gray-500 dark:text-gray-300">
                           {profile.selectedModels.length} model{profile.selectedModels.length !== 1 ? 's' : ''} |
                           {profile.predictionTargets.length} target{profile.predictionTargets.length !== 1 ? 's' : ''} |
                           {profile.trainTestSplit}/{100 - profile.trainTestSplit} split
                         </div>
-                        <div className="text-xs text-gray-400 dark:text-gray-500">
+                        <div className="text-xs text-gray-400 dark:text-gray-300">
                           Created: {new Date(profile.createdAt).toLocaleDateString()}
                         </div>
                       </div>
@@ -1326,7 +1326,7 @@ const Training: React.FC = () => {
                   />
                   <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-md text-sm">
                     <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Profile will include:</p>
-                    <ul className="text-gray-500 dark:text-gray-400 space-y-1">
+                    <ul className="text-gray-500 dark:text-gray-300 space-y-1">
                       <li>• {selectedModels.length} model type{selectedModels.length !== 1 ? 's' : ''}</li>
                       <li>• Parameter ranges configuration</li>
                       <li>• {predictionTargets.length} prediction target{predictionTargets.length !== 1 ? 's' : ''}</li>
@@ -1379,7 +1379,7 @@ const Training: React.FC = () => {
                 </button>
                 <div>
                   <h2 className="text-xl font-semibold">Job #{jobProgress.job.id}</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                  <p className="text-sm text-gray-500 dark:text-gray-300">
                     {datasets.find(d => d.id === jobProgress.job.datasetId)?.ticker || 'Unknown Dataset'}
                   </p>
                 </div>
@@ -1433,13 +1433,13 @@ const Training: React.FC = () => {
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
                     {/* Generation Progress */}
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
+                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-300 mb-1">
                         <Activity size={16} />
                         <span className="text-xs">Generation</span>
                       </div>
                       <div className="text-2xl font-bold">
                         {jobProgress.job.currentGeneration || 0}
-                        <span className="text-sm text-gray-500 dark:text-gray-400 font-normal">
+                        <span className="text-sm text-gray-500 dark:text-gray-300 font-normal">
                           /{jobProgress.job.totalGenerations || 50}
                         </span>
                       </div>
@@ -1447,7 +1447,7 @@ const Training: React.FC = () => {
 
                     {/* Best Fitness */}
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
+                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-300 mb-1">
                         <Target size={16} />
                         <span className="text-xs">Best Fitness</span>
                       </div>
@@ -1458,7 +1458,7 @@ const Training: React.FC = () => {
 
                     {/* GPU Utilization */}
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
+                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-300 mb-1">
                         <Zap size={16} />
                         <span className="text-xs">GPU Usage</span>
                       </div>
@@ -1469,7 +1469,7 @@ const Training: React.FC = () => {
 
                     {/* ETA */}
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
+                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-300 mb-1">
                         <Timer size={16} />
                         <span className="text-xs">Time Remaining</span>
                       </div>
@@ -1480,7 +1480,7 @@ const Training: React.FC = () => {
 
                     {/* Status */}
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
+                      <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-300 mb-1">
                         <Clock size={16} />
                         <span className="text-xs">Status</span>
                       </div>
@@ -1489,7 +1489,7 @@ const Training: React.FC = () => {
                         jobProgress.job.status === 'running' ? 'text-blue-600 dark:text-blue-400' :
                         jobProgress.job.status === 'paused' ? 'text-yellow-600 dark:text-yellow-400' :
                         jobProgress.job.status === 'failed' || jobProgress.job.status === 'cancelled' ? 'text-red-600 dark:text-red-400' :
-                        'text-gray-600 dark:text-gray-400'
+                        'text-gray-600 dark:text-gray-300'
                       }`}>
                         {jobProgress.job.status.charAt(0).toUpperCase() + jobProgress.job.status.slice(1)}
                       </div>
@@ -1499,7 +1499,7 @@ const Training: React.FC = () => {
                   {/* Overall Progress Bar */}
                   <div className="mb-6">
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="text-gray-500 dark:text-gray-400">Progress</span>
+                      <span className="text-gray-500 dark:text-gray-300">Progress</span>
                       <span className="font-medium">{jobProgress.job.progress.toFixed(1)}%</span>
                     </div>
                     <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
@@ -1535,7 +1535,7 @@ const Training: React.FC = () => {
                           </LineChart>
                         </ResponsiveContainer>
                       ) : (
-                        <div className="h-48 flex items-center justify-center text-gray-500 dark:text-gray-400">
+                        <div className="h-48 flex items-center justify-center text-gray-500 dark:text-gray-300">
                           Waiting for training data...
                         </div>
                       )}
@@ -1560,7 +1560,7 @@ const Training: React.FC = () => {
                           </LineChart>
                         </ResponsiveContainer>
                       ) : (
-                        <div className="h-48 flex items-center justify-center text-gray-500 dark:text-gray-400">
+                        <div className="h-48 flex items-center justify-center text-gray-500 dark:text-gray-300">
                           Waiting for training data...
                         </div>
                       )}
@@ -1604,7 +1604,7 @@ const Training: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold mb-4">Optimization Jobs</h2>
         {jobs.length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-400">
+          <p className="text-gray-500 dark:text-gray-300">
             No optimization jobs yet. Click "Create New Job" to get started.
           </p>
         ) : (
@@ -1640,12 +1640,12 @@ const Training: React.FC = () => {
                       <div className="font-medium">
                         Job #{job.id}
                         {dataset && (
-                          <span className="text-gray-500 dark:text-gray-400 ml-2">
+                          <span className="text-gray-500 dark:text-gray-300 ml-2">
                             - {dataset.ticker} ({dataset.timeframe})
                           </span>
                         )}
                       </div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                      <div className="text-sm text-gray-500 dark:text-gray-300">
                         {job.selectedModels.length} model{job.selectedModels.length !== 1 ? 's' : ''} |
                         Created: {new Date(job.createdAt).toLocaleString()}
                         {job.status === 'running' && job.currentGeneration !== undefined && (

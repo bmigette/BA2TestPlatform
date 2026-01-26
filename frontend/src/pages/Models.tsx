@@ -187,7 +187,7 @@ const Models: React.FC = () => {
       className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${
         sortField === field
           ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-          : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+          : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
       }`}
     >
       {label}
@@ -206,9 +206,9 @@ const Models: React.FC = () => {
             <Brain className="w-8 h-8 text-purple-500" />
             Model Library
           </h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Browse and manage your trained models</p>
+          <p className="text-gray-500 dark:text-gray-300 mt-1">Browse and manage your trained models</p>
         </div>
-        <div className="text-sm text-gray-500 dark:text-gray-400">
+        <div className="text-sm text-gray-500 dark:text-gray-300">
           {filteredModels.length} of {models.length} model{models.length !== 1 ? 's' : ''}
         </div>
       </div>
@@ -279,7 +279,7 @@ const Models: React.FC = () => {
               className={`p-2 ${
                 viewMode === 'grid'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
               title="Grid view"
             >
@@ -290,7 +290,7 @@ const Models: React.FC = () => {
               className={`p-2 ${
                 viewMode === 'list'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
               title="List view"
             >
@@ -305,7 +305,7 @@ const Models: React.FC = () => {
         <div className="text-center py-16">
           <Brain className="w-16 h-16 mx-auto text-gray-300 mb-4" />
           <h3 className="text-xl font-medium text-gray-600 dark:text-gray-300">No models found</h3>
-          <p className="text-gray-500 dark:text-gray-400 mt-2">
+          <p className="text-gray-500 dark:text-gray-300 mt-2">
             {models.length === 0
               ? 'Run an optimization job to train your first model'
               : 'Try adjusting your search or filter criteria'}
@@ -325,7 +325,7 @@ const Models: React.FC = () => {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate text-gray-900 dark:text-gray-100 group-hover:text-blue-600">{model.name}</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 truncate">Dataset #{model.datasetId}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-300 truncate">Dataset #{model.datasetId}</p>
                   </div>
                   <span className={`px-2 py-1 text-xs font-medium rounded-full ${getModelTypeColor(model.modelType)}`}>
                     {model.modelType}
@@ -339,12 +339,12 @@ const Models: React.FC = () => {
                 <div className="grid grid-cols-2 gap-2">
                   <div className="flex items-center gap-2 text-sm">
                     <Target className="w-4 h-4 text-green-500" />
-                    <span className="text-gray-500 dark:text-gray-400">Accuracy:</span>
+                    <span className="text-gray-500 dark:text-gray-300">Accuracy:</span>
                     <span className="font-medium text-gray-900 dark:text-gray-100">{(model.performanceMetrics.accuracy * 100).toFixed(1)}%</span>
                   </div>
                   <div className="flex items-center gap-2 text-sm">
                     <TrendingUp className="w-4 h-4 text-blue-500" />
-                    <span className="text-gray-500 dark:text-gray-400">Fitness:</span>
+                    <span className="text-gray-500 dark:text-gray-300">Fitness:</span>
                     <span className="font-medium text-gray-900 dark:text-gray-100">{model.fitness.toFixed(1)}</span>
                   </div>
                 </div>
@@ -357,16 +357,16 @@ const Models: React.FC = () => {
                     ) : (
                       <Clock className="w-4 h-4 text-yellow-500" />
                     )}
-                    <span className="text-gray-600 dark:text-gray-400 capitalize">{model.status}</span>
+                    <span className="text-gray-600 dark:text-gray-300 capitalize">{model.status}</span>
                   </div>
-                  <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
+                  <div className="flex items-center gap-1 text-gray-500 dark:text-gray-300">
                     <Layers className="w-4 h-4" />
                     <span>Gen {model.bestGeneration}/{model.generations}</span>
                   </div>
                 </div>
 
                 {/* Date */}
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-gray-500 dark:text-gray-300">
                   Created: {new Date(model.createdAt).toLocaleDateString()}
                 </p>
               </div>
@@ -376,14 +376,14 @@ const Models: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={(e) => handleExport(e, model.id)}
-                    className="p-2 text-gray-500 dark:text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                    className="p-2 text-gray-500 dark:text-gray-300 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
                     title="Export model"
                   >
                     <Download className="w-4 h-4" />
                   </button>
                   <button
                     onClick={(e) => handleDelete(e, model.id)}
-                    className="p-2 text-gray-500 dark:text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                    className="p-2 text-gray-500 dark:text-gray-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                     title="Delete model"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -422,14 +422,14 @@ const Models: React.FC = () => {
                 >
                   <td className="px-4 py-3">
                     <div className="font-medium text-gray-900 dark:text-gray-100">{model.name}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">{model.id}</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-300">{model.id}</div>
                   </td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-1 text-xs font-medium rounded-full ${getModelTypeColor(model.modelType)}`}>
                       {model.modelType}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                  <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
                     #{model.datasetId}
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -455,28 +455,28 @@ const Models: React.FC = () => {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-300">
                     {new Date(model.createdAt).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
                       <button
                         onClick={(e) => handleExport(e, model.id)}
-                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-300 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
                         title="Export"
                       >
                         <Download className="w-4 h-4" />
                       </button>
                       <button
                         onClick={(e) => handleDelete(e, model.id)}
-                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors"
                         title="Delete"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); navigate(`/models/${model.id}`); }}
-                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
                         title="View Details"
                       >
                         <ChevronRight className="w-4 h-4" />
