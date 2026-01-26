@@ -202,7 +202,7 @@ async def shutdown_event():
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors (422) and log them"""
     errors = exc.errors()
-    logger.warning(
+    logger.error(
         f"Validation error on {request.method} {request.url.path}: {errors}"
     )
     return JSONResponse(

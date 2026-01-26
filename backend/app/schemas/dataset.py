@@ -15,7 +15,7 @@ class DatasetCreate(BaseModel):
     end_date: Optional[str] = Field(None, description="End date for data (YYYY-MM-DD)")
     name: Optional[str] = Field(None, description="Custom name for dataset")
     data_provider: Optional[str] = Field("yfinance", description="Data provider to use")
-    technical_indicators: Optional[Dict[str, Any]] = Field(None, description="Technical indicators configuration")
+    technical_indicators: Optional[List[Dict[str, Any]]] = Field(None, description="Technical indicators configuration")
     fundamentals_config: Optional[Dict[str, Any]] = Field(None, description="Fundamentals configuration")
     sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")
     indicator_collection_id: Optional[int] = Field(None, description="ID of indicator collection to use")
