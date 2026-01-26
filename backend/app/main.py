@@ -225,9 +225,10 @@ async def global_exception_handler(request, exc):
 
 
 # Import and include routers
-from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections
+from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools
 
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
+app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["optimization"])
 app.include_router(workers.router, prefix="/api/workers", tags=["workers"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])

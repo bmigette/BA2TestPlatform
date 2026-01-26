@@ -8,6 +8,7 @@ import Models from './pages/Models';
 import ModelDetails from './pages/ModelDetails';
 import Backtesting from './pages/Backtesting';
 import Settings from './pages/Settings';
+import Tools from './pages/Tools';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="models" element={<Models />} />
           <Route path="models/:id" element={<ModelDetails />} />
           <Route path="backtesting" element={<Backtesting />} />
+          <Route path="tools" element={<Tools />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

@@ -6,6 +6,7 @@ import {
   Brain,
   Library,
   TrendingUp,
+  Wrench,
   Settings
 } from 'lucide-react';
 
@@ -18,6 +19,7 @@ const Sidebar: React.FC = () => {
     { path: '/training', label: 'Training', icon: Brain },
     { path: '/models', label: 'Models', icon: Library },
     { path: '/backtesting', label: 'Backtesting', icon: TrendingUp },
+    { path: '/tools', label: 'Tools', icon: Wrench },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
