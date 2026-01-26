@@ -235,7 +235,7 @@ const Settings: React.FC = () => {
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
-          <p className="text-gray-600 dark:text-gray-300 mt-1">
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
             Configure workers, API keys, and application settings
           </p>
         </div>
@@ -257,25 +257,25 @@ const Settings: React.FC = () => {
           <div className="flex items-center gap-2">
             <Server className="w-5 h-5 text-blue-500" />
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Workers</h2>
-            <span className="text-sm text-gray-500 dark:text-gray-300">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
               ({workers.filter(w => w.isEnabled).length} enabled)
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={fetchWorkers}
-              className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
               title="Refresh"
             >
               <RefreshCw className="w-4 h-4" />
             </button>
-            <label className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg cursor-pointer" title="Import">
+            <label className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg cursor-pointer" title="Import">
               <Upload className="w-4 h-4" />
               <input type="file" accept=".json" onChange={handleImport} className="hidden" />
             </label>
             <button
               onClick={handleExport}
-              className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
               title="Export"
             >
               <Download className="w-4 h-4" />
@@ -296,7 +296,7 @@ const Settings: React.FC = () => {
               <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
             </div>
           ) : workers.length === 0 ? (
-            <p className="text-center text-gray-500 dark:text-gray-300 py-8">No workers configured</p>
+            <p className="text-center text-gray-500 dark:text-gray-400 py-8">No workers configured</p>
           ) : (
             <div className="grid gap-4">
               {workers.map(worker => (
@@ -325,34 +325,34 @@ const Settings: React.FC = () => {
                             {worker.isEnabled ? worker.status : 'disabled'}
                           </span>
                         </div>
-                        <p className="text-sm text-gray-500 dark:text-gray-300 mt-1">
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                           {worker.isLocal ? 'Running on backend host' : worker.url}
                         </p>
                         {worker.description && (
-                          <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{worker.description}</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{worker.description}</p>
                         )}
 
                         {/* Hardware Info */}
                         <div className="flex flex-wrap gap-4 mt-3 text-sm">
                           {worker.gpuInfo && (
-                            <div className="flex items-center gap-1 text-gray-600 dark:text-gray-300">
+                            <div className="flex items-center gap-1 text-gray-600 dark:text-gray-400">
                               <HardDrive className="w-4 h-4" />
                               <span>{worker.gpuInfo.name} ({formatMemory(worker.gpuInfo.memory)})</span>
                               {worker.gpuInfo.count > 1 && <span>x{worker.gpuInfo.count}</span>}
                             </div>
                           )}
                           {worker.cpuInfo && (
-                            <div className="flex items-center gap-1 text-gray-600 dark:text-gray-300">
+                            <div className="flex items-center gap-1 text-gray-600 dark:text-gray-400">
                               <Cpu className="w-4 h-4" />
                               <span>{worker.cpuInfo.cores} cores</span>
                             </div>
                           )}
-                          <div className="flex items-center gap-1 text-gray-600 dark:text-gray-300">
+                          <div className="flex items-center gap-1 text-gray-600 dark:text-gray-400">
                             <Activity className="w-4 h-4" />
                             <span>{worker.activeJobsCount} active jobs</span>
                           </div>
                           {worker.lastHeartbeat && (
-                            <div className="flex items-center gap-1 text-gray-500 dark:text-gray-300">
+                            <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
                               <Clock className="w-4 h-4" />
                               <span>Last seen: {new Date(worker.lastHeartbeat).toLocaleTimeString()}</span>
                             </div>
@@ -380,7 +380,7 @@ const Settings: React.FC = () => {
                       <button
                         onClick={() => handleHealthCheck(worker.id)}
                         disabled={healthChecking === worker.id}
-                        className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-50"
+                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-50"
                         title="Health Check"
                       >
                         {healthChecking === worker.id ? (
@@ -402,7 +402,7 @@ const Settings: React.FC = () => {
                         <>
                           <button
                             onClick={() => openEditModal(worker)}
-                            className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                            className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
                             title="Edit"
                           >
                             <Edit2 className="w-4 h-4" />
@@ -512,7 +512,7 @@ const Settings: React.FC = () => {
                   setEditingWorker(null);
                   setFormData({ name: '', url: '', description: '', capabilities: { train: true, infer: true } });
                 }}
-                className="px-4 py-2 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               >
                 Cancel
               </button>

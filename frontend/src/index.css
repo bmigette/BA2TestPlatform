@@ -40,7 +40,7 @@
   --secondary: 217.2 32.6% 17.5%;
   --secondary-foreground: 0 0% 95%;
   --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20% 75%;
+  --muted-foreground: 215 20.2% 80%;
   --accent: 217.2 32.6% 17.5%;
   --accent-foreground: 0 0% 95%;
   --destructive: 0 62.8% 30.6%;
@@ -87,30 +87,38 @@ body {
    Override gray text colors to be lighter in dark mode for better contrast
    ============================================================================ */
 
-/* Gray text overrides - make text significantly lighter in dark mode */
+/* Gray text overrides - make text lighter in dark mode */
 .dark .text-gray-400 {
-  color: rgb(209 213 219) !important; /* gray-300 - much lighter */
+  color: rgb(156 163 175) !important; /* gray-400 stays same */
 }
 
 .dark .text-gray-500 {
-  color: rgb(209 213 219) !important; /* gray-300 - much lighter */
+  color: rgb(156 163 175) !important; /* gray-400 equivalent - lighter */
 }
 
 .dark .text-gray-600 {
-  color: rgb(209 213 219) !important; /* gray-300 - much lighter */
+  color: rgb(156 163 175) !important; /* gray-400 equivalent - lighter */
 }
 
-.dark .text-gray-700,
-.dark button.text-gray-700 {
-  color: rgb(229 231 235) !important; /* gray-200 - lighter */
+.dark .text-gray-700 {
+  color: rgb(209 213 219) !important; /* gray-300 equivalent - lighter */
 }
 
 .dark .text-gray-800 {
-  color: rgb(243 244 246) !important; /* gray-100 - near white */
+  color: rgb(229 231 235) !important; /* gray-200 equivalent - lighter */
 }
 
 .dark .text-gray-900 {
-  color: rgb(249 250 251) !important; /* gray-50 - almost white */
+  color: rgb(243 244 246) !important; /* gray-100 equivalent - lighter */
+}
+
+/* Tailwind v4 dark: prefixed utility overrides */
+.dark .dark\:text-gray-300 {
+  color: rgb(209 213 219) !important; /* gray-300 */
+}
+
+.dark .dark\:text-gray-400 {
+  color: rgb(156 163 175) !important; /* gray-400 */
 }
 
 /* Ensure font-medium and font-semibold text is visible in dark mode on gray backgrounds */
@@ -258,54 +266,6 @@ body {
   opacity: 1 !important;
 }
 
-/* Cancel/secondary button text - make more visible */
-.dark button.text-gray-500,
-.dark button.text-gray-600,
-.dark button.text-muted-foreground {
-  color: rgb(209 213 219) !important; /* gray-300 - much more visible */
-}
-
-/* Ghost/outline button variants */
-.dark [class*="ghost"] {
-  color: rgb(209 213 219) !important;
-}
-
-/* Text inside modals should be visible */
-.dark [role="dialog"] label,
-.dark [role="dialog"] .text-sm {
-  color: rgb(209 213 219) !important;
-}
-
-/* All buttons in modals should have readable text */
-.dark [role="dialog"] button {
-  color: rgb(209 213 219);
-}
-
-/* Primary buttons keep their styling */
-.dark [role="dialog"] button.bg-blue-600,
-.dark [role="dialog"] button.bg-primary,
-.dark [role="dialog"] button[class*="bg-blue"] {
-  color: white !important;
-}
-
-/* Cancel/secondary buttons specifically */
-.dark [role="dialog"] button:not([class*="bg-"]):not([class*="primary"]) {
-  color: rgb(229 231 235) !important; /* gray-200 - very visible */
-}
-
-/* Modal footer cancel buttons - very specific targeting */
-.dark .fixed button.text-gray-700,
-.dark .bg-gray-800 button.text-gray-700,
-.dark div[class*="bg-gray-800"] button.text-gray-700 {
-  color: rgb(229 231 235) !important; /* gray-200 */
-}
-
-/* Force override for any text-gray-700 in dark mode with oklch fallback */
-.dark .text-gray-700 {
-  --tw-text-opacity: 1 !important;
-  color: rgb(229 231 235 / var(--tw-text-opacity)) !important;
-}
-
 /* ============================================================================
    Fix specific component text colors in dark mode
    ============================================================================ */
@@ -435,20 +395,42 @@ body {
   border-color: rgb(55 65 81); /* gray-700 */
 }
 
-/* Fix text on colored backgrounds in dark mode */
+/* Fix text on colored backgrounds in dark mode - use light text for dark backgrounds */
 .dark .bg-blue-50 p,
 .dark .bg-blue-50 span {
-  color: rgb(30 64 175); /* blue-800 */
+  color: rgb(219 234 254); /* blue-100 - light blue text */
 }
 
 .dark .bg-green-50 p,
 .dark .bg-green-50 span {
-  color: rgb(22 101 52); /* green-800 */
+  color: rgb(220 252 231); /* green-100 - light green text */
 }
 
 .dark .bg-purple-50 p,
 .dark .bg-purple-50 span {
-  color: rgb(107 33 168); /* purple-800 */
+  color: rgb(243 232 255); /* purple-100 - light purple text */
+}
+
+/* Fix dark mode colored section backgrounds to use darker variants */
+.dark .bg-blue-900\/20 p,
+.dark .bg-blue-900\/20 span,
+.dark .bg-blue-900\/30 p,
+.dark .bg-blue-900\/30 span {
+  color: rgb(219 234 254) !important; /* blue-100 */
+}
+
+.dark .bg-green-900\/20 p,
+.dark .bg-green-900\/20 span,
+.dark .bg-green-900\/30 p,
+.dark .bg-green-900\/30 span {
+  color: rgb(220 252 231) !important; /* green-100 */
+}
+
+.dark .bg-purple-900\/20 p,
+.dark .bg-purple-900\/20 span,
+.dark .bg-purple-900\/30 p,
+.dark .bg-purple-900\/30 span {
+  color: rgb(243 232 255) !important; /* purple-100 */
 }
 
 /* Fix code blocks in dark mode */

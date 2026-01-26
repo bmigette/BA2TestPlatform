@@ -570,7 +570,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               : 'border-gray-300 dark:border-gray-600'
           }`}
         />
-        <p className="text-xs text-gray-500 dark:text-gray-300 mt-1">Leave empty for 1 year of data</p>
+        <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">Leave empty for 1 year of data</p>
       </div>
 
       <div>
@@ -588,7 +588,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         {dateError ? (
           <p className="text-xs text-red-500 mt-1">{dateError}</p>
         ) : (
-          <p className="text-xs text-gray-500 dark:text-gray-300 mt-1">Leave empty for today</p>
+          <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">Leave empty for today</p>
         )}
       </div>
     </div>
@@ -596,7 +596,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const renderStep2 = () => (
     <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+      <p className="text-sm text-muted-foreground mb-4">
         Select a data provider to fetch historical market data:
       </p>
 
@@ -606,32 +606,34 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           { id: 'alphavantage', name: 'Alpha Vantage', desc: 'Professional-grade financial data with fundamentals.', tags: ['API Key Required', '500/day'] },
           { id: 'fmp', name: 'Financial Modeling Prep', desc: 'Comprehensive financial data with earnings data.', tags: ['API Key Required', '250/day'] },
           { id: 'alpaca', name: 'Alpaca Markets', desc: 'Real-time and historical market data for trading.', tags: ['API Key Required'] },
-        ].map(provider => (
+        ].map(provider => {
+          const isSelected = wizardData.dataProvider === provider.id;
+          return (
           <label key={provider.id} className={`block p-4 border-2 rounded-lg cursor-pointer transition-colors ${
-            wizardData.dataProvider === provider.id
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+            isSelected
+              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30'
               : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
           }`}>
             <input
               type="radio"
               name="dataProvider"
               value={provider.id}
-              checked={wizardData.dataProvider === provider.id}
+              checked={isSelected}
               onChange={(e) => setWizardData({ ...wizardData, dataProvider: e.target.value })}
               className="sr-only"
             />
-            <div className="font-semibold text-lg mb-1 text-gray-900 dark:text-gray-100">{provider.name}</div>
-            <p className="text-sm text-gray-600 dark:text-gray-300">{provider.desc}</p>
+            <div className="font-semibold text-lg mb-1 text-foreground">{provider.name}</div>
+            <p className="text-sm text-muted-foreground">{provider.desc}</p>
             <div className="mt-2 flex items-center space-x-2 text-xs">
               {provider.tags.map(tag => (
                 <span key={tag} className={`px-2 py-1 rounded ${tag.includes('Free') ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'}`}>
                   {tag}
                 </span>
               ))}
-              {provider.recommended && <span className="text-gray-500 dark:text-gray-300">Recommended</span>}
+              {provider.recommended && <span className="text-muted-foreground">Recommended</span>}
             </div>
           </label>
-        ))}
+        );})}
       </div>
 
       {/* Advanced Settings */}
@@ -675,7 +677,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
     return (
       <div className="space-y-4">
-        <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">
+        <p className="text-sm text-muted-foreground mb-2">
           Add technical indicators with individual timeframes. Indicator timeframe must be equal or greater than the dataset timeframe ({wizardData.timeframe}).
         </p>
 
@@ -797,7 +799,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         {/* List of added indicators */}
         <div className="space-y-2 max-h-48 overflow-y-auto">
           {wizardData.indicators.length === 0 ? (
-            <div className="text-center py-6 text-gray-500 dark:text-gray-300 text-sm">
+            <div className="text-center py-6 text-gray-400 dark:text-gray-500 text-sm">
               No indicators added yet. Use the form above to add indicators.
             </div>
           ) : (
@@ -825,8 +827,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           )}
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
-          <p className="text-sm text-blue-800 dark:text-blue-200">
+        <div className="bg-blue-50 dark:bg-gray-700 p-3 rounded-md">
+          <p className="text-sm text-blue-800 dark:text-gray-100">
             Added: <strong>{wizardData.indicators.length}</strong> indicators
           </p>
         </div>
@@ -918,10 +920,10 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
           </div>
 
-          <div className="bg-purple-50 dark:bg-purple-900/20 p-3 rounded-md">
-            <p className="text-sm text-purple-800 dark:text-purple-200">
-              Sentiment features like <code className="bg-purple-100 dark:bg-purple-800 px-1 rounded">news_1d_positive_short</code>,
-              <code className="bg-purple-100 dark:bg-purple-800 px-1 rounded ml-1">news_1w_negative_long</code> will be generated.
+          <div className="bg-purple-50 dark:bg-gray-700 p-3 rounded-md">
+            <p className="text-sm text-purple-800 dark:text-gray-100">
+              Sentiment features like <code className="bg-purple-100 dark:bg-gray-600 px-1 rounded">news_1d_positive_short</code>,
+              <code className="bg-purple-100 dark:bg-gray-600 px-1 rounded ml-1">news_1w_negative_long</code> will be generated.
             </p>
           </div>
         </div>
@@ -1061,10 +1063,10 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
           </div>
 
-          <div className="bg-green-50 dark:bg-green-900/20 p-3 rounded-md">
-            <p className="text-sm text-green-800 dark:text-green-200">
-              Features like <code className="bg-green-100 dark:bg-green-800 px-1 rounded">days_to_last_fcf</code>,
-              <code className="bg-green-100 dark:bg-green-800 px-1 rounded ml-1">last_eps_percent</code> will be generated.
+          <div className="bg-green-50 dark:bg-gray-700 p-3 rounded-md">
+            <p className="text-sm text-green-800 dark:text-gray-100">
+              Features like <code className="bg-green-100 dark:bg-gray-600 px-1 rounded">days_to_last_fcf</code>,
+              <code className="bg-green-100 dark:bg-gray-600 px-1 rounded ml-1">last_eps_percent</code> will be generated.
             </p>
           </div>
         </div>
@@ -1074,7 +1076,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const renderStep6 = () => (
     <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+      <p className="text-sm text-muted-foreground mb-4">
         Review your dataset configuration:
       </p>
       <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-md space-y-3 max-h-96 overflow-y-auto">
@@ -1151,8 +1153,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         </div>
       </div>
 
-      <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
-        <p className="text-sm text-blue-800 dark:text-blue-200">
+      <div className="bg-blue-50 dark:bg-gray-700 p-3 rounded-md">
+        <p className="text-sm text-blue-800 dark:text-gray-100">
           Click "Create Dataset" to fetch data and build your dataset with all configured features.
         </p>
       </div>
