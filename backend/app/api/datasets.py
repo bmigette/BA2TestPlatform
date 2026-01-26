@@ -166,10 +166,77 @@ async def create_dataset(
         } for dp in data_points])
 
         df = df.sort_values('Date').reset_index(drop=True)
+        logger.info(f"Fetched {len(df)} OHLC data points")
+
+        # Apply technical indicators if configured
+        if dataset_create.technical_indicators:
+            logger.info(f"Applying {len(dataset_create.technical_indicators)} technical indicators...")
+            try:
+                # Convert list format to dict format for add_indicators_to_dataframe
+                indicators_dict = {}
+                for indicator in dataset_create.technical_indicators:
+                    indicator_type = indicator.get('type', indicator.get('name', 'unknown'))
+                    indicator_name = indicator.get('name', f"{indicator_type}_{indicator.get('period', '')}")
+                    indicators_dict[indicator_name] = indicator
+
+                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                logger.info(f"Added technical indicators. DataFrame now has {len(df.columns)} columns")
+            except Exception as e:
+                logger.error(f"Error applying technical indicators: {e}")
+                # Continue without indicators rather than failing the whole dataset
+
+        # Fetch and add sentiment features if configured
+        if dataset_create.sentiment_config:
+            logger.info("Fetching sentiment data...")
+            try:
+                sentiment_service = SentimentService()
+                news_provider = dataset_create.sentiment_config.get('provider', 'fmp')
+
+                # Fetch news articles
+                articles = sentiment_service.fetch_news_for_ticker(
+                    ticker=dataset_create.ticker,
+                    start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                    end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                    provider=news_provider,
+                    enrich_content=dataset_create.sentiment_config.get('enrich_content', True)
+                )
+
+                if articles:
+                    # Analyze sentiment and add features
+                    df = sentiment_service.create_sentiment_features(df, articles)
+                    logger.info(f"Added sentiment features from {len(articles)} articles")
+                else:
+                    logger.warning("No news articles found for sentiment analysis")
+
+            except Exception as e:
+                logger.error(f"Error fetching sentiment: {e}")
+                # Continue without sentiment rather than failing the whole dataset
+
+        # Fetch and add fundamentals if configured
+        if dataset_create.fundamentals_config:
+            logger.info("Fetching fundamentals data...")
+            try:
+                fundamentals_service = FundamentalsService()
+                fundamentals = fundamentals_service.get_fundamental_data(dataset_create.ticker)
+
+                if fundamentals and fundamentals.get('current'):
+                    # Add current fundamentals as constant columns (for now)
+                    # A more sophisticated approach would interpolate historical values
+                    current = fundamentals['current']
+                    for key, value in current.items():
+                        if value is not None:
+                            df[f'fundamental_{key}'] = value
+                    logger.info(f"Added fundamentals data")
+                else:
+                    logger.warning("No fundamentals data available")
+
+            except Exception as e:
+                logger.error(f"Error fetching fundamentals: {e}")
+                # Continue without fundamentals rather than failing the whole dataset
 
         # Save dataset to file
         df.to_csv(file_path, index=False)
-        logger.info(f"Saved dataset to {file_path}")
+        logger.info(f"Saved dataset to {file_path} with {len(df.columns)} columns")
 
         # Update dataset with actual data and set to READY
         db_dataset.start_date = df['Date'].min()
@@ -180,7 +247,7 @@ async def create_dataset(
         db.commit()
         db.refresh(db_dataset)
 
-        logger.info(f"Dataset {db_dataset.id} is now READY with {len(df)} rows")
+        logger.info(f"Dataset {db_dataset.id} is now READY with {len(df)} rows and {len(df.columns)} columns")
 
         return db_dataset
 
@@ -642,12 +709,71 @@ async def regenerate_dataset(
             'Volume': dp.volume
         } for dp in data_points])
         df = df.sort_values('Date').reset_index(drop=True)
+        logger.info(f"Fetched {len(df)} OHLC data points")
+
+        # Apply technical indicators if configured
+        if dataset.technical_indicators:
+            logger.info(f"Applying {len(dataset.technical_indicators)} technical indicators...")
+            try:
+                indicators_dict = {}
+                for indicator in dataset.technical_indicators:
+                    indicator_type = indicator.get('type', indicator.get('name', 'unknown'))
+                    indicator_name = indicator.get('name', f"{indicator_type}_{indicator.get('period', '')}")
+                    indicators_dict[indicator_name] = indicator
+
+                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                logger.info(f"Added technical indicators. DataFrame now has {len(df.columns)} columns")
+            except Exception as e:
+                logger.error(f"Error applying technical indicators: {e}")
+
+        # Fetch and add sentiment features if configured
+        if dataset.sentiment_config:
+            logger.info("Fetching sentiment data...")
+            try:
+                sentiment_service = SentimentService()
+                news_provider = dataset.sentiment_config.get('provider', 'fmp')
+
+                articles = sentiment_service.fetch_news_for_ticker(
+                    ticker=dataset.ticker,
+                    start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                    end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                    provider=news_provider,
+                    enrich_content=dataset.sentiment_config.get('enrich_content', True)
+                )
+
+                if articles:
+                    df = sentiment_service.create_sentiment_features(df, articles)
+                    logger.info(f"Added sentiment features from {len(articles)} articles")
+                else:
+                    logger.warning("No news articles found for sentiment analysis")
+
+            except Exception as e:
+                logger.error(f"Error fetching sentiment: {e}")
+
+        # Fetch and add fundamentals if configured
+        if dataset.fundamentals_config:
+            logger.info("Fetching fundamentals data...")
+            try:
+                fundamentals_service = FundamentalsService()
+                fundamentals = fundamentals_service.get_fundamental_data(dataset.ticker)
+
+                if fundamentals and fundamentals.get('current'):
+                    current = fundamentals['current']
+                    for key, value in current.items():
+                        if value is not None:
+                            df[f'fundamental_{key}'] = value
+                    logger.info(f"Added fundamentals data")
+                else:
+                    logger.warning("No fundamentals data available")
+
+            except Exception as e:
+                logger.error(f"Error fetching fundamentals: {e}")
 
         # Save to file
         file_path = Path(dataset.file_path)
         file_path.parent.mkdir(exist_ok=True)
         df.to_csv(file_path, index=False)
-        logger.info(f"Saved regenerated dataset to {file_path}")
+        logger.info(f"Saved regenerated dataset to {file_path} with {len(df.columns)} columns")
 
         # Update dataset record
         dataset.start_date = df['Date'].min()
@@ -663,7 +789,7 @@ async def regenerate_dataset(
         db.commit()
         db.refresh(dataset)
 
-        logger.info(f"Dataset {dataset_id} regenerated successfully with {len(df)} rows")
+        logger.info(f"Dataset {dataset_id} regenerated successfully with {len(df)} rows and {len(df.columns)} columns")
 
         return dataset
 
