@@ -14,9 +14,13 @@ numpy>=2.0.0
 pyarrow>=18.0.0
 
 # Deep Learning
-# NOTE: For GPU/CUDA support, install PyTorch separately first:
+# NOTE: For GPU/CUDA support, install PyTorch packages separately first:
 # See https://pytorch.org/get-started/locally/
+# Install torch, torchvision, torchaudio TOGETHER from the same source
 torch>=2.5.0
+torchvision>=0.20.0
+torchaudio>=2.5.0
+pytorch-lightning>=2.0.0
 darts>=0.32.0
 
 # Darts Optional Dependencies (for additional models)

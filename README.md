@@ -58,13 +58,15 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 
 #### GPU/CUDA Support (Recommended)
 
-For GPU-accelerated training, install PyTorch with CUDA support **before** installing other requirements:
+For GPU-accelerated training, install PyTorch with CUDA support **before** installing other requirements.
+
+**Important:** You must install `torch`, `torchvision`, and `torchaudio` together from the same source to avoid version conflicts.
 
 1. Visit [PyTorch Get Started](https://pytorch.org/get-started/locally/)
 2. Select your configuration (OS, CUDA version)
 3. Run the generated command, for example:
    ```bash
-   # Example for CUDA 12.4
+   # Example for CUDA 12.4 (check the PyTorch website for your CUDA version)
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
    ```
 
@@ -78,6 +80,17 @@ pip install -r requirements.txt
 If you don't have a CUDA-capable GPU, simply install all dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+#### Troubleshooting
+
+If you see `AttributeError: partially initialized module 'torchvision'` or similar circular import errors:
+```bash
+# Uninstall existing PyTorch packages
+pip uninstall torch torchvision torchaudio -y
+
+# Reinstall all three together from the same source
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ```
 
 ### 2. Configure API Keys
