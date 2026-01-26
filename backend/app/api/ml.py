@@ -28,8 +28,15 @@ from app.services.genetic_optimizer_base import (
     GeneticLibrary,
     OptimizationResult
 )
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+class GenerateTrainingDataRequest(BaseModel):
+    """Request model for generate-training-data endpoint."""
+    targets: List[Dict[str, Any]] = None
+    normalize: bool = True
 
 router = APIRouter()
 
@@ -277,8 +284,7 @@ async def preview_prediction_targets(
 @router.post("/datasets/{dataset_id}/generate-training-data")
 async def generate_training_data(
     dataset_id: int,
-    targets: List[Dict[str, Any]] = None,
-    normalize: bool = True,
+    request: GenerateTrainingDataRequest = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -289,14 +295,17 @@ async def generate_training_data(
 
     Args:
         dataset_id: Dataset ID
-        targets: List of target configurations
-        normalize: Whether to normalize the data (default: True)
+        request: Request body with targets and normalize flag
         db: Database session
 
     Returns:
         File paths and statistics for the generated training data
     """
     try:
+        # Extract from request body
+        targets = request.targets if request else None
+        normalize = request.normalize if request else True
+
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
 
         if not dataset:
