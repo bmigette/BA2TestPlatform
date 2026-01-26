@@ -1052,6 +1052,37 @@ const DatasetDetails: React.FC = () => {
                 {new Date(dataset.created_at).toLocaleString()}
               </dd>
             </div>
+            <div>
+              <dt className="text-sm font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1">
+                <MessageSquare size={14} />
+                News Articles
+              </dt>
+              <dd className="text-sm text-gray-900 dark:text-gray-100">
+                {sentimentLoading ? (
+                  <span className="text-gray-500">Loading...</span>
+                ) : sentimentError ? (
+                  <span className="text-red-500">Error loading news</span>
+                ) : sentimentMarkers.length > 0 ? (
+                  <div>
+                    <span className="font-semibold">{sentimentMarkers.length}</span> articles found
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      {(() => {
+                        const dates = sentimentMarkers
+                          .map(m => m.date)
+                          .filter(d => d)
+                          .sort();
+                        if (dates.length === 0) return null;
+                        const first = new Date(dates[0]).toLocaleDateString();
+                        const last = new Date(dates[dates.length - 1]).toLocaleDateString();
+                        return `${first} — ${last}`;
+                      })()}
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-gray-500">No news articles found</span>
+                )}
+              </dd>
+            </div>
           </dl>
         </div>
 
