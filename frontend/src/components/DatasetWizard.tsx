@@ -13,6 +13,8 @@ interface InitialDataset {
   normalization_buffer_pct?: number;
   technical_indicators?: any;
   generation_config?: any;
+  sentiment_config?: any;
+  fundamentals_config?: any;
 }
 
 interface DatasetWizardProps {
@@ -147,6 +149,26 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         }));
       }
 
+      // Parse sentiment config from saved data
+      const savedSentiment = initialData.sentiment_config || {};
+      const sentimentConfig: SentimentConfig = {
+        enabled: savedSentiment.enabled || false,
+        newsSources: savedSentiment.newsSources || savedSentiment.news_sources || ['google_news', 'fmp_news'],
+        lookbackPeriods: savedSentiment.lookbackPeriods || savedSentiment.lookback_periods || ['1d', '1w', '1m', '6m'],
+        sentimentCategories: savedSentiment.sentimentCategories || savedSentiment.sentiment_categories || ['positive', 'neutral', 'negative'],
+        impactTimeframes: savedSentiment.impactTimeframes || savedSentiment.impact_timeframes || ['short', 'medium', 'long']
+      };
+
+      // Parse fundamentals config from saved data
+      const savedFundamentals = initialData.fundamentals_config || {};
+      const fundamentalsConfig: FundamentalsConfig = {
+        enabled: savedFundamentals.enabled || false,
+        metrics: savedFundamentals.metrics || ['fcf', 'pe', 'eps', 'revenue'],
+        macroIndicators: savedFundamentals.macroIndicators || savedFundamentals.macro_indicators || ['interest_rate', 'gdp', 'inflation', 'unemployment'],
+        fundamentalsProvider: savedFundamentals.fundamentalsProvider || savedFundamentals.fundamentals_provider || 'yfinance',
+        macroProvider: savedFundamentals.macroProvider || savedFundamentals.macro_provider || 'fred'
+      };
+
       setWizardData({
         ticker: mode === 'duplicate' ? '' : initialData.ticker,  // Clear ticker for duplicate
         timeframe: initialData.timeframe,
@@ -155,20 +177,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         dataProvider: initialData.generation_config?.data_provider || 'yfinance',
         normalizationBufferPct: initialData.normalization_buffer_pct || 0.35,
         indicators,
-        sentiment: {
-          enabled: false,
-          newsSources: ['google_news', 'fmp_news'],
-          lookbackPeriods: ['1d', '1w', '1m', '6m'],
-          sentimentCategories: ['positive', 'neutral', 'negative'],
-          impactTimeframes: ['short', 'medium', 'long']
-        },
-        fundamentals: {
-          enabled: false,
-          metrics: ['fcf', 'pe', 'eps', 'revenue'],
-          macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment'],
-          fundamentalsProvider: 'yfinance',
-          macroProvider: 'fred'
-        }
+        sentiment: sentimentConfig,
+        fundamentals: fundamentalsConfig
       });
     } else if (isOpen && mode === 'create') {
       setWizardData(getDefaultWizardData());
@@ -388,6 +398,23 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
       let response: Response;
 
+      // Prepare sentiment and fundamentals configs
+      const sentimentConfig = wizardData.sentiment.enabled ? {
+        enabled: true,
+        news_sources: wizardData.sentiment.newsSources,
+        lookback_periods: wizardData.sentiment.lookbackPeriods,
+        sentiment_categories: wizardData.sentiment.sentimentCategories,
+        impact_timeframes: wizardData.sentiment.impactTimeframes
+      } : { enabled: false };
+
+      const fundamentalsConfig = wizardData.fundamentals.enabled ? {
+        enabled: true,
+        metrics: wizardData.fundamentals.metrics,
+        macro_indicators: wizardData.fundamentals.macroIndicators,
+        fundamentals_provider: wizardData.fundamentals.fundamentalsProvider,
+        macro_provider: wizardData.fundamentals.macroProvider
+      } : { enabled: false };
+
       if (mode === 'duplicate' && initialData) {
         // Duplicate: POST to /{id}/duplicate
         response = await fetch(`http://localhost:8002/api/datasets/${initialData.id}/duplicate`, {
@@ -409,7 +436,9 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             start_date: wizardData.startDate || undefined,
             end_date: wizardData.endDate || undefined,
             technical_indicators: technicalIndicators,
-            normalization_buffer_pct: wizardData.normalizationBufferPct
+            normalization_buffer_pct: wizardData.normalizationBufferPct,
+            sentiment_config: sentimentConfig,
+            fundamentals_config: fundamentalsConfig
           }),
         });
       } else {
@@ -425,8 +454,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             data_provider: wizardData.dataProvider,
             normalization_buffer_pct: wizardData.normalizationBufferPct,
             technical_indicators: technicalIndicators,
-            sentiment_config: wizardData.sentiment.enabled ? wizardData.sentiment : null,
-            fundamentals_config: wizardData.fundamentals.enabled ? wizardData.fundamentals : null
+            sentiment_config: sentimentConfig,
+            fundamentals_config: fundamentalsConfig
           }),
         });
       }

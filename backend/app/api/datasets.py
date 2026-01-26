@@ -778,6 +778,12 @@ async def update_dataset(
         if dataset_update.technical_indicators is not None:
             dataset.technical_indicators = dataset_update.technical_indicators
 
+        if dataset_update.sentiment_config is not None:
+            dataset.sentiment_config = dataset_update.sentiment_config
+
+        if dataset_update.fundamentals_config is not None:
+            dataset.fundamentals_config = dataset_update.fundamentals_config
+
         db.commit()
         db.refresh(dataset)
 

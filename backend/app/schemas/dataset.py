@@ -31,6 +31,8 @@ class DatasetUpdate(BaseModel):
     end_date: Optional[str] = Field(None, description="New end date (will regenerate data)")
     technical_indicators: Optional[List[Dict[str, Any]]] = Field(None, description="New indicators (will regenerate data)")
     normalization_buffer_pct: Optional[float] = Field(None, description="New buffer percentage")
+    sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")
+    fundamentals_config: Optional[Dict[str, Any]] = Field(None, description="Fundamentals configuration")
 
 
 class DatasetDuplicate(BaseModel):
