@@ -452,13 +452,6 @@ class SentimentService:
         raw_articles = all_raw_articles
         logger.info(f"Received {len(raw_articles)} unique raw articles from {provider} across {len(monthly_chunks)} months")
 
-        # Debug log: raw articles
-        for i, article in enumerate(raw_articles):
-            logger.debug(f"[Raw {i+1}/{len(raw_articles)}] Title: {article.get('title', 'N/A')}")
-            logger.debug(f"[Raw {i+1}/{len(raw_articles)}] URL: {article.get('url', 'N/A')}")
-            summary = article.get('summary', article.get('snippet', ''))
-            logger.debug(f"[Raw {i+1}/{len(raw_articles)}] Summary length: {len(summary)} chars")
-
         # Enrich articles with short summaries using trafilatura
         if enrich_content and hasattr(news_provider, 'enrich_articles_with_content'):
             logger.info("Enriching articles with URL content via trafilatura...")
