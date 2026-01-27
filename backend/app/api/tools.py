@@ -538,9 +538,17 @@ async def fetch_fundamentals(
         if result:
             if isinstance(result, dict):
                 result["provider"] = provider
-            period_count = len(result.get('periods', result.get('earnings', [])))
-            logger.info(f"Fetched {data_type} for {symbol} from {provider}: {period_count} periods")
-            return result
+                # Different providers use different keys for the data array
+                period_count = len(result.get('statements', result.get('earnings', result.get('periods', []))))
+                logger.info(f"Fetched {data_type} for {symbol} from {provider}: {period_count} periods")
+                return result
+            elif isinstance(result, str):
+                # Error message from provider
+                logger.warning(f"Provider returned error for {symbol}: {result}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=result
+                )
         else:
             return {
                 "symbol": symbol,

@@ -80,8 +80,11 @@ class AlphaVantageCompanyOverviewProvider(AlphaVantageBaseProvider, CompanyFunda
             params = {"symbol": symbol}
             result = self.make_api_request("OVERVIEW", params)
             
-            # Build dict response (always build it for "both" format support)
-            data = json.loads(result)
+            # make_api_request returns dict for JSON responses, string for CSV
+            if isinstance(result, dict):
+                data = result
+            else:
+                data = json.loads(result)
             
             # Transform to match interface specification
             dict_response = {

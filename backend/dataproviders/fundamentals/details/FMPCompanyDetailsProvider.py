@@ -25,12 +25,6 @@ def get_app_setting(key: str) -> Optional[str]:
     return os.getenv(key)
 
 
-def validate_date_range(start_date: Optional[datetime], lookback_periods: Optional[int]) -> None:
-    """Validate that either start_date or lookback_periods is provided, but not both."""
-    if start_date is not None and lookback_periods is not None:
-        raise ValueError("Cannot specify both start_date and lookback_periods")
-    if start_date is None and lookback_periods is None:
-        raise ValueError("Must specify either start_date or lookback_periods")
 
 
 class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
@@ -372,35 +366,26 @@ class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
         """Filter statements by date range or period count."""
         if not statements:
             return []
-        
+
         # If lookback_periods is specified, just take that many
         if lookback_periods:
             return statements[:lookback_periods]
-        
-        # Otherwise filter by date
-        if start_date:
-            # validate_date_range returns tuple (start_date, end_date)
-            actual_start_date, actual_end_date = validate_date_range(start_date, end_date, lookback_periods)
-            # Use validated end_date if provided
-            if actual_end_date:
-                end_date = actual_end_date
-        else:
-            actual_start_date = None
-        
-        if not actual_start_date:
+
+        # Otherwise filter by date range
+        if not start_date:
             return statements
-        
+
         filtered = []
         for stmt in statements:
             stmt_date_str = stmt.get("date", "")
             if stmt_date_str:
                 try:
                     stmt_date = datetime.fromisoformat(stmt_date_str.split("T")[0])
-                    if actual_start_date <= stmt_date <= end_date:
+                    if start_date <= stmt_date <= end_date:
                         filtered.append(stmt)
                 except (ValueError, AttributeError):
                     continue
-        
+
         return filtered
     
     def _format_balance_sheet_markdown(self, symbol: str, frequency: str, statements: list) -> str:
