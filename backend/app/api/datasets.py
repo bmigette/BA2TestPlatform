@@ -1312,8 +1312,8 @@ async def update_dataset(
     """
     Update dataset properties and regenerate the dataset.
 
-    Always regenerates the dataset with the updated configuration to ensure
-    all indicators, sentiment, and fundamentals are applied.
+    OHLCV data is fetched synchronously for validation. If validation passes,
+    heavy processing (indicators, sentiment, fundamentals) is done in background.
 
     Args:
         dataset_id: Dataset ID to update
@@ -1321,8 +1321,10 @@ async def update_dataset(
         db: Database session
 
     Returns:
-        Updated dataset
+        Updated dataset with status="building"
     """
+    from app.services.task_queue import get_task_queue
+
     try:
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not dataset:
@@ -1418,7 +1420,7 @@ async def update_dataset(
         dataset.error_message = None
         db.commit()
 
-        # Fetch OHLC data
+        # Fetch OHLC data synchronously for validation
         provider_name = gen_config.get("data_provider", "yfinance")
         provider = get_ohlcv_provider(provider_name)
         interval_map = {
@@ -1445,20 +1447,22 @@ async def update_dataset(
                 detail=f"No data available for {new_ticker}"
             )
 
-        # Convert to DataFrame first
-        df = pd.DataFrame([{
-            'Date': dp.timestamp,
+        # Convert to DataFrame for validation
+        ohlcv_data = [{
+            'Date': dp.timestamp.isoformat() if hasattr(dp.timestamp, 'isoformat') else str(dp.timestamp),
             'Open': dp.open,
             'High': dp.high,
             'Low': dp.low,
             'Close': dp.close,
             'Volume': dp.volume
-        } for dp in data_points])
+        } for dp in data_points]
+
+        df = pd.DataFrame(ohlcv_data)
+        df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values('Date').reset_index(drop=True)
         logger.info(f"Fetched {len(df)} OHLC data points")
 
         # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
-        # Use date comparison to avoid timezone issues
         data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
         data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
         req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
@@ -1483,157 +1487,32 @@ async def update_dataset(
                 detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
             )
 
-        # Apply technical indicators if configured
-        if dataset.technical_indicators:
-            logger.info(f"Applying {len(dataset.technical_indicators)} technical indicators...")
-            try:
-                indicators_dict = {}
-                for indicator in dataset.technical_indicators:
-                    indicator_type = indicator.get('type', indicator.get('name', 'unknown'))
-                    indicator_name = indicator.get('name', f"{indicator_type}_{indicator.get('period', '')}")
-                    indicators_dict[indicator_name] = indicator
+        # OHLCV validation passed - queue background task for heavy processing
+        logger.info(f"OHLCV validation passed. Queuing background task for dataset {dataset_id}")
 
-                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
-                logger.info(f"Added technical indicators. DataFrame now has {len(df.columns)} columns")
-            except Exception as e:
-                logger.error(f"Error applying technical indicators: {e}")
+        task_queue = get_task_queue()
+        task_id = task_queue.queue_task(
+            task_type='dataset_regeneration',
+            name=f'Regenerate dataset {dataset.name}',
+            description=f'Processing indicators, sentiment, and fundamentals for dataset {dataset_id}',
+            payload={
+                'dataset_id': dataset_id,
+                'ohlcv_data': ohlcv_data,
+                'ticker': new_ticker,
+                'timeframe': new_timeframe,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat()
+            },
+            max_retries=1,
+            timeout_seconds=600
+        )
 
-        # Fetch and add sentiment features if configured
-        if dataset.sentiment_config and dataset.sentiment_config.get('enabled'):
-            logger.info("Fetching sentiment data...")
-            logger.debug(f"Sentiment config: {dataset.sentiment_config}")
-            try:
-                sentiment_service = SentimentService()
-
-                # Get news sources from config (supports multiple providers)
-                news_sources = dataset.sentiment_config.get('news_sources', [])
-                if not news_sources:
-                    legacy_provider = dataset.sentiment_config.get('provider', 'fmp')
-                    news_sources = [legacy_provider]
-
-                logger.info(f"Fetching news from {len(news_sources)} source(s): {news_sources}")
-
-                all_articles = []
-                for source in news_sources:
-                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
-                    try:
-                        logger.debug(f"Fetching news from provider: {provider}")
-                        articles = sentiment_service.fetch_news_for_ticker(
-                            ticker=new_ticker,
-                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
-                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                            provider=provider,
-                            enrich_content=dataset.sentiment_config.get('enrich_content', True)
-                        )
-                        if articles:
-                            logger.info(f"Fetched {len(articles)} articles from {provider}")
-                            all_articles.extend(articles)
-                        else:
-                            logger.warning(f"No articles from {provider}")
-                    except Exception as e:
-                        logger.warning(f"Error fetching from {provider}: {e}")
-
-                if all_articles:
-                    logger.info(f"Total articles from all sources: {len(all_articles)}")
-                    df = sentiment_service.create_sentiment_features(df, all_articles)
-                    logger.info(f"Added sentiment features from {len(all_articles)} articles")
-                    # Store articles count - copy dict to ensure SQLAlchemy detects change
-                    updated_sentiment_config = dict(dataset.sentiment_config) if dataset.sentiment_config else {}
-                    updated_sentiment_config['articles_count'] = len(all_articles)
-                    dataset.sentiment_config = updated_sentiment_config
-                else:
-                    logger.warning("No news articles found for sentiment analysis from any source")
-                    updated_sentiment_config = dict(dataset.sentiment_config) if dataset.sentiment_config else {}
-                    updated_sentiment_config['articles_count'] = 0
-                    dataset.sentiment_config = updated_sentiment_config
-
-            except Exception as e:
-                logger.error(f"Error fetching sentiment: {e}")
-
-        # Fetch and add fundamentals if configured
-        if dataset.fundamentals_config and dataset.fundamentals_config.get('enabled'):
-            logger.info("Fetching fundamentals data...")
-            logger.debug(f"Fundamentals config: {dataset.fundamentals_config}")
-            try:
-                fundamentals_config = dataset.fundamentals_config
-
-                # Check if using new statement-based config
-                statement_types = fundamentals_config.get('statement_types')
-                if statement_types:
-                    # Use new statement-based features with lookback
-                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
-                    providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
-
-                    logger.info(f"Creating statement features: types={statement_types}, lookback={lookback_statements}, providers={providers}")
-
-                    df = FundamentalsService.create_statement_features(
-                        df=df,
-                        ticker=new_ticker,
-                        statement_types=statement_types,
-                        lookback_statements=lookback_statements,
-                        providers=providers,
-                        frequency='quarterly'
-                    )
-
-                    # Count how many statement columns were added
-                    statement_cols = [c for c in df.columns if any(c.startswith(p + '_q') for p in ['bs', 'is', 'cf', 'earn'])]
-                    logger.info(f"Added {len(statement_cols)} statement feature columns")
-                else:
-                    # Legacy mode: add current fundamentals as constant columns
-                    fundamentals = FundamentalsService.get_fundamental_data(new_ticker)
-
-                    if fundamentals and fundamentals.get('current'):
-                        current = fundamentals['current']
-                        added_fundamentals = []
-                        for key, value in current.items():
-                            if value is not None:
-                                df[f'fundamental_{key}'] = value
-                                added_fundamentals.append(key)
-                        logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
-                    else:
-                        logger.warning("No fundamentals data available")
-
-                # Fetch macro indicators if configured
-                macro_indicators = dataset.fundamentals_config.get('macro_indicators', [])
-                if macro_indicators:
-                    logger.info(f"Fetching macro indicators: {macro_indicators}")
-                    try:
-                        macro_service = MacroService()
-                        df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
-                        # Rename columns to have macro_ prefix
-                        for indicator in macro_indicators:
-                            if indicator in df.columns:
-                                df = df.rename(columns={indicator: f'macro_{indicator}'})
-                                if f'{indicator}_yoy_change' in df.columns:
-                                    df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
-                        logger.info(f"Added macro columns for: {macro_indicators}")
-                    except Exception as e:
-                        logger.warning(f"Error fetching macro data: {e}")
-
-            except Exception as e:
-                logger.error(f"Error fetching fundamentals: {e}")
-
-        # Save to file
-        file_path = Path(dataset.file_path)
-        file_path.parent.mkdir(exist_ok=True)
-        df.to_csv(file_path, index=False)
-        logger.info(f"Saved updated dataset to {file_path} with {len(df.columns)} columns")
-
-        # Update dataset record
-        dataset.start_date = df['Date'].min()
-        dataset.end_date = df['Date'].max()
-        dataset.rows_count = len(df)
-        dataset.status = DatasetStatus.READY.value
-        dataset.error_message = None
-
-        # Update generation config
-        gen_config["updated_at"] = datetime.now().isoformat()
-        dataset.generation_config = gen_config
-
+        # Store task_id on dataset for tracking
+        dataset.task_id = task_id
         db.commit()
         db.refresh(dataset)
 
-        logger.info(f"Dataset {dataset_id} updated and regenerated successfully with {len(df)} rows and {len(df.columns)} columns")
+        logger.info(f"Dataset {dataset_id} update queued as background task {task_id}")
         return dataset
 
     except HTTPException:

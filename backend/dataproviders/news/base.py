@@ -192,7 +192,7 @@ class MarketNewsInterface(ABC):
     def resolve_finnhub_redirects(
         self,
         articles: List[Dict[str, Any]],
-        max_workers: int = 5
+        max_workers: int = 8
     ) -> List[Dict[str, Any]]:
         """
         Resolve Finnhub redirect URLs in articles to actual article URLs.
@@ -247,7 +247,7 @@ class MarketNewsInterface(ABC):
     def enrich_articles_with_content(
         self,
         articles: List[Dict[str, Any]],
-        max_workers: int = 5,
+        max_workers: int = 8,
         min_summary_length: int = 100
     ) -> List[Dict[str, Any]]:
         """
@@ -263,7 +263,7 @@ class MarketNewsInterface(ABC):
             Articles with enriched summaries
         """
         # First, resolve any Finnhub redirect URLs to actual article URLs
-        articles = self.resolve_finnhub_redirects(articles)
+        articles = self.resolve_finnhub_redirects(articles, max_workers=max_workers)
 
         # Find articles needing enrichment
         needs_enrichment = []

@@ -32,6 +32,8 @@ class Dataset(Base):
     # Status tracking
     status = Column(String(20), nullable=False, default=DatasetStatus.READY.value)
     error_message = Column(Text, nullable=True)
+    progress_message = Column(Text, nullable=True)  # Current processing step/progress
+    task_id = Column(String(50), nullable=True)  # Background task ID for tracking
 
     # JSON fields for configuration
     technical_indicators = Column(JSON, nullable=True)

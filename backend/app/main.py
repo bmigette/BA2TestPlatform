@@ -184,9 +184,15 @@ async def startup_event():
         logger.warning(f"Could not initialize default collections: {e}")
 
     # Initialize task queue
-    from app.services.task_queue import init_task_queue
+    from app.services.task_queue import init_task_queue, get_task_queue
     init_task_queue(max_workers=2)
     logger.info("Task queue initialized with 2 workers")
+
+    # Register dataset regeneration handler
+    from app.services.dataset_handler import handle_dataset_regeneration
+    task_queue = get_task_queue()
+    task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
+    logger.info("Registered dataset_regeneration handler")
 
     logger.info("Application startup complete")
 
