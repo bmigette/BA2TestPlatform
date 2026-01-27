@@ -240,6 +240,8 @@ class MarketNewsInterface(ABC):
             }
 
             resolved_count = 0
+            processed_count = 0
+            total_count = len(finnhub_articles)
             for future in as_completed(future_to_index):
                 idx = future_to_index[future]
                 try:
@@ -250,6 +252,10 @@ class MarketNewsInterface(ABC):
                         resolved_count += 1
                 except Exception as e:
                     logger.debug(f"Error resolving Finnhub URL for article {idx}: {e}")
+
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    logger.info(f"Progress: {processed_count}/{total_count} URLs processed ({resolved_count} resolved)")
 
         logger.info(f"Resolved {resolved_count}/{len(finnhub_articles)} Finnhub redirect URLs")
         return articles

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
 
-from app.models.database import get_db
+from app.models.database import get_db, SessionLocal
 from app.models.dataset import Dataset, DatasetStatus
 from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate
 from app.indicators import TechnicalIndicators
@@ -828,52 +828,49 @@ async def regenerate_dataset(
     Returns:
         Regenerated dataset
     """
+    # =========================================================================
+    # PHASE 1: Read config from DB and set status to BUILDING
+    # =========================================================================
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset with ID {dataset_id} not found"
+        )
+
+    logger.info(f"Regenerating dataset {dataset_id} ({dataset.name})")
+
+    # Extract all config into local variables (so we can close DB session)
+    dataset_name = dataset.name
+    ticker = dataset.ticker
+    timeframe = dataset.timeframe
+    file_path = dataset.file_path
+    technical_indicators = dataset.technical_indicators.copy() if dataset.technical_indicators else None
+    fundamentals_config = dataset.fundamentals_config.copy() if dataset.fundamentals_config else None
+    sentiment_config = dataset.sentiment_config.copy() if dataset.sentiment_config else None
+    gen_config = (dataset.generation_config or {}).copy()
+
+    # Parse dates
+    if gen_config.get("original_start_date"):
+        start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
+    else:
+        start_date = dataset.start_date
+
+    if gen_config.get("original_end_date"):
+        end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
+    else:
+        end_date = dataset.end_date
+
+    # Set status to BUILDING and commit immediately
+    dataset.status = DatasetStatus.BUILDING.value
+    dataset.error_message = None
+    db.commit()
+
+    # =========================================================================
+    # PHASE 2: Long-running operations WITHOUT holding DB session
+    # =========================================================================
     try:
-        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-        if not dataset:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Dataset with ID {dataset_id} not found"
-            )
-
-        logger.info(f"Regenerating dataset {dataset_id} ({dataset.name})")
-
-        # Debug log all dataset options
-        logger.debug("=" * 60)
-        logger.debug("DATASET REGENERATION OPTIONS:")
-        logger.debug(f"  Dataset ID: {dataset.id}")
-        logger.debug(f"  Name: {dataset.name}")
-        logger.debug(f"  Ticker: {dataset.ticker}")
-        logger.debug(f"  Timeframe: {dataset.timeframe}")
-        logger.debug(f"  Start Date: {dataset.start_date}")
-        logger.debug(f"  End Date: {dataset.end_date}")
-        logger.debug(f"  Normalization Buffer: {dataset.normalization_buffer_pct}%")
-        logger.debug(f"  Technical Indicators: {dataset.technical_indicators}")
-        logger.debug(f"  Fundamentals Config: {dataset.fundamentals_config}")
-        logger.debug(f"  Sentiment Config: {dataset.sentiment_config}")
-        logger.debug(f"  Generation Config: {dataset.generation_config}")
-        logger.debug("=" * 60)
-
-        # Set status to BUILDING
-        dataset.status = DatasetStatus.BUILDING.value
-        dataset.error_message = None
-        db.commit()
-
-        # Get generation config
-        gen_config = dataset.generation_config or {}
-
-        # Parse dates
-        if gen_config.get("original_start_date"):
-            start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
-        else:
-            start_date = dataset.start_date
-
-        if gen_config.get("original_end_date"):
-            end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
-        else:
-            end_date = dataset.end_date
-
-        # Fetch data
+        # Fetch OHLC data
         provider = YFinanceDataProvider()
         logger.info(f"Fetching data from {start_date.date()} to {end_date.date()}")
 
@@ -881,22 +878,26 @@ async def regenerate_dataset(
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
             "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
         }
-        interval = interval_map.get(dataset.timeframe, "1d")
+        interval = interval_map.get(timeframe, "1d")
 
         data_points = provider.get_data(
-            symbol=dataset.ticker,
+            symbol=ticker,
             start_date=start_date,
             end_date=end_date,
             interval=interval
         )
 
         if not data_points:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = f"No data available for {dataset.ticker}"
-            db.commit()
+            # Update status to ERROR using fresh session
+            with SessionLocal() as error_db:
+                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                if error_dataset:
+                    error_dataset.status = DatasetStatus.ERROR.value
+                    error_dataset.error_message = f"No data available for {ticker}"
+                    error_db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"No data available for {dataset.ticker}"
+                detail=f"No data available for {ticker}"
             )
 
         # Convert to DataFrame
@@ -912,11 +913,11 @@ async def regenerate_dataset(
         logger.info(f"Fetched {len(df)} OHLC data points")
 
         # Apply technical indicators if configured
-        if dataset.technical_indicators:
-            logger.info(f"Applying {len(dataset.technical_indicators)} technical indicators...")
+        if technical_indicators:
+            logger.info(f"Applying {len(technical_indicators)} technical indicators...")
             try:
                 indicators_dict = {}
-                for indicator in dataset.technical_indicators:
+                for indicator in technical_indicators:
                     indicator_type = indicator.get('type', indicator.get('name', 'unknown'))
                     indicator_name = indicator.get('name', f"{indicator_type}_{indicator.get('period', '')}")
                     indicators_dict[indicator_name] = indicator
@@ -927,17 +928,15 @@ async def regenerate_dataset(
                 logger.error(f"Error applying technical indicators: {e}")
 
         # Fetch and add sentiment features if configured
-        if dataset.sentiment_config and dataset.sentiment_config.get('enabled'):
+        if sentiment_config and sentiment_config.get('enabled'):
             logger.info("Fetching sentiment data...")
-            logger.debug(f"Sentiment config: {dataset.sentiment_config}")
             try:
                 sentiment_service = SentimentService()
 
                 # Get news sources from config (supports multiple providers)
-                news_sources = dataset.sentiment_config.get('news_sources', [])
+                news_sources = sentiment_config.get('news_sources', [])
                 if not news_sources:
-                    # Fallback to legacy 'provider' field
-                    legacy_provider = dataset.sentiment_config.get('provider', 'fmp')
+                    legacy_provider = sentiment_config.get('provider', 'fmp')
                     news_sources = [legacy_provider]
 
                 logger.info(f"Fetching news from {len(news_sources)} source(s): {news_sources}")
@@ -945,53 +944,46 @@ async def regenerate_dataset(
                 # Fetch from all configured news sources
                 all_articles = []
                 for source in news_sources:
-                    # Convert source name to provider name (e.g., 'fmp_news' -> 'fmp')
-                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
+                    news_provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
                     try:
-                        logger.debug(f"Fetching news from provider: {provider}")
                         articles = sentiment_service.fetch_news_for_ticker(
-                            ticker=dataset.ticker,
+                            ticker=ticker,
                             start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
                             end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                            provider=provider,
-                            enrich_content=dataset.sentiment_config.get('enrich_content', True)
+                            provider=news_provider,
+                            enrich_content=sentiment_config.get('enrich_content', True)
                         )
                         if articles:
-                            logger.info(f"Fetched {len(articles)} articles from {provider}")
+                            logger.info(f"Fetched {len(articles)} articles from {news_provider}")
                             all_articles.extend(articles)
                         else:
-                            logger.warning(f"No articles from {provider}")
+                            logger.warning(f"No articles from {news_provider}")
                     except Exception as e:
-                        logger.warning(f"Error fetching from {provider}: {e}")
+                        logger.warning(f"Error fetching from {news_provider}: {e}")
 
                 if all_articles:
                     logger.info(f"Total articles from all sources: {len(all_articles)}")
                     df = sentiment_service.create_sentiment_features(df, all_articles)
                     logger.info(f"Added sentiment features from {len(all_articles)} articles")
                 else:
-                    logger.warning("No news articles found for sentiment analysis from any source")
+                    logger.warning("No news articles found for sentiment analysis")
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
 
         # Fetch and add fundamentals if configured
-        if dataset.fundamentals_config and dataset.fundamentals_config.get('enabled'):
+        if fundamentals_config and fundamentals_config.get('enabled'):
             logger.info("Fetching fundamentals data...")
-            logger.debug(f"Fundamentals config: {dataset.fundamentals_config}")
             try:
-                fundamentals_config = dataset.fundamentals_config
-
-                # Check if using new statement-based config
                 statement_types = fundamentals_config.get('statement_types')
                 if statement_types:
-                    # Use new statement-based features with lookback
                     lookback_statements = fundamentals_config.get('lookback_statements', 2)
                     providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
 
                     logger.info(f"Creating statement features: {statement_types} with {lookback_statements} periods")
                     df = FundamentalsService.create_statement_features(
                         df=df,
-                        ticker=dataset.ticker,
+                        ticker=ticker,
                         statement_types=statement_types,
                         lookback_statements=lookback_statements,
                         providers=providers,
@@ -1000,19 +992,13 @@ async def regenerate_dataset(
                     new_cols = [c for c in df.columns if c.startswith(('bs_', 'is_', 'cf_', 'earn_'))]
                     logger.info(f"Added {len(new_cols)} statement feature columns")
                 else:
-                    # Legacy mode: add current fundamentals as constant columns
-                    fundamentals = FundamentalsService.get_fundamental_data(dataset.ticker)
-
+                    # Legacy mode
+                    fundamentals = FundamentalsService.get_fundamental_data(ticker)
                     if fundamentals and fundamentals.get('current'):
                         current = fundamentals['current']
-                        added_fundamentals = []
                         for key, value in current.items():
                             if value is not None:
                                 df[f'fundamental_{key}'] = value
-                                added_fundamentals.append(key)
-                        logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
-                    else:
-                        logger.warning("No fundamentals data available")
 
                 # Fetch macro indicators if configured
                 macro_indicators = fundamentals_config.get('macro_indicators', [])
@@ -1021,7 +1007,6 @@ async def regenerate_dataset(
                     try:
                         macro_service = MacroService()
                         df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
-                        # Rename columns to have macro_ prefix
                         for indicator in macro_indicators:
                             if indicator in df.columns:
                                 df = df.rename(columns={indicator: f'macro_{indicator}'})
@@ -1035,40 +1020,47 @@ async def regenerate_dataset(
                 logger.error(f"Error fetching fundamentals: {e}")
 
         # Save to file
-        file_path = Path(dataset.file_path)
-        file_path.parent.mkdir(exist_ok=True)
-        df.to_csv(file_path, index=False)
-        logger.info(f"Saved regenerated dataset to {file_path} with {len(df.columns)} columns")
+        save_path = Path(file_path)
+        save_path.parent.mkdir(exist_ok=True)
+        df.to_csv(save_path, index=False)
+        logger.info(f"Saved regenerated dataset to {save_path} with {len(df.columns)} columns")
 
-        # Update dataset record
-        dataset.start_date = df['Date'].min()
-        dataset.end_date = df['Date'].max()
-        dataset.rows_count = len(df)
-        dataset.status = DatasetStatus.READY.value
-        dataset.error_message = None
+        # =========================================================================
+        # PHASE 3: Update DB with fresh session
+        # =========================================================================
+        with SessionLocal() as final_db:
+            final_dataset = final_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if final_dataset:
+                final_dataset.start_date = df['Date'].min()
+                final_dataset.end_date = df['Date'].max()
+                final_dataset.rows_count = len(df)
+                final_dataset.status = DatasetStatus.READY.value
+                final_dataset.error_message = None
 
-        # Update generation config
-        gen_config["regenerated_at"] = datetime.now().isoformat()
-        dataset.generation_config = gen_config
+                gen_config["regenerated_at"] = datetime.now().isoformat()
+                final_dataset.generation_config = gen_config
 
-        db.commit()
-        db.refresh(dataset)
+                final_db.commit()
+                final_db.refresh(final_dataset)
 
-        logger.info(f"Dataset {dataset_id} regenerated successfully with {len(df)} rows and {len(df.columns)} columns")
+                logger.info(f"Dataset {dataset_id} regenerated successfully with {len(df)} rows and {len(df.columns)} columns")
 
-        return dataset
+                return final_dataset
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error regenerating dataset: {e}", exc_info=True)
-        # Mark as error
+        # Mark as error using fresh session
         try:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = str(e)
-            db.commit()
+            with SessionLocal() as error_db:
+                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                if error_dataset:
+                    error_dataset.status = DatasetStatus.ERROR.value
+                    error_dataset.error_message = str(e)
+                    error_db.commit()
         except Exception:
-            db.rollback()
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to regenerate dataset: {str(e)}"
@@ -1271,6 +1263,9 @@ async def update_dataset(
             end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
         else:
             end_date = dataset.end_date
+
+        # Save updated generation_config with new dates
+        dataset.generation_config = gen_config
 
         # Set status to BUILDING
         dataset.status = DatasetStatus.BUILDING.value
