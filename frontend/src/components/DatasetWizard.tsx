@@ -1080,6 +1080,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               For quarterly statements, 2 periods = last 2 quarters. Useful for showing trends.
+              Data is fetched before the dataset start date to ensure first bars have lookback data.
             </p>
           </div>
 
