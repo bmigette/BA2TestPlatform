@@ -147,12 +147,22 @@ class MarketNewsInterface(ABC):
         Returns:
             Articles with enriched summaries
         """
+        # URLs that shouldn't be scraped (API endpoints, paywalled sites, etc.)
+        skip_url_patterns = [
+            'finnhub.io/api/',  # Finnhub API URLs require auth
+            'api.finnhub.io/',
+        ]
+
         # Find articles needing enrichment
         needs_enrichment = []
         for i, article in enumerate(articles):
             summary = article.get('summary', '') or ''
-            if len(summary) < min_summary_length and article.get('url'):
-                needs_enrichment.append((i, article['url']))
+            url = article.get('url', '')
+            if len(summary) < min_summary_length and url:
+                # Skip URLs that can't be scraped
+                if any(pattern in url for pattern in skip_url_patterns):
+                    continue
+                needs_enrichment.append((i, url))
 
         if not needs_enrichment:
             return articles

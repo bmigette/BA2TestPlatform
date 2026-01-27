@@ -96,18 +96,14 @@ def setup_logging(
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
-    # Silence verbose third-party loggers
+    # Silence verbose third-party DEBUG loggers (keep WARNING and above visible)
     verbose_loggers = [
         'yfinance',
-        'trafilatura',
         'trafilatura.core',
-        'trafilatura.downloads',
         'trafilatura.readability_lxml',
         'trafilatura.external',
         'trafilatura.htmlprocessing',
         'trafilatura.main_extractor',
-        'urllib3',
-        'urllib3.connectionpool',
         'charset_normalizer',
         'filelock',
     ]
