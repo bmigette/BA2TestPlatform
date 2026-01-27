@@ -209,12 +209,41 @@ const NewsProviderTester: React.FC = () => {
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
   const exportToJson = async () => {
-    if (articles.length === 0) return;
-
     setExporting(true);
     setExportMessage(null);
 
     try {
+      // First fetch ALL news for the date range (no limit)
+      const fetchParams = new URLSearchParams({
+        provider,
+        news_type: newsType,
+        start_date: startDate,
+        end_date: endDate,
+        limit: '10000' // Fetch all articles for export
+      });
+      if (newsType === 'company' && symbol) {
+        fetchParams.set('symbol', symbol);
+      }
+
+      setExportMessage('Fetching all articles...');
+      const fetchResponse = await fetch(`http://localhost:8002/api/tools/news/fetch?${fetchParams}`);
+
+      if (!fetchResponse.ok) {
+        const errorData = await fetchResponse.json();
+        throw new Error(errorData.detail || 'Failed to fetch articles for export');
+      }
+
+      const fetchData = await fetchResponse.json();
+      const allArticles = fetchData.articles || [];
+
+      if (allArticles.length === 0) {
+        setExportMessage('No articles to export');
+        setExporting(false);
+        return;
+      }
+
+      setExportMessage(`Exporting ${allArticles.length} articles...`);
+
       // Build export URL with appropriate parameters
       const exportParams = new URLSearchParams({
         provider,
@@ -229,13 +258,13 @@ const NewsProviderTester: React.FC = () => {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(articles)
+          body: JSON.stringify(allArticles)
         }
       );
 
       if (response.ok) {
         const data = await response.json();
-        setExportMessage(`Exported to ${data.filename}`);
+        setExportMessage(`Exported ${allArticles.length} articles to ${data.filename}`);
       } else {
         const errorData = await response.json();
         setExportMessage(`Export failed: ${errorData.detail}`);
