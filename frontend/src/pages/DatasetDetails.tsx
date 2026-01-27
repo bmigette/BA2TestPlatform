@@ -1320,8 +1320,6 @@ const DatasetDetails: React.FC = () => {
             .map(c => c.name)
             .filter(col => chartData[0] && col in chartData[0]);
 
-          if (nonChartColumns.length === 0) return null;
-
           // Get visible data based on zoom
           const startIdx = zoomDomain?.startIndex ?? 0;
           const endIdx = zoomDomain?.endIndex ?? chartData.length - 1;
@@ -1336,51 +1334,63 @@ const DatasetDetails: React.FC = () => {
                 <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                   Non-Chart Data
                 </h2>
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  Showing {displayData.length} of {visibleData.length} rows ({nonChartColumns.length} columns)
-                </span>
+                {nonChartColumns.length > 0 && (
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    Showing {displayData.length} of {visibleData.length} rows ({nonChartColumns.length} columns)
+                  </span>
+                )}
               </div>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
                 Fundamental, sentiment, and macro data that are not displayed on the chart.
               </p>
-              <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">
-                        Date
-                      </th>
-                      {nonChartColumns.map(col => (
-                        <th key={col} className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                          {col}
+
+              {nonChartColumns.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                  <p>No fundamental, sentiment, or macro data in this dataset.</p>
+                  <p className="text-sm mt-2">
+                    Enable sentiment sources or add fundamental data when creating a dataset to see data here.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">
+                          Date
                         </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {displayData.map((row, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                          {new Date(row.Date).toLocaleDateString()}
-                        </td>
-                        {nonChartColumns.map(col => {
-                          const value = (row as any)[col];
-                          const formatted = value === null || value === undefined
-                            ? '-'
-                            : typeof value === 'number'
-                              ? Number.isInteger(value) ? value : value.toFixed(4)
-                              : String(value);
-                          return (
-                            <td key={col} className="px-3 py-2 text-gray-900 dark:text-gray-100 whitespace-nowrap font-mono text-xs">
-                              {formatted}
-                            </td>
-                          );
-                        })}
+                        {nonChartColumns.map(col => (
+                          <th key={col} className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                            {col}
+                          </th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {displayData.map((row, idx) => (
+                        <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                          <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                            {new Date(row.Date).toLocaleDateString()}
+                          </td>
+                          {nonChartColumns.map(col => {
+                            const value = (row as any)[col];
+                            const formatted = value === null || value === undefined
+                              ? '-'
+                              : typeof value === 'number'
+                                ? Number.isInteger(value) ? value : value.toFixed(4)
+                                : String(value);
+                            return (
+                              <td key={col} className="px-3 py-2 text-gray-900 dark:text-gray-100 whitespace-nowrap font-mono text-xs">
+                                {formatted}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           );
         })()
