@@ -131,7 +131,6 @@ class MarketDataProviderInterface(ABC):
                 # Check if cache is fresh
                 cache_age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
                 if cache_age < timedelta(hours=self.cache_max_age_hours):
-                    logger.debug(f"Using cached data for {symbol} (age: {cache_age})")
                     df = pd.read_csv(cache_file)
                     df['Date'] = pd.to_datetime(df['Date'])
 
@@ -146,9 +145,19 @@ class MarketDataProviderInterface(ABC):
                         start_dt = pd.Timestamp(start_date).tz_localize(None) if hasattr(start_date, 'tzinfo') and start_date.tzinfo else pd.Timestamp(start_date)
                         end_dt = pd.Timestamp(end_date).tz_localize(None) if hasattr(end_date, 'tzinfo') and end_date.tzinfo else pd.Timestamp(end_date)
 
-                    # Filter by date range
-                    df = df[(df['Date'] >= start_dt) & (df['Date'] <= end_dt)]
-                    return df
+                    # Check if cache covers the requested date range
+                    cache_max_date = df['Date'].max()
+                    cache_min_date = df['Date'].min()
+
+                    # If requested end date is beyond cache max (with 1 day tolerance for market closed days),
+                    # or requested start date is before cache min, fetch fresh data
+                    if end_dt > cache_max_date + pd.Timedelta(days=3) or start_dt < cache_min_date - pd.Timedelta(days=3):
+                        logger.debug(f"Cache for {symbol} doesn't cover requested range ({start_dt} to {end_dt}), cache has ({cache_min_date} to {cache_max_date}). Fetching fresh data.")
+                    else:
+                        logger.debug(f"Using cached data for {symbol} (age: {cache_age})")
+                        # Filter by date range
+                        df = df[(df['Date'] >= start_dt) & (df['Date'] <= end_dt)]
+                        return df
 
         # Fetch fresh data
         df = self._get_ohlcv_data_impl(symbol, start_date, end_date, interval)

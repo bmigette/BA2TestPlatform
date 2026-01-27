@@ -20,6 +20,18 @@ from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
 from app.services.sentiment import SentimentService
 from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
+from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
+
+
+def get_ohlcv_provider(provider_name: str = "yfinance"):
+    """Get the appropriate OHLCV provider based on config."""
+    provider_map = {
+        "yfinance": YFinanceDataProvider,
+        "yf": YFinanceDataProvider,
+        "fmp": FMPOHLCVProvider,
+    }
+    provider_class = provider_map.get(provider_name.lower(), YFinanceDataProvider)
+    return provider_class()
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +150,9 @@ async def create_dataset(
         logger.info(f"Created dataset record with ID {db_dataset.id} in BUILDING status")
 
         # Now fetch data - if this fails, dataset will remain in BUILDING or ERROR status
-        provider = YFinanceDataProvider()
-        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()}")
+        provider_name = dataset_create.data_provider or "yfinance"
+        provider = get_ohlcv_provider(provider_name)
+        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
 
         # Convert timeframe to YFinance interval format
         interval_map = {
@@ -169,6 +182,29 @@ async def create_dataset(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No data available for {dataset_create.ticker}"
+            )
+
+        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+        data_start = min(dp.timestamp for dp in data_points)
+        data_end = max(dp.timestamp for dp in data_points)
+        tolerance = timedelta(days=5)
+
+        if data_start > start_date + tolerance:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"Data starts at {data_start.date()}, but requested {start_date.date()}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data starts at {data_start.date()}, but requested start date was {start_date.date()}. Data may not be available for this range."
+            )
+
+        if data_end < end_date - tolerance:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"Data ends at {data_end.date()}, but requested {end_date.date()}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data ends at {data_end.date()}, but requested end date was {end_date.date()}. Data may not be available for this range."
             )
 
         # Convert data points to DataFrame
@@ -904,8 +940,9 @@ async def regenerate_dataset(
     # =========================================================================
     try:
         # Fetch OHLC data
-        provider = YFinanceDataProvider()
-        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()}")
+        provider_name = gen_config.get("data_provider", "yfinance")
+        provider = get_ohlcv_provider(provider_name)
+        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
 
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -931,6 +968,35 @@ async def regenerate_dataset(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No data available for {ticker}"
+            )
+
+        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+        data_start = min(dp.timestamp for dp in data_points)
+        data_end = max(dp.timestamp for dp in data_points)
+        tolerance = timedelta(days=5)
+
+        if data_start > start_date + tolerance:
+            with SessionLocal() as error_db:
+                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                if error_dataset:
+                    error_dataset.status = DatasetStatus.ERROR.value
+                    error_dataset.error_message = f"Data starts at {data_start.date()}, but requested {start_date.date()}"
+                    error_db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data starts at {data_start.date()}, but requested start date was {start_date.date()}. Data may not be available for this range."
+            )
+
+        if data_end < end_date - tolerance:
+            with SessionLocal() as error_db:
+                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                if error_dataset:
+                    error_dataset.status = DatasetStatus.ERROR.value
+                    error_dataset.error_message = f"Data ends at {data_end.date()}, but requested {end_date.date()}"
+                    error_db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data ends at {data_end.date()}, but requested end date was {end_date.date()}. Data may not be available for this range."
             )
 
         # Convert to DataFrame
@@ -1142,10 +1208,12 @@ async def duplicate_dataset(
         logger.info(f"Duplicating dataset {dataset_id} to {new_name} with ticker {new_ticker}")
 
         # Fetch data using the original generation config
-        provider = YFinanceDataProvider()
+        gen_config = original.generation_config or {}
+        provider_name = gen_config.get("data_provider", "yfinance")
+        provider = get_ohlcv_provider(provider_name)
+        logger.info(f"Using OHLCV provider: {provider_name}")
 
         # Use original dates from generation_config or dataset
-        gen_config = original.generation_config or {}
         start_date = datetime.strptime(gen_config.get("original_start_date"), "%Y-%m-%d") if gen_config.get("original_start_date") else original.start_date
         end_date = datetime.strptime(gen_config.get("original_end_date"), "%Y-%m-%d") if gen_config.get("original_end_date") else original.end_date
 
@@ -1311,14 +1379,15 @@ async def update_dataset(
         db.commit()
 
         # Fetch OHLC data
-        provider = YFinanceDataProvider()
+        provider_name = gen_config.get("data_provider", "yfinance")
+        provider = get_ohlcv_provider(provider_name)
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
             "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
         }
         interval = interval_map.get(new_timeframe, "1d")
 
-        logger.info(f"Fetching data for {new_ticker} from {start_date.date()} to {end_date.date()}")
+        logger.info(f"Fetching data for {new_ticker} from {start_date.date()} to {end_date.date()} using {provider_name}")
 
         data_points = provider.get_data(
             symbol=new_ticker,
@@ -1334,6 +1403,29 @@ async def update_dataset(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No data available for {new_ticker}"
+            )
+
+        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+        data_start = min(dp.timestamp for dp in data_points)
+        data_end = max(dp.timestamp for dp in data_points)
+        tolerance = timedelta(days=5)
+
+        if data_start > start_date + tolerance:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = f"Data starts at {data_start.date()}, but requested {start_date.date()}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data starts at {data_start.date()}, but requested start date was {start_date.date()}. Data may not be available for this range."
+            )
+
+        if data_end < end_date - tolerance:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = f"Data ends at {data_end.date()}, but requested {end_date.date()}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data ends at {data_end.date()}, but requested end date was {end_date.date()}. Data may not be available for this range."
             )
 
         # Convert to DataFrame
@@ -1584,7 +1676,9 @@ async def calculate_multi_timeframe_indicators(
         end_date = df['Date'].max()
 
         # Initialize provider
-        provider = YFinanceDataProvider()
+        gen_config = dataset.generation_config or {}
+        provider_name = gen_config.get("data_provider", "yfinance")
+        provider = get_ohlcv_provider(provider_name)
 
         # Calculate indicators for each timeframe
         all_indicators = {}
