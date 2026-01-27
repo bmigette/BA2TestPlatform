@@ -257,10 +257,24 @@ class SentimentService:
         # Convert to DataFrame for easier manipulation
         if news_articles:
             news_df = pd.DataFrame(news_articles)
-            news_df['date'] = pd.to_datetime(news_df['date'])
-            # Remove timezone info to avoid tz-aware/tz-naive mixing
-            if news_df['date'].dt.tz is not None:
-                news_df['date'] = news_df['date'].dt.tz_localize(None)
+            # Convert dates to timezone-naive datetime to avoid mixing issues
+            # Use utc=True to handle mixed tz-aware/tz-naive values, then convert to naive
+            try:
+                news_df['date'] = pd.to_datetime(news_df['date'], utc=True).dt.tz_localize(None)
+            except Exception:
+                # Fallback: convert each date individually
+                def to_naive_datetime(dt):
+                    if dt is None:
+                        return pd.NaT
+                    if isinstance(dt, str):
+                        try:
+                            dt = pd.to_datetime(dt)
+                        except Exception:
+                            return pd.NaT
+                    if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+                        return dt.replace(tzinfo=None)
+                    return dt
+                news_df['date'] = news_df['date'].apply(to_naive_datetime)
         else:
             news_df = pd.DataFrame(columns=['date', 'sentiment', 'impact_timeframe'])
 
