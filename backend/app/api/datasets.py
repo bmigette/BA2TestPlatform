@@ -184,30 +184,7 @@ async def create_dataset(
                 detail=f"No data available for {dataset_create.ticker}"
             )
 
-        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
-        data_start = min(dp.timestamp for dp in data_points)
-        data_end = max(dp.timestamp for dp in data_points)
-        tolerance = timedelta(days=5)
-
-        if data_start > start_date + tolerance:
-            db_dataset.status = DatasetStatus.ERROR.value
-            db_dataset.error_message = f"Data starts at {data_start.date()}, but requested {start_date.date()}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data starts at {data_start.date()}, but requested start date was {start_date.date()}. Data may not be available for this range."
-            )
-
-        if data_end < end_date - tolerance:
-            db_dataset.status = DatasetStatus.ERROR.value
-            db_dataset.error_message = f"Data ends at {data_end.date()}, but requested {end_date.date()}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data ends at {data_end.date()}, but requested end date was {end_date.date()}. Data may not be available for this range."
-            )
-
-        # Convert data points to DataFrame
+        # Convert data points to DataFrame first
         df = pd.DataFrame([{
             'Date': dp.timestamp,
             'Open': dp.open,
@@ -216,9 +193,34 @@ async def create_dataset(
             'Close': dp.close,
             'Volume': dp.volume
         } for dp in data_points])
-
         df = df.sort_values('Date').reset_index(drop=True)
         logger.info(f"Fetched {len(df)} OHLC data points")
+
+        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+        # Use date comparison to avoid timezone issues
+        data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
+        data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
+        req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
+        req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
+        tolerance_days = 5
+
+        if (data_start_date - req_start_date).days > tolerance_days:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"Data starts at {data_start_date}, but requested {req_start_date}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
+            )
+
+        if (req_end_date - data_end_date).days > tolerance_days:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"Data ends at {data_end_date}, but requested {req_end_date}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
+            )
 
         # Apply technical indicators if configured
         if dataset_create.technical_indicators:
@@ -970,36 +972,7 @@ async def regenerate_dataset(
                 detail=f"No data available for {ticker}"
             )
 
-        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
-        data_start = min(dp.timestamp for dp in data_points)
-        data_end = max(dp.timestamp for dp in data_points)
-        tolerance = timedelta(days=5)
-
-        if data_start > start_date + tolerance:
-            with SessionLocal() as error_db:
-                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
-                if error_dataset:
-                    error_dataset.status = DatasetStatus.ERROR.value
-                    error_dataset.error_message = f"Data starts at {data_start.date()}, but requested {start_date.date()}"
-                    error_db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data starts at {data_start.date()}, but requested start date was {start_date.date()}. Data may not be available for this range."
-            )
-
-        if data_end < end_date - tolerance:
-            with SessionLocal() as error_db:
-                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
-                if error_dataset:
-                    error_dataset.status = DatasetStatus.ERROR.value
-                    error_dataset.error_message = f"Data ends at {data_end.date()}, but requested {end_date.date()}"
-                    error_db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data ends at {data_end.date()}, but requested end date was {end_date.date()}. Data may not be available for this range."
-            )
-
-        # Convert to DataFrame
+        # Convert to DataFrame first
         df = pd.DataFrame([{
             'Date': dp.timestamp,
             'Open': dp.open,
@@ -1010,6 +983,38 @@ async def regenerate_dataset(
         } for dp in data_points])
         df = df.sort_values('Date').reset_index(drop=True)
         logger.info(f"Fetched {len(df)} OHLC data points")
+
+        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+        # Use date comparison to avoid timezone issues
+        data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
+        data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
+        req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
+        req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
+        tolerance_days = 5
+
+        if (data_start_date - req_start_date).days > tolerance_days:
+            with SessionLocal() as error_db:
+                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                if error_dataset:
+                    error_dataset.status = DatasetStatus.ERROR.value
+                    error_dataset.error_message = f"Data starts at {data_start_date}, but requested {req_start_date}"
+                    error_db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
+            )
+
+        if (req_end_date - data_end_date).days > tolerance_days:
+            with SessionLocal() as error_db:
+                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                if error_dataset:
+                    error_dataset.status = DatasetStatus.ERROR.value
+                    error_dataset.error_message = f"Data ends at {data_end_date}, but requested {req_end_date}"
+                    error_db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
+            )
 
         # Apply technical indicators if configured
         if technical_indicators:
@@ -1405,30 +1410,7 @@ async def update_dataset(
                 detail=f"No data available for {new_ticker}"
             )
 
-        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
-        data_start = min(dp.timestamp for dp in data_points)
-        data_end = max(dp.timestamp for dp in data_points)
-        tolerance = timedelta(days=5)
-
-        if data_start > start_date + tolerance:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = f"Data starts at {data_start.date()}, but requested {start_date.date()}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data starts at {data_start.date()}, but requested start date was {start_date.date()}. Data may not be available for this range."
-            )
-
-        if data_end < end_date - tolerance:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = f"Data ends at {data_end.date()}, but requested {end_date.date()}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data ends at {data_end.date()}, but requested end date was {end_date.date()}. Data may not be available for this range."
-            )
-
-        # Convert to DataFrame
+        # Convert to DataFrame first
         df = pd.DataFrame([{
             'Date': dp.timestamp,
             'Open': dp.open,
@@ -1439,6 +1421,32 @@ async def update_dataset(
         } for dp in data_points])
         df = df.sort_values('Date').reset_index(drop=True)
         logger.info(f"Fetched {len(df)} OHLC data points")
+
+        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+        # Use date comparison to avoid timezone issues
+        data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
+        data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
+        req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
+        req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
+        tolerance_days = 5
+
+        if (data_start_date - req_start_date).days > tolerance_days:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = f"Data starts at {data_start_date}, but requested {req_start_date}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
+            )
+
+        if (req_end_date - data_end_date).days > tolerance_days:
+            dataset.status = DatasetStatus.ERROR.value
+            dataset.error_message = f"Data ends at {data_end_date}, but requested {req_end_date}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
+            )
 
         # Apply technical indicators if configured
         if dataset.technical_indicators:
