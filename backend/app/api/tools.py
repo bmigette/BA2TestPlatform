@@ -426,8 +426,9 @@ async def list_fundamentals_providers():
 @router.get("/fundamentals/fetch")
 async def fetch_fundamentals(
     symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)"),
-    provider: str = Query("yfinance", description="Provider: yfinance, fmp, alphavantage"),
-    data_type: str = Query("balance_sheet", description="Data type: overview, balance_sheet, income_statement, cashflow_statement, past_earnings"),
+    provider: str = Query("yfinance", description="Single provider: yfinance, fmp, alphavantage"),
+    providers: Optional[str] = Query(None, description="Comma-separated priority list of providers (e.g., 'yfinance,fmp,alphavantage'). Overrides 'provider'."),
+    data_type: str = Query("balance_sheet", description="Data type: overview, balance_sheet, income_statement, cash_flow, earnings"),
     frequency: str = Query("quarterly", description="Frequency: quarterly or annual"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Use either this OR lookback_periods."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
@@ -438,18 +439,25 @@ async def fetch_fundamentals(
 
     Args:
         symbol: Stock ticker symbol
-        provider: Data provider (yfinance, fmp, alphavantage)
-        data_type: Type of data (overview, balance_sheet, income_statement, cashflow_statement, past_earnings)
+        provider: Single data provider (yfinance, fmp, alphavantage)
+        providers: Comma-separated list of providers in priority order (overrides provider param)
+        data_type: Type of data (overview, balance_sheet, income_statement, cash_flow, earnings)
         frequency: Data frequency (quarterly or annual)
         start_date: Start date for historical data (YYYY-MM-DD)
         end_date: End date for historical data (YYYY-MM-DD)
         lookback_periods: Number of periods to look back (alternative to start_date)
 
     Returns:
-        Fundamental data with historical periods
+        Fundamental data with historical periods (normalized format when using multiple providers)
     """
     try:
-        logger.info(f"Fetching {data_type} for {symbol} using {provider} ({frequency})")
+        # Parse provider list
+        provider_list = None
+        if providers:
+            provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+            logger.info(f"Fetching {data_type} for {symbol} using providers {provider_list} ({frequency})")
+        else:
+            logger.info(f"Fetching {data_type} for {symbol} using {provider} ({frequency})")
 
         # Parse dates
         if end_date:
@@ -466,11 +474,47 @@ async def fetch_fundamentals(
         if start_dt is None and lookback_periods is None:
             lookback_periods = 8
 
-        # Handle overview separately
+        # Handle overview separately (doesn't support multi-provider yet)
         if data_type == "overview":
             return await _fetch_fundamentals_overview(symbol, provider, end_dt)
 
-        # Get the appropriate details provider
+        # Use FundamentalsService for multi-provider support with priority fallback
+        if provider_list and len(provider_list) > 0:
+            from dataproviders.fundamentals.service import FundamentalsService
+            service = FundamentalsService(providers=provider_list)
+
+            # Map data_type to service method
+            # Support both old names (cashflow_statement, past_earnings) and new names (cash_flow, earnings)
+            if data_type in ("balance_sheet",):
+                result = service.get_balance_sheet(
+                    symbol=symbol, frequency=frequency, end_date=end_dt,
+                    start_date=start_dt, lookback_periods=lookback_periods
+                )
+            elif data_type in ("income_statement",):
+                result = service.get_income_statement(
+                    symbol=symbol, frequency=frequency, end_date=end_dt,
+                    start_date=start_dt, lookback_periods=lookback_periods
+                )
+            elif data_type in ("cash_flow", "cashflow_statement"):
+                result = service.get_cash_flow(
+                    symbol=symbol, frequency=frequency, end_date=end_dt,
+                    start_date=start_dt, lookback_periods=lookback_periods
+                )
+            elif data_type in ("earnings", "past_earnings"):
+                result = service.get_earnings(
+                    symbol=symbol, frequency=frequency, end_date=end_dt,
+                    lookback_periods=lookback_periods or 8
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown data_type: {data_type}. Available: overview, balance_sheet, income_statement, cash_flow, earnings"
+                )
+
+            # Return the normalized response
+            return result.to_dict()
+
+        # Single provider mode (backwards compatibility)
         if provider == "yfinance":
             from dataproviders.fundamentals.details import YFinanceCompanyDetailsProvider
             details_provider = YFinanceCompanyDetailsProvider()

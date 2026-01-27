@@ -691,8 +691,8 @@ const FundamentalsTester: React.FC = () => {
     { id: 'overview', name: 'Company Overview', description: 'P/E, EPS, Market Cap, etc.' },
     { id: 'balance_sheet', name: 'Balance Sheet', description: 'Assets, liabilities, equity' },
     { id: 'income_statement', name: 'Income Statement', description: 'Revenue, expenses, profit' },
-    { id: 'cashflow_statement', name: 'Cash Flow Statement', description: 'Operating, investing, financing' },
-    { id: 'past_earnings', name: 'Past Earnings', description: 'Historical EPS and surprises' },
+    { id: 'cash_flow', name: 'Cash Flow Statement', description: 'Operating, investing, financing' },
+    { id: 'earnings', name: 'Earnings History', description: 'Historical EPS and surprises' },
   ];
 
   const fetchFundamentals = async () => {
@@ -746,46 +746,57 @@ const FundamentalsTester: React.FC = () => {
 
   // Render periods data (balance sheet, income statement, cash flow)
   const renderPeriods = () => {
-    if (!fundamentals?.periods || fundamentals.periods.length === 0) {
+    // Handle both 'periods' (yfinance/unified) and 'statements' (FMP) keys
+    const periods = fundamentals?.periods || fundamentals?.statements || [];
+    if (periods.length === 0) {
       return <p className="text-gray-500 dark:text-gray-400">No period data available</p>;
     }
 
     return (
       <div className="space-y-6">
-        {fundamentals.periods.map((period: any, idx: number) => (
-          <div key={idx} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-3">
-              Period: {period.date}
-            </h4>
-            <div className="overflow-x-auto max-h-64 overflow-y-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Item</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Value</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {Object.entries(period.items || {}).map(([key, value]) => (
-                    <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td className="px-3 py-1 text-gray-900 dark:text-gray-100">{key}</td>
-                      <td className="px-3 py-1 text-right text-gray-600 dark:text-gray-400 font-mono">
-                        {formatValue(value)}
-                      </td>
+        {periods.map((period: any, idx: number) => {
+          // Support both old format (items dict) and new format (flat dict with fiscal_date)
+          const periodDate = period.date || period.fiscal_date || period.fiscal_date_ending || 'Unknown';
+          const items = period.items || Object.fromEntries(
+            Object.entries(period).filter(([k]) => !['date', 'fiscal_date', 'fiscal_date_ending', 'reported_currency'].includes(k))
+          );
+
+          return (
+            <div key={idx} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-3">
+                Period: {periodDate}
+              </h4>
+              <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Item</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Value</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {Object.entries(items).map(([key, value]) => (
+                      <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <td className="px-3 py-1 text-gray-900 dark:text-gray-100">{key}</td>
+                        <td className="px-3 py-1 text-right text-gray-600 dark:text-gray-400 font-mono">
+                          {formatValue(value)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
 
   // Render earnings data
   const renderEarnings = () => {
-    const earnings = fundamentals?.earnings || [];
+    // Handle both 'earnings' (FMP) and 'periods' (unified service) keys
+    const earnings = fundamentals?.earnings || fundamentals?.periods || [];
     if (earnings.length === 0) {
       return <p className="text-gray-500 dark:text-gray-400">No earnings data available</p>;
     }
@@ -803,14 +814,16 @@ const FundamentalsTester: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-            {earnings.map((earning: any, idx: number) => (
+            {earnings.map((earning: any, idx: number) => {
+              const fiscalDate = earning.fiscal_date_ending || earning.fiscal_date || 'Unknown';
+              return (
               <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                <td className="px-4 py-2 text-gray-900 dark:text-gray-100">{earning.fiscal_date_ending}</td>
+                <td className="px-4 py-2 text-gray-900 dark:text-gray-100">{fiscalDate}</td>
                 <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
                   ${earning.reported_eps?.toFixed(2) || '-'}
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
-                  ${earning.estimated_eps?.toFixed(2) || '-'}
+                  {earning.estimated_eps != null ? `$${earning.estimated_eps.toFixed(2)}` : '-'}
                 </td>
                 <td className={`px-4 py-2 text-right font-mono ${earning.surprise > 0 ? 'text-green-600' : earning.surprise < 0 ? 'text-red-600' : 'text-gray-600'}`}>
                   {earning.surprise != null ? `$${earning.surprise.toFixed(2)}` : '-'}
@@ -819,7 +832,8 @@ const FundamentalsTester: React.FC = () => {
                   {earning.surprise_percent != null ? `${earning.surprise_percent.toFixed(1)}%` : '-'}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -865,7 +879,7 @@ const FundamentalsTester: React.FC = () => {
 
     if (dataType === 'overview') {
       return renderOverview();
-    } else if (dataType === 'past_earnings') {
+    } else if (dataType === 'earnings' || dataType === 'past_earnings') {
       return renderEarnings();
     } else {
       return renderPeriods();

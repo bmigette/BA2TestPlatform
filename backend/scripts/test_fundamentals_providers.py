@@ -313,6 +313,88 @@ def print_env_status():
     print(f"ALPHA_VANTAGE_API_KEY: {'SET' if os.getenv('ALPHA_VANTAGE_API_KEY') else 'NOT SET'}")
 
 
+def test_fundamentals_service():
+    """Test the unified FundamentalsService with provider fallback."""
+    print("\n" + "="*60)
+    print("FUNDAMENTALS SERVICE (UNIFIED)")
+    print("="*60)
+
+    try:
+        from dataproviders.fundamentals.service import FundamentalsService
+
+        # Test with priority order: yfinance first, then fmp
+        service = FundamentalsService(providers=['yfinance', 'fmp', 'alphavantage'])
+
+        # Test balance sheet
+        print("\n--- Balance Sheet (with fallback) ---")
+        try:
+            result = service.get_balance_sheet(
+                symbol=SYMBOL,
+                frequency="quarterly",
+                end_date=END_DATE,
+                lookback_periods=LOOKBACK_PERIODS
+            )
+            print(f"Provider used: {result.provider}")
+            print(f"Periods: {result.period_count}")
+            if result.periods:
+                print(f"Normalized fields: {list(result.periods[0].keys())[:8]}")
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+        # Test income statement
+        print("\n--- Income Statement (with fallback) ---")
+        try:
+            result = service.get_income_statement(
+                symbol=SYMBOL,
+                frequency="quarterly",
+                end_date=END_DATE,
+                lookback_periods=LOOKBACK_PERIODS
+            )
+            print(f"Provider used: {result.provider}")
+            print(f"Periods: {result.period_count}")
+            if result.periods:
+                print(f"Normalized fields: {list(result.periods[0].keys())[:8]}")
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+        # Test cash flow
+        print("\n--- Cash Flow (with fallback) ---")
+        try:
+            result = service.get_cash_flow(
+                symbol=SYMBOL,
+                frequency="quarterly",
+                end_date=END_DATE,
+                lookback_periods=LOOKBACK_PERIODS
+            )
+            print(f"Provider used: {result.provider}")
+            print(f"Periods: {result.period_count}")
+            if result.periods:
+                print(f"Normalized fields: {list(result.periods[0].keys())[:8]}")
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+        # Test earnings
+        print("\n--- Earnings (with fallback) ---")
+        try:
+            result = service.get_earnings(
+                symbol=SYMBOL,
+                frequency="quarterly",
+                end_date=END_DATE,
+                lookback_periods=LOOKBACK_PERIODS
+            )
+            print(f"Provider used: {result.provider}")
+            print(f"Periods: {result.period_count}")
+            if result.periods:
+                print(f"Sample: {result.periods[0]}")
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+    except Exception as e:
+        print(f"Failed to test FundamentalsService: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 if __name__ == "__main__":
     print("Testing Fundamentals Providers")
     print(f"Symbol: {SYMBOL}")
@@ -324,6 +406,7 @@ if __name__ == "__main__":
     test_yfinance()
     test_fmp()
     test_alphavantage()
+    test_fundamentals_service()
 
     print("\n" + "="*60)
     print("DONE")
