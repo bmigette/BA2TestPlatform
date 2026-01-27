@@ -11,11 +11,28 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Literal, Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import time
+import requests
 
 logger = logging.getLogger(__name__)
 
 # Import trafilatura for content fetching (required dependency)
 import trafilatura
+
+# Headers for resolving Finnhub redirect URLs
+BROWSER_HEADERS = {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="131"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+    'upgrade-insecure-requests': '1',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+}
 
 
 class MarketNewsInterface(ABC):
@@ -129,6 +146,114 @@ class MarketNewsInterface(ABC):
 
         return None
 
+    @staticmethod
+    def resolve_finnhub_redirect(url: str, max_retries: int = 3) -> Optional[str]:
+        """
+        Resolve Finnhub redirect URL to get the actual article URL.
+
+        Finnhub returns URLs like https://finnhub.io/api/news?id=xxx that
+        redirect to the actual article. This follows the redirect.
+
+        Args:
+            url: Finnhub redirect URL
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            Resolved article URL or None if failed
+        """
+        delays = [3, 5, 15]  # Exponential backoff delays
+
+        for attempt in range(max_retries):
+            try:
+                # Use allow_redirects=False to capture the redirect URL
+                response = requests.head(
+                    url,
+                    headers=BROWSER_HEADERS,
+                    allow_redirects=False,
+                    timeout=10
+                )
+
+                # Check for redirect (3xx status codes)
+                if response.status_code in (301, 302, 303, 307, 308):
+                    redirect_url = response.headers.get('Location')
+                    if redirect_url:
+                        logger.debug(f"Resolved Finnhub redirect: {url} -> {redirect_url}")
+                        return redirect_url
+
+                # If no redirect, try GET to follow redirects
+                response = requests.get(
+                    url,
+                    headers=BROWSER_HEADERS,
+                    allow_redirects=True,
+                    timeout=10
+                )
+
+                # Return final URL after redirects
+                if response.url != url:
+                    logger.debug(f"Resolved Finnhub redirect (via GET): {url} -> {response.url}")
+                    return response.url
+
+                return None
+
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    delay = delays[attempt] if attempt < len(delays) else delays[-1]
+                    logger.debug(f"Retry {attempt + 1}/{max_retries} for {url} after {delay}s: {e}")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"Failed to resolve Finnhub redirect after {max_retries} attempts: {url}")
+
+        return None
+
+    def resolve_finnhub_redirects(
+        self,
+        articles: List[Dict[str, Any]],
+        max_workers: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Resolve Finnhub redirect URLs in articles to actual article URLs.
+
+        Args:
+            articles: List of article dicts with 'url' key
+            max_workers: Maximum parallel resolution threads
+
+        Returns:
+            Articles with resolved URLs
+        """
+        # Find articles with Finnhub redirect URLs
+        finnhub_articles = []
+        for i, article in enumerate(articles):
+            url = article.get('url', '')
+            if 'finnhub.io/api/' in url:
+                finnhub_articles.append((i, url))
+
+        if not finnhub_articles:
+            return articles
+
+        logger.info(f"Resolving {len(finnhub_articles)} Finnhub redirect URLs")
+
+        # Resolve in parallel with limited workers
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(self.resolve_finnhub_redirect, url): idx
+                for idx, url in finnhub_articles
+            }
+
+            resolved_count = 0
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
+                try:
+                    resolved_url = future.result()
+                    if resolved_url:
+                        articles[idx]['url'] = resolved_url
+                        articles[idx]['finnhub_url_resolved'] = True
+                        resolved_count += 1
+                except Exception as e:
+                    logger.debug(f"Error resolving Finnhub URL for article {idx}: {e}")
+
+        logger.info(f"Resolved {resolved_count}/{len(finnhub_articles)} Finnhub redirect URLs")
+        return articles
+
     def enrich_articles_with_content(
         self,
         articles: List[Dict[str, Any]],
@@ -147,11 +272,8 @@ class MarketNewsInterface(ABC):
         Returns:
             Articles with enriched summaries
         """
-        # URLs that shouldn't be scraped (API endpoints, paywalled sites, etc.)
-        skip_url_patterns = [
-            'finnhub.io/api/',  # Finnhub API URLs require auth
-            'api.finnhub.io/',
-        ]
+        # First, resolve any Finnhub redirect URLs to actual article URLs
+        articles = self.resolve_finnhub_redirects(articles)
 
         # Find articles needing enrichment
         needs_enrichment = []
@@ -159,8 +281,8 @@ class MarketNewsInterface(ABC):
             summary = article.get('summary', '') or ''
             url = article.get('url', '')
             if len(summary) < min_summary_length and url:
-                # Skip URLs that can't be scraped
-                if any(pattern in url for pattern in skip_url_patterns):
+                # Skip unresolved Finnhub API URLs (they can't be scraped)
+                if 'finnhub.io/api/' in url:
                     continue
                 needs_enrichment.append((i, url))
 
