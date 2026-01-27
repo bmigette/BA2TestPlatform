@@ -412,11 +412,17 @@ class SentimentService:
             raise ValueError(f"News provider '{provider}' is not available or not configured")
 
         # Check if provider supports global news
-        if not hasattr(news_provider, 'get_general_news'):
-            raise ValueError(f"Provider '{provider}' does not support global news. Use 'fmp' or 'finnhub'.")
+        supported_features = news_provider.get_supported_features()
+        if 'global_news' not in supported_features:
+            # List providers that do support global news
+            global_providers = ['fmp', 'finnhub', 'alpaca']
+            raise ValueError(
+                f"Provider '{provider}' does not support global news. "
+                f"Providers with global news support: {', '.join(global_providers)}"
+            )
 
         # Fetch global news
-        result = news_provider.get_general_news(
+        result = news_provider.get_global_news(
             end_date=end_date,
             start_date=start_date,
             format_type="dict"

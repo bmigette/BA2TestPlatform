@@ -92,6 +92,15 @@ const NewsProviderTester: React.FC = () => {
   const [sentimentResults, setSentimentResults] = useState<Record<number, SentimentResult | null>>({});
   const [analyzingIndex, setAnalyzingIndex] = useState<number | null>(null);
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const totalPages = Math.ceil(articles.length / itemsPerPage);
+  const paginatedArticles = articles.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
   // Fetch available providers on mount
   useEffect(() => {
     const fetchProviders = async () => {
@@ -113,6 +122,7 @@ const NewsProviderTester: React.FC = () => {
     setError(null);
     setArticles([]);
     setSentimentResults({});
+    setCurrentPage(1); // Reset to first page
 
     try {
       const params = new URLSearchParams({
@@ -120,7 +130,7 @@ const NewsProviderTester: React.FC = () => {
         news_type: newsType,
         start_date: startDate,
         end_date: endDate,
-        limit: '50'
+        limit: '500' // Fetch more articles, paginate client-side
       });
 
       // Only add symbol for company news
@@ -435,91 +445,152 @@ const NewsProviderTester: React.FC = () => {
           </div>
 
           <div className="space-y-4">
-            {articles.map((article, index) => (
-              <div
-                key={index}
-                className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">
-                      {article.title}
-                    </h3>
-                    <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 mb-2">
-                      {article.source && <span>{article.source}</span>}
-                      {(article.date || article.published_at) && (
-                        <span>
-                          {new Date(article.date || article.published_at || '').toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-                    {(article.summary || article.content) && (
-                      <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
-                        {article.summary || article.content}
-                      </p>
-                    )}
-                    {article.url && (
-                      <a
-                        href={article.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-1 inline-block"
-                      >
-                        Read more
-                      </a>
-                    )}
-                  </div>
-
-                  <div className="flex flex-col items-end gap-2">
-                    {/* Show provider's built-in sentiment if available */}
-                    {article.sentiment && (
-                      <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                        <span className="text-xs opacity-75">API:</span>
-                        <span className="text-sm font-medium capitalize">
-                          {article.sentiment}
-                        </span>
-                        {article.sentiment_score !== undefined && (
-                          <span className="text-xs opacity-75">
-                            ({(article.sentiment_score * 100).toFixed(0)}%)
+            {paginatedArticles.map((article, pageIndex) => {
+              // Calculate actual index in full articles array for sentiment tracking
+              const actualIndex = (currentPage - 1) * itemsPerPage + pageIndex;
+              return (
+                <div
+                  key={actualIndex}
+                  className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">
+                        {article.title}
+                      </h3>
+                      <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 mb-2">
+                        {article.source && <span>{article.source}</span>}
+                        {(article.date || article.published_at) && (
+                          <span>
+                            {new Date(article.date || article.published_at || '').toLocaleDateString()}
                           </span>
                         )}
                       </div>
-                    )}
-                    {/* Show FinBERT analysis or analyze button */}
-                    {sentimentResults[index] ? (
-                      <div className={`px-3 py-1.5 rounded-full flex items-center gap-1.5 ${getSentimentColor(sentimentResults[index]!.sentiment)}`}>
-                        {getSentimentIcon(sentimentResults[index]!.sentiment)}
-                        <span className="text-sm font-medium capitalize">
-                          {sentimentResults[index]!.sentiment}
-                        </span>
-                        <span className="text-xs opacity-75">
-                          ({(sentimentResults[index]!.sentiment_score * 100).toFixed(0)}%)
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => analyzeSentiment(index, article)}
-                        disabled={analyzingIndex === index}
-                        className="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm flex items-center gap-1"
-                      >
-                        {analyzingIndex === index ? (
-                          <>
-                            <Loader size={14} className="animate-spin" />
-                            Analyzing...
-                          </>
-                        ) : (
-                          <>
-                            <MessageSquare size={14} />
-                            FinBERT
-                          </>
-                        )}
-                      </button>
-                    )}
+                      {(article.summary || article.content) && (
+                        <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
+                          {article.summary || article.content}
+                        </p>
+                      )}
+                      {article.url && (
+                        <a
+                          href={article.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-1 inline-block"
+                        >
+                          Read more
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col items-end gap-2">
+                      {/* Show provider's built-in sentiment if available */}
+                      {article.sentiment && (
+                        <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                          <span className="text-xs opacity-75">API:</span>
+                          <span className="text-sm font-medium capitalize">
+                            {article.sentiment}
+                          </span>
+                          {article.sentiment_score !== undefined && (
+                            <span className="text-xs opacity-75">
+                              ({(article.sentiment_score * 100).toFixed(0)}%)
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {/* Show FinBERT analysis or analyze button */}
+                      {sentimentResults[actualIndex] ? (
+                        <div className={`px-3 py-1.5 rounded-full flex items-center gap-1.5 ${getSentimentColor(sentimentResults[actualIndex]!.sentiment)}`}>
+                          {getSentimentIcon(sentimentResults[actualIndex]!.sentiment)}
+                          <span className="text-sm font-medium capitalize">
+                            {sentimentResults[actualIndex]!.sentiment}
+                          </span>
+                          <span className="text-xs opacity-75">
+                            ({(sentimentResults[actualIndex]!.sentiment_score * 100).toFixed(0)}%)
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => analyzeSentiment(actualIndex, article)}
+                          disabled={analyzingIndex === actualIndex}
+                          className="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm flex items-center gap-1"
+                        >
+                          {analyzingIndex === actualIndex ? (
+                            <>
+                              <Loader size={14} className="animate-spin" />
+                              Analyzing...
+                            </>
+                          ) : (
+                            <>
+                              <MessageSquare size={14} />
+                              FinBERT
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Showing {(currentPage - 1) * itemsPerPage + 1}-{Math.min(currentPage * itemsPerPage, articles.length)} of {articles.length}
+                </span>
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => {
+                    setItemsPerPage(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="ml-2 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                >
+                  <option value={10}>10 per page</option>
+                  <option value={20}>20 per page</option>
+                  <option value={50}>50 per page</option>
+                  <option value={100}>100 per page</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  First
+                </button>
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Last
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
