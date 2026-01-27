@@ -372,3 +372,139 @@ async def list_news_exports():
         "count": len(exports),
         "directory": str(NEWS_EXPORTS_DIR)
     }
+
+
+@router.get("/fundamentals/fetch")
+async def fetch_fundamentals(
+    symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)")
+):
+    """
+    Fetch fundamental data for a ticker.
+
+    Args:
+        symbol: Stock ticker symbol
+
+    Returns:
+        Fundamental data including P/E, EPS, FCF, etc.
+    """
+    try:
+        from app.services.fundamentals import FundamentalsService
+
+        logger.info(f"Fetching fundamentals for {symbol}")
+
+        fundamentals_service = FundamentalsService()
+        fundamentals = fundamentals_service.get_fundamental_data(symbol)
+
+        if fundamentals:
+            logger.info(f"Fetched fundamentals for {symbol}: {len(fundamentals.get('current', {}))} metrics")
+            return fundamentals
+        else:
+            return {
+                "ticker": symbol,
+                "current": {},
+                "message": "No fundamental data available"
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching fundamentals: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch fundamentals: {str(e)}"
+        )
+
+
+@router.get("/macro/fetch")
+async def fetch_macro(
+    indicators: str = Query(..., description="Comma-separated list of indicators (e.g., interest_rate,gdp,inflation)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 1 year ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today.")
+):
+    """
+    Fetch macroeconomic indicators from FRED.
+
+    Args:
+        indicators: Comma-separated list of indicator IDs
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+
+    Returns:
+        Macro indicator data with time series
+    """
+    try:
+        from app.services.macro import MacroService
+
+        # Parse indicators
+        indicator_list = [i.strip() for i in indicators.split(',') if i.strip()]
+
+        if not indicator_list:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one indicator is required"
+            )
+
+        # Parse dates
+        if end_date:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end_dt = datetime.now()
+
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start_dt = end_dt - timedelta(days=365)
+
+        logger.info(f"Fetching macro indicators: {indicator_list} from {start_dt.date()} to {end_dt.date()}")
+
+        macro_service = MacroService()
+        macro_data = macro_service.get_macro_data(
+            indicators=indicator_list,
+            start_date=start_dt,
+            end_date=end_dt
+        )
+
+        # Format response
+        result = {
+            "start_date": start_dt.strftime("%Y-%m-%d"),
+            "end_date": end_dt.strftime("%Y-%m-%d"),
+            "indicators": {}
+        }
+
+        for indicator, df in macro_data.items():
+            indicator_info = macro_service.MACRO_INDICATORS.get(indicator, {})
+            if df is not None and not df.empty:
+                # Convert DataFrame to list of records
+                data_records = []
+                for _, row in df.iterrows():
+                    data_records.append({
+                        "date": row['date'].strftime("%Y-%m-%d") if hasattr(row['date'], 'strftime') else str(row['date']),
+                        "value": float(row['value']) if row['value'] is not None else None
+                    })
+                result["indicators"][indicator] = {
+                    "name": indicator_info.get('name', indicator),
+                    "description": indicator_info.get('description', ''),
+                    "unit": indicator_info.get('unit', ''),
+                    "data": data_records,
+                    "count": len(data_records)
+                }
+                logger.info(f"Fetched {len(data_records)} data points for {indicator}")
+            else:
+                result["indicators"][indicator] = {
+                    "name": indicator_info.get('name', indicator),
+                    "description": indicator_info.get('description', ''),
+                    "unit": indicator_info.get('unit', ''),
+                    "data": [],
+                    "count": 0,
+                    "error": "No data available"
+                }
+                logger.warning(f"No data available for {indicator}")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching macro data: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch macro data: {str(e)}"
+        )

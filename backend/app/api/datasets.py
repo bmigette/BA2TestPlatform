@@ -202,35 +202,59 @@ async def create_dataset(
                 # Continue without indicators rather than failing the whole dataset
 
         # Fetch and add sentiment features if configured
-        if dataset_create.sentiment_config:
+        if dataset_create.sentiment_config and dataset_create.sentiment_config.get('enabled'):
             logger.info("Fetching sentiment data...")
+            logger.debug(f"Sentiment config: {dataset_create.sentiment_config}")
             try:
                 sentiment_service = SentimentService()
-                news_provider = dataset_create.sentiment_config.get('provider', 'fmp')
 
-                # Fetch news articles
-                articles = sentiment_service.fetch_news_for_ticker(
-                    ticker=dataset_create.ticker,
-                    start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
-                    end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                    provider=news_provider,
-                    enrich_content=dataset_create.sentiment_config.get('enrich_content', True)
-                )
+                # Get news sources from config (supports multiple providers)
+                news_sources = dataset_create.sentiment_config.get('news_sources', [])
+                if not news_sources:
+                    # Fallback to legacy 'provider' field
+                    legacy_provider = dataset_create.sentiment_config.get('provider', 'fmp')
+                    news_sources = [legacy_provider]
 
-                if articles:
+                logger.info(f"Fetching news from {len(news_sources)} source(s): {news_sources}")
+
+                # Fetch from all configured news sources
+                all_articles = []
+                for source in news_sources:
+                    # Convert source name to provider name (e.g., 'fmp_news' -> 'fmp')
+                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
+                    try:
+                        logger.debug(f"Fetching news from provider: {provider}")
+                        articles = sentiment_service.fetch_news_for_ticker(
+                            ticker=dataset_create.ticker,
+                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                            provider=provider,
+                            enrich_content=dataset_create.sentiment_config.get('enrich_content', True)
+                        )
+                        if articles:
+                            logger.info(f"Fetched {len(articles)} articles from {provider}")
+                            all_articles.extend(articles)
+                        else:
+                            logger.warning(f"No articles from {provider}")
+                    except Exception as e:
+                        logger.warning(f"Error fetching from {provider}: {e}")
+
+                if all_articles:
                     # Analyze sentiment and add features
-                    df = sentiment_service.create_sentiment_features(df, articles)
-                    logger.info(f"Added sentiment features from {len(articles)} articles")
+                    logger.info(f"Total articles from all sources: {len(all_articles)}")
+                    df = sentiment_service.create_sentiment_features(df, all_articles)
+                    logger.info(f"Added sentiment features from {len(all_articles)} articles")
                 else:
-                    logger.warning("No news articles found for sentiment analysis")
+                    logger.warning("No news articles found for sentiment analysis from any source")
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
                 # Continue without sentiment rather than failing the whole dataset
 
         # Fetch and add fundamentals if configured
-        if dataset_create.fundamentals_config:
+        if dataset_create.fundamentals_config and dataset_create.fundamentals_config.get('enabled'):
             logger.info("Fetching fundamentals data...")
+            logger.debug(f"Fundamentals config: {dataset_create.fundamentals_config}")
             try:
                 fundamentals_service = FundamentalsService()
                 fundamentals = fundamentals_service.get_fundamental_data(dataset_create.ticker)
@@ -239,12 +263,37 @@ async def create_dataset(
                     # Add current fundamentals as constant columns (for now)
                     # A more sophisticated approach would interpolate historical values
                     current = fundamentals['current']
+                    added_fundamentals = []
                     for key, value in current.items():
                         if value is not None:
                             df[f'fundamental_{key}'] = value
-                    logger.info(f"Added fundamentals data")
+                            added_fundamentals.append(key)
+                    logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
                 else:
                     logger.warning("No fundamentals data available")
+
+                # Fetch macro indicators if configured
+                macro_indicators = dataset_create.fundamentals_config.get('macro_indicators', [])
+                if macro_indicators:
+                    logger.info(f"Fetching macro indicators: {macro_indicators}")
+                    try:
+                        macro_service = MacroService()
+                        macro_data = macro_service.get_macro_data(
+                            indicators=macro_indicators,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
+                        if macro_data:
+                            added_macro = []
+                            for indicator, values in macro_data.items():
+                                if values is not None:
+                                    df[f'macro_{indicator}'] = values
+                                    added_macro.append(indicator)
+                            logger.info(f"Added {len(added_macro)} macro columns: {added_macro}")
+                        else:
+                            logger.warning("No macro data available")
+                    except Exception as e:
+                        logger.warning(f"Error fetching macro data: {e}")
 
             except Exception as e:
                 logger.error(f"Error fetching fundamentals: {e}")
@@ -507,12 +556,12 @@ async def get_dataset_columns(dataset_id: int, db: Session = Depends(get_db)):
         technical_patterns = ['SMA', 'EMA', 'RSI', 'MACD', 'BB_', 'ATR', 'ADX', 'CCI', 'MFI',
                              'OBV', 'VWAP', 'Stoch', 'Williams', 'ROC', 'MOM', 'TRIX',
                              'DX', 'PLUS_DI', 'MINUS_DI', 'Aroon', 'CMO', 'PPO', 'UO']
-        fundamental_patterns = ['PE', 'EPS', 'FCF', 'Revenue', 'Debt', 'ROE', 'ROA',
+        fundamental_patterns = ['fundamental_', 'PE', 'EPS', 'FCF', 'Revenue', 'Debt', 'ROE', 'ROA',
                                'BookValue', 'Dividend', 'MarketCap', 'PB', 'PS',
                                'days_to', 'last_', 'next_']
         sentiment_patterns = ['news_', 'sentiment_', 'positive', 'negative', 'neutral']
-        macro_patterns = ['interest_rate', 'gdp', 'inflation', 'unemployment', 'cpi',
-                         'fed_', 'treasury', 'yield_']
+        macro_patterns = ['macro_', 'interest_rate', 'gdp', 'inflation', 'unemployment', 'cpi',
+                         'fed_', 'treasury', 'yield_', 'vix']
         target_patterns = ['price_up_', 'price_down_', 'target_', 'label_']
 
         def categorize_column(col_name: str) -> str:
@@ -865,44 +914,94 @@ async def regenerate_dataset(
                 logger.error(f"Error applying technical indicators: {e}")
 
         # Fetch and add sentiment features if configured
-        if dataset.sentiment_config:
+        if dataset.sentiment_config and dataset.sentiment_config.get('enabled'):
             logger.info("Fetching sentiment data...")
+            logger.debug(f"Sentiment config: {dataset.sentiment_config}")
             try:
                 sentiment_service = SentimentService()
-                news_provider = dataset.sentiment_config.get('provider', 'fmp')
 
-                articles = sentiment_service.fetch_news_for_ticker(
-                    ticker=dataset.ticker,
-                    start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
-                    end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                    provider=news_provider,
-                    enrich_content=dataset.sentiment_config.get('enrich_content', True)
-                )
+                # Get news sources from config (supports multiple providers)
+                news_sources = dataset.sentiment_config.get('news_sources', [])
+                if not news_sources:
+                    # Fallback to legacy 'provider' field
+                    legacy_provider = dataset.sentiment_config.get('provider', 'fmp')
+                    news_sources = [legacy_provider]
 
-                if articles:
-                    df = sentiment_service.create_sentiment_features(df, articles)
-                    logger.info(f"Added sentiment features from {len(articles)} articles")
+                logger.info(f"Fetching news from {len(news_sources)} source(s): {news_sources}")
+
+                # Fetch from all configured news sources
+                all_articles = []
+                for source in news_sources:
+                    # Convert source name to provider name (e.g., 'fmp_news' -> 'fmp')
+                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
+                    try:
+                        logger.debug(f"Fetching news from provider: {provider}")
+                        articles = sentiment_service.fetch_news_for_ticker(
+                            ticker=dataset.ticker,
+                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                            provider=provider,
+                            enrich_content=dataset.sentiment_config.get('enrich_content', True)
+                        )
+                        if articles:
+                            logger.info(f"Fetched {len(articles)} articles from {provider}")
+                            all_articles.extend(articles)
+                        else:
+                            logger.warning(f"No articles from {provider}")
+                    except Exception as e:
+                        logger.warning(f"Error fetching from {provider}: {e}")
+
+                if all_articles:
+                    logger.info(f"Total articles from all sources: {len(all_articles)}")
+                    df = sentiment_service.create_sentiment_features(df, all_articles)
+                    logger.info(f"Added sentiment features from {len(all_articles)} articles")
                 else:
-                    logger.warning("No news articles found for sentiment analysis")
+                    logger.warning("No news articles found for sentiment analysis from any source")
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
 
         # Fetch and add fundamentals if configured
-        if dataset.fundamentals_config:
+        if dataset.fundamentals_config and dataset.fundamentals_config.get('enabled'):
             logger.info("Fetching fundamentals data...")
+            logger.debug(f"Fundamentals config: {dataset.fundamentals_config}")
             try:
                 fundamentals_service = FundamentalsService()
                 fundamentals = fundamentals_service.get_fundamental_data(dataset.ticker)
 
                 if fundamentals and fundamentals.get('current'):
                     current = fundamentals['current']
+                    added_fundamentals = []
                     for key, value in current.items():
                         if value is not None:
                             df[f'fundamental_{key}'] = value
-                    logger.info(f"Added fundamentals data")
+                            added_fundamentals.append(key)
+                    logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
                 else:
                     logger.warning("No fundamentals data available")
+
+                # Fetch macro indicators if configured
+                macro_indicators = dataset.fundamentals_config.get('macro_indicators', [])
+                if macro_indicators:
+                    logger.info(f"Fetching macro indicators: {macro_indicators}")
+                    try:
+                        macro_service = MacroService()
+                        macro_data = macro_service.get_macro_data(
+                            indicators=macro_indicators,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
+                        if macro_data:
+                            added_macro = []
+                            for indicator, values in macro_data.items():
+                                if values is not None:
+                                    df[f'macro_{indicator}'] = values
+                                    added_macro.append(indicator)
+                            logger.info(f"Added {len(added_macro)} macro columns: {added_macro}")
+                        else:
+                            logger.warning("No macro data available")
+                    except Exception as e:
+                        logger.warning(f"Error fetching macro data: {e}")
 
             except Exception as e:
                 logger.error(f"Error fetching fundamentals: {e}")
@@ -1206,23 +1305,44 @@ async def update_dataset(
         # Fetch and add sentiment features if configured
         if dataset.sentiment_config and dataset.sentiment_config.get('enabled'):
             logger.info("Fetching sentiment data...")
+            logger.debug(f"Sentiment config: {dataset.sentiment_config}")
             try:
                 sentiment_service = SentimentService()
-                news_provider = dataset.sentiment_config.get('provider', 'fmp')
 
-                articles = sentiment_service.fetch_news_for_ticker(
-                    ticker=new_ticker,
-                    start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
-                    end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                    provider=news_provider,
-                    enrich_content=dataset.sentiment_config.get('enrich_content', True)
-                )
+                # Get news sources from config (supports multiple providers)
+                news_sources = dataset.sentiment_config.get('news_sources', [])
+                if not news_sources:
+                    legacy_provider = dataset.sentiment_config.get('provider', 'fmp')
+                    news_sources = [legacy_provider]
 
-                if articles:
-                    df = sentiment_service.create_sentiment_features(df, articles)
-                    logger.info(f"Added sentiment features from {len(articles)} articles")
+                logger.info(f"Fetching news from {len(news_sources)} source(s): {news_sources}")
+
+                all_articles = []
+                for source in news_sources:
+                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
+                    try:
+                        logger.debug(f"Fetching news from provider: {provider}")
+                        articles = sentiment_service.fetch_news_for_ticker(
+                            ticker=new_ticker,
+                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                            provider=provider,
+                            enrich_content=dataset.sentiment_config.get('enrich_content', True)
+                        )
+                        if articles:
+                            logger.info(f"Fetched {len(articles)} articles from {provider}")
+                            all_articles.extend(articles)
+                        else:
+                            logger.warning(f"No articles from {provider}")
+                    except Exception as e:
+                        logger.warning(f"Error fetching from {provider}: {e}")
+
+                if all_articles:
+                    logger.info(f"Total articles from all sources: {len(all_articles)}")
+                    df = sentiment_service.create_sentiment_features(df, all_articles)
+                    logger.info(f"Added sentiment features from {len(all_articles)} articles")
                 else:
-                    logger.warning("No news articles found for sentiment analysis")
+                    logger.warning("No news articles found for sentiment analysis from any source")
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
@@ -1230,18 +1350,44 @@ async def update_dataset(
         # Fetch and add fundamentals if configured
         if dataset.fundamentals_config and dataset.fundamentals_config.get('enabled'):
             logger.info("Fetching fundamentals data...")
+            logger.debug(f"Fundamentals config: {dataset.fundamentals_config}")
             try:
                 fundamentals_service = FundamentalsService()
                 fundamentals = fundamentals_service.get_fundamental_data(new_ticker)
 
                 if fundamentals and fundamentals.get('current'):
                     current = fundamentals['current']
+                    added_fundamentals = []
                     for key, value in current.items():
                         if value is not None:
                             df[f'fundamental_{key}'] = value
-                    logger.info(f"Added fundamentals data")
+                            added_fundamentals.append(key)
+                    logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
                 else:
                     logger.warning("No fundamentals data available")
+
+                # Fetch macro indicators if configured
+                macro_indicators = dataset.fundamentals_config.get('macro_indicators', [])
+                if macro_indicators:
+                    logger.info(f"Fetching macro indicators: {macro_indicators}")
+                    try:
+                        macro_service = MacroService()
+                        macro_data = macro_service.get_macro_data(
+                            indicators=macro_indicators,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
+                        if macro_data:
+                            added_macro = []
+                            for indicator, values in macro_data.items():
+                                if values is not None:
+                                    df[f'macro_{indicator}'] = values
+                                    added_macro.append(indicator)
+                            logger.info(f"Added {len(added_macro)} macro columns: {added_macro}")
+                        else:
+                            logger.warning("No macro data available")
+                    except Exception as e:
+                        logger.warning(f"Error fetching macro data: {e}")
 
             except Exception as e:
                 logger.error(f"Error fetching fundamentals: {e}")

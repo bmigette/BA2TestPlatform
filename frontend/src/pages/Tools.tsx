@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download } from 'lucide-react';
+import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp } from 'lucide-react';
 
 interface NewsArticle {
   title: string;
@@ -29,7 +29,7 @@ interface NewsProvider {
 }
 
 const Tools: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'news'>('news');
+  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro'>('news');
 
   return (
     <div className="p-6">
@@ -59,11 +59,39 @@ const Tools: React.FC = () => {
               News Providers
             </div>
           </button>
+          <button
+            onClick={() => setActiveTab('fundamentals')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'fundamentals'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <DollarSign size={16} />
+              Fundamentals
+            </div>
+          </button>
+          <button
+            onClick={() => setActiveTab('macro')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'macro'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <TrendingUp size={16} />
+              Macro Indicators
+            </div>
+          </button>
         </nav>
       </div>
 
       {/* Tab Content */}
       {activeTab === 'news' && <NewsProviderTester />}
+      {activeTab === 'fundamentals' && <FundamentalsTester />}
+      {activeTab === 'macro' && <MacroTester />}
     </div>
   );
 };
@@ -629,6 +657,324 @@ const NewsProviderTester: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Fundamentals Tester Component
+const FundamentalsTester: React.FC = () => {
+  const [symbol, setSymbol] = useState('AAPL');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fundamentals, setFundamentals] = useState<Record<string, any> | null>(null);
+
+  const fetchFundamentals = async () => {
+    setLoading(true);
+    setError(null);
+    setFundamentals(null);
+
+    try {
+      const response = await fetch(`http://localhost:8002/api/tools/fundamentals/fetch?symbol=${symbol}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        setFundamentals(data);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.detail || 'Failed to fetch fundamentals');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">
+          Test Fundamentals Provider
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Fetch fundamental data (P/E, EPS, FCF, etc.) for a ticker using YFinance.
+        </p>
+
+        <div className="flex flex-wrap gap-4 items-end">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Symbol
+            </label>
+            <input
+              type="text"
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+              className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              placeholder="AAPL"
+            />
+          </div>
+
+          <button
+            onClick={fetchFundamentals}
+            disabled={loading || !symbol}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader size={16} className="animate-spin" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Search size={16} />
+                Fetch Fundamentals
+              </>
+            )}
+          </button>
+        </div>
+
+        {error && (
+          <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center gap-2">
+            <XCircle size={16} />
+            {error}
+          </div>
+        )}
+      </div>
+
+      {fundamentals && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
+            Fundamentals for {fundamentals.ticker}
+          </h3>
+
+          {fundamentals.current && Object.keys(fundamentals.current).length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-700">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Metric</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {Object.entries(fundamentals.current).map(([key, value]) => (
+                    <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">
+                        {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                      </td>
+                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400 font-mono">
+                        {value === null ? '-' : typeof value === 'number' ? value.toLocaleString() : String(value)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-gray-500 dark:text-gray-400">No fundamental data available</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Macro Indicators Tester Component
+const MacroTester: React.FC = () => {
+  const [indicators, setIndicators] = useState<string[]>(['interest_rate', 'gdp', 'inflation', 'unemployment']);
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [macroData, setMacroData] = useState<Record<string, any> | null>(null);
+
+  const availableIndicators = [
+    { id: 'interest_rate', name: 'Federal Funds Rate' },
+    { id: 'gdp', name: 'GDP' },
+    { id: 'inflation', name: 'CPI (Inflation)' },
+    { id: 'unemployment', name: 'Unemployment Rate' },
+    { id: 'vix', name: 'VIX Volatility' },
+    { id: 'yield_10y', name: '10-Year Treasury Yield' },
+    { id: 'yield_2y', name: '2-Year Treasury Yield' },
+  ];
+
+  const toggleIndicator = (id: string) => {
+    setIndicators(prev =>
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const fetchMacroData = async () => {
+    setLoading(true);
+    setError(null);
+    setMacroData(null);
+
+    try {
+      const params = new URLSearchParams({
+        indicators: indicators.join(','),
+        start_date: startDate,
+        end_date: endDate,
+      });
+
+      const response = await fetch(`http://localhost:8002/api/tools/macro/fetch?${params}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        setMacroData(data);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.detail || 'Failed to fetch macro data');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">
+          Test Macro Indicators Provider
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Fetch macroeconomic indicators from FRED (Federal Reserve Economic Data).
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Indicators
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {availableIndicators.map(ind => (
+                <label
+                  key={ind.id}
+                  className={`px-3 py-1.5 rounded-full cursor-pointer text-sm transition-colors ${
+                    indicators.includes(ind.id)
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={indicators.includes(ind.id)}
+                    onChange={() => toggleIndicator(ind.id)}
+                    className="sr-only"
+                  />
+                  {ind.name}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-4 items-end">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Start Date
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                End Date
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+
+            <button
+              onClick={fetchMacroData}
+              disabled={loading || indicators.length === 0}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader size={16} className="animate-spin" />
+                  Fetching...
+                </>
+              ) : (
+                <>
+                  <Search size={16} />
+                  Fetch Macro Data
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center gap-2">
+            <XCircle size={16} />
+            {error}
+          </div>
+        )}
+      </div>
+
+      {macroData && macroData.indicators && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
+            Macro Data Results
+          </h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            {macroData.start_date} to {macroData.end_date}
+          </p>
+
+          <div className="space-y-6">
+            {Object.entries(macroData.indicators).map(([indicator, data]: [string, any]) => (
+              <div key={indicator} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">
+                  {data.name || indicator}
+                </h4>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                  {data.description} ({data.unit})
+                </p>
+                {data.data && data.data.length > 0 ? (
+                  <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Date</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {data.data.slice(-20).map((row: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                            <td className="px-3 py-1 text-gray-600 dark:text-gray-400">{row.date}</td>
+                            <td className="px-3 py-1 text-gray-900 dark:text-gray-100 font-mono">{row.value?.toFixed(2) || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {data.data.length > 20 && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        Showing last 20 of {data.data.length} data points
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-gray-500 dark:text-gray-400">No data available</p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
