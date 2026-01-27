@@ -12,6 +12,7 @@ from pathlib import Path
 import logging
 import json
 import uuid
+import pandas as pd
 
 from app.services.sentiment import SentimentService
 
@@ -694,11 +695,16 @@ async def fetch_macro(
             indicator_info = macro_service.MACRO_INDICATORS.get(indicator, {})
             if df is not None and not df.empty:
                 # Convert DataFrame to list of records
+                # Note: DataFrame has 'Date' column and indicator name as value column
                 data_records = []
                 for _, row in df.iterrows():
+                    # Get date from 'Date' column (capital D)
+                    date_val = row.get('Date', row.get('date'))
+                    # Get value from indicator column (column is renamed to indicator name)
+                    value_val = row.get(indicator, row.get('value'))
                     data_records.append({
-                        "date": row['date'].strftime("%Y-%m-%d") if hasattr(row['date'], 'strftime') else str(row['date']),
-                        "value": float(row['value']) if row['value'] is not None else None
+                        "date": date_val.strftime("%Y-%m-%d") if hasattr(date_val, 'strftime') else str(date_val),
+                        "value": float(value_val) if value_val is not None and not pd.isna(value_val) else None
                     })
                 result["indicators"][indicator] = {
                     "name": indicator_info.get('name', indicator),
