@@ -256,24 +256,43 @@ async def create_dataset(
             logger.info("Fetching fundamentals data...")
             logger.debug(f"Fundamentals config: {dataset_create.fundamentals_config}")
             try:
-                fundamentals_service = FundamentalsService()
-                fundamentals = fundamentals_service.get_fundamental_data(dataset_create.ticker)
+                fundamentals_config = dataset_create.fundamentals_config
 
-                if fundamentals and fundamentals.get('current'):
-                    # Add current fundamentals as constant columns (for now)
-                    # A more sophisticated approach would interpolate historical values
-                    current = fundamentals['current']
-                    added_fundamentals = []
-                    for key, value in current.items():
-                        if value is not None:
-                            df[f'fundamental_{key}'] = value
-                            added_fundamentals.append(key)
-                    logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
+                # Check if using new statement-based config
+                statement_types = fundamentals_config.get('statement_types')
+                if statement_types:
+                    # Use new statement-based features with lookback
+                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
+                    providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
+
+                    logger.info(f"Creating statement features: {statement_types} with {lookback_statements} periods")
+                    df = FundamentalsService.create_statement_features(
+                        df=df,
+                        ticker=dataset_create.ticker,
+                        statement_types=statement_types,
+                        lookback_statements=lookback_statements,
+                        providers=providers,
+                        frequency='quarterly'
+                    )
+                    new_cols = [c for c in df.columns if c.startswith(('bs_', 'is_', 'cf_', 'earn_'))]
+                    logger.info(f"Added {len(new_cols)} statement feature columns")
                 else:
-                    logger.warning("No fundamentals data available")
+                    # Legacy mode: add current fundamentals as constant columns
+                    fundamentals = FundamentalsService.get_fundamental_data(dataset_create.ticker)
+
+                    if fundamentals and fundamentals.get('current'):
+                        current = fundamentals['current']
+                        added_fundamentals = []
+                        for key, value in current.items():
+                            if value is not None:
+                                df[f'fundamental_{key}'] = value
+                                added_fundamentals.append(key)
+                        logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
+                    else:
+                        logger.warning("No fundamentals data available")
 
                 # Fetch macro indicators if configured
-                macro_indicators = dataset_create.fundamentals_config.get('macro_indicators', [])
+                macro_indicators = fundamentals_config.get('macro_indicators', [])
                 if macro_indicators:
                     logger.info(f"Fetching macro indicators: {macro_indicators}")
                     try:
@@ -966,22 +985,43 @@ async def regenerate_dataset(
             logger.info("Fetching fundamentals data...")
             logger.debug(f"Fundamentals config: {dataset.fundamentals_config}")
             try:
-                fundamentals_service = FundamentalsService()
-                fundamentals = fundamentals_service.get_fundamental_data(dataset.ticker)
+                fundamentals_config = dataset.fundamentals_config
 
-                if fundamentals and fundamentals.get('current'):
-                    current = fundamentals['current']
-                    added_fundamentals = []
-                    for key, value in current.items():
-                        if value is not None:
-                            df[f'fundamental_{key}'] = value
-                            added_fundamentals.append(key)
-                    logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
+                # Check if using new statement-based config
+                statement_types = fundamentals_config.get('statement_types')
+                if statement_types:
+                    # Use new statement-based features with lookback
+                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
+                    providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
+
+                    logger.info(f"Creating statement features: {statement_types} with {lookback_statements} periods")
+                    df = FundamentalsService.create_statement_features(
+                        df=df,
+                        ticker=dataset.ticker,
+                        statement_types=statement_types,
+                        lookback_statements=lookback_statements,
+                        providers=providers,
+                        frequency='quarterly'
+                    )
+                    new_cols = [c for c in df.columns if c.startswith(('bs_', 'is_', 'cf_', 'earn_'))]
+                    logger.info(f"Added {len(new_cols)} statement feature columns")
                 else:
-                    logger.warning("No fundamentals data available")
+                    # Legacy mode: add current fundamentals as constant columns
+                    fundamentals = FundamentalsService.get_fundamental_data(dataset.ticker)
+
+                    if fundamentals and fundamentals.get('current'):
+                        current = fundamentals['current']
+                        added_fundamentals = []
+                        for key, value in current.items():
+                            if value is not None:
+                                df[f'fundamental_{key}'] = value
+                                added_fundamentals.append(key)
+                        logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
+                    else:
+                        logger.warning("No fundamentals data available")
 
                 # Fetch macro indicators if configured
-                macro_indicators = dataset.fundamentals_config.get('macro_indicators', [])
+                macro_indicators = fundamentals_config.get('macro_indicators', [])
                 if macro_indicators:
                     logger.info(f"Fetching macro indicators: {macro_indicators}")
                     try:
@@ -1352,19 +1392,43 @@ async def update_dataset(
             logger.info("Fetching fundamentals data...")
             logger.debug(f"Fundamentals config: {dataset.fundamentals_config}")
             try:
-                fundamentals_service = FundamentalsService()
-                fundamentals = fundamentals_service.get_fundamental_data(new_ticker)
+                fundamentals_config = dataset.fundamentals_config
 
-                if fundamentals and fundamentals.get('current'):
-                    current = fundamentals['current']
-                    added_fundamentals = []
-                    for key, value in current.items():
-                        if value is not None:
-                            df[f'fundamental_{key}'] = value
-                            added_fundamentals.append(key)
-                    logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
+                # Check if using new statement-based config
+                statement_types = fundamentals_config.get('statement_types')
+                if statement_types:
+                    # Use new statement-based features with lookback
+                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
+                    providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
+
+                    logger.info(f"Creating statement features: types={statement_types}, lookback={lookback_statements}, providers={providers}")
+
+                    df = FundamentalsService.create_statement_features(
+                        df=df,
+                        ticker=new_ticker,
+                        statement_types=statement_types,
+                        lookback_statements=lookback_statements,
+                        providers=providers,
+                        frequency='quarterly'
+                    )
+
+                    # Count how many statement columns were added
+                    statement_cols = [c for c in df.columns if any(c.startswith(p + '_q') for p in ['bs', 'is', 'cf', 'earn'])]
+                    logger.info(f"Added {len(statement_cols)} statement feature columns")
                 else:
-                    logger.warning("No fundamentals data available")
+                    # Legacy mode: add current fundamentals as constant columns
+                    fundamentals = FundamentalsService.get_fundamental_data(new_ticker)
+
+                    if fundamentals and fundamentals.get('current'):
+                        current = fundamentals['current']
+                        added_fundamentals = []
+                        for key, value in current.items():
+                            if value is not None:
+                                df[f'fundamental_{key}'] = value
+                                added_fundamentals.append(key)
+                        logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
+                    else:
+                        logger.warning("No fundamentals data available")
 
                 # Fetch macro indicators if configured
                 macro_indicators = dataset.fundamentals_config.get('macro_indicators', [])

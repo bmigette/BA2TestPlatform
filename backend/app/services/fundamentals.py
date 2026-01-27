@@ -3,6 +3,10 @@ Fundamentals Service
 
 Fetches fundamental data (FCF, P/E, EPS, Revenue) for tickers and creates
 derived features for ML model training.
+
+Supports two modes:
+1. Legacy mode: Point-in-time features (days_to_last_fcf, last_fcf, etc.)
+2. Statement mode: Statement-based features with lookback (bs_q0_total_assets, etc.)
 """
 
 import pandas as pd
@@ -13,6 +17,34 @@ import logging
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+# Statement type to prefix mapping
+STATEMENT_PREFIXES = {
+    'balance_sheet': 'bs',
+    'income_statement': 'is',
+    'cash_flow': 'cf',
+    'earnings': 'earn'
+}
+
+# Key fields to extract for each statement type (subset of available fields)
+STATEMENT_KEY_FIELDS = {
+    'balance_sheet': [
+        'total_assets', 'total_liabilities', 'total_stockholders_equity',
+        'cash_and_cash_equivalents', 'long_term_debt', 'total_current_assets',
+        'total_current_liabilities', 'net_debt', 'working_capital'
+    ],
+    'income_statement': [
+        'total_revenue', 'gross_profit', 'operating_income', 'net_income',
+        'basic_eps', 'diluted_eps', 'ebitda', 'operating_expenses'
+    ],
+    'cash_flow': [
+        'operating_cash_flow', 'capital_expenditure', 'free_cash_flow',
+        'investing_cash_flow', 'financing_cash_flow', 'dividends_paid'
+    ],
+    'earnings': [
+        'reported_eps', 'estimated_eps', 'surprise', 'surprise_percent'
+    ]
+}
 
 
 class FundamentalsService:
@@ -295,4 +327,173 @@ class FundamentalsService:
             result_df[f'days_to_next_{metric}'] = np.nan
             result_df[f'next_{metric}_forecast'] = np.nan
 
+        return result_df
+
+    @staticmethod
+    def create_statement_features(
+        df: pd.DataFrame,
+        ticker: str,
+        statement_types: List[str],
+        lookback_statements: int = 2,
+        providers: List[str] = None,
+        frequency: str = 'quarterly'
+    ) -> pd.DataFrame:
+        """
+        Create statement-based features with lookback periods.
+
+        For each statement type and lookback period, creates columns like:
+        - bs_q0_total_assets (most recent quarter)
+        - bs_q1_total_assets (previous quarter)
+        - is_q0_net_income, is_q1_net_income, etc.
+
+        Args:
+            df: DataFrame with Date column
+            ticker: Stock ticker symbol
+            statement_types: List of statement types to fetch
+                            ('balance_sheet', 'income_statement', 'cash_flow', 'earnings')
+            lookback_statements: Number of historical periods to include (default: 2)
+            providers: List of providers in priority order (default: ['yfinance'])
+            frequency: 'quarterly' or 'annual' (default: 'quarterly')
+
+        Returns:
+            DataFrame with added statement features
+        """
+        result_df = df.copy()
+
+        # Ensure Date is datetime
+        if 'Date' in result_df.columns:
+            result_df['Date'] = pd.to_datetime(result_df['Date'])
+
+        # Import the provider-based service
+        try:
+            from dataproviders.fundamentals.service import FundamentalsService as ProviderService
+        except ImportError as e:
+            logger.error(f"Failed to import provider service: {e}")
+            return result_df
+
+        # Initialize the provider service
+        provider_list = providers or ['yfinance']
+        try:
+            provider_service = ProviderService(providers=provider_list)
+        except Exception as e:
+            logger.error(f"Failed to initialize provider service: {e}")
+            return result_df
+
+        # Get the date range - fetch enough historical data for lookback
+        min_date = result_df['Date'].min()
+        max_date = result_df['Date'].max()
+
+        # Fetch extra periods for lookback (e.g., if lookback=2, fetch 2 extra)
+        fetch_periods = lookback_statements + 8  # Extra buffer for point-in-time
+
+        # Process each statement type
+        for stmt_type in statement_types:
+            if stmt_type not in STATEMENT_PREFIXES:
+                logger.warning(f"Unknown statement type: {stmt_type}")
+                continue
+
+            prefix = STATEMENT_PREFIXES[stmt_type]
+            key_fields = STATEMENT_KEY_FIELDS.get(stmt_type, [])
+
+            try:
+                # Fetch statement data
+                if stmt_type == 'balance_sheet':
+                    response = provider_service.get_balance_sheet(
+                        symbol=ticker,
+                        frequency=frequency,
+                        end_date=max_date,
+                        lookback_periods=fetch_periods
+                    )
+                elif stmt_type == 'income_statement':
+                    response = provider_service.get_income_statement(
+                        symbol=ticker,
+                        frequency=frequency,
+                        end_date=max_date,
+                        lookback_periods=fetch_periods
+                    )
+                elif stmt_type == 'cash_flow':
+                    response = provider_service.get_cash_flow(
+                        symbol=ticker,
+                        frequency=frequency,
+                        end_date=max_date,
+                        lookback_periods=fetch_periods
+                    )
+                elif stmt_type == 'earnings':
+                    response = provider_service.get_earnings(
+                        symbol=ticker,
+                        frequency=frequency,
+                        end_date=max_date,
+                        lookback_periods=fetch_periods
+                    )
+                else:
+                    continue
+
+                periods = response.periods
+                if not periods:
+                    logger.warning(f"No {stmt_type} data available for {ticker}")
+                    # Add NaN columns
+                    for q_idx in range(lookback_statements):
+                        for field in key_fields:
+                            result_df[f'{prefix}_q{q_idx}_{field}'] = np.nan
+                    continue
+
+                logger.info(f"Fetched {len(periods)} {stmt_type} periods for {ticker}")
+
+                # Sort periods by fiscal_date descending (most recent first)
+                periods_sorted = sorted(
+                    periods,
+                    key=lambda p: p.get('fiscal_date', ''),
+                    reverse=True
+                )
+
+                # Create lookup function for point-in-time data
+                def get_periods_for_date(row_date):
+                    """Get N most recent periods before or on row_date."""
+                    available = []
+                    for period in periods_sorted:
+                        fiscal_date = period.get('fiscal_date', '')
+                        if fiscal_date:
+                            try:
+                                period_date = pd.to_datetime(fiscal_date)
+                                if period_date <= row_date:
+                                    available.append(period)
+                                    if len(available) >= lookback_statements:
+                                        break
+                            except Exception:
+                                continue
+                    return available
+
+                # Add columns for each lookback period and field
+                for q_idx in range(lookback_statements):
+                    for field in key_fields:
+                        col_name = f'{prefix}_q{q_idx}_{field}'
+
+                        def get_value(row_date, q_idx=q_idx, field=field):
+                            available_periods = get_periods_for_date(row_date)
+                            if q_idx < len(available_periods):
+                                return available_periods[q_idx].get(field)
+                            return np.nan
+
+                        result_df[col_name] = result_df['Date'].apply(get_value)
+
+                # Also add fiscal date columns for reference
+                for q_idx in range(lookback_statements):
+                    col_name = f'{prefix}_q{q_idx}_date'
+
+                    def get_date(row_date, q_idx=q_idx):
+                        available_periods = get_periods_for_date(row_date)
+                        if q_idx < len(available_periods):
+                            return available_periods[q_idx].get('fiscal_date')
+                        return None
+
+                    result_df[col_name] = result_df['Date'].apply(get_date)
+
+            except Exception as e:
+                logger.error(f"Error fetching {stmt_type} for {ticker}: {e}")
+                # Add NaN columns on error
+                for q_idx in range(lookback_statements):
+                    for field in key_fields:
+                        result_df[f'{prefix}_q{q_idx}_{field}'] = np.nan
+
+        logger.info(f"Created statement features for {ticker}: {statement_types} with {lookback_statements} periods")
         return result_df
