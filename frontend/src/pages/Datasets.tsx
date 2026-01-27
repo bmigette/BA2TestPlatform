@@ -101,8 +101,21 @@ const Datasets: React.FC = () => {
     setIsWizardOpen(true);
   };
 
-  const handleEdit = (dataset: Dataset) => {
-    setSelectedDataset(dataset);
+  const handleEdit = async (dataset: Dataset) => {
+    // Fetch fresh dataset data to ensure we have the latest dates
+    try {
+      const response = await fetch(`http://localhost:8002/api/datasets/${dataset.id}`);
+      if (response.ok) {
+        const freshDataset = await response.json();
+        setSelectedDataset(freshDataset);
+      } else {
+        // Fallback to list data if fetch fails
+        setSelectedDataset(dataset);
+      }
+    } catch {
+      // Fallback to list data if fetch fails
+      setSelectedDataset(dataset);
+    }
     setWizardMode('edit');
     setIsWizardOpen(true);
   };

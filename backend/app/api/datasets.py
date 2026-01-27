@@ -377,6 +377,36 @@ async def list_datasets(db: Session = Depends(get_db)):
         )
 
 
+@router.get("/{dataset_id}", response_model=DatasetResponse)
+async def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Get a single dataset by ID
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Dataset details
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+        return dataset
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching dataset: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch dataset: {str(e)}"
+        )
+
+
 @router.get("/{dataset_id}/preview")
 async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
     """
