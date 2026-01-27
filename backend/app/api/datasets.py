@@ -297,20 +297,14 @@ async def create_dataset(
                     logger.info(f"Fetching macro indicators: {macro_indicators}")
                     try:
                         macro_service = MacroService()
-                        macro_data = macro_service.get_macro_data(
-                            indicators=macro_indicators,
-                            start_date=start_date,
-                            end_date=end_date
-                        )
-                        if macro_data:
-                            added_macro = []
-                            for indicator, values in macro_data.items():
-                                if values is not None:
-                                    df[f'macro_{indicator}'] = values
-                                    added_macro.append(indicator)
-                            logger.info(f"Added {len(added_macro)} macro columns: {added_macro}")
-                        else:
-                            logger.warning("No macro data available")
+                        df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
+                        # Rename columns to have macro_ prefix
+                        for indicator in macro_indicators:
+                            if indicator in df.columns:
+                                df = df.rename(columns={indicator: f'macro_{indicator}'})
+                                if f'{indicator}_yoy_change' in df.columns:
+                                    df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+                        logger.info(f"Added macro columns for: {macro_indicators}")
                     except Exception as e:
                         logger.warning(f"Error fetching macro data: {e}")
 
@@ -1026,20 +1020,14 @@ async def regenerate_dataset(
                     logger.info(f"Fetching macro indicators: {macro_indicators}")
                     try:
                         macro_service = MacroService()
-                        macro_data = macro_service.get_macro_data(
-                            indicators=macro_indicators,
-                            start_date=start_date,
-                            end_date=end_date
-                        )
-                        if macro_data:
-                            added_macro = []
-                            for indicator, values in macro_data.items():
-                                if values is not None:
-                                    df[f'macro_{indicator}'] = values
-                                    added_macro.append(indicator)
-                            logger.info(f"Added {len(added_macro)} macro columns: {added_macro}")
-                        else:
-                            logger.warning("No macro data available")
+                        df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
+                        # Rename columns to have macro_ prefix
+                        for indicator in macro_indicators:
+                            if indicator in df.columns:
+                                df = df.rename(columns={indicator: f'macro_{indicator}'})
+                                if f'{indicator}_yoy_change' in df.columns:
+                                    df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+                        logger.info(f"Added macro columns for: {macro_indicators}")
                     except Exception as e:
                         logger.warning(f"Error fetching macro data: {e}")
 
@@ -1436,20 +1424,14 @@ async def update_dataset(
                     logger.info(f"Fetching macro indicators: {macro_indicators}")
                     try:
                         macro_service = MacroService()
-                        macro_data = macro_service.get_macro_data(
-                            indicators=macro_indicators,
-                            start_date=start_date,
-                            end_date=end_date
-                        )
-                        if macro_data:
-                            added_macro = []
-                            for indicator, values in macro_data.items():
-                                if values is not None:
-                                    df[f'macro_{indicator}'] = values
-                                    added_macro.append(indicator)
-                            logger.info(f"Added {len(added_macro)} macro columns: {added_macro}")
-                        else:
-                            logger.warning("No macro data available")
+                        df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
+                        # Rename columns to have macro_ prefix
+                        for indicator in macro_indicators:
+                            if indicator in df.columns:
+                                df = df.rename(columns={indicator: f'macro_{indicator}'})
+                                if f'{indicator}_yoy_change' in df.columns:
+                                    df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+                        logger.info(f"Added macro columns for: {macro_indicators}")
                     except Exception as e:
                         logger.warning(f"Error fetching macro data: {e}")
 
