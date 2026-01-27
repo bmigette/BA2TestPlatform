@@ -188,11 +188,13 @@ async def startup_event():
     init_task_queue(max_workers=2)
     logger.info("Task queue initialized with 2 workers")
 
-    # Register dataset regeneration handler
+    # Register task handlers
     from app.services.dataset_handler import handle_dataset_regeneration
+    from app.services.job_handler import handle_training_job
     task_queue = get_task_queue()
     task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
-    logger.info("Registered dataset_regeneration handler")
+    task_queue.register_handler('training_job', handle_training_job)
+    logger.info("Registered task handlers: dataset_regeneration, training_job")
 
     logger.info("Application startup complete")
 

@@ -1,5 +1,7 @@
 """
 Optimization Jobs API endpoints
+
+Uses TaskQueueService for background job processing with real ML training.
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -10,23 +12,21 @@ from datetime import datetime
 import logging
 import uuid
 import asyncio
-import random
-import threading
-import time
 import json
+
+from app.services.task_queue import get_task_queue
+from app.models.database import SessionLocal
+from app.models.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory job store (would be replaced with database in production)
+# In-memory job store for quick access (synced with task queue)
 jobs_store: dict = {}
 
 # Training progress data (metrics over time)
 job_progress_data: Dict[str, Dict[str, Any]] = {}
-
-# Background training simulation threads
-training_threads: Dict[str, bool] = {}  # job_id -> should_stop flag
 
 
 class PredictionTarget(BaseModel):
@@ -151,187 +151,75 @@ class JobListResponse(BaseModel):
     total: int
 
 
-def simulate_multi_dataset_training(job_id: str, dataset_progress: List[Dict[str, Any]]):
-    """
-    Simulates training with multiple datasets, processing them chronologically.
-    Updates per-dataset progress during training.
-    """
-    if job_id not in jobs_store:
-        return
-
-    job = jobs_store[job_id]
-    cross_validation = job.get("crossValidation", {})
-    use_cv = cross_validation.get("enabled", False) if cross_validation else False
-
-    # Process each dataset
-    for idx, ds_progress in enumerate(dataset_progress):
-        if training_threads.get(job_id, False):
-            return
-
-        ds_id = ds_progress["datasetId"]
-        ds_name = ds_progress["datasetName"]
-        ticker = ds_progress["ticker"]
-
-        # Update current dataset
-        jobs_store[job_id]["currentDatasetId"] = ds_id
-        jobs_store[job_id]["datasetProgress"][idx]["status"] = "processing"
-
-        job_progress_data[job_id]["logs"].append(
-            f"[{datetime.now().isoformat()}] Processing dataset: {ds_name} ({ticker})"
-        )
-
-        # Simulate processing this dataset's data
-        total_rows = ds_progress["totalRows"]
-        for row_batch in range(0, total_rows, max(1, total_rows // 10)):
-            if training_threads.get(job_id, False):
-                return
-
-            processed = min(row_batch + total_rows // 10, total_rows)
-            jobs_store[job_id]["datasetProgress"][idx]["rowsProcessed"] = processed
-            jobs_store[job_id]["datasetProgress"][idx]["progress"] = (processed / total_rows) * 100
-
-            time.sleep(0.1)
-
-        # Mark dataset as completed
-        jobs_store[job_id]["datasetProgress"][idx]["status"] = "completed"
-        jobs_store[job_id]["datasetProgress"][idx]["rowsProcessed"] = total_rows
-        jobs_store[job_id]["datasetProgress"][idx]["progress"] = 100.0
-
-        # If cross-validation, add fold results
-        if use_cv:
-            fold_result = {
-                "fold": idx + 1,
-                "datasetId": ds_id,
-                "datasetName": ds_name,
-                "ticker": ticker,
-                "metrics": {
-                    "mape": round(random.uniform(5, 15), 2),
-                    "mae": round(random.uniform(0.01, 0.1), 4),
-                    "rmse": round(random.uniform(0.02, 0.15), 4),
-                    "accuracy": round(random.uniform(0.7, 0.9), 4)
-                }
+def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
+    """Get dataset information from database."""
+    db = SessionLocal()
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if dataset:
+            return {
+                "datasetId": dataset.id,
+                "datasetName": dataset.name,
+                "ticker": dataset.ticker or "UNKNOWN",
+                "status": "pending",
+                "progress": 0.0,
+                "rowsProcessed": 0,
+                "totalRows": dataset.row_count or 0
             }
-            if jobs_store[job_id].get("foldResults") is None:
-                jobs_store[job_id]["foldResults"] = []
-            jobs_store[job_id]["foldResults"].append(fold_result)
-
-            job_progress_data[job_id]["logs"].append(
-                f"[{datetime.now().isoformat()}] CV Fold {idx + 1} completed - "
-                f"Accuracy: {fold_result['metrics']['accuracy']:.4f}"
-            )
-
-    job_progress_data[job_id]["logs"].append(
-        f"[{datetime.now().isoformat()}] All datasets combined chronologically"
-    )
-
-
-def simulate_training(job_id: str):
-    """
-    Simulates training progress for a job.
-    Updates job metrics over time to simulate genetic optimization.
-    Handles both single and multi-dataset training.
-    """
-    if job_id not in jobs_store:
-        return
-
-    # Initialize progress data
-    job_progress_data[job_id] = {
-        "metrics": [],
-        "logs": [f"[{datetime.now().isoformat()}] Starting optimization job {job_id}"],
-    }
-
-    # Update job to running
-    jobs_store[job_id]["status"] = "running"
-    jobs_store[job_id]["startedAt"] = datetime.now().isoformat()
-
-    # Handle multi-dataset training first
-    dataset_progress = jobs_store[job_id].get("datasetProgress")
-    if dataset_progress and len(dataset_progress) > 1:
-        job_progress_data[job_id]["logs"].append(
-            f"[{datetime.now().isoformat()}] Multi-dataset training: {len(dataset_progress)} datasets"
-        )
-        simulate_multi_dataset_training(job_id, dataset_progress)
-
-    total_generations = jobs_store[job_id].get("totalGenerations", 50)
-    start_time = time.time()
-
-    # Simulate training over generations
-    base_loss = 2.5
-    base_accuracy = 0.25
-    best_fitness = 0.0
-
-    for gen in range(1, total_generations + 1):
-        # Check if we should stop (paused, cancelled)
-        if job_id in training_threads and training_threads[job_id]:
-            job_progress_data[job_id]["logs"].append(
-                f"[{datetime.now().isoformat()}] Training stopped at generation {gen}"
-            )
-            return
-
-        # Check if job is paused
-        if job_id in jobs_store and jobs_store[job_id]["status"] == "paused":
-            while jobs_store[job_id]["status"] == "paused":
-                time.sleep(0.5)
-                if job_id in training_threads and training_threads[job_id]:
-                    return
-
-        # Simulate improvement over generations
-        noise = random.uniform(-0.1, 0.1)
-        improvement = gen / total_generations
-        loss = max(0.1, base_loss * (1 - improvement * 0.8) + noise * 0.3)
-        accuracy = min(0.95, base_accuracy + improvement * 0.65 + noise * 0.1)
-        val_loss = loss + random.uniform(0.05, 0.2)
-        val_accuracy = accuracy - random.uniform(0.02, 0.08)
-        fitness = accuracy * 100 - loss * 10
-
-        if fitness > best_fitness:
-            best_fitness = fitness
-
-        # Calculate ETA
-        elapsed = time.time() - start_time
-        avg_time_per_gen = elapsed / gen if gen > 0 else 1
-        remaining_gens = total_generations - gen
-        eta_seconds = int(avg_time_per_gen * remaining_gens)
-        eta_str = f"{eta_seconds // 60}m {eta_seconds % 60}s" if eta_seconds > 60 else f"{eta_seconds}s"
-
-        # Update job store
-        jobs_store[job_id]["progress"] = (gen / total_generations) * 100
-        jobs_store[job_id]["currentGeneration"] = gen
-        jobs_store[job_id]["currentLoss"] = round(loss, 4)
-        jobs_store[job_id]["currentAccuracy"] = round(accuracy, 4)
-        jobs_store[job_id]["bestFitness"] = round(best_fitness, 2)
-        jobs_store[job_id]["gpuUtilization"] = random.uniform(75, 95)
-        jobs_store[job_id]["estimatedTimeRemaining"] = eta_str
-
-        # Add metrics
-        metric = {
-            "generation": gen,
-            "loss": round(loss, 4),
-            "accuracy": round(accuracy, 4),
-            "valLoss": round(val_loss, 4),
-            "valAccuracy": round(val_accuracy, 4),
-            "fitness": round(fitness, 2),
-            "timestamp": datetime.now().isoformat(),
+        return {
+            "datasetId": dataset_id,
+            "datasetName": f"Dataset_{dataset_id}",
+            "ticker": f"TICKER{dataset_id}",
+            "status": "pending",
+            "progress": 0.0,
+            "rowsProcessed": 0,
+            "totalRows": 1000
         }
-        job_progress_data[job_id]["metrics"].append(metric)
+    finally:
+        db.close()
 
-        # Add log entry every 5 generations
-        if gen % 5 == 0 or gen == 1:
-            job_progress_data[job_id]["logs"].append(
-                f"[{datetime.now().isoformat()}] Gen {gen}/{total_generations}: "
-                f"loss={loss:.4f}, accuracy={accuracy:.4f}, fitness={fitness:.2f}"
-            )
 
-        # Simulate training time (0.5-1s per generation for demo)
-        time.sleep(random.uniform(0.5, 1.0))
+def sync_job_from_task(job_id: str) -> Optional[Dict[str, Any]]:
+    """Sync job data from task queue."""
+    if job_id not in jobs_store:
+        return None
 
-    # Training completed
-    jobs_store[job_id]["status"] = "completed"
-    jobs_store[job_id]["completedAt"] = datetime.now().isoformat()
-    jobs_store[job_id]["progress"] = 100
-    job_progress_data[job_id]["logs"].append(
-        f"[{datetime.now().isoformat()}] Training completed! Best fitness: {best_fitness:.2f}"
-    )
+    task_queue = get_task_queue()
+    task_status = task_queue.get_task_status(job_id)
+
+    if task_status:
+        # Update local job store from task queue
+        jobs_store[job_id]["status"] = task_status.get("status", "queued")
+        jobs_store[job_id]["progress"] = task_status.get("progress", 0)
+
+        if task_status.get("started_at"):
+            jobs_store[job_id]["startedAt"] = task_status["started_at"]
+        if task_status.get("completed_at"):
+            jobs_store[job_id]["completedAt"] = task_status["completed_at"]
+        if task_status.get("error_message"):
+            jobs_store[job_id]["error"] = task_status["error_message"]
+        if task_status.get("progress_message"):
+            # Parse progress message for current generation info
+            msg = task_status["progress_message"]
+            if "Gen " in msg:
+                try:
+                    # Extract generation from message like "LSTM: Gen 5/50, Fitness: 0.85"
+                    gen_part = msg.split("Gen ")[1].split(",")[0]
+                    current, total = gen_part.split("/")
+                    jobs_store[job_id]["currentGeneration"] = int(current)
+                except (IndexError, ValueError):
+                    pass
+
+        # Get result data if completed
+        if task_status.get("status") == "completed" and task_status.get("result"):
+            result = task_status["result"]
+            if result.get("best_model"):
+                best = result["best_model"]
+                jobs_store[job_id]["bestFitness"] = best.get("best_fitness")
+                if best.get("metrics"):
+                    jobs_store[job_id]["currentAccuracy"] = best["metrics"].get("fitness")
+
+    return jobs_store.get(job_id)
 
 
 @router.post("", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
@@ -344,6 +232,8 @@ async def create_job(job_create: JobCreate):
     - Datasets are combined chronologically
     - Ticker column is added to distinguish data from different tickers
     - Cross-validation can use each dataset as a fold
+
+    Uses TaskQueueService for background ML training.
 
     Args:
         job_create: Job creation parameters
@@ -365,22 +255,11 @@ async def create_job(job_create: JobCreate):
 
         logger.info(f"Creating optimization job for {len(dataset_ids)} dataset(s)")
 
-        job_id = str(uuid.uuid4())[:8]
-
-        # Build dataset progress tracking (simulated - real implementation would load from DB)
+        # Build dataset progress tracking from real database
         dataset_progress = []
         dataset_names = []
-        for idx, ds_id in enumerate(dataset_ids):
-            # Simulate dataset info (in production, would query database)
-            ds_info = {
-                "datasetId": ds_id,
-                "datasetName": f"Dataset_{ds_id}",
-                "ticker": f"TICKER{ds_id}",
-                "status": "pending",
-                "progress": 0.0,
-                "rowsProcessed": 0,
-                "totalRows": 1000 + idx * 500  # Simulated
-            }
+        for ds_id in dataset_ids:
+            ds_info = get_dataset_info(ds_id)
             dataset_progress.append(ds_info)
             dataset_names.append(ds_info["datasetName"])
 
@@ -396,6 +275,30 @@ async def create_job(job_create: JobCreate):
         # Get genetic config with defaults
         genetic_config = job_create.geneticConfig or GeneticConfig()
         metrics_config = job_create.metricsConfig or MetricsConfig()
+
+        # Build payload for background task
+        task_payload = {
+            'dataset_ids': dataset_ids,
+            'selected_models': job_create.selectedModels,
+            'parameter_ranges': params.dict(),
+            'prediction_targets': [pt.dict() for pt in job_create.predictionTargets],
+            'train_test_split': job_create.trainTestSplit,
+            'cross_validation': job_create.crossValidation.dict() if job_create.crossValidation else None,
+            'genetic_config': genetic_config.dict(),
+            'metrics_config': metrics_config.dict()
+        }
+
+        # Queue background training task
+        task_queue = get_task_queue()
+        task_id = task_queue.queue_task(
+            task_type='training_job',
+            name=f'Training job: {", ".join(job_create.selectedModels)} on {len(dataset_ids)} dataset(s)',
+            payload=task_payload,
+            description=f'Genetic optimization with {genetic_config.generations} generations'
+        )
+
+        # Use task_id as job_id
+        job_id = task_id
 
         job = JobResponse(
             id=job_id,
@@ -418,15 +321,16 @@ async def create_job(job_create: JobCreate):
             datasetProgress=dataset_progress if len(dataset_ids) > 1 else None,
         )
 
-        # Store in memory
+        # Store in memory for quick access
         jobs_store[job_id] = job.dict()
 
-        logger.info(f"Created job {job_id} with {len(dataset_ids)} dataset(s)")
+        # Initialize progress data
+        job_progress_data[job_id] = {
+            "metrics": [],
+            "logs": [f"[{datetime.now().isoformat()}] Job queued for processing"]
+        }
 
-        # Start training simulation in background thread
-        training_threads[job_id] = False  # should_stop = False
-        thread = threading.Thread(target=simulate_training, args=(job_id,), daemon=True)
-        thread.start()
+        logger.info(f"Created job {job_id} with {len(dataset_ids)} dataset(s) - queued for background processing")
 
         return job
 
@@ -445,10 +349,16 @@ async def list_jobs():
     """
     List all optimization jobs.
 
+    Syncs status from task queue before returning.
+
     Returns:
         List of jobs with status
     """
     try:
+        # Sync all jobs from task queue
+        for job_id in list(jobs_store.keys()):
+            sync_job_from_task(job_id)
+
         jobs = [JobResponse(**job) for job in jobs_store.values()]
         # Sort by createdAt descending
         jobs.sort(key=lambda x: x.createdAt, reverse=True)
@@ -471,6 +381,8 @@ async def get_job(job_id: str):
     """
     Get a specific job by ID.
 
+    Syncs status from task queue before returning.
+
     Args:
         job_id: Job ID
 
@@ -482,6 +394,9 @@ async def get_job(job_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job {job_id} not found"
         )
+
+    # Sync from task queue
+    sync_job_from_task(job_id)
 
     return JobResponse(**jobs_store[job_id])
 
@@ -500,8 +415,9 @@ async def delete_job(job_id: str):
             detail=f"Job {job_id} not found"
         )
 
-    # Stop training thread if running
-    training_threads[job_id] = True
+    # Cancel task if running
+    task_queue = get_task_queue()
+    task_queue.cancel_task(job_id)
 
     del jobs_store[job_id]
     if job_id in job_progress_data:
@@ -514,6 +430,8 @@ async def get_job_progress(job_id: str):
     """
     Get detailed progress information for a job including metrics and logs.
 
+    Syncs status from task queue before returning.
+
     Args:
         job_id: Job ID
 
@@ -525,6 +443,22 @@ async def get_job_progress(job_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job {job_id} not found"
         )
+
+    # Sync from task queue
+    sync_job_from_task(job_id)
+
+    # Get progress message from task queue
+    task_queue = get_task_queue()
+    task_progress = task_queue.get_task_progress(job_id)
+    if task_progress and task_progress.get("progress_message"):
+        # Add task progress message to logs if new
+        progress_msg = task_progress["progress_message"]
+        if job_id in job_progress_data:
+            logs = job_progress_data[job_id].get("logs", [])
+            if not logs or progress_msg not in logs[-1]:
+                job_progress_data[job_id]["logs"].append(
+                    f"[{datetime.now().isoformat()}] {progress_msg}"
+                )
 
     job = JobResponse(**jobs_store[job_id])
     progress_data = job_progress_data.get(job_id, {"metrics": [], "logs": []})
@@ -554,21 +488,31 @@ async def pause_job(job_id: str):
             detail=f"Job {job_id} not found"
         )
 
+    # Sync and check status
+    sync_job_from_task(job_id)
     job = jobs_store[job_id]
+
     if job["status"] != "running":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot pause job in status: {job['status']}"
         )
 
-    jobs_store[job_id]["status"] = "paused"
-    if job_id in job_progress_data:
-        job_progress_data[job_id]["logs"].append(
-            f"[{datetime.now().isoformat()}] Job paused"
+    # Pause via task queue
+    task_queue = get_task_queue()
+    if task_queue.pause_task(job_id):
+        jobs_store[job_id]["status"] = "paused"
+        if job_id in job_progress_data:
+            job_progress_data[job_id]["logs"].append(
+                f"[{datetime.now().isoformat()}] Job paused"
+            )
+        logger.info(f"Paused job {job_id}")
+        return {"status": "paused", "message": f"Job {job_id} paused"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to pause job"
         )
-
-    logger.info(f"Paused job {job_id}")
-    return {"status": "paused", "message": f"Job {job_id} paused"}
 
 
 @router.post("/{job_id}/resume")
@@ -585,21 +529,31 @@ async def resume_job(job_id: str):
             detail=f"Job {job_id} not found"
         )
 
+    # Sync and check status
+    sync_job_from_task(job_id)
     job = jobs_store[job_id]
+
     if job["status"] != "paused":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot resume job in status: {job['status']}"
         )
 
-    jobs_store[job_id]["status"] = "running"
-    if job_id in job_progress_data:
-        job_progress_data[job_id]["logs"].append(
-            f"[{datetime.now().isoformat()}] Job resumed"
+    # Resume via task queue
+    task_queue = get_task_queue()
+    if task_queue.resume_task(job_id):
+        jobs_store[job_id]["status"] = "queued"  # Re-queued for processing
+        if job_id in job_progress_data:
+            job_progress_data[job_id]["logs"].append(
+                f"[{datetime.now().isoformat()}] Job resumed"
+            )
+        logger.info(f"Resumed job {job_id}")
+        return {"status": "running", "message": f"Job {job_id} resumed"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to resume job"
         )
-
-    logger.info(f"Resumed job {job_id}")
-    return {"status": "running", "message": f"Job {job_id} resumed"}
 
 
 @router.post("/{job_id}/cancel")
@@ -616,15 +570,20 @@ async def cancel_job(job_id: str):
             detail=f"Job {job_id} not found"
         )
 
+    # Sync and check status
+    sync_job_from_task(job_id)
     job = jobs_store[job_id]
+
     if job["status"] not in ["running", "paused", "queued"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot cancel job in status: {job['status']}"
         )
 
-    # Signal the training thread to stop
-    training_threads[job_id] = True
+    # Cancel via task queue
+    task_queue = get_task_queue()
+    task_queue.cancel_task(job_id)
+
     jobs_store[job_id]["status"] = "cancelled"
     if job_id in job_progress_data:
         job_progress_data[job_id]["logs"].append(
@@ -643,26 +602,32 @@ async def generate_sse_events(job_id: str):
     """
     Generator for SSE events for job progress.
 
+    Syncs with task queue for real-time status.
+
     Yields:
         SSE formatted events with job progress data
     """
-    last_generation = -1
+    last_progress = -1
 
     while True:
         if job_id not in jobs_store:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Job not found'})}\n\n"
             break
 
+        # Sync from task queue
+        sync_job_from_task(job_id)
+
         job = jobs_store[job_id]
+        current_progress = job.get("progress", 0)
         current_gen = job.get("currentGeneration", 0)
 
-        # Send update if generation changed or status changed
-        if current_gen != last_generation or job["status"] in ["completed", "cancelled", "failed"]:
+        # Send update if progress changed or status changed
+        if current_progress != last_progress or job["status"] in ["completed", "cancelled", "failed"]:
             event_data = {
                 "type": "progress",
                 "job_id": job_id,
                 "status": job["status"],
-                "progress": job.get("progress", 0),
+                "progress": current_progress,
                 "currentGeneration": current_gen,
                 "totalGenerations": job.get("totalGenerations", 50),
                 "currentLoss": job.get("currentLoss"),
@@ -673,7 +638,7 @@ async def generate_sse_events(job_id: str):
                 "timestamp": datetime.now().isoformat()
             }
             yield f"data: {json.dumps(event_data)}\n\n"
-            last_generation = current_gen
+            last_progress = current_progress
 
         # Exit if job finished
         if job["status"] in ["completed", "cancelled", "failed"]:
