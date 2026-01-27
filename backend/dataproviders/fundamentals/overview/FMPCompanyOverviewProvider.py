@@ -5,16 +5,23 @@ Provides company overview and fundamentals using FMP's company profile endpoint.
 Documentation: https://site.financialmodelingprep.com/developer/docs#company
 """
 
-from typing import Dict, Any, Literal, Annotated
+from typing import Dict, Any, Literal, Annotated, Optional
 from datetime import datetime
+import os
+import logging
 import json
 
 import fmpsdk
 
-from ba2_trade_platform.core.interfaces import CompanyFundamentalsOverviewInterface
-from ba2_trade_platform.core.provider_utils import log_provider_call
-from ba2_trade_platform.logger import logger
-from ba2_trade_platform.config import get_app_setting
+from dataproviders.interfaces import CompanyFundamentalsOverviewInterface
+from dataproviders.utils import log_provider_call
+
+logger = logging.getLogger(__name__)
+
+
+def get_app_setting(key: str) -> Optional[str]:
+    """Get app setting from environment variable."""
+    return os.getenv(key)
 
 
 class FMPCompanyOverviewProvider(CompanyFundamentalsOverviewInterface):

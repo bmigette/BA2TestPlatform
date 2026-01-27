@@ -383,6 +383,8 @@ async def list_fundamentals_providers():
     Returns:
         List of providers with their supported features
     """
+    import os
+
     providers = [
         {
             "id": "yfinance",
@@ -391,6 +393,24 @@ async def list_fundamentals_providers():
             "requires_api_key": False,
             "api_key_configured": True,
             "available": True,
+            "features": ["overview", "balance_sheet", "income_statement", "cashflow_statement", "past_earnings"]
+        },
+        {
+            "id": "fmp",
+            "name": "Financial Modeling Prep",
+            "description": "Financial statements and company profile from FMP API",
+            "requires_api_key": True,
+            "api_key_configured": bool(os.getenv("FMP_API_KEY")),
+            "available": bool(os.getenv("FMP_API_KEY")),
+            "features": ["overview", "balance_sheet", "income_statement", "cashflow_statement", "past_earnings"]
+        },
+        {
+            "id": "alphavantage",
+            "name": "Alpha Vantage",
+            "description": "Financial statements and company overview from Alpha Vantage API",
+            "requires_api_key": True,
+            "api_key_configured": bool(os.getenv("ALPHA_VANTAGE_API_KEY")),
+            "available": bool(os.getenv("ALPHA_VANTAGE_API_KEY")),
             "features": ["overview", "balance_sheet", "income_statement", "cashflow_statement", "past_earnings"]
         }
     ]
@@ -406,7 +426,7 @@ async def list_fundamentals_providers():
 @router.get("/fundamentals/fetch")
 async def fetch_fundamentals(
     symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)"),
-    provider: str = Query("yfinance", description="Provider: yfinance (others require old framework)"),
+    provider: str = Query("yfinance", description="Provider: yfinance, fmp, alphavantage"),
     data_type: str = Query("balance_sheet", description="Data type: overview, balance_sheet, income_statement, cashflow_statement, past_earnings"),
     frequency: str = Query("quarterly", description="Frequency: quarterly or annual"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Use either this OR lookback_periods."),
@@ -414,11 +434,11 @@ async def fetch_fundamentals(
     lookback_periods: Optional[int] = Query(None, description="Number of periods to look back. Use either this OR start_date. Default: 8")
 ):
     """
-    Fetch fundamental data for a ticker using yfinance.
+    Fetch fundamental data for a ticker using the dataproviders.
 
     Args:
         symbol: Stock ticker symbol
-        provider: Data provider (currently only yfinance is fully supported)
+        provider: Data provider (yfinance, fmp, alphavantage)
         data_type: Type of data (overview, balance_sheet, income_statement, cashflow_statement, past_earnings)
         frequency: Data frequency (quarterly or annual)
         start_date: Start date for historical data (YYYY-MM-DD)
@@ -428,8 +448,6 @@ async def fetch_fundamentals(
     Returns:
         Fundamental data with historical periods
     """
-    import yfinance as yf
-
     try:
         logger.info(f"Fetching {data_type} for {symbol} using {provider} ({frequency})")
 
@@ -448,132 +466,89 @@ async def fetch_fundamentals(
         if start_dt is None and lookback_periods is None:
             lookback_periods = 8
 
-        # Currently only yfinance is supported (other providers need old framework)
-        if provider != "yfinance":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Provider '{provider}' requires the old framework. Currently only 'yfinance' is supported."
-            )
-
-        ticker = yf.Ticker(symbol.upper())
-
-        result = {
-            "symbol": symbol.upper(),
-            "provider": provider,
-            "data_type": data_type,
-            "frequency": frequency,
-            "end_date": end_dt.isoformat(),
-            "retrieved_at": datetime.now().isoformat()
-        }
-
+        # Handle overview separately
         if data_type == "overview":
-            # Fetch company overview/info
-            info = ticker.info
-            result["current"] = {
-                "company_name": info.get("longName", ""),
-                "sector": info.get("sector", ""),
-                "industry": info.get("industry", ""),
-                "market_cap": info.get("marketCap"),
-                "price": info.get("currentPrice") or info.get("regularMarketPrice"),
-                "trailing_pe": info.get("trailingPE"),
-                "forward_pe": info.get("forwardPE"),
-                "eps": info.get("trailingEps"),
-                "forward_eps": info.get("forwardEps"),
-                "dividend_yield": info.get("dividendYield"),
-                "beta": info.get("beta"),
-                "52_week_high": info.get("fiftyTwoWeekHigh"),
-                "52_week_low": info.get("fiftyTwoWeekLow"),
-                "revenue": info.get("totalRevenue"),
-                "gross_profit": info.get("grossProfits"),
-                "free_cash_flow": info.get("freeCashflow"),
-                "debt_to_equity": info.get("debtToEquity"),
-                "roe": info.get("returnOnEquity"),
-                "roa": info.get("returnOnAssets"),
-                "profit_margin": info.get("profitMargins"),
-                "operating_margin": info.get("operatingMargins"),
-            }
+            return await _fetch_fundamentals_overview(symbol, provider, end_dt)
 
-        elif data_type == "balance_sheet":
-            # Fetch balance sheet
-            if frequency == "quarterly":
-                data = ticker.quarterly_balance_sheet
-            else:
-                data = ticker.balance_sheet
-
-            result["periods"] = _convert_financial_statement(data, end_dt, start_dt, lookback_periods)
-
-        elif data_type == "income_statement":
-            # Fetch income statement
-            if frequency == "quarterly":
-                data = ticker.quarterly_income_stmt
-            else:
-                data = ticker.income_stmt
-
-            result["periods"] = _convert_financial_statement(data, end_dt, start_dt, lookback_periods)
-
-        elif data_type == "cashflow_statement":
-            # Fetch cash flow statement
-            if frequency == "quarterly":
-                data = ticker.quarterly_cashflow
-            else:
-                data = ticker.cashflow
-
-            result["periods"] = _convert_financial_statement(data, end_dt, start_dt, lookback_periods)
-
-        elif data_type == "past_earnings":
-            # Fetch earnings history
-            try:
-                earnings_dates = ticker.earnings_dates
-                if earnings_dates is not None and not earnings_dates.empty:
-                    earnings_list = []
-                    for idx, row in earnings_dates.iterrows():
-                        # Convert index to datetime
-                        if hasattr(idx, 'to_pydatetime'):
-                            period_dt = idx.to_pydatetime()
-                            if hasattr(period_dt, 'tzinfo') and period_dt.tzinfo:
-                                period_dt = period_dt.replace(tzinfo=None)
-                        else:
-                            period_dt = pd.to_datetime(idx).to_pydatetime()
-
-                        # Filter by date
-                        if period_dt > end_dt:
-                            continue
-                        if start_dt and period_dt < start_dt:
-                            continue
-
-                        reported = row.get('Reported EPS')
-                        estimated = row.get('EPS Estimate')
-
-                        earnings_list.append({
-                            "fiscal_date_ending": period_dt.strftime("%Y-%m-%d"),
-                            "reported_eps": float(reported) if pd.notna(reported) else None,
-                            "estimated_eps": float(estimated) if pd.notna(estimated) else None,
-                            "surprise": float(reported - estimated) if pd.notna(reported) and pd.notna(estimated) else None,
-                            "surprise_percent": float((reported - estimated) / abs(estimated) * 100) if pd.notna(reported) and pd.notna(estimated) and estimated != 0 else None
-                        })
-
-                    # Sort by date descending and limit
-                    earnings_list.sort(key=lambda x: x["fiscal_date_ending"], reverse=True)
-                    if lookback_periods:
-                        earnings_list = earnings_list[:lookback_periods]
-
-                    result["earnings"] = earnings_list
-                else:
-                    result["earnings"] = []
-            except Exception as e:
-                logger.warning(f"Could not fetch earnings dates: {e}")
-                result["earnings"] = []
-                result["error"] = str(e)
-
+        # Get the appropriate details provider
+        if provider == "yfinance":
+            from dataproviders.fundamentals.details import YFinanceCompanyDetailsProvider
+            details_provider = YFinanceCompanyDetailsProvider()
+        elif provider == "fmp":
+            from dataproviders.fundamentals.details import FMPCompanyDetailsProvider
+            details_provider = FMPCompanyDetailsProvider()
+        elif provider == "alphavantage":
+            from dataproviders.fundamentals.details import AlphaVantageCompanyDetailsProvider
+            details_provider = AlphaVantageCompanyDetailsProvider()
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown data_type: {data_type}. Available: overview, balance_sheet, income_statement, cashflow_statement, past_earnings"
+                detail=f"Unknown provider: {provider}. Available: yfinance, fmp, alphavantage"
             )
 
-        period_count = len(result.get('periods', result.get('earnings', result.get('current', {}))))
-        logger.info(f"Fetched {data_type} for {symbol}: {period_count} items")
-        return result
+        # Fetch the requested data type
+        result = None
+        try:
+            if data_type == "balance_sheet":
+                result = details_provider.get_balance_sheet(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    start_date=start_dt,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+            elif data_type == "income_statement":
+                result = details_provider.get_income_statement(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    start_date=start_dt,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+            elif data_type == "cashflow_statement":
+                result = details_provider.get_cashflow_statement(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    start_date=start_dt,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+            elif data_type == "past_earnings":
+                result = details_provider.get_past_earnings(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    lookback_periods=lookback_periods or 8,
+                    format_type="dict"
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown data_type: {data_type}. Available: overview, balance_sheet, income_statement, cashflow_statement, past_earnings"
+                )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+
+        if result:
+            if isinstance(result, dict):
+                result["provider"] = provider
+            period_count = len(result.get('periods', result.get('earnings', [])))
+            logger.info(f"Fetched {data_type} for {symbol} from {provider}: {period_count} periods")
+            return result
+        else:
+            return {
+                "symbol": symbol,
+                "provider": provider,
+                "data_type": data_type,
+                "periods": [],
+                "message": "No data available"
+            }
 
     except HTTPException:
         raise
@@ -585,58 +560,82 @@ async def fetch_fundamentals(
         )
 
 
-def _convert_financial_statement(
-    data: pd.DataFrame,
-    end_dt: datetime,
-    start_dt: Optional[datetime],
-    lookback_periods: Optional[int]
-) -> List[Dict[str, Any]]:
+async def _fetch_fundamentals_overview(symbol: str, provider: str, as_of_date: datetime) -> Dict[str, Any]:
     """
-    Convert a yfinance financial statement DataFrame to a list of period dictionaries.
+    Fetch company overview from overview providers.
     """
-    if data is None or data.empty:
-        return []
-
-    periods = []
-
-    for col in data.columns:
-        # Convert column (date) to datetime
-        if hasattr(col, 'to_pydatetime'):
-            period_dt = col.to_pydatetime()
-            if hasattr(period_dt, 'tzinfo') and period_dt.tzinfo:
-                period_dt = period_dt.replace(tzinfo=None)
+    try:
+        if provider == "yfinance":
+            # YFinance doesn't have a separate overview provider, use yfinance directly
+            import yfinance as yf
+            ticker = yf.Ticker(symbol.upper())
+            info = ticker.info
+            result = {
+                "symbol": symbol.upper(),
+                "provider": "yfinance",
+                "data_type": "overview",
+                "retrieved_at": datetime.now().isoformat(),
+                "current": {
+                    "company_name": info.get("longName", ""),
+                    "sector": info.get("sector", ""),
+                    "industry": info.get("industry", ""),
+                    "market_cap": info.get("marketCap"),
+                    "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                    "trailing_pe": info.get("trailingPE"),
+                    "forward_pe": info.get("forwardPE"),
+                    "eps": info.get("trailingEps"),
+                    "forward_eps": info.get("forwardEps"),
+                    "dividend_yield": info.get("dividendYield"),
+                    "beta": info.get("beta"),
+                    "52_week_high": info.get("fiftyTwoWeekHigh"),
+                    "52_week_low": info.get("fiftyTwoWeekLow"),
+                    "revenue": info.get("totalRevenue"),
+                    "gross_profit": info.get("grossProfits"),
+                    "free_cash_flow": info.get("freeCashflow"),
+                    "debt_to_equity": info.get("debtToEquity"),
+                    "roe": info.get("returnOnEquity"),
+                    "roa": info.get("returnOnAssets"),
+                    "profit_margin": info.get("profitMargins"),
+                    "operating_margin": info.get("operatingMargins"),
+                }
+            }
+            return result
+        elif provider == "fmp":
+            from dataproviders.fundamentals.overview import FMPCompanyOverviewProvider
+            overview_provider = FMPCompanyOverviewProvider()
+            result = overview_provider.get_fundamentals_overview(
+                symbol=symbol,
+                as_of_date=as_of_date,
+                format_type="dict"
+            )
+        elif provider == "alphavantage":
+            from dataproviders.fundamentals.overview import AlphaVantageCompanyOverviewProvider
+            overview_provider = AlphaVantageCompanyOverviewProvider()
+            result = overview_provider.get_fundamentals_overview(
+                symbol=symbol,
+                as_of_date=as_of_date,
+                format_type="dict"
+            )
         else:
-            try:
-                period_dt = pd.to_datetime(col).to_pydatetime()
-            except:
-                continue
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown provider: {provider}. Available: yfinance, fmp, alphavantage"
+            )
 
-        # Filter by date range
-        if period_dt > end_dt:
-            continue
-        if start_dt and period_dt < start_dt:
-            continue
+        if isinstance(result, dict):
+            result["provider"] = provider
+            result["data_type"] = "overview"
 
-        # Convert row items to dict
-        items = {}
-        for item_name in data.index:
-            value = data.loc[item_name, col]
-            if pd.notna(value):
-                items[str(item_name)] = float(value)
+        return result
 
-        periods.append({
-            "date": period_dt.strftime("%Y-%m-%d"),
-            "items": items
-        })
-
-    # Sort by date descending
-    periods.sort(key=lambda x: x["date"], reverse=True)
-
-    # Apply lookback limit
-    if lookback_periods:
-        periods = periods[:lookback_periods]
-
-    return periods
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching overview for {symbol}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch overview: {str(e)}"
+        )
 
 
 @router.get("/macro/fetch")

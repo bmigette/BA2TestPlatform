@@ -7,12 +7,14 @@ using Yahoo Finance as the data source.
 
 from typing import Dict, Any, Literal, Optional
 from datetime import datetime
+import logging
 import yfinance as yf
 import pandas as pd
 
-from ba2_trade_platform.core.interfaces import CompanyFundamentalsDetailsInterface
-from ba2_trade_platform.core.provider_utils import log_provider_call
-from ba2_trade_platform.logger import logger
+from dataproviders.interfaces import CompanyFundamentalsDetailsInterface
+from dataproviders.utils import log_provider_call
+
+logger = logging.getLogger(__name__)
 
 
 class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):

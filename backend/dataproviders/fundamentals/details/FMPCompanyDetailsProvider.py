@@ -8,14 +8,29 @@ API Documentation: https://site.financialmodelingprep.com/developer/docs#financi
 
 from typing import Dict, Any, Literal, Optional
 from datetime import datetime
+import os
+import logging
 
 import fmpsdk
 import requests
 
-from ba2_trade_platform.core.interfaces import CompanyFundamentalsDetailsInterface
-from ba2_trade_platform.core.provider_utils import validate_date_range
-from ba2_trade_platform.config import get_app_setting
-from ba2_trade_platform.logger import logger
+from dataproviders.interfaces import CompanyFundamentalsDetailsInterface
+from dataproviders.utils import log_provider_call
+
+logger = logging.getLogger(__name__)
+
+
+def get_app_setting(key: str) -> Optional[str]:
+    """Get app setting from environment variable."""
+    return os.getenv(key)
+
+
+def validate_date_range(start_date: Optional[datetime], lookback_periods: Optional[int]) -> None:
+    """Validate that either start_date or lookback_periods is provided, but not both."""
+    if start_date is not None and lookback_periods is not None:
+        raise ValueError("Cannot specify both start_date and lookback_periods")
+    if start_date is None and lookback_periods is None:
+        raise ValueError("Must specify either start_date or lookback_periods")
 
 
 class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):

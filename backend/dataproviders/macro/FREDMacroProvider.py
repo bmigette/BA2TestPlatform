@@ -7,17 +7,24 @@ including economic indicators, yield curves, and Federal Reserve calendar.
 
 from typing import Dict, Any, Literal, Optional, Annotated
 from datetime import datetime, timedelta
+import os
+import logging
 import requests
 
-from ba2_trade_platform.config import get_app_setting
-from ba2_trade_platform.core.interfaces import MacroEconomicsInterface
-from ba2_trade_platform.core.provider_utils import (
+from dataproviders.interfaces import MacroEconomicsInterface
+from dataproviders.utils import (
     validate_date_range,
     validate_lookback_days,
     calculate_date_range,
     log_provider_call
 )
-from ba2_trade_platform.logger import logger
+
+logger = logging.getLogger(__name__)
+
+
+def get_app_setting(key: str) -> Optional[str]:
+    """Get app setting from environment variable."""
+    return os.getenv(key)
 
 
 class FREDMacroProvider(MacroEconomicsInterface):

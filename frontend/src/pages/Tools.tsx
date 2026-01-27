@@ -683,6 +683,8 @@ const FundamentalsTester: React.FC = () => {
 
   const availableProviders = [
     { id: 'yfinance', name: 'Yahoo Finance', description: 'Free, no API key required' },
+    { id: 'fmp', name: 'Financial Modeling Prep', description: 'Requires FMP API key' },
+    { id: 'alphavantage', name: 'Alpha Vantage', description: 'Requires Alpha Vantage API key' },
   ];
 
   const dataTypes = [
