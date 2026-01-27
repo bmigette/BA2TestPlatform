@@ -165,22 +165,8 @@ class MarketNewsInterface(ABC):
 
         for attempt in range(max_retries):
             try:
-                # Use allow_redirects=False to capture the redirect URL
-                response = requests.head(
-                    url,
-                    headers=BROWSER_HEADERS,
-                    allow_redirects=False,
-                    timeout=10
-                )
-
-                # Check for redirect (3xx status codes)
-                if response.status_code in (301, 302, 303, 307, 308):
-                    redirect_url = response.headers.get('Location')
-                    if redirect_url:
-                        logger.debug(f"Resolved Finnhub redirect: {url} -> {redirect_url}")
-                        return redirect_url
-
-                # If no redirect, try GET to follow redirects
+                # Use GET with allow_redirects=True to follow the full redirect chain
+                # HEAD requests often return incomplete Location headers (e.g., "/")
                 response = requests.get(
                     url,
                     headers=BROWSER_HEADERS,
@@ -188,9 +174,8 @@ class MarketNewsInterface(ABC):
                     timeout=10
                 )
 
-                # Return final URL after redirects
-                if response.url != url:
-                    logger.debug(f"Resolved Finnhub redirect (via GET): {url} -> {response.url}")
+                # Return final URL if it differs from the original
+                if response.url != url and not response.url.endswith('/'):
                     return response.url
 
                 return None
@@ -198,7 +183,6 @@ class MarketNewsInterface(ABC):
             except requests.RequestException as e:
                 if attempt < max_retries - 1:
                     delay = delays[attempt] if attempt < len(delays) else delays[-1]
-                    logger.debug(f"Retry {attempt + 1}/{max_retries} for {url} after {delay}s: {e}")
                     time.sleep(delay)
                 else:
                     logger.warning(f"Failed to resolve Finnhub redirect after {max_retries} attempts: {url}")
@@ -208,7 +192,7 @@ class MarketNewsInterface(ABC):
     def resolve_finnhub_redirects(
         self,
         articles: List[Dict[str, Any]],
-        max_workers: int = 3
+        max_workers: int = 5
     ) -> List[Dict[str, Any]]:
         """
         Resolve Finnhub redirect URLs in articles to actual article URLs.
