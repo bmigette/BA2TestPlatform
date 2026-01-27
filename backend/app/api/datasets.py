@@ -1332,36 +1332,57 @@ async def update_dataset(
             )
 
         logger.info(f"Updating and regenerating dataset {dataset_id}")
-        logger.info(f"Update request: start_date={dataset_update.start_date}, end_date={dataset_update.end_date}")
-        logger.info(f"Current dataset: start_date={dataset.start_date}, end_date={dataset.end_date}")
+
+        # Log full payload received
+        logger.debug(f"Update payload received: {dataset_update.dict()}")
+        logger.info(f"Update request: start_date={dataset_update.start_date}, end_date={dataset_update.end_date}, data_provider={dataset_update.data_provider}")
+        logger.info(f"Current dataset: start_date={dataset.start_date}, end_date={dataset.end_date}, data_provider={dataset.generation_config.get('data_provider') if dataset.generation_config else 'N/A'}")
+
+        # Track what's being updated
+        updates = []
 
         # Update simple fields first
         if dataset_update.name:
+            updates.append(f"name: {dataset.name} -> {dataset_update.name}")
             dataset.name = dataset_update.name
 
         if dataset_update.normalization_buffer_pct is not None:
+            updates.append(f"normalization_buffer_pct: {dataset.normalization_buffer_pct} -> {dataset_update.normalization_buffer_pct}")
             dataset.normalization_buffer_pct = dataset_update.normalization_buffer_pct
 
         if dataset_update.technical_indicators is not None:
+            updates.append(f"technical_indicators: {len(dataset.technical_indicators or [])} -> {len(dataset_update.technical_indicators)} indicators")
             dataset.technical_indicators = dataset_update.technical_indicators
 
         if dataset_update.sentiment_config is not None:
+            updates.append(f"sentiment_config updated")
             dataset.sentiment_config = dataset_update.sentiment_config
 
         if dataset_update.fundamentals_config is not None:
+            updates.append(f"fundamentals_config updated")
             dataset.fundamentals_config = dataset_update.fundamentals_config
 
         # Update ticker/timeframe if provided
         new_ticker = dataset_update.ticker or dataset.ticker
         new_timeframe = dataset_update.timeframe or dataset.timeframe
+        if new_ticker != dataset.ticker:
+            updates.append(f"ticker: {dataset.ticker} -> {new_ticker}")
+        if new_timeframe != dataset.timeframe:
+            updates.append(f"timeframe: {dataset.timeframe} -> {new_timeframe}")
         dataset.ticker = new_ticker
         dataset.timeframe = new_timeframe
 
         # Parse dates - copy dict to ensure SQLAlchemy detects changes
         gen_config = dict(dataset.generation_config) if dataset.generation_config else {}
+        old_start = gen_config.get("original_start_date")
+        old_end = gen_config.get("original_end_date")
+        old_provider = gen_config.get("data_provider", "yfinance")
+
         if dataset_update.start_date:
             start_date = datetime.strptime(dataset_update.start_date, "%Y-%m-%d")
             gen_config["original_start_date"] = dataset_update.start_date
+            if old_start != dataset_update.start_date:
+                updates.append(f"start_date: {old_start} -> {dataset_update.start_date}")
         elif gen_config.get("original_start_date"):
             start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
         else:
@@ -1370,6 +1391,8 @@ async def update_dataset(
         if dataset_update.end_date:
             end_date = datetime.strptime(dataset_update.end_date, "%Y-%m-%d")
             gen_config["original_end_date"] = dataset_update.end_date
+            if old_end != dataset_update.end_date:
+                updates.append(f"end_date: {old_end} -> {dataset_update.end_date}")
         elif gen_config.get("original_end_date"):
             end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
         else:
@@ -1377,10 +1400,18 @@ async def update_dataset(
 
         # Update data provider if provided
         if dataset_update.data_provider:
+            if old_provider != dataset_update.data_provider:
+                updates.append(f"data_provider: {old_provider} -> {dataset_update.data_provider}")
             gen_config["data_provider"] = dataset_update.data_provider
 
         # Save updated generation_config with new dates and provider
         dataset.generation_config = gen_config
+
+        # Log all updates
+        if updates:
+            logger.info(f"Updating fields: {', '.join(updates)}")
+        else:
+            logger.info("No field changes detected, regenerating with current settings")
 
         # Set status to BUILDING
         dataset.status = DatasetStatus.BUILDING.value
