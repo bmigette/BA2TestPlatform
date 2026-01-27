@@ -446,17 +446,200 @@ FMP_CASH_FLOW_MAPPING = {
     "free_cash_flow": "free_cash_flow",
 }
 
+# AlphaVantage mappings (camelCase field names)
+ALPHAVANTAGE_BALANCE_SHEET_MAPPING = {
+    "fiscalDateEnding": "fiscal_date",
+    "reportedCurrency": "reported_currency",
+    "totalAssets": "total_assets",
+    "totalCurrentAssets": "total_current_assets",
+    "cashAndCashEquivalentsAtCarryingValue": "cash_and_cash_equivalents",
+    "cashAndShortTermInvestments": "cash_and_short_term_investments",
+    "shortTermInvestments": "short_term_investments",
+    "currentNetReceivables": "net_receivables",
+    "inventory": "inventory",
+    "otherCurrentAssets": "other_current_assets",
+    "totalNonCurrentAssets": "total_non_current_assets",
+    "propertyPlantEquipment": "property_plant_equipment",
+    "goodwill": "goodwill",
+    "intangibleAssets": "intangible_assets",
+    "intangibleAssetsExcludingGoodwill": "intangible_assets",
+    "longTermInvestments": "long_term_investments",
+    "otherNonCurrentAssets": "other_non_current_assets",
+    "totalLiabilities": "total_liabilities",
+    "totalCurrentLiabilities": "total_current_liabilities",
+    "currentAccountsPayable": "accounts_payable",
+    "shortTermDebt": "short_term_debt",
+    "currentLongTermDebt": "short_term_debt",
+    "deferredRevenue": "deferred_revenue",
+    "otherCurrentLiabilities": "other_current_liabilities",
+    "totalNonCurrentLiabilities": "total_non_current_liabilities",
+    "longTermDebt": "long_term_debt",
+    "longTermDebtNoncurrent": "long_term_debt",
+    "otherNonCurrentLiabilities": "other_non_current_liabilities",
+    "totalShareholderEquity": "total_stockholders_equity",
+    "commonStock": "common_stock",
+    "retainedEarnings": "retained_earnings",
+    "treasuryStock": "treasury_stock",
+    "commonStockSharesOutstanding": "shares_outstanding",
+}
+
+ALPHAVANTAGE_INCOME_STATEMENT_MAPPING = {
+    "fiscalDateEnding": "fiscal_date",
+    "reportedCurrency": "reported_currency",
+    "totalRevenue": "total_revenue",
+    "costOfRevenue": "cost_of_revenue",
+    "costofGoodsAndServicesSold": "cost_of_revenue",
+    "grossProfit": "gross_profit",
+    "operatingExpenses": "operating_expenses",
+    "researchAndDevelopment": "research_and_development",
+    "sellingGeneralAndAdministrative": "selling_general_administrative",
+    "depreciationAndAmortization": "depreciation_and_amortization",
+    "operatingIncome": "operating_income",
+    "interestIncome": "interest_income",
+    "interestExpense": "interest_expense",
+    "otherNonOperatingIncome": "other_income_expense",
+    "incomeBeforeTax": "income_before_tax",
+    "incomeTaxExpense": "income_tax_expense",
+    "netIncome": "net_income",
+    "netIncomeFromContinuingOperations": "net_income_continuing_operations",
+    "ebit": "ebit",
+    "ebitda": "ebitda",
+}
+
+ALPHAVANTAGE_CASH_FLOW_MAPPING = {
+    "fiscalDateEnding": "fiscal_date",
+    "reportedCurrency": "reported_currency",
+    "operatingCashflow": "operating_cash_flow",
+    "netIncome": "net_income",
+    "depreciationDepletionAndAmortization": "depreciation_and_amortization",
+    "deferredIncomeTax": "deferred_income_tax",
+    "changeInOperatingLiabilities": "change_in_payables",
+    "changeInOperatingAssets": "change_in_receivables",
+    "changeInReceivables": "change_in_receivables",
+    "changeInInventory": "change_in_inventory",
+    "cashflowFromInvestment": "investing_cash_flow",
+    "capitalExpenditures": "capital_expenditure",
+    "cashflowFromFinancing": "financing_cash_flow",
+    "dividendPayout": "dividends_paid",
+    "dividendPayoutCommonStock": "dividends_paid",
+    "paymentsForRepurchaseOfCommonStock": "stock_repurchased",
+    "proceedsFromIssuanceOfCommonStock": "stock_issued",
+    "proceedsFromRepaymentOfShortTermDebt": "debt_repayment",
+    "changeInCashAndCashEquivalents": "net_change_in_cash",
+}
+
 
 def normalize_field_name(raw_name: str, mapping: Dict[str, str]) -> Optional[str]:
     """Convert a raw field name to standardized name using mapping."""
     return mapping.get(raw_name)
 
 
-def apply_mapping(data: Dict[str, Any], mapping: Dict[str, str]) -> Dict[str, Any]:
-    """Apply field name mapping to a data dictionary."""
+def parse_numeric_value(value: Any) -> Any:
+    """
+    Parse a value that might be a formatted string into a numeric value.
+
+    Handles formats like:
+    - "$27.47B" -> 27470000000.0
+    - "$1.5M" -> 1500000.0
+    - "$250K" -> 250000.0
+    - "27.47B" -> 27470000000.0
+    - "-$1.5M" -> -1500000.0
+    - Already numeric values -> returned as-is
+    - None/empty -> None
+
+    Args:
+        value: The value to parse (string, number, or None)
+
+    Returns:
+        Parsed numeric value or original value if not parseable
+    """
+    if value is None:
+        return None
+
+    # Already a number
+    if isinstance(value, (int, float)):
+        return value
+
+    # Not a string, return as-is
+    if not isinstance(value, str):
+        return value
+
+    # Empty string
+    value = value.strip()
+    if not value or value == '-' or value.lower() == 'none':
+        return None
+
+    try:
+        # Remove currency symbols and commas
+        clean = value.replace('$', '').replace(',', '').strip()
+
+        # Check for negative sign
+        negative = False
+        if clean.startswith('-'):
+            negative = True
+            clean = clean[1:].strip()
+        elif clean.startswith('(') and clean.endswith(')'):
+            negative = True
+            clean = clean[1:-1].strip()
+
+        # Handle suffixes (B, M, K, T)
+        multiplier = 1.0
+        if clean.endswith('T') or clean.endswith('t'):
+            multiplier = 1e12
+            clean = clean[:-1]
+        elif clean.endswith('B') or clean.endswith('b'):
+            multiplier = 1e9
+            clean = clean[:-1]
+        elif clean.endswith('M') or clean.endswith('m'):
+            multiplier = 1e6
+            clean = clean[:-1]
+        elif clean.endswith('K') or clean.endswith('k'):
+            multiplier = 1e3
+            clean = clean[:-1]
+
+        # Handle percentage
+        if clean.endswith('%'):
+            clean = clean[:-1]
+            multiplier = 0.01
+
+        # Parse the number
+        result = float(clean) * multiplier
+
+        if negative:
+            result = -result
+
+        return result
+
+    except (ValueError, AttributeError):
+        # Could not parse, return original
+        return value
+
+
+def apply_mapping(data: Dict[str, Any], mapping: Dict[str, str], strict: bool = True) -> Dict[str, Any]:
+    """
+    Apply field name mapping to a data dictionary.
+
+    Args:
+        data: Raw data dictionary from provider
+        mapping: Field name mapping (raw -> canonical)
+        strict: If True, only include fields that have mappings. If False, include unmapped fields with original names.
+
+    Returns:
+        Dictionary with normalized field names and parsed numeric values
+    """
     result = {}
     for raw_key, value in data.items():
-        normalized_key = mapping.get(raw_key, raw_key)
-        if normalized_key and value is not None:
-            result[normalized_key] = value
+        normalized_key = mapping.get(raw_key)
+
+        if normalized_key:
+            # Parse the value to numeric if possible
+            parsed_value = parse_numeric_value(value)
+            if parsed_value is not None:
+                result[normalized_key] = parsed_value
+        elif not strict and value is not None:
+            # In non-strict mode, keep unmapped fields with parsed values
+            parsed_value = parse_numeric_value(value)
+            if parsed_value is not None:
+                result[raw_key] = parsed_value
+
     return result

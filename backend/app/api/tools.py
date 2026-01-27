@@ -432,7 +432,8 @@ async def fetch_fundamentals(
     frequency: str = Query("quarterly", description="Frequency: quarterly or annual"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Use either this OR lookback_periods."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
-    lookback_periods: Optional[int] = Query(None, description="Number of periods to look back. Use either this OR start_date. Default: 8")
+    lookback_periods: Optional[int] = Query(None, description="Number of periods to look back. Use either this OR start_date. Default: 8"),
+    merge: bool = Query(False, description="If true and multiple providers are specified, merge data from all providers (10-day date tolerance). If false, use fallback (first successful provider).")
 ):
     """
     Fetch fundamental data for a ticker using the dataproviders.
@@ -478,28 +479,47 @@ async def fetch_fundamentals(
         if data_type == "overview":
             return await _fetch_fundamentals_overview(symbol, provider, end_dt)
 
-        # Use FundamentalsService for multi-provider support with priority fallback
+        # Use FundamentalsService for multi-provider support with priority fallback or merge
         if provider_list and len(provider_list) > 0:
             from dataproviders.fundamentals.service import FundamentalsService
             service = FundamentalsService(providers=provider_list)
 
             # Map data_type to service method
             # Support both old names (cashflow_statement, past_earnings) and new names (cash_flow, earnings)
+            # Use merged methods if merge=True, otherwise use fallback methods
             if data_type in ("balance_sheet",):
-                result = service.get_balance_sheet(
-                    symbol=symbol, frequency=frequency, end_date=end_dt,
-                    start_date=start_dt, lookback_periods=lookback_periods
-                )
+                if merge and len(provider_list) > 1:
+                    result = service.get_balance_sheet_merged(
+                        symbol=symbol, frequency=frequency, end_date=end_dt,
+                        start_date=start_dt, lookback_periods=lookback_periods
+                    )
+                else:
+                    result = service.get_balance_sheet(
+                        symbol=symbol, frequency=frequency, end_date=end_dt,
+                        start_date=start_dt, lookback_periods=lookback_periods
+                    )
             elif data_type in ("income_statement",):
-                result = service.get_income_statement(
-                    symbol=symbol, frequency=frequency, end_date=end_dt,
-                    start_date=start_dt, lookback_periods=lookback_periods
-                )
+                if merge and len(provider_list) > 1:
+                    result = service.get_income_statement_merged(
+                        symbol=symbol, frequency=frequency, end_date=end_dt,
+                        start_date=start_dt, lookback_periods=lookback_periods
+                    )
+                else:
+                    result = service.get_income_statement(
+                        symbol=symbol, frequency=frequency, end_date=end_dt,
+                        start_date=start_dt, lookback_periods=lookback_periods
+                    )
             elif data_type in ("cash_flow", "cashflow_statement"):
-                result = service.get_cash_flow(
-                    symbol=symbol, frequency=frequency, end_date=end_dt,
-                    start_date=start_dt, lookback_periods=lookback_periods
-                )
+                if merge and len(provider_list) > 1:
+                    result = service.get_cash_flow_merged(
+                        symbol=symbol, frequency=frequency, end_date=end_dt,
+                        start_date=start_dt, lookback_periods=lookback_periods
+                    )
+                else:
+                    result = service.get_cash_flow(
+                        symbol=symbol, frequency=frequency, end_date=end_dt,
+                        start_date=start_dt, lookback_periods=lookback_periods
+                    )
             elif data_type in ("earnings", "past_earnings"):
                 result = service.get_earnings(
                     symbol=symbol, frequency=frequency, end_date=end_dt,

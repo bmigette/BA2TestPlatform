@@ -6,7 +6,7 @@ providers with fallback support and data normalization.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Literal
 
 from .models import (
@@ -21,10 +21,109 @@ from .models import (
     FMP_BALANCE_SHEET_MAPPING,
     FMP_INCOME_STATEMENT_MAPPING,
     FMP_CASH_FLOW_MAPPING,
+    ALPHAVANTAGE_BALANCE_SHEET_MAPPING,
+    ALPHAVANTAGE_INCOME_STATEMENT_MAPPING,
+    ALPHAVANTAGE_CASH_FLOW_MAPPING,
     apply_mapping,
+    parse_numeric_value,
 )
 
 logger = logging.getLogger(__name__)
+
+# Date tolerance for matching periods across providers (in days)
+DATE_TOLERANCE_DAYS = 10
+
+
+def parse_date(date_str: str) -> Optional[datetime]:
+    """Parse a date string to datetime object."""
+    if not date_str:
+        return None
+    try:
+        # Try common formats
+        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]:
+            try:
+                return datetime.strptime(date_str.split('T')[0].split(' ')[0], "%Y-%m-%d")
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
+
+
+def dates_match(date1: str, date2: str, tolerance_days: int = DATE_TOLERANCE_DAYS) -> bool:
+    """Check if two dates are within the tolerance period."""
+    d1 = parse_date(date1)
+    d2 = parse_date(date2)
+    if not d1 or not d2:
+        return False
+    return abs((d1 - d2).days) <= tolerance_days
+
+
+def merge_periods(
+    all_periods: List[List[Dict[str, Any]]],
+    provider_names: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    Merge periods from multiple providers.
+
+    For overlapping dates (within DATE_TOLERANCE_DAYS), takes data from the
+    first provider (highest priority), filling in missing fields from
+    subsequent providers.
+
+    Args:
+        all_periods: List of period lists, one per provider (in priority order)
+        provider_names: List of provider names corresponding to all_periods
+
+    Returns:
+        Merged list of periods with combined data
+    """
+    if not all_periods:
+        return []
+
+    # Use first provider's periods as base
+    merged = {}
+    used_providers = {}
+
+    # Process each provider in priority order
+    for provider_idx, periods in enumerate(all_periods):
+        provider_name = provider_names[provider_idx] if provider_idx < len(provider_names) else f"provider_{provider_idx}"
+
+        for period in periods:
+            fiscal_date = period.get("fiscal_date", "")
+            if not fiscal_date:
+                continue
+
+            # Find if this date matches an existing period
+            matched_key = None
+            for existing_key in merged.keys():
+                if dates_match(existing_key, fiscal_date):
+                    matched_key = existing_key
+                    break
+
+            if matched_key:
+                # Merge with existing period - only add fields that are missing
+                existing = merged[matched_key]
+                for key, value in period.items():
+                    if key not in existing or existing[key] is None:
+                        existing[key] = value
+                # Track which providers contributed
+                if matched_key not in used_providers:
+                    used_providers[matched_key] = []
+                if provider_name not in used_providers[matched_key]:
+                    used_providers[matched_key].append(provider_name)
+            else:
+                # New period
+                merged[fiscal_date] = period.copy()
+                used_providers[fiscal_date] = [provider_name]
+
+    # Add provider info to each period
+    result = []
+    for fiscal_date in sorted(merged.keys(), reverse=True):
+        period_data = merged[fiscal_date]
+        period_data["_sources"] = used_providers.get(fiscal_date, [])
+        result.append(period_data)
+
+    return result
 
 
 class FundamentalsService:
@@ -321,6 +420,66 @@ class FundamentalsService:
 
         return {"error": "Failed to get earnings from income statement"}
 
+    def _normalize_period(
+        self,
+        raw_period: Dict[str, Any],
+        provider_name: str,
+        mapping_type: str
+    ) -> Dict[str, Any]:
+        """
+        Normalize a single period from any provider.
+
+        Args:
+            raw_period: Raw period data from provider
+            provider_name: Name of the provider
+            mapping_type: Type of mapping ('balance_sheet', 'income_statement', 'cash_flow')
+
+        Returns:
+            Normalized period dictionary with standardized field names
+        """
+        # Select appropriate mapping
+        mappings = {
+            "yfinance": {
+                "balance_sheet": YFINANCE_BALANCE_SHEET_MAPPING,
+                "income_statement": YFINANCE_INCOME_STATEMENT_MAPPING,
+                "cash_flow": YFINANCE_CASH_FLOW_MAPPING,
+            },
+            "fmp": {
+                "balance_sheet": FMP_BALANCE_SHEET_MAPPING,
+                "income_statement": FMP_INCOME_STATEMENT_MAPPING,
+                "cash_flow": FMP_CASH_FLOW_MAPPING,
+            },
+            "alphavantage": {
+                "balance_sheet": ALPHAVANTAGE_BALANCE_SHEET_MAPPING,
+                "income_statement": ALPHAVANTAGE_INCOME_STATEMENT_MAPPING,
+                "cash_flow": ALPHAVANTAGE_CASH_FLOW_MAPPING,
+            },
+        }
+
+        mapping = mappings.get(provider_name, {}).get(mapping_type, {})
+
+        if provider_name == "yfinance":
+            # YFinance uses 'date' and 'items' structure
+            fiscal_date = raw_period.get("date", "")
+            items = raw_period.get("items", {})
+            normalized = apply_mapping(items, mapping, strict=True)
+            normalized["fiscal_date"] = fiscal_date
+        elif provider_name in ("fmp", "alphavantage"):
+            # FMP and AlphaVantage use flat structure
+            normalized = apply_mapping(raw_period, mapping, strict=True)
+        else:
+            # Unknown provider - try to extract fiscal_date and parse values
+            normalized = {}
+            for key, value in raw_period.items():
+                if key in ("fiscalDateEnding", "fiscal_date_ending", "date"):
+                    normalized["fiscal_date"] = value
+                else:
+                    parsed = parse_numeric_value(value)
+                    if parsed is not None:
+                        normalized[key] = parsed
+
+        return normalized
+
     def _normalize_balance_sheet(
         self,
         result: Dict[str, Any],
@@ -333,22 +492,9 @@ class FundamentalsService:
         raw_periods = result.get("periods", result.get("statements", []))
 
         for raw_period in raw_periods:
-            if provider_name == "yfinance":
-                # YFinance uses 'date' and 'items' structure
-                fiscal_date = raw_period.get("date", "")
-                items = raw_period.get("items", {})
-                normalized = apply_mapping(items, YFINANCE_BALANCE_SHEET_MAPPING)
-                normalized["fiscal_date"] = fiscal_date
-            elif provider_name == "fmp":
-                # FMP uses flat structure with fiscal_date_ending
-                normalized = apply_mapping(raw_period, FMP_BALANCE_SHEET_MAPPING)
-            else:
-                # AlphaVantage and others - use as-is for now
-                normalized = raw_period
-                if "fiscalDateEnding" in normalized:
-                    normalized["fiscal_date"] = normalized.pop("fiscalDateEnding")
-
-            periods.append(normalized)
+            normalized = self._normalize_period(raw_period, provider_name, "balance_sheet")
+            if normalized.get("fiscal_date"):
+                periods.append(normalized)
 
         return FinancialStatementResponse(
             symbol=result.get("symbol", ""),
@@ -372,19 +518,9 @@ class FundamentalsService:
         raw_periods = result.get("periods", result.get("statements", []))
 
         for raw_period in raw_periods:
-            if provider_name == "yfinance":
-                fiscal_date = raw_period.get("date", "")
-                items = raw_period.get("items", {})
-                normalized = apply_mapping(items, YFINANCE_INCOME_STATEMENT_MAPPING)
-                normalized["fiscal_date"] = fiscal_date
-            elif provider_name == "fmp":
-                normalized = apply_mapping(raw_period, FMP_INCOME_STATEMENT_MAPPING)
-            else:
-                normalized = raw_period
-                if "fiscalDateEnding" in normalized:
-                    normalized["fiscal_date"] = normalized.pop("fiscalDateEnding")
-
-            periods.append(normalized)
+            normalized = self._normalize_period(raw_period, provider_name, "income_statement")
+            if normalized.get("fiscal_date"):
+                periods.append(normalized)
 
         return FinancialStatementResponse(
             symbol=result.get("symbol", ""),
@@ -408,19 +544,9 @@ class FundamentalsService:
         raw_periods = result.get("periods", result.get("statements", []))
 
         for raw_period in raw_periods:
-            if provider_name == "yfinance":
-                fiscal_date = raw_period.get("date", "")
-                items = raw_period.get("items", {})
-                normalized = apply_mapping(items, YFINANCE_CASH_FLOW_MAPPING)
-                normalized["fiscal_date"] = fiscal_date
-            elif provider_name == "fmp":
-                normalized = apply_mapping(raw_period, FMP_CASH_FLOW_MAPPING)
-            else:
-                normalized = raw_period
-                if "fiscalDateEnding" in normalized:
-                    normalized["fiscal_date"] = normalized.pop("fiscalDateEnding")
-
-            periods.append(normalized)
+            normalized = self._normalize_period(raw_period, provider_name, "cash_flow")
+            if normalized.get("fiscal_date"):
+                periods.append(normalized)
 
         return FinancialStatementResponse(
             symbol=result.get("symbol", ""),
@@ -447,10 +573,10 @@ class FundamentalsService:
             normalized = {
                 "fiscal_date": raw_earning.get("fiscal_date_ending", raw_earning.get("fiscal_date", "")),
                 "report_date": raw_earning.get("report_date"),
-                "reported_eps": raw_earning.get("reported_eps"),
-                "estimated_eps": raw_earning.get("estimated_eps"),
-                "surprise": raw_earning.get("surprise"),
-                "surprise_percent": raw_earning.get("surprise_percent"),
+                "reported_eps": parse_numeric_value(raw_earning.get("reported_eps")),
+                "estimated_eps": parse_numeric_value(raw_earning.get("estimated_eps")),
+                "surprise": parse_numeric_value(raw_earning.get("surprise")),
+                "surprise_percent": parse_numeric_value(raw_earning.get("surprise_percent")),
             }
             # Remove None values
             normalized = {k: v for k, v in normalized.items() if v is not None}
@@ -464,6 +590,167 @@ class FundamentalsService:
             end_date=result.get("end_date"),
             periods=periods,
             period_count=len(periods)
+        )
+
+
+    def get_balance_sheet_merged(
+        self,
+        symbol: str,
+        frequency: Literal["quarterly", "annual"] = "quarterly",
+        end_date: datetime = None,
+        start_date: Optional[datetime] = None,
+        lookback_periods: Optional[int] = None,
+    ) -> FinancialStatementResponse:
+        """
+        Get balance sheet data from ALL providers and merge them.
+
+        Periods with dates within 10 days are considered the same period.
+        Data is merged with priority given to providers in the order specified.
+        """
+        end_date = end_date or datetime.now()
+        all_periods = []
+        provider_names = []
+
+        for provider_name in self.provider_priority:
+            if provider_name not in self._providers:
+                continue
+
+            try:
+                provider = self._providers[provider_name]
+                result = provider.get_balance_sheet(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_date,
+                    start_date=start_date,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+
+                if isinstance(result, dict) and not result.get("error"):
+                    normalized = self._normalize_balance_sheet(result, provider_name)
+                    if normalized.periods:
+                        all_periods.append(normalized.periods)
+                        provider_names.append(provider_name)
+                        logger.info(f"Got {len(normalized.periods)} balance sheet periods from {provider_name}")
+
+            except Exception as e:
+                logger.warning(f"Provider {provider_name} failed for {symbol}: {e}")
+                continue
+
+        # Merge all periods
+        merged = merge_periods(all_periods, provider_names)
+        primary_provider = provider_names[0] if provider_names else "none"
+
+        return FinancialStatementResponse(
+            symbol=symbol,
+            provider=",".join(provider_names) if provider_names else "none",
+            statement_type="balance_sheet",
+            frequency=frequency,
+            end_date=end_date.isoformat() if end_date else None,
+            periods=merged,
+            period_count=len(merged)
+        )
+
+    def get_income_statement_merged(
+        self,
+        symbol: str,
+        frequency: Literal["quarterly", "annual"] = "quarterly",
+        end_date: datetime = None,
+        start_date: Optional[datetime] = None,
+        lookback_periods: Optional[int] = None,
+    ) -> FinancialStatementResponse:
+        """Get income statement data from ALL providers and merge them."""
+        end_date = end_date or datetime.now()
+        all_periods = []
+        provider_names = []
+
+        for provider_name in self.provider_priority:
+            if provider_name not in self._providers:
+                continue
+
+            try:
+                provider = self._providers[provider_name]
+                result = provider.get_income_statement(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_date,
+                    start_date=start_date,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+
+                if isinstance(result, dict) and not result.get("error"):
+                    normalized = self._normalize_income_statement(result, provider_name)
+                    if normalized.periods:
+                        all_periods.append(normalized.periods)
+                        provider_names.append(provider_name)
+                        logger.info(f"Got {len(normalized.periods)} income statement periods from {provider_name}")
+
+            except Exception as e:
+                logger.warning(f"Provider {provider_name} failed for {symbol}: {e}")
+                continue
+
+        merged = merge_periods(all_periods, provider_names)
+
+        return FinancialStatementResponse(
+            symbol=symbol,
+            provider=",".join(provider_names) if provider_names else "none",
+            statement_type="income_statement",
+            frequency=frequency,
+            end_date=end_date.isoformat() if end_date else None,
+            periods=merged,
+            period_count=len(merged)
+        )
+
+    def get_cash_flow_merged(
+        self,
+        symbol: str,
+        frequency: Literal["quarterly", "annual"] = "quarterly",
+        end_date: datetime = None,
+        start_date: Optional[datetime] = None,
+        lookback_periods: Optional[int] = None,
+    ) -> FinancialStatementResponse:
+        """Get cash flow data from ALL providers and merge them."""
+        end_date = end_date or datetime.now()
+        all_periods = []
+        provider_names = []
+
+        for provider_name in self.provider_priority:
+            if provider_name not in self._providers:
+                continue
+
+            try:
+                provider = self._providers[provider_name]
+                result = provider.get_cashflow_statement(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_date,
+                    start_date=start_date,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+
+                if isinstance(result, dict) and not result.get("error"):
+                    normalized = self._normalize_cash_flow(result, provider_name)
+                    if normalized.periods:
+                        all_periods.append(normalized.periods)
+                        provider_names.append(provider_name)
+                        logger.info(f"Got {len(normalized.periods)} cash flow periods from {provider_name}")
+
+            except Exception as e:
+                logger.warning(f"Provider {provider_name} failed for {symbol}: {e}")
+                continue
+
+        merged = merge_periods(all_periods, provider_names)
+
+        return FinancialStatementResponse(
+            symbol=symbol,
+            provider=",".join(provider_names) if provider_names else "none",
+            statement_type="cash_flow",
+            frequency=frequency,
+            end_date=end_date.isoformat() if end_date else None,
+            periods=merged,
+            period_count=len(merged)
         )
 
 

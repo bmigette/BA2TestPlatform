@@ -60,6 +60,7 @@ interface SentimentConfig {
 interface FundamentalsConfig {
   enabled: boolean;
   statementTypes: string[];  // balance_sheet, income_statement, cash_flow, earnings
+  lookbackStatements: number;  // Number of historical statement periods to include (e.g., 2 means last 2 quarters)
   macroIndicators: string[];
   fundamentalsProviders: string[];  // Priority-ordered list of providers
   macroProvider: string;
@@ -121,6 +122,7 @@ const getDefaultWizardData = (): WizardData => ({
   fundamentals: {
     enabled: false,
     statementTypes: ['balance_sheet', 'income_statement', 'cash_flow'],
+    lookbackStatements: 2,  // Include last 2 statement periods
     macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment'],
     fundamentalsProviders: ['yfinance', 'fmp', 'alphavantage'],  // Priority order
     macroProvider: 'fred'
@@ -164,6 +166,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       const fundamentalsConfig: FundamentalsConfig = {
         enabled: savedFundamentals.enabled || false,
         statementTypes: savedFundamentals.statementTypes || savedFundamentals.statement_types || savedFundamentals.metrics || ['balance_sheet', 'income_statement', 'cash_flow'],
+        lookbackStatements: savedFundamentals.lookbackStatements || savedFundamentals.lookback_statements || 2,
         macroIndicators: savedFundamentals.macroIndicators || savedFundamentals.macro_indicators || ['interest_rate', 'gdp', 'inflation', 'unemployment'],
         fundamentalsProviders: savedFundamentals.fundamentalsProviders || savedFundamentals.fundamentals_providers ||
           (savedFundamentals.fundamentals_provider ? [savedFundamentals.fundamentals_provider] : ['yfinance', 'fmp', 'alphavantage']),
@@ -411,6 +414,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       const fundamentalsConfig = wizardData.fundamentals.enabled ? {
         enabled: true,
         statement_types: wizardData.fundamentals.statementTypes,
+        lookback_statements: wizardData.fundamentals.lookbackStatements,
         macro_indicators: wizardData.fundamentals.macroIndicators,
         fundamentals_providers: wizardData.fundamentals.fundamentalsProviders,
         macro_provider: wizardData.fundamentals.macroProvider
@@ -1053,6 +1057,32 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
           </div>
 
+          {/* Lookback Statements */}
+          <div>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+              Historical Statement Periods
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={wizardData.fundamentals.lookbackStatements}
+                onChange={(e) => setWizardData({
+                  ...wizardData,
+                  fundamentals: { ...wizardData.fundamentals, lookbackStatements: parseInt(e.target.value) || 2 }
+                })}
+                className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <span className="text-sm text-gray-600 dark:text-gray-400">
+                Include the last {wizardData.fundamentals.lookbackStatements} {wizardData.fundamentals.lookbackStatements === 1 ? 'period' : 'periods'} of each statement type in each data point
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              For quarterly statements, 2 periods = last 2 quarters. Useful for showing trends.
+            </p>
+          </div>
+
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Macro Economic Indicators</label>
             <div className="grid grid-cols-2 gap-2">
@@ -1246,6 +1276,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           {wizardData.fundamentals.enabled && (
             <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 pl-6">
               <div>Statements: {wizardData.fundamentals.statementTypes.join(', ')}</div>
+              <div>Lookback: {wizardData.fundamentals.lookbackStatements} period{wizardData.fundamentals.lookbackStatements !== 1 ? 's' : ''}</div>
               <div>Providers: {wizardData.fundamentals.fundamentalsProviders.join(' → ')}</div>
               <div>Macro: {wizardData.fundamentals.macroIndicators.join(', ')}</div>
             </div>
