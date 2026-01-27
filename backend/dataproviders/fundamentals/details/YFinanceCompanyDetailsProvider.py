@@ -166,11 +166,14 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
                 # Convert to datetime for comparison
                 if hasattr(period_date, 'to_pydatetime'):
                     period_dt = period_date.to_pydatetime()
+                    # Remove timezone info to avoid tz-aware/tz-naive comparison issues
+                    if period_dt.tzinfo is not None:
+                        period_dt = period_dt.replace(tzinfo=None)
                 elif hasattr(period_date, 'date'):
                     period_dt = datetime.combine(period_date.date(), datetime.min.time())
                 else:
                     continue
-                
+
                 # Filter by date range
                 if period_dt > end_date:
                     continue
@@ -286,11 +289,14 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
                 # Convert to datetime for comparison
                 if hasattr(period_date, 'to_pydatetime'):
                     period_dt = period_date.to_pydatetime()
+                    # Remove timezone info to avoid tz-aware/tz-naive comparison issues
+                    if period_dt.tzinfo is not None:
+                        period_dt = period_dt.replace(tzinfo=None)
                 elif hasattr(period_date, 'date'):
                     period_dt = datetime.combine(period_date.date(), datetime.min.time())
                 else:
                     continue
-                
+
                 # Filter by date range
                 if period_dt > end_date:
                     continue
@@ -406,11 +412,14 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
                 # Convert to datetime for comparison
                 if hasattr(period_date, 'to_pydatetime'):
                     period_dt = period_date.to_pydatetime()
+                    # Remove timezone info to avoid tz-aware/tz-naive comparison issues
+                    if period_dt.tzinfo is not None:
+                        period_dt = period_dt.replace(tzinfo=None)
                 elif hasattr(period_date, 'date'):
                     period_dt = datetime.combine(period_date.date(), datetime.min.time())
                 else:
                     continue
-                
+
                 # Filter by date range
                 if period_dt > end_date:
                     continue
@@ -608,14 +617,19 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
                 # Convert index to datetime for comparison
                 if hasattr(idx, 'to_pydatetime'):
                     period_dt = idx.to_pydatetime()
+                    # Remove timezone info to avoid tz-aware/tz-naive comparison issues
+                    if period_dt.tzinfo is not None:
+                        period_dt = period_dt.replace(tzinfo=None)
                 elif hasattr(idx, 'date'):
                     period_dt = datetime.combine(idx.date(), datetime.min.time())
                 else:
                     try:
                         period_dt = pd.to_datetime(idx).to_pydatetime()
+                        if period_dt.tzinfo is not None:
+                            period_dt = period_dt.replace(tzinfo=None)
                     except:
                         continue
-                
+
                 # Filter by end_date
                 if period_dt > end_date:
                     continue

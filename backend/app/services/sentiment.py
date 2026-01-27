@@ -246,6 +246,9 @@ class SentimentService:
         """
         result_df = ohlc_df.copy()
         result_df['Date'] = pd.to_datetime(result_df['Date'])
+        # Remove timezone info to avoid tz-aware/tz-naive mixing
+        if result_df['Date'].dt.tz is not None:
+            result_df['Date'] = result_df['Date'].dt.tz_localize(None)
 
         # Analyze articles if not already analyzed
         if news_articles and 'sentiment' not in news_articles[0]:
@@ -255,13 +258,20 @@ class SentimentService:
         if news_articles:
             news_df = pd.DataFrame(news_articles)
             news_df['date'] = pd.to_datetime(news_df['date'])
+            # Remove timezone info to avoid tz-aware/tz-naive mixing
+            if news_df['date'].dt.tz is not None:
+                news_df['date'] = news_df['date'].dt.tz_localize(None)
         else:
             news_df = pd.DataFrame(columns=['date', 'sentiment', 'impact_timeframe'])
 
         # Create all sentiment feature columns
-        feature_columns = []
+        feature_columns = ['news_count']  # Total news count for the day
         for period_name, period_days in self.LOOKBACK_PERIODS.items():
+            # Add total count per period
+            feature_columns.append(f'news_{period_name}_count')
+            # Add sentiment counts per period
             for sentiment in self.SENTIMENT_CATEGORIES:
+                feature_columns.append(f'news_{period_name}_{sentiment}')
                 for impact in self.IMPACT_TIMEFRAMES:
                     col_name = f'news_{period_name}_{sentiment}_{impact}'
                     feature_columns.append(col_name)
@@ -273,6 +283,12 @@ class SentimentService:
         # Calculate features for each row
         for idx, row in result_df.iterrows():
             row_date = row['Date']
+            row_date_only = row_date.date() if hasattr(row_date, 'date') else row_date
+
+            # Count news for this exact day
+            if len(news_df) > 0:
+                day_mask = news_df['date'].dt.date == row_date_only
+                result_df.at[idx, 'news_count'] = day_mask.sum()
 
             for period_name, period_days in self.LOOKBACK_PERIODS.items():
                 start_date = row_date - timedelta(days=period_days)
@@ -281,7 +297,15 @@ class SentimentService:
                 mask = (news_df['date'] >= start_date) & (news_df['date'] <= row_date)
                 period_news = news_df[mask] if len(news_df) > 0 else pd.DataFrame()
 
+                # Total count for this period
+                result_df.at[idx, f'news_{period_name}_count'] = len(period_news)
+
                 for sentiment in self.SENTIMENT_CATEGORIES:
+                    # Count by sentiment (all impacts)
+                    if len(period_news) > 0:
+                        sentiment_count = len(period_news[period_news['sentiment'] == sentiment])
+                        result_df.at[idx, f'news_{period_name}_{sentiment}'] = sentiment_count
+
                     for impact in self.IMPACT_TIMEFRAMES:
                         col_name = f'news_{period_name}_{sentiment}_{impact}'
 

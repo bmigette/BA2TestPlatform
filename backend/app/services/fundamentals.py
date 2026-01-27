@@ -364,6 +364,16 @@ class FundamentalsService:
         if 'Date' in result_df.columns:
             result_df['Date'] = pd.to_datetime(result_df['Date'])
 
+        # Filter to only valid statement types
+        valid_statement_types = [st for st in statement_types if st in STATEMENT_PREFIXES]
+        invalid_types = [st for st in statement_types if st not in STATEMENT_PREFIXES]
+        if invalid_types:
+            logger.warning(f"Ignoring invalid statement types (use legacy mode for these): {invalid_types}")
+
+        if not valid_statement_types:
+            logger.warning("No valid statement types provided")
+            return result_df
+
         # Import the provider-based service
         try:
             from dataproviders.fundamentals.service import FundamentalsService as ProviderService
@@ -386,12 +396,8 @@ class FundamentalsService:
         # Fetch extra periods for lookback (e.g., if lookback=2, fetch 2 extra)
         fetch_periods = lookback_statements + 8  # Extra buffer for point-in-time
 
-        # Process each statement type
-        for stmt_type in statement_types:
-            if stmt_type not in STATEMENT_PREFIXES:
-                logger.warning(f"Unknown statement type: {stmt_type}")
-                continue
-
+        # Process each valid statement type
+        for stmt_type in valid_statement_types:
             prefix = STATEMENT_PREFIXES[stmt_type]
             key_fields = STATEMENT_KEY_FIELDS.get(stmt_type, [])
 
@@ -495,5 +501,5 @@ class FundamentalsService:
                     for field in key_fields:
                         result_df[f'{prefix}_q{q_idx}_{field}'] = np.nan
 
-        logger.info(f"Created statement features for {ticker}: {statement_types} with {lookback_statements} periods")
+        logger.info(f"Created statement features for {ticker}: {valid_statement_types} with {lookback_statements} periods")
         return result_df
