@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader, Settings, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   XAxis,
   YAxis,
@@ -60,6 +60,15 @@ interface SentimentMarker {
   source?: string;
 }
 
+interface NewsFrequency {
+  date: string;
+  count: number;
+  positiveCount: number;
+  negativeCount: number;
+  neutralCount: number;
+  dominantSentiment: 'positive' | 'neutral' | 'negative';
+}
+
 interface PredictionTarget {
   profitPct: number;
   maxDd: number;
@@ -105,6 +114,34 @@ interface IndicatorVisibility {
   showSentiment: boolean;
   showTargets: boolean;
 }
+
+interface ColumnInfo {
+  name: string;
+  dtype: string;
+  category: string;
+}
+
+interface DatasetColumns {
+  dataset_id: number;
+  total_columns: number;
+  category_counts: Record<string, number>;
+  columns: Record<string, ColumnInfo[]>;
+  all_columns: string[];
+}
+
+// Colors for dynamic indicators
+const INDICATOR_COLORS = [
+  '#3B82F6', // blue
+  '#F97316', // orange
+  '#10B981', // green
+  '#8B5CF6', // purple
+  '#EC4899', // pink
+  '#06B6D4', // cyan
+  '#F59E0B', // amber
+  '#6366F1', // indigo
+  '#84CC16', // lime
+  '#EF4444', // red
+];
 
 // Custom Candlestick component for Recharts
 const Candlestick = (props: any) => {
@@ -171,6 +208,13 @@ const DatasetDetails: React.FC = () => {
     showTargets: true,
   });
 
+  // Dynamic indicators from dataset columns
+  const [datasetColumns, setDatasetColumns] = useState<DatasetColumns | null>(null);
+  const [columnsLoading, setColumnsLoading] = useState(false);
+  const [showIndicatorPopup, setShowIndicatorPopup] = useState(false);
+  const [enabledIndicators, setEnabledIndicators] = useState<Set<string>>(new Set());
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['technical']));
+
   // Fetch real sentiment markers from API
   const fetchSentimentMarkers = async (datasetId: number) => {
     setSentimentLoading(true);
@@ -203,6 +247,56 @@ const DatasetDetails: React.FC = () => {
     } finally {
       setSentimentLoading(false);
     }
+  };
+
+  // Fetch dataset columns for indicator selection
+  const fetchDatasetColumns = async (datasetId: number) => {
+    setColumnsLoading(true);
+    try {
+      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/columns`);
+      if (response.ok) {
+        const data = await response.json();
+        setDatasetColumns(data);
+      } else {
+        console.error('Failed to fetch dataset columns');
+      }
+    } catch (err) {
+      console.error('Error fetching columns:', err);
+    } finally {
+      setColumnsLoading(false);
+    }
+  };
+
+  // Toggle indicator visibility
+  const toggleDynamicIndicator = (columnName: string) => {
+    setEnabledIndicators(prev => {
+      const next = new Set(prev);
+      if (next.has(columnName)) {
+        next.delete(columnName);
+      } else {
+        next.add(columnName);
+      }
+      return next;
+    });
+  };
+
+  // Toggle category expansion in popup
+  const toggleCategory = (category: string) => {
+    setExpandedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  };
+
+  // Get color for an indicator based on its index
+  const getIndicatorColor = (columnName: string): string => {
+    const index = Array.from(enabledIndicators).indexOf(columnName);
+    return INDICATOR_COLORS[index % INDICATOR_COLORS.length];
   };
 
   // Handle dataset regeneration
@@ -431,6 +525,13 @@ const DatasetDetails: React.FC = () => {
     }
   }, [dataset?.id, indicators.showSentiment]);
 
+  // Fetch dataset columns for indicator popup
+  useEffect(() => {
+    if (dataset) {
+      fetchDatasetColumns(dataset.id);
+    }
+  }, [dataset?.id]);
+
   // Set initial zoom based on data length (show last 100 bars by default)
   useEffect(() => {
     if (chartData.length > 0 && !initialZoomSet) {
@@ -466,6 +567,56 @@ const DatasetDetails: React.FC = () => {
   };
 
   const candlestickData = prepareChartData();
+
+  // Aggregate news by date for frequency-based visualization
+  const newsFrequencyByDate = useMemo<NewsFrequency[]>(() => {
+    if (!sentimentMarkers || sentimentMarkers.length === 0) return [];
+
+    // Group markers by date
+    const byDate = new Map<string, SentimentMarker[]>();
+    sentimentMarkers.forEach(marker => {
+      const existing = byDate.get(marker.date) || [];
+      existing.push(marker);
+      byDate.set(marker.date, existing);
+    });
+
+    // Convert to NewsFrequency array
+    const frequencies: NewsFrequency[] = [];
+    byDate.forEach((markers, date) => {
+      const positiveCount = markers.filter(m => m.sentiment === 'positive').length;
+      const negativeCount = markers.filter(m => m.sentiment === 'negative').length;
+      const neutralCount = markers.filter(m => m.sentiment === 'neutral').length;
+
+      let dominantSentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
+      if (positiveCount > negativeCount && positiveCount > neutralCount) {
+        dominantSentiment = 'positive';
+      } else if (negativeCount > positiveCount && negativeCount > neutralCount) {
+        dominantSentiment = 'negative';
+      }
+
+      frequencies.push({
+        date,
+        count: markers.length,
+        positiveCount,
+        negativeCount,
+        neutralCount,
+        dominantSentiment
+      });
+    });
+
+    return frequencies;
+  }, [sentimentMarkers]);
+
+  // Calculate circle size based on news count
+  const getNewsCircleRadius = (count: number): number => {
+    const minRadius = 4;
+    const maxRadius = 16;
+    // Use log scale for better visualization
+    const maxCount = Math.max(...newsFrequencyByDate.map(n => n.count), 1);
+    if (maxCount <= 1) return minRadius;
+    const scale = (Math.log(count + 1) / Math.log(maxCount + 1));
+    return minRadius + (maxRadius - minRadius) * scale;
+  };
 
   // Zoom control functions
   const handleZoomIn = () => {
@@ -506,7 +657,7 @@ const DatasetDetails: React.FC = () => {
   const [brushKey, setBrushKey] = useState(0);
 
   // Debounce timer ref
-  const brushDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const brushDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleBrushChange = useCallback((domain: any) => {
     if (domain && domain.startIndex !== undefined && domain.endIndex !== undefined) {
@@ -820,6 +971,18 @@ const DatasetDetails: React.FC = () => {
             {indicators.volume ? <Eye size={14} /> : <EyeOff size={14} />}
             Volume
           </button>
+          <button
+            onClick={() => setShowIndicatorPopup(true)}
+            className="px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-800/50"
+          >
+            <Settings size={14} />
+            More Indicators
+            {enabledIndicators.size > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-xs bg-indigo-500 text-white rounded-full">
+                {enabledIndicators.size}
+              </span>
+            )}
+          </button>
           <div className="border-l border-gray-300 dark:border-gray-600 mx-2"></div>
           <button
             onClick={() => toggleIndicator('showSentiment')}
@@ -885,11 +1048,13 @@ const DatasetDetails: React.FC = () => {
                     <div className="w-3 h-3 rounded-full bg-red-500"></div>
                     <span className="text-gray-500 dark:text-gray-400">Negative</span>
                   </div>
+                  <span className="text-gray-400 dark:text-gray-500 mx-1">|</span>
+                  <span className="text-gray-500 dark:text-gray-400">Size = frequency</span>
                   {sentimentIsMock && (
                     <span className="text-orange-500 text-xs">(Mock Data)</span>
                   )}
                   {!sentimentIsMock && sentimentMarkers.length > 0 && (
-                    <span className="text-gray-400 text-xs">({sentimentMarkers.length} articles)</span>
+                    <span className="text-gray-400 text-xs">({sentimentMarkers.length} articles, {newsFrequencyByDate.length} days)</span>
                   )}
                 </>
               )}
@@ -1032,21 +1197,39 @@ const DatasetDetails: React.FC = () => {
                   />
                 </>
               )}
-              {/* Sentiment Markers */}
-              {indicators.showSentiment && sentimentMarkers.map((marker, idx) => {
-                const dataPoint = candlestickData.find(d => d.Date === marker.date);
+              {/* Dynamic Indicators from Dataset */}
+              {Array.from(enabledIndicators).map((columnName) => (
+                <Line
+                  key={`dynamic-${columnName}`}
+                  yAxisId="price"
+                  type="monotone"
+                  dataKey={columnName}
+                  stroke={getIndicatorColor(columnName)}
+                  strokeWidth={1.5}
+                  dot={false}
+                  name={columnName}
+                  connectNulls
+                />
+              ))}
+              {/* News Frequency Circles - size based on article count */}
+              {indicators.showSentiment && newsFrequencyByDate.map((newsFreq, idx) => {
+                const dataPoint = candlestickData.find(d => d.Date === newsFreq.date);
                 if (!dataPoint) return null;
-                const color = marker.sentiment === 'positive' ? '#10B981' :
-                              marker.sentiment === 'negative' ? '#EF4444' : '#F59E0B';
+
+                const color = newsFreq.dominantSentiment === 'positive' ? '#10B981' :
+                              newsFreq.dominantSentiment === 'negative' ? '#EF4444' : '#F59E0B';
+                const radius = getNewsCircleRadius(newsFreq.count);
+
                 return (
                   <ReferenceDot
-                    key={`sentiment-${idx}`}
-                    x={marker.date}
+                    key={`news-freq-${idx}`}
+                    x={newsFreq.date}
                     y={dataPoint.High * 1.02}
                     yAxisId="price"
-                    r={6}
+                    r={radius}
                     fill={color}
-                    stroke="#1F2937"
+                    fillOpacity={0.6}
+                    stroke={color}
                     strokeWidth={2}
                   />
                 );
@@ -1126,6 +1309,82 @@ const DatasetDetails: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Non-Chart Data Table (Fundamental, Sentiment, Macro) */}
+      {datasetColumns && chartData.length > 0 && (
+        (() => {
+          // Get columns that are NOT price or technical
+          const nonChartCategories = ['fundamental', 'sentiment', 'macro'];
+          const nonChartColumns = nonChartCategories
+            .flatMap(cat => datasetColumns.columns[cat] || [])
+            .map(c => c.name)
+            .filter(col => chartData[0] && col in chartData[0]);
+
+          if (nonChartColumns.length === 0) return null;
+
+          // Get visible data based on zoom
+          const startIdx = zoomDomain?.startIndex ?? 0;
+          const endIdx = zoomDomain?.endIndex ?? chartData.length - 1;
+          const visibleData = chartData.slice(startIdx, endIdx + 1);
+
+          // Limit displayed rows
+          const displayData = visibleData.slice(-50); // Last 50 rows
+
+          return (
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+                  Non-Chart Data
+                </h2>
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing {displayData.length} of {visibleData.length} rows ({nonChartColumns.length} columns)
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                Fundamental, sentiment, and macro data that are not displayed on the chart.
+              </p>
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">
+                        Date
+                      </th>
+                      {nonChartColumns.map(col => (
+                        <th key={col} className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                          {col}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {displayData.map((row, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                          {new Date(row.Date).toLocaleDateString()}
+                        </td>
+                        {nonChartColumns.map(col => {
+                          const value = (row as any)[col];
+                          const formatted = value === null || value === undefined
+                            ? '-'
+                            : typeof value === 'number'
+                              ? Number.isInteger(value) ? value : value.toFixed(4)
+                              : String(value);
+                          return (
+                            <td key={col} className="px-3 py-2 text-gray-900 dark:text-gray-100 whitespace-nowrap font-mono text-xs">
+                              {formatted}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()
+      )}
 
       {/* Dataset Information */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1411,6 +1670,163 @@ const DatasetDetails: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Indicator Selection Popup */}
+      {showIndicatorPopup && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                  Dataset Indicators
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Select indicators to display on the chart (loaded from dataset)
+                </p>
+              </div>
+              <button
+                onClick={() => setShowIndicatorPopup(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {columnsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader size={24} className="animate-spin text-gray-500" />
+                  <span className="ml-2 text-gray-500">Loading columns...</span>
+                </div>
+              ) : datasetColumns ? (
+                <div className="space-y-4">
+                  {/* Category sections */}
+                  {['technical', 'fundamental', 'sentiment', 'macro', 'other'].map(category => {
+                    const columns = datasetColumns.columns[category] || [];
+                    if (columns.length === 0) return null;
+
+                    const isExpanded = expandedCategories.has(category);
+                    const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
+                    const enabledCount = columns.filter(c => enabledIndicators.has(c.name)).length;
+
+                    return (
+                      <div key={category} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => toggleCategory(category)}
+                          className="w-full flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        >
+                          <div className="flex items-center gap-2">
+                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                            <span className="font-medium text-gray-900 dark:text-gray-100">
+                              {categoryLabel}
+                            </span>
+                            <span className="text-sm text-gray-500">
+                              ({columns.length} columns)
+                            </span>
+                            {enabledCount > 0 && (
+                              <span className="px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 rounded-full">
+                                {enabledCount} selected
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                        {isExpanded && (
+                          <div className="p-3 grid grid-cols-2 md:grid-cols-3 gap-2">
+                            {columns.map(col => {
+                              // Skip non-numeric columns
+                              if (!col.dtype.includes('float') && !col.dtype.includes('int')) {
+                                return null;
+                              }
+                              const isEnabled = enabledIndicators.has(col.name);
+                              const color = isEnabled ? getIndicatorColor(col.name) : undefined;
+
+                              return (
+                                <button
+                                  key={col.name}
+                                  onClick={() => toggleDynamicIndicator(col.name)}
+                                  className={`px-3 py-2 text-sm rounded-md flex items-center gap-2 transition-colors text-left ${
+                                    isEnabled
+                                      ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300'
+                                      : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-500'
+                                  }`}
+                                >
+                                  {isEnabled && (
+                                    <div
+                                      className="w-3 h-3 rounded-full flex-shrink-0"
+                                      style={{ backgroundColor: color }}
+                                    />
+                                  )}
+                                  <span className="truncate">{col.name}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Currently selected indicators */}
+                  {enabledIndicators.size > 0 && (
+                    <div className="mt-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
+                      <h4 className="text-sm font-medium text-indigo-700 dark:text-indigo-300 mb-2">
+                        Selected Indicators ({enabledIndicators.size})
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {Array.from(enabledIndicators).map(name => (
+                          <span
+                            key={name}
+                            className="px-2 py-1 text-xs rounded-full flex items-center gap-1.5"
+                            style={{
+                              backgroundColor: `${getIndicatorColor(name)}20`,
+                              color: getIndicatorColor(name),
+                              border: `1px solid ${getIndicatorColor(name)}`
+                            }}
+                          >
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{ backgroundColor: getIndicatorColor(name) }}
+                            />
+                            {name}
+                            <button
+                              onClick={() => toggleDynamicIndicator(name)}
+                              className="ml-1 hover:opacity-70"
+                            >
+                              <X size={12} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  No column data available
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700">
+              <button
+                onClick={() => setEnabledIndicators(new Set())}
+                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+              >
+                Clear All
+              </button>
+              <button
+                onClick={() => setShowIndicatorPopup(false)}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

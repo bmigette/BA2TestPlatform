@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle, Plus, Trash2, Save, FolderOpen } from 'lucide-react';
+import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle, Plus, Trash2, Save } from 'lucide-react';
 
 type WizardMode = 'create' | 'duplicate' | 'edit';
 

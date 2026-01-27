@@ -22,19 +22,21 @@ router = APIRouter()
 
 @router.get("/news/fetch")
 async def fetch_news(
-    symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)"),
+    symbol: Optional[str] = Query(None, description="Stock ticker symbol (e.g., AAPL). Leave empty for global news."),
     provider: str = Query("fmp", description="News provider (fmp, alpaca, alphavantage)"),
+    news_type: str = Query("company", description="Type of news: 'company' (requires symbol) or 'global' (market/general news)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). If not provided, defaults to 30 days ago."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). If not provided, defaults to today."),
     days: Optional[int] = Query(None, description="Deprecated: Use start_date/end_date instead. Number of days to look back."),
     limit: int = Query(50, description="Maximum number of articles")
 ):
     """
-    Fetch news articles for a symbol without sentiment analysis.
+    Fetch news articles for a symbol or global market news.
 
     Args:
-        symbol: Stock ticker symbol
+        symbol: Stock ticker symbol (required for company news, optional for global)
         provider: News provider to use
+        news_type: 'company' for ticker-specific news, 'global' for market news
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
         days: Deprecated, use date range instead
@@ -44,6 +46,13 @@ async def fetch_news(
         List of news articles
     """
     try:
+        # Validate inputs
+        if news_type == "company" and not symbol:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Symbol is required for company news"
+            )
+
         # Parse dates or use defaults
         if end_date:
             end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -59,16 +68,26 @@ async def fetch_news(
             # Default to last 30 days
             start_dt = end_dt - timedelta(days=30)
 
-        logger.info(f"Fetching news for {symbol} from {provider}, {start_dt.date()} to {end_dt.date()}")
+        logger.info(f"Fetching {news_type} news for {symbol or 'global'} from {provider}, {start_dt.date()} to {end_dt.date()}")
 
         sentiment_service = SentimentService()
-        articles = sentiment_service.fetch_news_for_ticker(
-            ticker=symbol,
-            start_date=start_dt,
-            end_date=end_dt,
-            provider=provider,
-            enrich_content=False
-        )
+
+        if news_type == "global":
+            # Fetch global/market news
+            articles = sentiment_service.fetch_global_news(
+                start_date=start_dt,
+                end_date=end_dt,
+                provider=provider
+            )
+        else:
+            # Fetch company-specific news
+            articles = sentiment_service.fetch_news_for_ticker(
+                ticker=symbol,
+                start_date=start_dt,
+                end_date=end_dt,
+                provider=provider,
+                enrich_content=False
+            )
 
         # Limit results
         articles = articles[:limit] if articles else []
@@ -81,7 +100,8 @@ async def fetch_news(
                 article['published_at'] = article['published_at'].isoformat()
 
         return {
-            "symbol": symbol,
+            "symbol": symbol or "global",
+            "news_type": news_type,
             "provider": provider,
             "start_date": start_dt.isoformat(),
             "end_date": end_dt.isoformat(),
@@ -89,6 +109,8 @@ async def fetch_news(
             "articles": articles
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching news: {e}", exc_info=True)
         raise HTTPException(

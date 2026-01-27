@@ -138,7 +138,26 @@
       <dataset_visualization>
         - Interactive chart showing price action with OHLC candlesticks
         - Overlay technical indicators (SMA, EMA, Bollinger Bands, etc.)
-        - Display news events with sentiment markers
+        - Dynamic indicator toggle popup:
+          * "More Indicators" button opens modal
+          * Load all columns from dataset via /api/datasets/:id/columns
+          * Categorized by type: technical, fundamental, sentiment, macro
+          * Toggle individual indicators to display on chart
+          * Indicators use data from dataset (not recalculated in UI)
+          * Color-coded lines for each enabled indicator
+          * Badge shows count of selected indicators
+        - News frequency visualization:
+          * Aggregate news by date
+          * Circle size represents news article count
+          * Color represents dominant sentiment (green=positive, red=negative, orange=neutral)
+          * Logarithmic scale for better visualization of frequency differences
+          * Legend shows "Size = frequency" indicator
+        - Non-chart data table below chart:
+          * Displays fundamental, sentiment, and macro data
+          * Only shows columns not displayed on chart
+          * Syncs with chart zoom (shows visible date range)
+          * Scrollable table with sticky header
+          * Numeric values formatted appropriately
         - Prediction target overlay:
           * Toggle to show/hide prediction target markers
           * Green diamond markers for detected "up" targets (below price)
@@ -488,7 +507,10 @@
       <tools_page>
         - Developer/testing tools for debugging data providers
         - News Provider Testing:
-          * Symbol input for stock ticker
+          * News type toggle: "Company News" or "Global/Market News"
+            - Company news requires symbol input
+            - Global news fetches market-wide news (no symbol required)
+          * Symbol input for stock ticker (company news only)
           * Provider selector dropdown (FMP, AlphaVantage, Finnhub, Alpaca, LocalFiles)
           * Date range picker (start/end dates, defaults to last 30 days)
           * Fetch news button with loading state
@@ -644,6 +666,10 @@
       - DELETE /api/datasets/:id - Delete dataset
       - GET /api/datasets/:id/preview - Get dataset preview/visualization
       - GET /api/datasets/:id/stats - Get dataset statistics
+      - GET /api/datasets/:id/columns - Get dataset columns categorized by type
+        * Returns columns organized into: price, technical, fundamental, sentiment, macro, target, other
+        * Each column includes: name, dtype, category
+        * Used for dynamic indicator selection in visualization
     </datasets>
 
     <optimization>
@@ -711,8 +737,10 @@
 
     <tools>
       - GET /api/tools/news/providers - List available news providers with status
-      - GET /api/tools/news/fetch - Fetch news articles for a symbol
-        * Query params: symbol, provider, start_date, end_date, limit
+      - GET /api/tools/news/fetch - Fetch news articles (company or global)
+        * Query params: symbol (optional for global), provider, news_type (company|global), start_date, end_date, limit
+        * news_type=company: Requires symbol, fetches ticker-specific news
+        * news_type=global: Fetches market-wide news, no symbol required
         * Returns articles with optional provider sentiment
       - POST /api/tools/news/export - Export articles to JSON file
         * Query params: symbol, provider

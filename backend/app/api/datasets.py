@@ -446,6 +446,109 @@ async def get_dataset_stats(dataset_id: int, db: Session = Depends(get_db)):
         )
 
 
+@router.get("/{dataset_id}/columns")
+async def get_dataset_columns(dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Get all columns in a dataset, categorized by type.
+
+    Categories:
+    - price: OHLCV data (Date, Open, High, Low, Close, Volume)
+    - technical: Technical indicators (SMA, EMA, RSI, MACD, etc.)
+    - fundamental: Fundamental data (P/E, EPS, FCF, etc.)
+    - sentiment: Sentiment features (news counts, scores)
+    - macro: Macro economic indicators (interest rates, GDP, etc.)
+    - target: Prediction targets (price_up_*, price_down_*)
+    - other: Unclassified columns
+
+    Args:
+        dataset_id: Dataset ID
+        db: Database session
+
+    Returns:
+        Categorized column information with data types
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        # Load dataset to get columns
+        df = pd.read_csv(file_path, nrows=5)  # Just need headers and dtypes
+
+        # Categorize columns
+        price_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']
+        technical_patterns = ['SMA', 'EMA', 'RSI', 'MACD', 'BB_', 'ATR', 'ADX', 'CCI', 'MFI',
+                             'OBV', 'VWAP', 'Stoch', 'Williams', 'ROC', 'MOM', 'TRIX',
+                             'DX', 'PLUS_DI', 'MINUS_DI', 'Aroon', 'CMO', 'PPO', 'UO']
+        fundamental_patterns = ['PE', 'EPS', 'FCF', 'Revenue', 'Debt', 'ROE', 'ROA',
+                               'BookValue', 'Dividend', 'MarketCap', 'PB', 'PS',
+                               'days_to', 'last_', 'next_']
+        sentiment_patterns = ['news_', 'sentiment_', 'positive', 'negative', 'neutral']
+        macro_patterns = ['interest_rate', 'gdp', 'inflation', 'unemployment', 'cpi',
+                         'fed_', 'treasury', 'yield_']
+        target_patterns = ['price_up_', 'price_down_', 'target_', 'label_']
+
+        def categorize_column(col_name: str) -> str:
+            col_lower = col_name.lower()
+            col_upper = col_name.upper()
+
+            if col_name in price_cols:
+                return 'price'
+            if any(p in col_upper for p in technical_patterns):
+                return 'technical'
+            if any(p in col_lower for p in fundamental_patterns):
+                return 'fundamental'
+            if any(p in col_lower for p in sentiment_patterns):
+                return 'sentiment'
+            if any(p in col_lower for p in macro_patterns):
+                return 'macro'
+            if any(p in col_lower for p in target_patterns):
+                return 'target'
+            return 'other'
+
+        columns = {}
+        for col in df.columns:
+            category = categorize_column(col)
+            if category not in columns:
+                columns[category] = []
+            columns[category].append({
+                'name': col,
+                'dtype': str(df[col].dtype),
+                'category': category
+            })
+
+        # Count by category
+        category_counts = {cat: len(cols) for cat, cols in columns.items()}
+
+        return {
+            'dataset_id': dataset_id,
+            'total_columns': len(df.columns),
+            'category_counts': category_counts,
+            'columns': columns,
+            'all_columns': list(df.columns)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting dataset columns: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get dataset columns: {str(e)}"
+        )
+
+
 @router.get("/{dataset_id}", response_model=DatasetResponse)
 async def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
     """

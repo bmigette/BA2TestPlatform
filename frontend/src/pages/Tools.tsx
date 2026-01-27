@@ -71,6 +71,7 @@ const Tools: React.FC = () => {
 const NewsProviderTester: React.FC = () => {
   const [symbol, setSymbol] = useState('AAPL');
   const [provider, setProvider] = useState('fmp');
+  const [newsType, setNewsType] = useState<'company' | 'global'>('company');
   // Default to last 30 days
   const getDefaultDates = () => {
     const end = new Date();
@@ -115,12 +116,17 @@ const NewsProviderTester: React.FC = () => {
 
     try {
       const params = new URLSearchParams({
-        symbol,
         provider,
+        news_type: newsType,
         start_date: startDate,
         end_date: endDate,
         limit: '50'
       });
+
+      // Only add symbol for company news
+      if (newsType === 'company' && symbol) {
+        params.set('symbol', symbol);
+      }
 
       const response = await fetch(`http://localhost:8002/api/tools/news/fetch?${params}`);
 
@@ -250,19 +256,45 @@ const NewsProviderTester: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
         <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-gray-100">Test News Provider</h2>
 
+        {/* News Type Toggle */}
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setNewsType('company')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              newsType === 'company'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+            }`}
+          >
+            Company News
+          </button>
+          <button
+            onClick={() => setNewsType('global')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              newsType === 'global'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+            }`}
+          >
+            Global/Market News
+          </button>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Symbol
-            </label>
-            <input
-              type="text"
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-              placeholder="AAPL"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-            />
-          </div>
+          {newsType === 'company' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Symbol
+              </label>
+              <input
+                type="text"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                placeholder="AAPL"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -314,7 +346,7 @@ const NewsProviderTester: React.FC = () => {
           <div className="flex items-end">
             <button
               onClick={fetchNews}
-              disabled={loading || !symbol}
+              disabled={loading || (newsType === 'company' && !symbol)}
               className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading ? (

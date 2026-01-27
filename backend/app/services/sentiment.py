@@ -384,6 +384,74 @@ class SentimentService:
         logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
         return articles
 
+    def fetch_global_news(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        provider: str = "fmp"
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch global/market news (not ticker-specific) from a provider.
+
+        Args:
+            start_date: Start date
+            end_date: End date
+            provider: News provider to use (must support global news)
+
+        Returns:
+            List of news articles
+
+        Raises:
+            ValueError: If provider doesn't support global news
+        """
+        logger.info(f"Fetching global news from {start_date} to {end_date} using {provider}")
+
+        # Get the news provider
+        news_provider = self._get_news_provider(provider)
+        if news_provider is None:
+            raise ValueError(f"News provider '{provider}' is not available or not configured")
+
+        # Check if provider supports global news
+        if not hasattr(news_provider, 'get_general_news'):
+            raise ValueError(f"Provider '{provider}' does not support global news. Use 'fmp' or 'finnhub'.")
+
+        # Fetch global news
+        result = news_provider.get_general_news(
+            end_date=end_date,
+            start_date=start_date,
+            format_type="dict"
+        )
+
+        # Check for error response
+        if isinstance(result, dict) and "error" in result:
+            raise Exception(result["error"])
+
+        raw_articles = result.get("articles", [])
+        logger.info(f"Received {len(raw_articles)} global news articles from {provider}")
+
+        # Convert to standard format
+        articles = []
+        for article in raw_articles:
+            pub_date = article.get("published_at", "")
+            if isinstance(pub_date, str) and pub_date:
+                try:
+                    pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
+                except ValueError:
+                    pub_date = start_date
+
+            articles.append({
+                'title': article.get('title', ''),
+                'content': article.get('summary', article.get('snippet', '')),
+                'date': pub_date,
+                'source': article.get('source', provider.upper()),
+                'url': article.get('url', ''),
+                'sentiment': article.get('sentiment'),
+                'sentiment_score': article.get('sentiment_score')
+            })
+
+        logger.info(f"Fetched {len(articles)} global news articles from {provider}")
+        return articles
+
     def _get_news_provider(self, provider: str):
         """
         Get news provider instance by name.
