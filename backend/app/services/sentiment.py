@@ -47,9 +47,6 @@ class SentimentService:
     # Sentiment categories
     SENTIMENT_CATEGORIES = ['positive', 'neutral', 'negative']
 
-    # Impact timeframes
-    IMPACT_TIMEFRAMES = ['short', 'medium', 'long']
-
     # Default financial sentiment model
     DEFAULT_MODEL = 'ProsusAI/finbert'
 
@@ -183,46 +180,18 @@ class SentimentService:
                 f"neu={sentiment['neutral_prob']:.3f}, neg={sentiment['negative_prob']:.3f})"
             )
 
-            impact = self._estimate_impact_timeframe(text)
-            logger.debug(f"[Article {i+1}/{len(articles)}] Impact timeframe: {impact}")
-
             result = {
                 **article,
                 'sentiment': sentiment['label'],
                 'sentiment_score': sentiment['score'],
                 'positive_prob': sentiment['positive_prob'],
                 'neutral_prob': sentiment['neutral_prob'],
-                'negative_prob': sentiment['negative_prob'],
-                'impact_timeframe': impact
+                'negative_prob': sentiment['negative_prob']
             }
             results.append(result)
 
         logger.info(f"Analyzed sentiment for {len(results)} articles")
         return results
-
-    def _estimate_impact_timeframe(self, text: str) -> str:
-        """
-        Estimate the impact timeframe of news based on content.
-
-        Args:
-            text: News text
-
-        Returns:
-            'short', 'medium', or 'long'
-        """
-        text_lower = text.lower()
-
-        # Long-term indicators
-        long_keywords = ['annual', 'yearly', 'decade', 'long-term', 'strategic', 'restructuring']
-        if any(kw in text_lower for kw in long_keywords):
-            return 'long'
-
-        # Short-term indicators
-        short_keywords = ['today', 'trading', 'intraday', 'immediate', 'breaking']
-        if any(kw in text_lower for kw in short_keywords):
-            return 'short'
-
-        return 'medium'
 
     def create_sentiment_features(
         self,
@@ -233,9 +202,11 @@ class SentimentService:
         Create aggregated sentiment features for dataset.
 
         Creates features like:
-        - news_1d_positive_short: Positive short-term news count in last day
-        - news_1w_negative_long: Negative long-term news count in last week
-        - etc.
+        - news_count: Total news count for the day
+        - news_1d_count: News count in last day
+        - news_1d_positive: Positive news count in last day
+        - news_1d_neutral: Neutral news count in last day
+        - news_1d_negative: Negative news count in last day
 
         Args:
             ohlc_df: DataFrame with Date column
@@ -250,10 +221,10 @@ class SentimentService:
         if result_df['Date'].dt.tz is not None:
             result_df['Date'] = result_df['Date'].dt.tz_localize(None)
 
-        # Analyze articles if not already analyzed (check for both sentiment and impact_timeframe)
+        # Analyze articles if not already analyzed
         if news_articles:
             first_article = news_articles[0]
-            if 'sentiment' not in first_article or 'impact_timeframe' not in first_article:
+            if 'sentiment' not in first_article:
                 news_articles = self.analyze_news_articles(news_articles)
 
         # Convert to DataFrame for easier manipulation
@@ -278,19 +249,16 @@ class SentimentService:
                     return dt
                 news_df['date'] = news_df['date'].apply(to_naive_datetime)
         else:
-            news_df = pd.DataFrame(columns=['date', 'sentiment', 'impact_timeframe'])
+            news_df = pd.DataFrame(columns=['date', 'sentiment'])
 
         # Create all sentiment feature columns
         feature_columns = ['news_count']  # Total news count for the day
         for period_name, period_days in self.LOOKBACK_PERIODS.items():
             # Add total count per period
             feature_columns.append(f'news_{period_name}_count')
-            # Add sentiment counts per period
+            # Add sentiment counts per period (positive, neutral, negative)
             for sentiment in self.SENTIMENT_CATEGORIES:
                 feature_columns.append(f'news_{period_name}_{sentiment}')
-                for impact in self.IMPACT_TIMEFRAMES:
-                    col_name = f'news_{period_name}_{sentiment}_{impact}'
-                    feature_columns.append(col_name)
 
         # Initialize columns with zeros
         for col in feature_columns:
@@ -317,20 +285,10 @@ class SentimentService:
                 result_df.at[idx, f'news_{period_name}_count'] = len(period_news)
 
                 for sentiment in self.SENTIMENT_CATEGORIES:
-                    # Count by sentiment (all impacts)
+                    # Count by sentiment
                     if len(period_news) > 0:
                         sentiment_count = len(period_news[period_news['sentiment'] == sentiment])
                         result_df.at[idx, f'news_{period_name}_{sentiment}'] = sentiment_count
-
-                    for impact in self.IMPACT_TIMEFRAMES:
-                        col_name = f'news_{period_name}_{sentiment}_{impact}'
-
-                        if len(period_news) > 0:
-                            count = len(period_news[
-                                (period_news['sentiment'] == sentiment) &
-                                (period_news['impact_timeframe'] == impact)
-                            ])
-                            result_df.at[idx, col_name] = count
 
         logger.info(f"Created {len(feature_columns)} sentiment features")
         return result_df
@@ -624,13 +582,17 @@ class SentimentService:
         Returns:
             Dictionary mapping feature names to descriptions
         """
-        descriptions = {}
+        descriptions = {
+            'news_count': 'Total news count for the day'
+        }
         for period_name, period_days in SentimentService.LOOKBACK_PERIODS.items():
+            descriptions[f'news_{period_name}_count'] = (
+                f"Total news count in the last {period_name} ({period_days} days)"
+            )
             for sentiment in SentimentService.SENTIMENT_CATEGORIES:
-                for impact in SentimentService.IMPACT_TIMEFRAMES:
-                    col_name = f'news_{period_name}_{sentiment}_{impact}'
-                    descriptions[col_name] = (
-                        f"Count of {sentiment} {impact}-term impact news articles "
-                        f"in the last {period_name} ({period_days} days)"
-                    )
+                col_name = f'news_{period_name}_{sentiment}'
+                descriptions[col_name] = (
+                    f"Count of {sentiment} news articles "
+                    f"in the last {period_name} ({period_days} days)"
+                )
         return descriptions

@@ -118,7 +118,6 @@ def generate_test_dataset():
         "news_sources": ["fmp_news", "finnhub_news"],  # Removed alphavantage (25/day limit)
         "lookback_periods": ["1d", "1w", "1m", "6m"],
         "sentiment_categories": ["positive", "neutral", "negative"],
-        "impact_timeframes": ["short", "medium", "long"],
         "enrich_content": True
     }
 

@@ -2062,7 +2062,6 @@ async def get_sentiment_feature_descriptions():
         "features": SentimentService.get_feature_descriptions(),
         "lookback_periods": SentimentService.LOOKBACK_PERIODS,
         "sentiment_categories": SentimentService.SENTIMENT_CATEGORIES,
-        "impact_timeframes": SentimentService.IMPACT_TIMEFRAMES,
         "description": "Aggregated news sentiment features for ML model training"
     }
 
@@ -2435,8 +2434,7 @@ async def get_dataset_sentiment(
                 "sentiment": article.get('sentiment', 'neutral'),
                 "score": article.get('sentiment_score', 0.5),
                 "headline": article.get('title', ''),
-                "source": article.get('source', 'Unknown'),
-                "impact_timeframe": article.get('impact_timeframe', 'medium')
+                "source": article.get('source', 'Unknown')
             })
 
         logger.info(f"Returning {len(markers)} sentiment markers for dataset {dataset_id}")

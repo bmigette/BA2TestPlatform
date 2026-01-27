@@ -52,14 +52,6 @@ interface OHLCData {
   BB_middle?: number;
 }
 
-interface SentimentMarker {
-  date: string;
-  sentiment: 'positive' | 'neutral' | 'negative';
-  score: number;
-  headline: string;
-  source?: string;
-}
-
 interface NewsFrequency {
   date: string;
   count: number;
@@ -178,10 +170,6 @@ const DatasetDetails: React.FC = () => {
   const navigate = useNavigate();
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [chartData, setChartData] = useState<OHLCData[]>([]);
-  const [sentimentMarkers, setSentimentMarkers] = useState<SentimentMarker[]>([]);
-  const [sentimentLoading, setSentimentLoading] = useState(false);
-  const [sentimentIsMock, setSentimentIsMock] = useState(false);
-  const [sentimentError, setSentimentError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialZoomSet, setInitialZoomSet] = useState(false);
@@ -215,39 +203,6 @@ const DatasetDetails: React.FC = () => {
   const [enabledIndicators, setEnabledIndicators] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['technical']));
 
-  // Fetch real sentiment markers from API
-  const fetchSentimentMarkers = async (datasetId: number) => {
-    setSentimentLoading(true);
-    setSentimentError(null);
-    try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/sentiment?provider=fmp`);
-      if (response.ok) {
-        const data = await response.json();
-        setSentimentMarkers(data.markers || []);
-        setSentimentIsMock(data.is_mock || false);
-        setSentimentError(null);
-      } else {
-        // Try to extract error message from response
-        let errorMsg = 'Failed to fetch sentiment markers';
-        try {
-          const errorData = await response.json();
-          errorMsg = errorData.detail || errorMsg;
-        } catch {
-          // Ignore JSON parse errors
-        }
-        console.error('Failed to fetch sentiment markers:', errorMsg);
-        setSentimentMarkers([]);
-        setSentimentError(errorMsg);
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Network error';
-      console.error('Error fetching sentiment:', errorMsg);
-      setSentimentMarkers([]);
-      setSentimentError(errorMsg);
-    } finally {
-      setSentimentLoading(false);
-    }
-  };
 
   // Fetch dataset columns for indicator selection
   const fetchDatasetColumns = async (datasetId: number) => {
@@ -518,12 +473,8 @@ const DatasetDetails: React.FC = () => {
     }
   }, [id]);
 
-  // Fetch sentiment when dataset loads and sentiment toggle is on
-  useEffect(() => {
-    if (dataset && indicators.showSentiment) {
-      fetchSentimentMarkers(dataset.id);
-    }
-  }, [dataset?.id, indicators.showSentiment]);
+  // Sentiment data now comes from chartData columns (news_1d_positive, etc.)
+  // No API call needed - newsFrequencyByDate is computed from chartData directly
 
   // Fetch dataset columns for indicator popup
   useEffect(() => {
@@ -569,43 +520,49 @@ const DatasetDetails: React.FC = () => {
   const candlestickData = prepareChartData();
 
   // Aggregate news by date for frequency-based visualization
+  // Uses existing dataset columns (news_1d_positive, news_1d_neutral, news_1d_negative) instead of API
   const newsFrequencyByDate = useMemo<NewsFrequency[]>(() => {
-    if (!sentimentMarkers || sentimentMarkers.length === 0) return [];
+    if (!chartData || chartData.length === 0) return [];
 
-    // Group markers by date
-    const byDate = new Map<string, SentimentMarker[]>();
-    sentimentMarkers.forEach(marker => {
-      const existing = byDate.get(marker.date) || [];
-      existing.push(marker);
-      byDate.set(marker.date, existing);
-    });
+    // Check if dataset has news sentiment columns
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const firstRow = chartData[0] as any;
+    const hasNewsColumns = 'news_1d_positive' in firstRow || 'news_count' in firstRow;
+    if (!hasNewsColumns) return [];
 
-    // Convert to NewsFrequency array
     const frequencies: NewsFrequency[] = [];
-    byDate.forEach((markers, date) => {
-      const positiveCount = markers.filter(m => m.sentiment === 'positive').length;
-      const negativeCount = markers.filter(m => m.sentiment === 'negative').length;
-      const neutralCount = markers.filter(m => m.sentiment === 'neutral').length;
 
-      let dominantSentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
-      if (positiveCount > negativeCount && positiveCount > neutralCount) {
-        dominantSentiment = 'positive';
-      } else if (negativeCount > positiveCount && negativeCount > neutralCount) {
-        dominantSentiment = 'negative';
+    chartData.forEach((row) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dataRow = row as any;
+      // Use news_1d columns (1-day lookback) for the chart
+      const positiveCount = Number(dataRow['news_1d_positive'] || 0);
+      const negativeCount = Number(dataRow['news_1d_negative'] || 0);
+      const neutralCount = Number(dataRow['news_1d_neutral'] || 0);
+      const totalCount = positiveCount + negativeCount + neutralCount;
+
+      // Only add if there's any news for this date
+      if (totalCount > 0) {
+        let dominantSentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
+        if (positiveCount > negativeCount && positiveCount > neutralCount) {
+          dominantSentiment = 'positive';
+        } else if (negativeCount > positiveCount && negativeCount > neutralCount) {
+          dominantSentiment = 'negative';
+        }
+
+        frequencies.push({
+          date: row.Date,
+          count: totalCount,
+          positiveCount,
+          negativeCount,
+          neutralCount,
+          dominantSentiment
+        });
       }
-
-      frequencies.push({
-        date,
-        count: markers.length,
-        positiveCount,
-        negativeCount,
-        neutralCount,
-        dominantSentiment
-      });
     });
 
     return frequencies;
-  }, [sentimentMarkers]);
+  }, [chartData]);
 
   // Calculate circle size based on news count
   const getNewsCircleRadius = (count: number): number => {
@@ -994,7 +951,6 @@ const DatasetDetails: React.FC = () => {
           >
             <MessageSquare size={14} />
             News Sentiment
-            {sentimentLoading && <span className="ml-1 animate-spin">...</span>}
           </button>
           <button
             onClick={() => toggleIndicator('showTargets')}
@@ -1023,17 +979,8 @@ const DatasetDetails: React.FC = () => {
           {/* Sentiment Legend */}
           {indicators.showSentiment && (
             <div className="flex items-center gap-3 ml-3 text-xs">
-              {sentimentError ? (
-                <>
-                  <span className="text-red-500">Error: {sentimentError}</span>
-                  <button
-                    onClick={() => dataset && fetchSentimentMarkers(dataset.id)}
-                    disabled={sentimentLoading}
-                    className="px-2 py-0.5 bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800/50 disabled:opacity-50"
-                  >
-                    {sentimentLoading ? 'Retrying...' : 'Retry'}
-                  </button>
-                </>
+              {newsFrequencyByDate.length === 0 ? (
+                <span className="text-gray-400">No sentiment data in dataset</span>
               ) : (
                 <>
                   <div className="flex items-center gap-1">
@@ -1049,13 +996,8 @@ const DatasetDetails: React.FC = () => {
                     <span className="text-gray-500 dark:text-gray-400">Negative</span>
                   </div>
                   <span className="text-gray-400 dark:text-gray-500 mx-1">|</span>
-                  <span className="text-gray-500 dark:text-gray-400">Size = frequency</span>
-                  {sentimentIsMock && (
-                    <span className="text-orange-500 text-xs">(Mock Data)</span>
-                  )}
-                  {!sentimentIsMock && sentimentMarkers.length > 0 && (
-                    <span className="text-gray-400 text-xs">({sentimentMarkers.length} articles, {newsFrequencyByDate.length} days)</span>
-                  )}
+                  <span className="text-gray-500 dark:text-gray-400">Size = count</span>
+                  <span className="text-gray-400 text-xs">({newsFrequencyByDate.length} days with news)</span>
                 </>
               )}
             </div>
