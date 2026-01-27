@@ -1131,7 +1131,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                 { id: 'yfinance', name: 'Yahoo Finance', desc: 'Free, no API key required' },
                 { id: 'fmp', name: 'Financial Modeling Prep', desc: 'Comprehensive data, API key required' },
                 { id: 'alphavantage', name: 'Alpha Vantage', desc: 'Professional grade, API key required' }
-              ].map((provider, index) => {
+              ].map((provider) => {
                 const isEnabled = wizardData.fundamentals.fundamentalsProviders.includes(provider.id);
                 const priorityIndex = wizardData.fundamentals.fundamentalsProviders.indexOf(provider.id);
                 return (

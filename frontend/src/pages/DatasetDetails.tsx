@@ -1329,7 +1329,7 @@ const DatasetDetails: React.FC = () => {
           const displayData = visibleData.slice(-50); // Last 50 rows
 
           return (
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-6">
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-6 overflow-hidden">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                   Non-Chart Data
@@ -1352,8 +1352,9 @@ const DatasetDetails: React.FC = () => {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                  <table className="text-sm" style={{ minWidth: 'max-content' }}>
+                <div className="w-full overflow-hidden">
+                  <div className="overflow-x-auto max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                    <table className="text-sm whitespace-nowrap">
                     <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">
@@ -1388,7 +1389,8 @@ const DatasetDetails: React.FC = () => {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
