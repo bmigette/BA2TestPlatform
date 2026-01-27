@@ -683,8 +683,6 @@ const FundamentalsTester: React.FC = () => {
 
   const availableProviders = [
     { id: 'yfinance', name: 'Yahoo Finance', description: 'Free, no API key required' },
-    { id: 'fmp', name: 'Financial Modeling Prep', description: 'Requires FMP API key' },
-    { id: 'alphavantage', name: 'Alpha Vantage', description: 'Requires Alpha Vantage API key' },
   ];
 
   const dataTypes = [
@@ -693,7 +691,6 @@ const FundamentalsTester: React.FC = () => {
     { id: 'income_statement', name: 'Income Statement', description: 'Revenue, expenses, profit' },
     { id: 'cashflow_statement', name: 'Cash Flow Statement', description: 'Operating, investing, financing' },
     { id: 'past_earnings', name: 'Past Earnings', description: 'Historical EPS and surprises' },
-    { id: 'earnings_estimates', name: 'Earnings Estimates', description: 'Future EPS forecasts' },
   ];
 
   const fetchFundamentals = async () => {
@@ -827,49 +824,6 @@ const FundamentalsTester: React.FC = () => {
     );
   };
 
-  // Render estimates data
-  const renderEstimates = () => {
-    const estimates = fundamentals?.estimates || [];
-    if (estimates.length === 0) {
-      return <p className="text-gray-500 dark:text-gray-400">No estimates data available</p>;
-    }
-
-    return (
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-700">
-            <tr>
-              <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Date</th>
-              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Avg Estimate</th>
-              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">High</th>
-              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Low</th>
-              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300"># Analysts</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-            {estimates.map((estimate: any, idx: number) => (
-              <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                <td className="px-4 py-2 text-gray-900 dark:text-gray-100">{estimate.fiscal_date_ending}</td>
-                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
-                  ${estimate.estimated_eps_avg?.toFixed(2) || '-'}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
-                  ${estimate.estimated_eps_high?.toFixed(2) || '-'}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
-                  ${estimate.estimated_eps_low?.toFixed(2) || '-'}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
-                  {estimate.number_of_analysts || '-'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  };
-
   // Render overview data (current metrics)
   const renderOverview = () => {
     const current = fundamentals?.current || fundamentals?.metrics || {};
@@ -911,8 +865,6 @@ const FundamentalsTester: React.FC = () => {
       return renderOverview();
     } else if (dataType === 'past_earnings') {
       return renderEarnings();
-    } else if (dataType === 'earnings_estimates') {
-      return renderEstimates();
     } else {
       return renderPeriods();
     }
