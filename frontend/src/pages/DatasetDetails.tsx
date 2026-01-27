@@ -753,7 +753,7 @@ const DatasetDetails: React.FC = () => {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-6 max-w-full overflow-x-hidden">
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
