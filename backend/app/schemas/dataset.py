@@ -29,6 +29,7 @@ class DatasetUpdate(BaseModel):
     timeframe: Optional[str] = Field(None, description="New timeframe (will regenerate data)")
     start_date: Optional[str] = Field(None, description="New start date (will regenerate data)")
     end_date: Optional[str] = Field(None, description="New end date (will regenerate data)")
+    data_provider: Optional[str] = Field(None, description="Data provider (yfinance, fmp)")
     technical_indicators: Optional[List[Dict[str, Any]]] = Field(None, description="New indicators (will regenerate data)")
     normalization_buffer_pct: Optional[float] = Field(None, description="New buffer percentage")
     sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")

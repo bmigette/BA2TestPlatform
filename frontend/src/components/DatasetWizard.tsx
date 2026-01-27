@@ -439,6 +439,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             timeframe: wizardData.timeframe,
             start_date: wizardData.startDate || undefined,
             end_date: wizardData.endDate || undefined,
+            data_provider: wizardData.dataProvider,
             technical_indicators: technicalIndicators,
             normalization_buffer_pct: wizardData.normalizationBufferPct,
             sentiment_config: sentimentConfig,

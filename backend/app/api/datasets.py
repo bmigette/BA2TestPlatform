@@ -1375,7 +1375,11 @@ async def update_dataset(
         else:
             end_date = dataset.end_date
 
-        # Save updated generation_config with new dates
+        # Update data provider if provided
+        if dataset_update.data_provider:
+            gen_config["data_provider"] = dataset_update.data_provider
+
+        # Save updated generation_config with new dates and provider
         dataset.generation_config = gen_config
 
         # Set status to BUILDING
