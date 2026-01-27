@@ -10,6 +10,7 @@ import requests
 import pandas as pd
 import json
 import logging
+import time
 from datetime import datetime
 from io import StringIO
 from typing import Optional
@@ -131,7 +132,10 @@ def make_api_request(function_name: str, params: dict, source: str = "dl_forecas
     
     # Log the request
     logger.debug(f"Alpha Vantage API request: function={function_name}, params={params}")
-    
+
+    # Sleep 1 second before each request to avoid rate limiting (free tier: 1 req/second)
+    time.sleep(1)
+
     response = requests.get(API_BASE_URL, params=api_params)
     response.raise_for_status()
 
