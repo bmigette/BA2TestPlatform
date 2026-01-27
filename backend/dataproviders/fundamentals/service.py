@@ -149,16 +149,28 @@ class FundamentalsService:
     def _initialize_providers(self):
         """Initialize available providers."""
         # Lazy import to avoid circular dependencies
+        from .details import (
+            YFinanceCompanyDetailsProvider,
+            FMPCompanyDetailsProvider,
+            AlphaVantageCompanyDetailsProvider,
+        )
+
         for provider_name in self.provider_priority:
             try:
                 if provider_name == 'yfinance':
-                    from .details import YFinanceCompanyDetailsProvider
+                    if YFinanceCompanyDetailsProvider is None:
+                        logger.warning("YFinanceCompanyDetailsProvider not available (missing dependency)")
+                        continue
                     self._providers['yfinance'] = YFinanceCompanyDetailsProvider()
                 elif provider_name == 'fmp':
-                    from .details import FMPCompanyDetailsProvider
+                    if FMPCompanyDetailsProvider is None:
+                        logger.debug("FMPCompanyDetailsProvider not available (missing fmpsdk)")
+                        continue
                     self._providers['fmp'] = FMPCompanyDetailsProvider()
                 elif provider_name == 'alphavantage':
-                    from .details import AlphaVantageCompanyDetailsProvider
+                    if AlphaVantageCompanyDetailsProvider is None:
+                        logger.debug("AlphaVantageCompanyDetailsProvider not available (missing dependency)")
+                        continue
                     self._providers['alphavantage'] = AlphaVantageCompanyDetailsProvider()
                 logger.debug(f"Initialized provider: {provider_name}")
             except Exception as e:
@@ -747,6 +759,69 @@ class FundamentalsService:
             symbol=symbol,
             provider=",".join(provider_names) if provider_names else "none",
             statement_type="cash_flow",
+            frequency=frequency,
+            end_date=end_date.isoformat() if end_date else None,
+            periods=merged,
+            period_count=len(merged)
+        )
+
+
+    def get_earnings_merged(
+        self,
+        symbol: str,
+        frequency: Literal["quarterly", "annual"] = "quarterly",
+        end_date: datetime = None,
+        lookback_periods: int = 8,
+    ) -> FinancialStatementResponse:
+        """
+        Get earnings data from ALL providers and merge them.
+
+        This is especially useful because yfinance doesn't provide estimated_eps,
+        surprise, and surprise_percent, but FMP does.
+        """
+        end_date = end_date or datetime.now()
+        all_periods = []
+        provider_names = []
+
+        for provider_name in self.provider_priority:
+            if provider_name not in self._providers:
+                continue
+
+            try:
+                provider = self._providers[provider_name]
+
+                # YFinance earnings is deprecated, try to get from income statement
+                if provider_name == 'yfinance':
+                    result = self._get_yfinance_earnings_from_income(
+                        provider, symbol, frequency, end_date, lookback_periods
+                    )
+                else:
+                    result = provider.get_past_earnings(
+                        symbol=symbol,
+                        frequency=frequency,
+                        end_date=end_date,
+                        lookback_periods=lookback_periods,
+                        format_type="dict"
+                    )
+
+                if isinstance(result, dict) and not result.get("error"):
+                    normalized = self._normalize_earnings(result, provider_name)
+                    if normalized.periods:
+                        all_periods.append(normalized.periods)
+                        provider_names.append(provider_name)
+                        logger.info(f"Got {len(normalized.periods)} earnings periods from {provider_name}")
+
+            except Exception as e:
+                logger.warning(f"Provider {provider_name} failed for {symbol}: {e}")
+                continue
+
+        # Merge all periods
+        merged = merge_periods(all_periods, provider_names)
+
+        return FinancialStatementResponse(
+            symbol=symbol,
+            provider=",".join(provider_names) if provider_names else "none",
+            statement_type="earnings",
             frequency=frequency,
             end_date=end_date.isoformat() if end_date else None,
             periods=merged,

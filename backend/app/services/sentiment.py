@@ -250,9 +250,11 @@ class SentimentService:
         if result_df['Date'].dt.tz is not None:
             result_df['Date'] = result_df['Date'].dt.tz_localize(None)
 
-        # Analyze articles if not already analyzed
-        if news_articles and 'sentiment' not in news_articles[0]:
-            news_articles = self.analyze_news_articles(news_articles)
+        # Analyze articles if not already analyzed (check for both sentiment and impact_timeframe)
+        if news_articles:
+            first_article = news_articles[0]
+            if 'sentiment' not in first_article or 'impact_timeframe' not in first_article:
+                news_articles = self.analyze_news_articles(news_articles)
 
         # Convert to DataFrame for easier manipulation
         if news_articles:
@@ -333,6 +335,38 @@ class SentimentService:
         logger.info(f"Created {len(feature_columns)} sentiment features")
         return result_df
 
+    def _generate_monthly_chunks(
+        self,
+        start_date: datetime,
+        end_date: datetime
+    ) -> List[Tuple[datetime, datetime]]:
+        """
+        Split a date range into monthly chunks.
+
+        Args:
+            start_date: Start date
+            end_date: End date
+
+        Returns:
+            List of (chunk_start, chunk_end) tuples
+        """
+        chunks = []
+        current_start = start_date
+
+        while current_start < end_date:
+            # Calculate end of current month
+            if current_start.month == 12:
+                next_month_start = current_start.replace(year=current_start.year + 1, month=1, day=1)
+            else:
+                next_month_start = current_start.replace(month=current_start.month + 1, day=1)
+
+            # Chunk end is min of next month start and end_date
+            chunk_end = min(next_month_start, end_date)
+            chunks.append((current_start, chunk_end))
+            current_start = next_month_start
+
+        return chunks
+
     def fetch_news_for_ticker(
         self,
         ticker: str,
@@ -340,10 +374,13 @@ class SentimentService:
         end_date: datetime,
         provider: str = "fmp",
         enrich_content: bool = True,
-        limit: int = 500
+        limit: int = None  # None means no limit, fetch all
     ) -> List[Dict[str, Any]]:
         """
         Fetch news articles for a ticker in date range using real news providers.
+
+        For date ranges longer than 1 month, fetches month by month to avoid
+        API rate limits and get complete coverage.
 
         Args:
             ticker: Stock ticker symbol
@@ -351,7 +388,7 @@ class SentimentService:
             end_date: End date
             provider: News provider to use ('fmp', 'alphavantage', 'finnhub', 'alpaca')
             enrich_content: Whether to fetch full article content for short summaries
-            limit: Maximum number of articles to fetch
+            limit: Maximum number of articles to fetch per month (None = unlimited)
 
         Returns:
             List of news articles with title, content, date, source
@@ -360,28 +397,60 @@ class SentimentService:
             ValueError: If provider is not available or unknown
             Exception: If news fetching fails (no fallback to mock data)
         """
-        logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider} (limit={limit})")
+        logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider}")
 
         # Get the news provider - fail if not available
         news_provider = self._get_news_provider(provider)
         if news_provider is None:
             raise ValueError(f"News provider '{provider}' is not available or not configured")
 
-        # Fetch news using the provider - no fallback on error
-        result = news_provider.get_company_news(
-            symbol=ticker,
-            end_date=end_date,
-            start_date=start_date,
-            limit=limit,
-            format_type="dict"
-        )
+        # Split into monthly chunks to avoid API limits and get complete data
+        monthly_chunks = self._generate_monthly_chunks(start_date, end_date)
+        logger.info(f"Fetching news in {len(monthly_chunks)} monthly chunks")
 
-        # Check for error response
-        if isinstance(result, dict) and "error" in result:
-            raise Exception(result["error"])
+        all_raw_articles = []
+        seen_urls = set()
 
-        raw_articles = result.get("articles", [])
-        logger.info(f"Received {len(raw_articles)} raw articles from {provider}")
+        for chunk_start, chunk_end in monthly_chunks:
+            try:
+                logger.debug(f"Fetching chunk: {chunk_start.date()} to {chunk_end.date()}")
+
+                # Fetch news for this chunk
+                result = news_provider.get_company_news(
+                    symbol=ticker,
+                    end_date=chunk_end,
+                    start_date=chunk_start,
+                    limit=limit or 1000,  # High limit per chunk if no limit specified
+                    format_type="dict"
+                )
+
+                # Check for error response
+                if isinstance(result, dict) and "error" in result:
+                    logger.warning(f"Error fetching chunk {chunk_start.date()}-{chunk_end.date()}: {result['error']}")
+                    continue
+
+                chunk_articles = result.get("articles", [])
+                logger.debug(f"Got {len(chunk_articles)} articles for chunk {chunk_start.date()}-{chunk_end.date()}")
+
+                # Deduplicate by URL
+                for article in chunk_articles:
+                    url = article.get('url', '')
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_raw_articles.append(article)
+                    elif not url:
+                        # Articles without URL - dedupe by title
+                        title = article.get('title', '')
+                        if title and title not in seen_urls:
+                            seen_urls.add(title)
+                            all_raw_articles.append(article)
+
+            except Exception as e:
+                logger.warning(f"Error fetching chunk {chunk_start.date()}-{chunk_end.date()}: {e}")
+                continue
+
+        raw_articles = all_raw_articles
+        logger.info(f"Received {len(raw_articles)} unique raw articles from {provider} across {len(monthly_chunks)} months")
 
         # Debug log: raw articles
         for i, article in enumerate(raw_articles):

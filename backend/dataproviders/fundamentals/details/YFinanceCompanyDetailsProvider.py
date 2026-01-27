@@ -133,10 +133,16 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
         # Default end_date to now if not provided
         if end_date is None:
             end_date = datetime.now()
-        
+
+        # Normalize dates to timezone-naive for comparison
+        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+            end_date = end_date.replace(tzinfo=None)
+        if start_date and hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+            start_date = start_date.replace(tzinfo=None)
+
         try:
             ticker_obj = yf.Ticker(symbol.upper())
-            
+
             if frequency.lower() == "quarterly":
                 data = ticker_obj.quarterly_balance_sheet
             else:
@@ -256,10 +262,16 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
         # Default end_date to now if not provided
         if end_date is None:
             end_date = datetime.now()
-        
+
+        # Normalize dates to timezone-naive for comparison
+        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+            end_date = end_date.replace(tzinfo=None)
+        if start_date and hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+            start_date = start_date.replace(tzinfo=None)
+
         try:
             ticker_obj = yf.Ticker(symbol.upper())
-            
+
             if frequency.lower() == "quarterly":
                 data = ticker_obj.quarterly_income_stmt
             else:
@@ -379,10 +391,16 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
         # Default end_date to now if not provided
         if end_date is None:
             end_date = datetime.now()
-        
+
+        # Normalize dates to timezone-naive for comparison
+        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+            end_date = end_date.replace(tzinfo=None)
+        if start_date and hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+            start_date = start_date.replace(tzinfo=None)
+
         try:
             ticker_obj = yf.Ticker(symbol.upper())
-            
+
             if frequency.lower() == "quarterly":
                 data = ticker_obj.quarterly_cashflow
             else:
@@ -584,10 +602,14 @@ class YFinanceCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
         # Default end_date to now if not provided
         if end_date is None:
             end_date = datetime.now()
-        
+
+        # Normalize dates to timezone-naive for comparison
+        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+            end_date = end_date.replace(tzinfo=None)
+
         try:
             ticker_obj = yf.Ticker(symbol.upper())
-            
+
             # Get earnings history using the new yfinance method
             if frequency.lower() == "quarterly":
                 data = ticker_obj.get_earnings(freq='quarterly')

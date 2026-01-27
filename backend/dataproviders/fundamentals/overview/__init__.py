@@ -8,10 +8,24 @@ Available Providers:
     - FMP: Company profile from Financial Modeling Prep API
 """
 
-from .AlphaVantageCompanyOverviewProvider import AlphaVantageCompanyOverviewProvider
-from .FMPCompanyOverviewProvider import FMPCompanyOverviewProvider
+import logging
 
-__all__ = [
-    "AlphaVantageCompanyOverviewProvider",
-    "FMPCompanyOverviewProvider",
-]
+logger = logging.getLogger(__name__)
+
+__all__ = []
+
+# AlphaVantage - requires alpha_vantage package
+try:
+    from .AlphaVantageCompanyOverviewProvider import AlphaVantageCompanyOverviewProvider
+    __all__.append("AlphaVantageCompanyOverviewProvider")
+except ImportError as e:
+    logger.debug(f"AlphaVantageCompanyOverviewProvider not available: {e}")
+    AlphaVantageCompanyOverviewProvider = None
+
+# FMP - requires fmpsdk package
+try:
+    from .FMPCompanyOverviewProvider import FMPCompanyOverviewProvider
+    __all__.append("FMPCompanyOverviewProvider")
+except ImportError as e:
+    logger.debug(f"FMPCompanyOverviewProvider not available: {e}")
+    FMPCompanyOverviewProvider = None

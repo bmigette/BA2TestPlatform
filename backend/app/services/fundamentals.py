@@ -425,7 +425,9 @@ class FundamentalsService:
                         lookback_periods=fetch_periods
                     )
                 elif stmt_type == 'earnings':
-                    response = provider_service.get_earnings(
+                    # Use merged earnings to combine data from multiple providers
+                    # yfinance provides reported_eps, FMP provides estimated_eps/surprise
+                    response = provider_service.get_earnings_merged(
                         symbol=ticker,
                         frequency=frequency,
                         end_date=max_date,
@@ -456,12 +458,21 @@ class FundamentalsService:
                 def get_periods_for_date(row_date):
                     """Get N most recent periods before or on row_date."""
                     available = []
+                    # Normalize row_date to timezone-naive for comparison
+                    if hasattr(row_date, 'tzinfo') and row_date.tzinfo is not None:
+                        row_date_naive = row_date.replace(tzinfo=None)
+                    else:
+                        row_date_naive = row_date
+
                     for period in periods_sorted:
                         fiscal_date = period.get('fiscal_date', '')
                         if fiscal_date:
                             try:
                                 period_date = pd.to_datetime(fiscal_date)
-                                if period_date <= row_date:
+                                # Normalize period_date to timezone-naive
+                                if hasattr(period_date, 'tzinfo') and period_date.tzinfo is not None:
+                                    period_date = period_date.replace(tzinfo=None)
+                                if period_date <= row_date_naive:
                                     available.append(period)
                                     if len(available) >= lookback_statements:
                                         break

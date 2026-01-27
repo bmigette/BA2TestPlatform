@@ -505,7 +505,11 @@ class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
             Historical earnings data in requested format
         """
         logger.debug(f"Fetching FMP past earnings for {symbol} ({frequency})")
-        
+
+        # Normalize end_date to timezone-naive for comparison
+        if hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+            end_date = end_date.replace(tzinfo=None)
+
         try:
             # FMP uses 'quarter' and 'annual' for the period parameter
             period = "quarter" if frequency.lower() == "quarterly" else "annual"
@@ -629,7 +633,11 @@ class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
             Future earnings estimates in requested format
         """
         logger.debug(f"Fetching FMP earnings estimates for {symbol} ({frequency})")
-        
+
+        # Normalize as_of_date to timezone-naive for comparison
+        if hasattr(as_of_date, 'tzinfo') and as_of_date.tzinfo is not None:
+            as_of_date = as_of_date.replace(tzinfo=None)
+
         try:
             # Use direct API call since fmpsdk doesn't have analyst_estimates method
             # FMP API: https://financialmodelingprep.com/api/v3/analyst-estimates/{symbol}
