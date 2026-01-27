@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, X, Database, Calendar, BarChart2, Cpu, Sliders, Target, Trash2, Split, Save, FolderOpen, Play, Clock, CheckCircle, AlertCircle, Loader2, Pause, SkipForward, XCircle, ArrowLeft, Activity, Timer, Zap, FileText } from 'lucide-react';
+import { Plus, X, Database, Calendar, BarChart2, Cpu, Sliders, Target, Trash2, Split, Save, FolderOpen, Play, Clock, CheckCircle, AlertCircle, Loader2, Pause, SkipForward, XCircle, ArrowLeft, Activity, Timer, Zap, FileText, Settings } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 interface Dataset {
@@ -38,8 +38,34 @@ interface ParameterRanges {
   learningRateMin: number;
   learningRateMax: number;
   learningRateStep: number;
+  dropoutMin: number;
+  dropoutMax: number;
+  dropoutStep: number;
   activationFunctions: string[];
 }
+
+interface GeneticConfig {
+  populationSize: number;
+  generations: number;
+  elitismPercent: number;
+  crossoverProb: number;
+  mutationProb: number;
+  earlyStoppingGenerations: number;
+}
+
+interface MetricsConfig {
+  optimizeMetric: string;
+}
+
+const AVAILABLE_METRICS = [
+  { id: 'f1_score', name: 'F1 Score', description: 'Harmonic mean of precision and recall' },
+  { id: 'accuracy', name: 'Accuracy', description: 'Overall correctness (caution: misleading for imbalanced data)' },
+  { id: 'balanced_accuracy', name: 'Balanced Accuracy', description: 'Average of recall per class' },
+  { id: 'precision', name: 'Precision', description: 'Minimize false positives' },
+  { id: 'recall', name: 'Recall', description: 'Minimize false negatives' },
+  { id: 'auc_roc', name: 'AUC-ROC', description: 'Area under ROC curve' },
+  { id: 'mcc', name: 'MCC', description: 'Matthews Correlation Coefficient' },
+];
 
 interface PredictionTarget {
   id: string;
@@ -56,6 +82,8 @@ interface JobProfile {
   parameterRanges: ParameterRanges;
   predictionTargets: Omit<PredictionTarget, 'id'>[];
   trainTestSplit: number;
+  geneticConfig?: GeneticConfig;
+  metricsConfig?: MetricsConfig;
 }
 
 const PROFILES_STORAGE_KEY = 'ba2ml_job_profiles';
@@ -130,7 +158,21 @@ const Training: React.FC = () => {
     learningRateMin: 0.001,
     learningRateMax: 0.01,
     learningRateStep: 0.001,
+    dropoutMin: 0.0,
+    dropoutMax: 0.5,
+    dropoutStep: 0.1,
     activationFunctions: ['relu'],
+  });
+  const [geneticConfig, setGeneticConfig] = useState<GeneticConfig>({
+    populationSize: 20,
+    generations: 50,
+    elitismPercent: 10,
+    crossoverProb: 0.7,
+    mutationProb: 0.2,
+    earlyStoppingGenerations: 5,
+  });
+  const [metricsConfig, setMetricsConfig] = useState<MetricsConfig>({
+    optimizeMetric: 'f1_score',
   });
   const [predictionTargets, setPredictionTargets] = useState<PredictionTarget[]>([]);
   const [showCustomTargetForm, setShowCustomTargetForm] = useState(false);
@@ -298,6 +340,8 @@ const Training: React.FC = () => {
             timePeriodDays,
           })),
           trainTestSplit,
+          geneticConfig,
+          metricsConfig,
         }),
       });
 
@@ -342,12 +386,26 @@ const Training: React.FC = () => {
       learningRateMin: 0.001,
       learningRateMax: 0.01,
       learningRateStep: 0.001,
+      dropoutMin: 0.0,
+      dropoutMax: 0.5,
+      dropoutStep: 0.1,
       activationFunctions: ['relu'],
     });
     setPredictionTargets([]);
     setShowCustomTargetForm(false);
     setCustomTarget({ profitPercent: 15, maxDrawdownPercent: 7, timePeriodDays: 14 });
     setTrainTestSplit(80);
+    setGeneticConfig({
+      populationSize: 20,
+      generations: 50,
+      elitismPercent: 10,
+      crossoverProb: 0.7,
+      mutationProb: 0.2,
+      earlyStoppingGenerations: 5,
+    });
+    setMetricsConfig({
+      optimizeMetric: 'f1_score',
+    });
   };
 
   const handleCloseForm = () => {
@@ -374,8 +432,19 @@ const Training: React.FC = () => {
       parameterRanges.layersMin <= parameterRanges.layersMax &&
       parameterRanges.layerSizeMin <= parameterRanges.layerSizeMax &&
       parameterRanges.learningRateMin <= parameterRanges.learningRateMax &&
+      parameterRanges.dropoutMin <= parameterRanges.dropoutMax &&
       parameterRanges.activationFunctions.length > 0
     );
+  };
+
+  const calculateCombinations = () => {
+    const layersCount = Math.max(1, Math.floor((parameterRanges.layersMax - parameterRanges.layersMin) / parameterRanges.layersStep) + 1);
+    const layerSizeCount = Math.max(1, Math.floor((parameterRanges.layerSizeMax - parameterRanges.layerSizeMin) / parameterRanges.layerSizeStep) + 1);
+    const lrCount = Math.max(1, Math.floor((parameterRanges.learningRateMax - parameterRanges.learningRateMin) / parameterRanges.learningRateStep) + 1);
+    const dropoutCount = Math.max(1, Math.floor((parameterRanges.dropoutMax - parameterRanges.dropoutMin) / parameterRanges.dropoutStep) + 1);
+    const activationCount = parameterRanges.activationFunctions.length;
+    const modelCount = selectedModels.length || 1;
+    return layersCount * layerSizeCount * lrCount * dropoutCount * activationCount * modelCount;
   };
 
   const addPresetTarget = (preset: typeof PREDICTION_PRESETS[0]) => {
@@ -460,6 +529,8 @@ const Training: React.FC = () => {
         timePeriodDays,
       })),
       trainTestSplit,
+      geneticConfig,
+      metricsConfig,
     };
 
     const updatedProfiles = [...profiles, newProfile];
@@ -484,6 +555,12 @@ const Training: React.FC = () => {
       }))
     );
     setTrainTestSplit(profile.trainTestSplit);
+    if (profile.geneticConfig) {
+      setGeneticConfig(profile.geneticConfig);
+    }
+    if (profile.metricsConfig) {
+      setMetricsConfig(profile.metricsConfig);
+    }
     setShowLoadProfileDialog(false);
   };
 
@@ -513,7 +590,7 @@ const Training: React.FC = () => {
       {/* Job Creation Form Modal */}
       {isFormOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-5xl mx-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700">
               <h2 className="text-xl font-semibold">Create Optimization Job</h2>
               <div className="flex items-center space-x-2">
@@ -867,6 +944,51 @@ const Training: React.FC = () => {
                     )}
                   </div>
 
+                  {/* Dropout */}
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-300 mb-2">
+                      Dropout Rate
+                    </label>
+                    <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+                      <input
+                        type="number"
+                        min="0"
+                        max="0.9"
+                        step="0.1"
+                        value={parameterRanges.dropoutMin}
+                        onChange={(e) => handleParameterChange('dropoutMin', parseFloat(e.target.value) || 0)}
+                        className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                      />
+                      <span className="text-gray-400">to</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="0.9"
+                        step="0.1"
+                        value={parameterRanges.dropoutMax}
+                        onChange={(e) => handleParameterChange('dropoutMax', parseFloat(e.target.value) || 0)}
+                        className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                      />
+                      {showStepConfig && (
+                        <>
+                          <span className="text-gray-400">step</span>
+                          <input
+                            type="number"
+                            min="0.05"
+                            max="0.5"
+                            step="0.05"
+                            value={parameterRanges.dropoutStep}
+                            onChange={(e) => handleParameterChange('dropoutStep', parseFloat(e.target.value) || 0.1)}
+                            className="w-16 px-2 py-1 border border-green-400 dark:border-green-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                          />
+                        </>
+                      )}
+                    </div>
+                    {parameterRanges.dropoutMin > parameterRanges.dropoutMax && (
+                      <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>
+                    )}
+                  </div>
+
                   {/* Activation Functions */}
                   <div>
                     <label className="block text-xs text-gray-600 dark:text-gray-300 mb-2">
@@ -900,6 +1022,134 @@ const Training: React.FC = () => {
                         {parameterRanges.activationFunctions.length} function{parameterRanges.activationFunctions.length !== 1 ? 's' : ''} selected
                       </p>
                     )}
+                  </div>
+                  {/* Combinations Count */}
+                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Total Parameter Combinations:</span>
+                      <span className="text-lg font-bold text-green-600 dark:text-green-400">{calculateCombinations().toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Optimization Settings */}
+              <div className="mb-6">
+                <div className="flex items-center space-x-2 mb-3">
+                  <Settings size={16} className="text-gray-400" />
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Optimization Settings
+                  </label>
+                </div>
+
+                <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                  <div className="grid grid-cols-2 gap-6">
+                    {/* Left Column - Genetic Algorithm */}
+                    <div className="space-y-4">
+                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">Genetic Algorithm</h4>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Population Size</label>
+                          <input
+                            type="number"
+                            min="10"
+                            max="200"
+                            value={geneticConfig.populationSize}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, populationSize: parseInt(e.target.value) || 20 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Generations</label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="500"
+                            value={geneticConfig.generations}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, generations: parseInt(e.target.value) || 50 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Elitism %</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="50"
+                            value={geneticConfig.elitismPercent}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, elitismPercent: parseFloat(e.target.value) || 10 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Early Stop (gens)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="50"
+                            value={geneticConfig.earlyStoppingGenerations}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, earlyStoppingGenerations: parseInt(e.target.value) || 5 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Crossover Prob</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={geneticConfig.crossoverProb}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, crossoverProb: parseFloat(e.target.value) || 0.7 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Mutation Prob</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={geneticConfig.mutationProb}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, mutationProb: parseFloat(e.target.value) || 0.2 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column - Metrics */}
+                    <div className="space-y-4">
+                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">Optimization Metric</h4>
+
+                      <div className="space-y-2">
+                        {AVAILABLE_METRICS.map((metric) => (
+                          <label
+                            key={metric.id}
+                            className={`flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                              metricsConfig.optimizeMetric === metric.id
+                                ? 'bg-green-100 dark:bg-green-900/30 border border-green-500'
+                                : 'hover:bg-gray-100 dark:hover:bg-gray-600 border border-transparent'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="optimizeMetric"
+                              value={metric.id}
+                              checked={metricsConfig.optimizeMetric === metric.id}
+                              onChange={(e) => setMetricsConfig({ optimizeMetric: e.target.value })}
+                              className="w-4 h-4 text-green-600"
+                            />
+                            <div>
+                              <div className="text-sm font-medium">{metric.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">{metric.description}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -38,11 +38,32 @@ class PredictionTarget(BaseModel):
 class ParameterRanges(BaseModel):
     layersMin: int
     layersMax: int
+    layersStep: int = 1
     layerSizeMin: int
     layerSizeMax: int
+    layerSizeStep: int = 64
     learningRateMin: float
     learningRateMax: float
+    learningRateStep: float = 0.001
+    dropoutMin: float = 0.0
+    dropoutMax: float = 0.5
+    dropoutStep: float = 0.1
     activationFunctions: List[str]
+
+
+class GeneticConfig(BaseModel):
+    """Genetic algorithm optimization configuration"""
+    populationSize: int = 20
+    generations: int = 50
+    elitismPercent: float = 10.0  # Percentage of best individuals to keep
+    crossoverProb: float = 0.7
+    mutationProb: float = 0.2
+    earlyStoppingGenerations: int = 5  # Stop if no improvement for N generations
+
+
+class MetricsConfig(BaseModel):
+    """Metrics configuration for model optimization"""
+    optimizeMetric: str = "f1_score"  # f1_score, accuracy, balanced_accuracy, precision, recall, auc_roc, mcc
 
 
 class CrossValidationConfig(BaseModel):
@@ -59,6 +80,8 @@ class JobCreate(BaseModel):
     predictionTargets: List[PredictionTarget]
     trainTestSplit: int
     crossValidation: Optional[CrossValidationConfig] = None
+    geneticConfig: Optional[GeneticConfig] = None
+    metricsConfig: Optional[MetricsConfig] = None
 
 
 class DatasetProgress(BaseModel):
@@ -81,6 +104,8 @@ class JobResponse(BaseModel):
     predictionTargets: List[PredictionTarget]
     trainTestSplit: int
     crossValidation: Optional[CrossValidationConfig] = None
+    geneticConfig: Optional[GeneticConfig] = None
+    metricsConfig: Optional[MetricsConfig] = None
     status: str  # 'queued', 'running', 'paused', 'completed', 'failed', 'cancelled'
     progress: float  # 0-100
     createdAt: str
@@ -95,11 +120,14 @@ class JobResponse(BaseModel):
     bestFitness: Optional[float] = None
     gpuUtilization: Optional[float] = None
     estimatedTimeRemaining: Optional[str] = None
+    optimizeMetric: Optional[str] = None  # The metric being optimized
     # Multi-dataset progress
     datasetProgress: Optional[List[DatasetProgress]] = None
     currentDatasetId: Optional[int] = None
     # Cross-validation results
     foldResults: Optional[List[Dict[str, Any]]] = None
+    # Parameter combinations count
+    totalCombinations: Optional[int] = None
 
 
 class TrainingMetrics(BaseModel):
@@ -356,6 +384,19 @@ async def create_job(job_create: JobCreate):
             dataset_progress.append(ds_info)
             dataset_names.append(ds_info["datasetName"])
 
+        # Calculate parameter combinations
+        params = job_create.parameterRanges
+        layers_count = max(1, (params.layersMax - params.layersMin) // params.layersStep + 1)
+        layer_size_count = max(1, (params.layerSizeMax - params.layerSizeMin) // params.layerSizeStep + 1)
+        lr_count = max(1, int((params.learningRateMax - params.learningRateMin) / params.learningRateStep) + 1)
+        dropout_count = max(1, int((params.dropoutMax - params.dropoutMin) / params.dropoutStep) + 1)
+        activation_count = len(params.activationFunctions)
+        total_combinations = layers_count * layer_size_count * lr_count * dropout_count * activation_count * len(job_create.selectedModels)
+
+        # Get genetic config with defaults
+        genetic_config = job_create.geneticConfig or GeneticConfig()
+        metrics_config = job_create.metricsConfig or MetricsConfig()
+
         job = JobResponse(
             id=job_id,
             datasetId=dataset_ids[0] if len(dataset_ids) == 1 else None,
@@ -366,10 +407,14 @@ async def create_job(job_create: JobCreate):
             predictionTargets=job_create.predictionTargets,
             trainTestSplit=job_create.trainTestSplit,
             crossValidation=job_create.crossValidation,
+            geneticConfig=genetic_config,
+            metricsConfig=metrics_config,
             status="queued",
             progress=0.0,
             createdAt=datetime.now().isoformat(),
-            totalGenerations=50,
+            totalGenerations=genetic_config.generations,
+            optimizeMetric=metrics_config.optimizeMetric,
+            totalCombinations=total_combinations,
             datasetProgress=dataset_progress if len(dataset_ids) > 1 else None,
         )
 
