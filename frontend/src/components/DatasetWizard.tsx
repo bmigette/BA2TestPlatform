@@ -136,11 +136,10 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
   // Initialize from initialData when mode changes
   useEffect(() => {
     if (isOpen && initialData && (mode === 'duplicate' || mode === 'edit')) {
-      // Parse dates from ISO format
-      const startDate = initialData.generation_config?.original_start_date ||
-                       (initialData.start_date ? initialData.start_date.split('T')[0] : '');
-      const endDate = initialData.generation_config?.original_end_date ||
-                     (initialData.end_date ? initialData.end_date.split('T')[0] : '');
+      // Parse dates - use actual data dates for editing (what the dataset contains)
+      // For duplicate, also use actual dates as the starting point
+      const startDate = initialData.start_date ? initialData.start_date.split('T')[0] : '';
+      const endDate = initialData.end_date ? initialData.end_date.split('T')[0] : '';
 
       // Parse indicators
       let indicators: IndicatorConfig[] = [];
