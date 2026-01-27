@@ -69,6 +69,22 @@ async def create_dataset(
     try:
         logger.info(f"Creating dataset for {dataset_create.ticker} with timeframe {dataset_create.timeframe}")
 
+        # Debug log all dataset generation options
+        logger.debug("=" * 60)
+        logger.debug("DATASET GENERATION OPTIONS:")
+        logger.debug(f"  Ticker: {dataset_create.ticker}")
+        logger.debug(f"  Timeframe: {dataset_create.timeframe}")
+        logger.debug(f"  Start Date: {dataset_create.start_date}")
+        logger.debug(f"  End Date: {dataset_create.end_date}")
+        logger.debug(f"  Name: {dataset_create.name}")
+        logger.debug(f"  Data Provider: {dataset_create.data_provider or 'yfinance'}")
+        logger.debug(f"  Normalization Buffer: {dataset_create.normalization_buffer_pct}%")
+        logger.debug(f"  Indicator Collection ID: {dataset_create.indicator_collection_id}")
+        logger.debug(f"  Technical Indicators: {dataset_create.technical_indicators}")
+        logger.debug(f"  Fundamentals Config: {dataset_create.fundamentals_config}")
+        logger.debug(f"  Sentiment Config: {dataset_create.sentiment_config}")
+        logger.debug("=" * 60)
+
         # Generate dataset name if not provided
         if not dataset_create.name:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -759,6 +775,22 @@ async def regenerate_dataset(
             )
 
         logger.info(f"Regenerating dataset {dataset_id} ({dataset.name})")
+
+        # Debug log all dataset options
+        logger.debug("=" * 60)
+        logger.debug("DATASET REGENERATION OPTIONS:")
+        logger.debug(f"  Dataset ID: {dataset.id}")
+        logger.debug(f"  Name: {dataset.name}")
+        logger.debug(f"  Ticker: {dataset.ticker}")
+        logger.debug(f"  Timeframe: {dataset.timeframe}")
+        logger.debug(f"  Start Date: {dataset.start_date}")
+        logger.debug(f"  End Date: {dataset.end_date}")
+        logger.debug(f"  Normalization Buffer: {dataset.normalization_buffer_pct}%")
+        logger.debug(f"  Technical Indicators: {dataset.technical_indicators}")
+        logger.debug(f"  Fundamentals Config: {dataset.fundamentals_config}")
+        logger.debug(f"  Sentiment Config: {dataset.sentiment_config}")
+        logger.debug(f"  Generation Config: {dataset.generation_config}")
+        logger.debug("=" * 60)
 
         # Set status to BUILDING
         dataset.status = DatasetStatus.BUILDING.value
