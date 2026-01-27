@@ -1223,6 +1223,8 @@ async def update_dataset(
             )
 
         logger.info(f"Updating and regenerating dataset {dataset_id}")
+        logger.info(f"Update request: start_date={dataset_update.start_date}, end_date={dataset_update.end_date}")
+        logger.info(f"Current dataset: start_date={dataset.start_date}, end_date={dataset.end_date}")
 
         # Update simple fields first
         if dataset_update.name:
@@ -1246,8 +1248,8 @@ async def update_dataset(
         dataset.ticker = new_ticker
         dataset.timeframe = new_timeframe
 
-        # Parse dates
-        gen_config = dataset.generation_config or {}
+        # Parse dates - copy dict to ensure SQLAlchemy detects changes
+        gen_config = dict(dataset.generation_config) if dataset.generation_config else {}
         if dataset_update.start_date:
             start_date = datetime.strptime(dataset_update.start_date, "%Y-%m-%d")
             gen_config["original_start_date"] = dataset_update.start_date
