@@ -1192,34 +1192,43 @@ const Training: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end space-x-3 p-4 border-t border-gray-200 dark:border-gray-700">
-              <button
-                onClick={handleCloseForm}
-                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitJob}
-                disabled={!selectedDatasetId || selectedModels.length === 0 || !isParameterValid() || predictionTargets.length === 0 || isSubmitting}
-                className={`px-4 py-2 rounded-md flex items-center space-x-2 ${
-                  selectedDatasetId && selectedModels.length > 0 && isParameterValid() && predictionTargets.length > 0 && !isSubmitting
-                    ? 'bg-green-600 text-white hover:bg-green-700'
-                    : 'bg-gray-300 dark:bg-gray-600 text-gray-500 cursor-not-allowed'
-                }`}
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>Starting...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play size={16} />
-                    <span>Start Optimization</span>
-                  </>
-                )}
-              </button>
+            <div className="flex justify-between items-center p-4 border-t border-gray-200 dark:border-gray-700">
+              {/* Show missing requirements */}
+              <div className="text-sm text-red-500 dark:text-red-400">
+                {!selectedDatasetId && <span className="mr-3">⚠ Select dataset</span>}
+                {selectedModels.length === 0 && <span className="mr-3">⚠ Select models</span>}
+                {!isParameterValid() && <span className="mr-3">⚠ Fix parameters</span>}
+                {predictionTargets.length === 0 && <span className="mr-3">⚠ Add targets</span>}
+              </div>
+              <div className="flex space-x-3">
+                <button
+                  onClick={handleCloseForm}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitJob}
+                  disabled={!selectedDatasetId || selectedModels.length === 0 || !isParameterValid() || predictionTargets.length === 0 || isSubmitting}
+                  className={`px-4 py-2 rounded-md flex items-center space-x-2 ${
+                    selectedDatasetId && selectedModels.length > 0 && isParameterValid() && predictionTargets.length > 0 && !isSubmitting
+                      ? 'bg-green-600 text-white hover:bg-green-700'
+                      : 'bg-gray-300 dark:bg-gray-600 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Starting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play size={16} />
+                      <span>Start Optimization</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
