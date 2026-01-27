@@ -301,7 +301,8 @@ class SentimentService:
         start_date: datetime,
         end_date: datetime,
         provider: str = "fmp",
-        enrich_content: bool = True
+        enrich_content: bool = True,
+        limit: int = 500
     ) -> List[Dict[str, Any]]:
         """
         Fetch news articles for a ticker in date range using real news providers.
@@ -312,6 +313,7 @@ class SentimentService:
             end_date: End date
             provider: News provider to use ('fmp', 'alphavantage', 'finnhub', 'alpaca')
             enrich_content: Whether to fetch full article content for short summaries
+            limit: Maximum number of articles to fetch
 
         Returns:
             List of news articles with title, content, date, source
@@ -320,7 +322,7 @@ class SentimentService:
             ValueError: If provider is not available or unknown
             Exception: If news fetching fails (no fallback to mock data)
         """
-        logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider}")
+        logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider} (limit={limit})")
 
         # Get the news provider - fail if not available
         news_provider = self._get_news_provider(provider)
@@ -332,6 +334,7 @@ class SentimentService:
             symbol=ticker,
             end_date=end_date,
             start_date=start_date,
+            limit=limit,
             format_type="dict"
         )
 
@@ -388,7 +391,8 @@ class SentimentService:
         self,
         start_date: datetime,
         end_date: datetime,
-        provider: str = "fmp"
+        provider: str = "fmp",
+        limit: int = 500
     ) -> List[Dict[str, Any]]:
         """
         Fetch global/market news (not ticker-specific) from a provider.
@@ -397,6 +401,7 @@ class SentimentService:
             start_date: Start date
             end_date: End date
             provider: News provider to use (must support global news)
+            limit: Maximum number of articles to fetch
 
         Returns:
             List of news articles
@@ -404,7 +409,7 @@ class SentimentService:
         Raises:
             ValueError: If provider doesn't support global news
         """
-        logger.info(f"Fetching global news from {start_date} to {end_date} using {provider}")
+        logger.info(f"Fetching global news from {start_date} to {end_date} using {provider} (limit={limit})")
 
         # Get the news provider
         news_provider = self._get_news_provider(provider)
@@ -425,6 +430,7 @@ class SentimentService:
         result = news_provider.get_global_news(
             end_date=end_date,
             start_date=start_date,
+            limit=limit,
             format_type="dict"
         )
 

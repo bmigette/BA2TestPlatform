@@ -28,7 +28,7 @@ async def fetch_news(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). If not provided, defaults to 30 days ago."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). If not provided, defaults to today."),
     days: Optional[int] = Query(None, description="Deprecated: Use start_date/end_date instead. Number of days to look back."),
-    limit: int = Query(50, description="Maximum number of articles")
+    limit: int = Query(500, description="Maximum number of articles")
 ):
     """
     Fetch news articles for a symbol or global market news.
@@ -68,7 +68,7 @@ async def fetch_news(
             # Default to last 30 days
             start_dt = end_dt - timedelta(days=30)
 
-        logger.info(f"Fetching {news_type} news for {symbol or 'global'} from {provider}, {start_dt.date()} to {end_dt.date()}")
+        logger.info(f"Fetching {news_type} news for {symbol or 'global'} from {provider}, {start_dt.date()} to {end_dt.date()}, limit={limit}")
 
         sentiment_service = SentimentService()
 
@@ -77,7 +77,8 @@ async def fetch_news(
             articles = sentiment_service.fetch_global_news(
                 start_date=start_dt,
                 end_date=end_dt,
-                provider=provider
+                provider=provider,
+                limit=limit
             )
         else:
             # Fetch company-specific news
@@ -86,11 +87,9 @@ async def fetch_news(
                 start_date=start_dt,
                 end_date=end_dt,
                 provider=provider,
-                enrich_content=False
+                enrich_content=False,
+                limit=limit
             )
-
-        # Limit results
-        articles = articles[:limit] if articles else []
 
         # Convert dates to strings for JSON serialization
         for article in articles:
