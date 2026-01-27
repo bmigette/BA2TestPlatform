@@ -59,9 +59,94 @@ def dates_match(date1: str, date2: str, tolerance_days: int = DATE_TOLERANCE_DAY
     return abs((d1 - d2).days) <= tolerance_days
 
 
+def get_fiscal_quarter(date_str: str) -> Optional[str]:
+    """
+    Get the fiscal quarter identifier from a date string.
+
+    For earnings, maps both fiscal quarter end dates and announcement dates
+    to the same quarter. Announcement dates are typically 3-6 weeks after quarter end.
+
+    Returns format: "YYYY-Q#" (e.g., "2025-Q4")
+    """
+    d = parse_date(date_str)
+    if not d:
+        return None
+
+    # Map month to fiscal quarter
+    # Q1: Jan-Mar, Q2: Apr-Jun, Q3: Jul-Sep, Q4: Oct-Dec
+    month = d.month
+    year = d.year
+
+    if month <= 3:
+        quarter = 1
+    elif month <= 6:
+        quarter = 2
+    elif month <= 9:
+        quarter = 3
+    else:
+        quarter = 4
+
+    return f"{year}-Q{quarter}"
+
+
+def earnings_dates_match(date1: str, date2: str) -> bool:
+    """
+    Check if two earnings dates match based on fiscal quarter.
+
+    This handles the case where yfinance uses fiscal quarter end dates
+    (e.g., 2025-09-30 for Q3) and FMP uses announcement dates
+    (e.g., 2025-10-30 for Q3, about 30 days later).
+
+    For earnings specifically, if dates are within 60 days and map to
+    adjacent periods, they likely represent the same earnings report.
+    """
+    d1 = parse_date(date1)
+    d2 = parse_date(date2)
+    if not d1 or not d2:
+        return False
+
+    gap = abs((d1 - d2).days)
+
+    # If within 10 days, definitely a match
+    if gap <= DATE_TOLERANCE_DAYS:
+        return True
+
+    # For earnings, check if dates are within 60 days
+    # The announcement date is typically 30-45 days after quarter end
+    if gap <= 60:
+        # Check if the later date is within expected announcement window
+        # Announcements happen 3-6 weeks after quarter end
+        earlier, later = (d1, d2) if d1 < d2 else (d2, d1)
+
+        # If earlier date is a quarter end (last day of month divisible by 3)
+        # and later date is within 60 days, consider it a match
+        if earlier.month in (3, 6, 9, 12) and earlier.day >= 28:
+            return True
+
+        # Also match if they're in the same fiscal quarter or adjacent
+        q1 = get_fiscal_quarter(date1)
+        q2 = get_fiscal_quarter(date2)
+        if q1 and q2:
+            # Same quarter is a match
+            if q1 == q2:
+                return True
+            # Adjacent quarters with small gap (announcement in next quarter)
+            # e.g., Q3 ends Sept 30, announced Oct 30 (Q4)
+            year1, qn1 = q1.split("-Q")
+            year2, qn2 = q2.split("-Q")
+            if year1 == year2 and abs(int(qn1) - int(qn2)) == 1:
+                return True
+            # Year boundary case (Q4 -> Q1 next year)
+            if int(year2) - int(year1) == 1 and qn1 == "4" and qn2 == "1":
+                return True
+
+    return False
+
+
 def merge_periods(
     all_periods: List[List[Dict[str, Any]]],
-    provider_names: List[str]
+    provider_names: List[str],
+    use_earnings_matching: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Merge periods from multiple providers.
@@ -73,12 +158,17 @@ def merge_periods(
     Args:
         all_periods: List of period lists, one per provider (in priority order)
         provider_names: List of provider names corresponding to all_periods
+        use_earnings_matching: Use earnings-specific date matching (handles
+                               fiscal end dates vs announcement dates)
 
     Returns:
         Merged list of periods with combined data
     """
     if not all_periods:
         return []
+
+    # Select matching function based on data type
+    match_func = earnings_dates_match if use_earnings_matching else dates_match
 
     # Use first provider's periods as base
     merged = {}
@@ -96,7 +186,7 @@ def merge_periods(
             # Find if this date matches an existing period
             matched_key = None
             for existing_key in merged.keys():
-                if dates_match(existing_key, fiscal_date):
+                if match_func(existing_key, fiscal_date):
                     matched_key = existing_key
                     break
 
@@ -815,8 +905,9 @@ class FundamentalsService:
                 logger.warning(f"Provider {provider_name} failed for {symbol}: {e}")
                 continue
 
-        # Merge all periods
-        merged = merge_periods(all_periods, provider_names)
+        # Merge all periods using earnings-specific date matching
+        # This handles yfinance fiscal dates vs FMP announcement dates
+        merged = merge_periods(all_periods, provider_names, use_earnings_matching=True)
 
         return FinancialStatementResponse(
             symbol=symbol,
