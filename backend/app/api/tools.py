@@ -551,7 +551,7 @@ async def fetch_fundamentals(
                     lookback_periods=lookback_periods,
                     format_type="dict"
                 )
-            elif data_type == "cashflow_statement":
+            elif data_type in ("cash_flow", "cashflow_statement"):
                 result = details_provider.get_cashflow_statement(
                     symbol=symbol,
                     frequency=frequency,
@@ -560,7 +560,7 @@ async def fetch_fundamentals(
                     lookback_periods=lookback_periods,
                     format_type="dict"
                 )
-            elif data_type == "past_earnings":
+            elif data_type in ("earnings", "past_earnings"):
                 result = details_provider.get_past_earnings(
                     symbol=symbol,
                     frequency=frequency,
@@ -571,7 +571,7 @@ async def fetch_fundamentals(
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Unknown data_type: {data_type}. Available: overview, balance_sheet, income_statement, cashflow_statement, past_earnings"
+                    detail=f"Unknown data_type: {data_type}. Available: overview, balance_sheet, income_statement, cash_flow, earnings"
                 )
         except ValueError as e:
             raise HTTPException(
