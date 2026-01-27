@@ -862,22 +862,29 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
       {wizardData.sentiment.enabled && (
         <div className="space-y-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+          {/* API News Sources */}
           <div>
-            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">News Sources</label>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">API News Sources</label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Fetch live news from providers</p>
             <div className="flex flex-wrap gap-2">
-              {['fmp_news', 'alpaca_news'].map(source => (
-                <label key={source} className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
-                  wizardData.sentiment.newsSources.includes(source)
+              {[
+                { id: 'fmp_news', label: 'FMP News' },
+                { id: 'alpaca_news', label: 'Alpaca News' },
+                { id: 'finnhub_news', label: 'Finnhub News' },
+                { id: 'alphavantage_news', label: 'AlphaVantage News' }
+              ].map(source => (
+                <label key={source.id} className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
+                  wizardData.sentiment.newsSources.includes(source.id)
                     ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
                     : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}>
                   <input
                     type="checkbox"
-                    checked={wizardData.sentiment.newsSources.includes(source)}
+                    checked={wizardData.sentiment.newsSources.includes(source.id)}
                     onChange={(e) => {
                       const newSources = e.target.checked
-                        ? [...wizardData.sentiment.newsSources, source]
-                        : wizardData.sentiment.newsSources.filter(s => s !== source);
+                        ? [...wizardData.sentiment.newsSources, source.id]
+                        : wizardData.sentiment.newsSources.filter(s => s !== source.id);
                       setWizardData({
                         ...wizardData,
                         sentiment: { ...wizardData.sentiment, newsSources: newSources }
@@ -885,10 +892,63 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
                     }}
                     className="sr-only"
                   />
-                  <span className="capitalize">{source.replace('_', ' ')}</span>
+                  <span>{source.label}</span>
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* Local Files News Sources */}
+          <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Local Files (Cached News)</label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Import previously exported news from local JSON files</p>
+            <div className="flex flex-wrap gap-2">
+              <label className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
+                wizardData.sentiment.newsSources.includes('localfiles_company')
+                  ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
+              }`}>
+                <input
+                  type="checkbox"
+                  checked={wizardData.sentiment.newsSources.includes('localfiles_company')}
+                  onChange={(e) => {
+                    const newSources = e.target.checked
+                      ? [...wizardData.sentiment.newsSources, 'localfiles_company']
+                      : wizardData.sentiment.newsSources.filter(s => s !== 'localfiles_company');
+                    setWizardData({
+                      ...wizardData,
+                      sentiment: { ...wizardData.sentiment, newsSources: newSources }
+                    });
+                  }}
+                  className="sr-only"
+                />
+                <span>Company News (Local)</span>
+              </label>
+              <label className={`px-3 py-2 rounded-lg cursor-pointer border text-sm ${
+                wizardData.sentiment.newsSources.includes('localfiles_global')
+                  ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
+              }`}>
+                <input
+                  type="checkbox"
+                  checked={wizardData.sentiment.newsSources.includes('localfiles_global')}
+                  onChange={(e) => {
+                    const newSources = e.target.checked
+                      ? [...wizardData.sentiment.newsSources, 'localfiles_global']
+                      : wizardData.sentiment.newsSources.filter(s => s !== 'localfiles_global');
+                    setWizardData({
+                      ...wizardData,
+                      sentiment: { ...wizardData.sentiment, newsSources: newSources }
+                    });
+                  }}
+                  className="sr-only"
+                />
+                <span>Global News (Local)</span>
+              </label>
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+              Export news from the Tools page first, then import here
+            </p>
           </div>
 
           <div>

@@ -215,8 +215,17 @@ const NewsProviderTester: React.FC = () => {
     setExportMessage(null);
 
     try {
+      // Build export URL with appropriate parameters
+      const exportParams = new URLSearchParams({
+        provider,
+        news_type: newsType
+      });
+      if (newsType === 'company' && symbol) {
+        exportParams.set('symbol', symbol);
+      }
+
       const response = await fetch(
-        `http://localhost:8002/api/tools/news/export?symbol=${symbol}&provider=${provider}`,
+        `http://localhost:8002/api/tools/news/export?${exportParams}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

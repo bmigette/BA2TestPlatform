@@ -54,7 +54,7 @@ class LocalFilesNewsProvider(MarketNewsInterface):
 
     def get_supported_features(self) -> list[str]:
         """Get supported features of this provider."""
-        return ["company_news", "cached_sentiment"]
+        return ["company_news", "global_news", "cached_sentiment"]
 
     def validate_config(self) -> bool:
         """
@@ -101,11 +101,13 @@ class LocalFilesNewsProvider(MarketNewsInterface):
                 # Add metadata to each article
                 file_symbol = data.get("symbol", "")
                 file_provider = data.get("provider", "unknown")
+                file_news_type = data.get("news_type", "company")  # Default to company for backward compat
 
                 for article in data["articles"]:
                     article["_file_symbol"] = file_symbol
                     article["_original_provider"] = file_provider
                     article["_source_file"] = str(filepath)
+                    article["_news_type"] = file_news_type
                     all_articles.append(article)
 
                 logger.debug(f"Loaded {len(data['articles'])} articles from {filepath}")
@@ -274,7 +276,9 @@ class LocalFilesNewsProvider(MarketNewsInterface):
         format_type: Literal["dict", "markdown", "both"] = "markdown"
     ) -> Dict[str, Any] | str:
         """
-        Get all news from local files regardless of symbol.
+        Get global/market news from local files.
+
+        Only returns articles from files exported with news_type='global'.
         """
         # Validate date parameters
         if start_date and lookback_days:
@@ -289,12 +293,20 @@ class LocalFilesNewsProvider(MarketNewsInterface):
         else:
             start_date, end_date = validate_date_range(start_date, end_date, max_days=365)
 
+        logger.info(f"Fetching global news from local files: {start_date.date()} to {end_date.date()}")
+
         # Load all articles
         all_articles = self._load_files()
 
-        # Filter by date range only
+        # Filter for global news only (news_type == 'global' or symbol == 'global')
+        global_articles = [
+            a for a in all_articles
+            if a.get("_news_type") == "global" or a.get("_file_symbol", "").lower() == "global"
+        ]
+
+        # Filter by date range
         articles = []
-        for article in all_articles:
+        for article in global_articles:
             pub_date_str = article.get("published_at", "")
             if not pub_date_str:
                 continue
@@ -319,6 +331,7 @@ class LocalFilesNewsProvider(MarketNewsInterface):
         articles = articles[:limit]
 
         result = {
+            "news_type": "global",
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "article_count": len(articles),

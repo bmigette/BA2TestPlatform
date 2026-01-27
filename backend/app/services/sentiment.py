@@ -415,7 +415,7 @@ class SentimentService:
         supported_features = news_provider.get_supported_features()
         if 'global_news' not in supported_features:
             # List providers that do support global news
-            global_providers = ['fmp', 'finnhub', 'alpaca']
+            global_providers = ['fmp', 'finnhub', 'alpaca', 'localfiles']
             raise ValueError(
                 f"Provider '{provider}' does not support global news. "
                 f"Providers with global news support: {', '.join(global_providers)}"

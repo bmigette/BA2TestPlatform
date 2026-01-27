@@ -246,8 +246,9 @@ NEWS_EXPORTS_DIR = Path("news_exports")
 
 @router.post("/news/export")
 async def export_news_to_json(
-    symbol: str = Query(..., description="Stock ticker symbol"),
+    symbol: Optional[str] = Query(None, description="Stock ticker symbol (required for company news)"),
     provider: str = Query(..., description="Provider used to fetch the news"),
+    news_type: str = Query("company", description="Type of news: 'company' or 'global'"),
     articles: List[Dict[str, Any]] = None
 ):
     """
@@ -256,8 +257,9 @@ async def export_news_to_json(
     The exported format can be imported using the LocalFiles news provider.
 
     Args:
-        symbol: Stock ticker symbol
+        symbol: Stock ticker symbol (required for company news, ignored for global)
         provider: Original provider name
+        news_type: Type of news ('company' or 'global')
         articles: List of articles to export
 
     Returns:
@@ -269,20 +271,33 @@ async def export_news_to_json(
             detail="No articles provided for export"
         )
 
+    if news_type == "company" and not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol is required for company news export"
+        )
+
     try:
         # Ensure export directory exists
         NEWS_EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename
+        # Generate filename based on news type
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{symbol}_{provider}_{timestamp}.json"
+        if news_type == "global":
+            filename = f"global_{provider}_{timestamp}.json"
+            symbol_value = "global"
+        else:
+            filename = f"{symbol}_{provider}_{timestamp}.json"
+            symbol_value = symbol
+
         filepath = NEWS_EXPORTS_DIR / filename
 
         # Standardize article format for export
         export_data = {
-            "version": "1.0",
+            "version": "1.1",
             "export_date": datetime.now().isoformat(),
-            "symbol": symbol,
+            "news_type": news_type,
+            "symbol": symbol_value,
             "provider": provider,
             "article_count": len(articles),
             "articles": []
