@@ -1352,8 +1352,8 @@ const DatasetDetails: React.FC = () => {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                  <table className="min-w-full text-sm">
+                <div className="overflow-x-auto max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                  <table className="text-sm" style={{ minWidth: 'max-content' }}>
                     <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">
