@@ -59,9 +59,9 @@ interface SentimentConfig {
 
 interface FundamentalsConfig {
   enabled: boolean;
-  metrics: string[];
+  statementTypes: string[];  // balance_sheet, income_statement, cash_flow, earnings
   macroIndicators: string[];
-  fundamentalsProvider: string;
+  fundamentalsProviders: string[];  // Priority-ordered list of providers
   macroProvider: string;
 }
 
@@ -120,9 +120,9 @@ const getDefaultWizardData = (): WizardData => ({
   },
   fundamentals: {
     enabled: false,
-    metrics: ['fcf', 'pe', 'eps', 'revenue'],
+    statementTypes: ['balance_sheet', 'income_statement', 'cash_flow'],
     macroIndicators: ['interest_rate', 'gdp', 'inflation', 'unemployment'],
-    fundamentalsProvider: 'yfinance',
+    fundamentalsProviders: ['yfinance', 'fmp', 'alphavantage'],  // Priority order
     macroProvider: 'fred'
   }
 });
@@ -163,9 +163,10 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       const savedFundamentals = initialData.fundamentals_config || {};
       const fundamentalsConfig: FundamentalsConfig = {
         enabled: savedFundamentals.enabled || false,
-        metrics: savedFundamentals.metrics || ['fcf', 'pe', 'eps', 'revenue'],
+        statementTypes: savedFundamentals.statementTypes || savedFundamentals.statement_types || savedFundamentals.metrics || ['balance_sheet', 'income_statement', 'cash_flow'],
         macroIndicators: savedFundamentals.macroIndicators || savedFundamentals.macro_indicators || ['interest_rate', 'gdp', 'inflation', 'unemployment'],
-        fundamentalsProvider: savedFundamentals.fundamentalsProvider || savedFundamentals.fundamentals_provider || 'yfinance',
+        fundamentalsProviders: savedFundamentals.fundamentalsProviders || savedFundamentals.fundamentals_providers ||
+          (savedFundamentals.fundamentals_provider ? [savedFundamentals.fundamentals_provider] : ['yfinance', 'fmp', 'alphavantage']),
         macroProvider: savedFundamentals.macroProvider || savedFundamentals.macro_provider || 'fred'
       };
 
@@ -409,9 +410,9 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
       const fundamentalsConfig = wizardData.fundamentals.enabled ? {
         enabled: true,
-        metrics: wizardData.fundamentals.metrics,
+        statement_types: wizardData.fundamentals.statementTypes,
         macro_indicators: wizardData.fundamentals.macroIndicators,
-        fundamentals_provider: wizardData.fundamentals.fundamentalsProvider,
+        fundamentals_providers: wizardData.fundamentals.fundamentalsProviders,
         macro_provider: wizardData.fundamentals.macroProvider
       } : { enabled: false };
 
@@ -1018,36 +1019,35 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       {wizardData.fundamentals.enabled && (
         <div className="space-y-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
           <div>
-            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Fundamental Metrics</label>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Financial Statements</label>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { id: 'fcf', label: 'Free Cash Flow (FCF)' },
-                { id: 'pe', label: 'P/E Ratio' },
-                { id: 'eps', label: 'Earnings Per Share (EPS)' },
-                { id: 'revenue', label: 'Revenue' },
-                { id: 'debt_equity', label: 'Debt/Equity Ratio' },
-                { id: 'roe', label: 'Return on Equity (ROE)' }
-              ].map(metric => (
-                <label key={metric.id} className={`p-3 rounded-lg cursor-pointer border text-sm ${
-                  wizardData.fundamentals.metrics.includes(metric.id)
+                { id: 'balance_sheet', label: 'Balance Sheet', desc: 'Assets, liabilities, equity' },
+                { id: 'income_statement', label: 'Income Statement', desc: 'Revenue, expenses, profit' },
+                { id: 'cash_flow', label: 'Cash Flow Statement', desc: 'Operating, investing, financing' },
+                { id: 'earnings', label: 'Earnings History', desc: 'EPS, estimates, surprises' }
+              ].map(stmt => (
+                <label key={stmt.id} className={`p-3 rounded-lg cursor-pointer border text-sm ${
+                  wizardData.fundamentals.statementTypes.includes(stmt.id)
                     ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200'
                     : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}>
                   <input
                     type="checkbox"
-                    checked={wizardData.fundamentals.metrics.includes(metric.id)}
+                    checked={wizardData.fundamentals.statementTypes.includes(stmt.id)}
                     onChange={(e) => {
-                      const newMetrics = e.target.checked
-                        ? [...wizardData.fundamentals.metrics, metric.id]
-                        : wizardData.fundamentals.metrics.filter(m => m !== metric.id);
+                      const newTypes = e.target.checked
+                        ? [...wizardData.fundamentals.statementTypes, stmt.id]
+                        : wizardData.fundamentals.statementTypes.filter(t => t !== stmt.id);
                       setWizardData({
                         ...wizardData,
-                        fundamentals: { ...wizardData.fundamentals, metrics: newMetrics }
+                        fundamentals: { ...wizardData.fundamentals, statementTypes: newTypes }
                       });
                     }}
                     className="sr-only"
                   />
-                  <span>{metric.label}</span>
+                  <div className="font-medium">{stmt.label}</div>
+                  <div className="text-xs opacity-70">{stmt.desc}</div>
                 </label>
               ))}
             </div>
@@ -1087,46 +1087,85 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
           </div>
 
-          {/* Data Provider Selection */}
+          {/* Data Provider Priority Selection */}
           <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
-            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Data Providers</label>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Fundamentals Provider</label>
-                <select
-                  value={wizardData.fundamentals.fundamentalsProvider}
-                  onChange={(e) => setWizardData({
-                    ...wizardData,
-                    fundamentals: { ...wizardData.fundamentals, fundamentalsProvider: e.target.value }
-                  })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
-                >
-                  <option value="yfinance">Yahoo Finance (Free)</option>
-                  <option value="alphavantage">Alpha Vantage (API Key)</option>
-                  <option value="fmp">Financial Modeling Prep (API Key)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Macro Data Provider</label>
-                <select
-                  value={wizardData.fundamentals.macroProvider}
-                  onChange={(e) => setWizardData({
-                    ...wizardData,
-                    fundamentals: { ...wizardData.fundamentals, macroProvider: e.target.value }
-                  })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
-                >
-                  <option value="fred">FRED (Federal Reserve)</option>
-                  <option value="alphavantage">Alpha Vantage (API Key)</option>
-                </select>
-              </div>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+              Fundamentals Providers (Priority Order)
+            </label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              Click to toggle. First enabled provider has highest priority for overlapping data.
+            </p>
+            <div className="space-y-2">
+              {[
+                { id: 'yfinance', name: 'Yahoo Finance', desc: 'Free, no API key required' },
+                { id: 'fmp', name: 'Financial Modeling Prep', desc: 'Comprehensive data, API key required' },
+                { id: 'alphavantage', name: 'Alpha Vantage', desc: 'Professional grade, API key required' }
+              ].map((provider, index) => {
+                const isEnabled = wizardData.fundamentals.fundamentalsProviders.includes(provider.id);
+                const priorityIndex = wizardData.fundamentals.fundamentalsProviders.indexOf(provider.id);
+                return (
+                  <div
+                    key={provider.id}
+                    className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer ${
+                      isEnabled
+                        ? 'border-green-500 bg-green-50 dark:bg-green-900/30'
+                        : 'border-gray-300 dark:border-gray-600 opacity-50'
+                    }`}
+                    onClick={() => {
+                      const newProviders = isEnabled
+                        ? wizardData.fundamentals.fundamentalsProviders.filter(p => p !== provider.id)
+                        : [...wizardData.fundamentals.fundamentalsProviders, provider.id];
+                      setWizardData({
+                        ...wizardData,
+                        fundamentals: { ...wizardData.fundamentals, fundamentalsProviders: newProviders }
+                      });
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      {isEnabled && (
+                        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-green-500 text-white text-xs font-bold">
+                          {priorityIndex + 1}
+                        </span>
+                      )}
+                      <div>
+                        <div className={`font-medium ${isEnabled ? 'text-green-800 dark:text-green-200' : 'text-gray-600 dark:text-gray-400'}`}>
+                          {provider.name}
+                        </div>
+                        <div className="text-xs opacity-70">{provider.desc}</div>
+                      </div>
+                    </div>
+                    <div className={`w-4 h-4 rounded border-2 ${isEnabled ? 'bg-green-500 border-green-500' : 'border-gray-400'}`}>
+                      {isEnabled && (
+                        <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-4">
+              <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Macro Data Provider</label>
+              <select
+                value={wizardData.fundamentals.macroProvider}
+                onChange={(e) => setWizardData({
+                  ...wizardData,
+                  fundamentals: { ...wizardData.fundamentals, macroProvider: e.target.value }
+                })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm dark:bg-gray-700 dark:text-gray-100"
+              >
+                <option value="fred">FRED (Federal Reserve)</option>
+                <option value="alphavantage">Alpha Vantage (API Key)</option>
+              </select>
             </div>
           </div>
 
           <div className="bg-green-50 dark:bg-gray-700 p-3 rounded-md">
             <p className="text-sm text-green-800 dark:text-gray-100">
-              Features like <code className="bg-green-100 dark:bg-gray-600 px-1 rounded">days_to_last_fcf</code>,
-              <code className="bg-green-100 dark:bg-gray-600 px-1 rounded ml-1">last_eps_percent</code> will be generated.
+              Financial statement data will be fetched from providers in priority order.
+              If a provider fails or lacks data, the next provider will be used.
             </p>
           </div>
         </div>
@@ -1206,7 +1245,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           </div>
           {wizardData.fundamentals.enabled && (
             <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 pl-6">
-              <div>Metrics: {wizardData.fundamentals.metrics.join(', ')}</div>
+              <div>Statements: {wizardData.fundamentals.statementTypes.join(', ')}</div>
+              <div>Providers: {wizardData.fundamentals.fundamentalsProviders.join(' → ')}</div>
               <div>Macro: {wizardData.fundamentals.macroIndicators.join(', ')}</div>
             </div>
           )}
