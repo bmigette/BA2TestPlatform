@@ -666,9 +666,16 @@ const NewsProviderTester: React.FC = () => {
 // Fundamentals Tester Component
 const FundamentalsTester: React.FC = () => {
   const [symbol, setSymbol] = useState('AAPL');
+  const [provider, setProvider] = useState('yfinance');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fundamentals, setFundamentals] = useState<Record<string, any> | null>(null);
+
+  const availableProviders = [
+    { id: 'yfinance', name: 'Yahoo Finance', description: 'Free, no API key required' },
+    { id: 'fmp', name: 'Financial Modeling Prep', description: 'Requires FMP API key' },
+    { id: 'alphavantage', name: 'Alpha Vantage', description: 'Requires Alpha Vantage API key' },
+  ];
 
   const fetchFundamentals = async () => {
     setLoading(true);
@@ -676,7 +683,8 @@ const FundamentalsTester: React.FC = () => {
     setFundamentals(null);
 
     try {
-      const response = await fetch(`http://localhost:8002/api/tools/fundamentals/fetch?symbol=${symbol}`);
+      const params = new URLSearchParams({ symbol, provider });
+      const response = await fetch(`http://localhost:8002/api/tools/fundamentals/fetch?${params}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -699,7 +707,7 @@ const FundamentalsTester: React.FC = () => {
           Test Fundamentals Provider
         </h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-          Fetch fundamental data (P/E, EPS, FCF, etc.) for a ticker using YFinance.
+          Fetch fundamental data (P/E, EPS, FCF, etc.) for a ticker.
         </p>
 
         <div className="flex flex-wrap gap-4 items-end">
@@ -714,6 +722,23 @@ const FundamentalsTester: React.FC = () => {
               className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               placeholder="AAPL"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Provider
+            </label>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            >
+              {availableProviders.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <button
@@ -745,9 +770,14 @@ const FundamentalsTester: React.FC = () => {
 
       {fundamentals && (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
-            Fundamentals for {fundamentals.ticker}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              Fundamentals for {fundamentals.ticker}
+            </h3>
+            <span className="px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+              Provider: {fundamentals.provider || 'yfinance'}
+            </span>
+          </div>
 
           {fundamentals.current && Object.keys(fundamentals.current).length > 0 ? (
             <div className="overflow-x-auto">
@@ -784,6 +814,7 @@ const FundamentalsTester: React.FC = () => {
 // Macro Indicators Tester Component
 const MacroTester: React.FC = () => {
   const [indicators, setIndicators] = useState<string[]>(['interest_rate', 'gdp', 'inflation', 'unemployment']);
+  const [provider, setProvider] = useState('fred');
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setFullYear(d.getFullYear() - 1);
@@ -793,6 +824,10 @@ const MacroTester: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [macroData, setMacroData] = useState<Record<string, any> | null>(null);
+
+  const availableProviders = [
+    { id: 'fred', name: 'FRED', description: 'Federal Reserve Economic Data' },
+  ];
 
   const availableIndicators = [
     { id: 'interest_rate', name: 'Federal Funds Rate' },
@@ -818,6 +853,7 @@ const MacroTester: React.FC = () => {
     try {
       const params = new URLSearchParams({
         indicators: indicators.join(','),
+        provider,
         start_date: startDate,
         end_date: endDate,
       });
@@ -849,6 +885,25 @@ const MacroTester: React.FC = () => {
         </p>
 
         <div className="space-y-4">
+          <div className="flex flex-wrap gap-4 items-end">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Provider
+              </label>
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              >
+                {availableProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Indicators
@@ -929,9 +984,14 @@ const MacroTester: React.FC = () => {
 
       {macroData && macroData.indicators && (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
-            Macro Data Results
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              Macro Data Results
+            </h3>
+            <span className="px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+              Provider: {macroData.provider || 'fred'}
+            </span>
+          </div>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             {macroData.start_date} to {macroData.end_date}
           </p>

@@ -376,35 +376,102 @@ async def list_news_exports():
 
 @router.get("/fundamentals/fetch")
 async def fetch_fundamentals(
-    symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)")
+    symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)"),
+    provider: str = Query("yfinance", description="Provider: yfinance, fmp, alphavantage")
 ):
     """
     Fetch fundamental data for a ticker.
 
     Args:
         symbol: Stock ticker symbol
+        provider: Data provider to use (yfinance, fmp, alphavantage)
 
     Returns:
         Fundamental data including P/E, EPS, FCF, etc.
     """
     try:
-        from app.services.fundamentals import FundamentalsService
+        logger.info(f"Fetching fundamentals for {symbol} using provider: {provider}")
 
-        logger.info(f"Fetching fundamentals for {symbol}")
-
-        fundamentals_service = FundamentalsService()
-        fundamentals = fundamentals_service.get_fundamental_data(symbol)
+        if provider == "yfinance":
+            from app.services.fundamentals import FundamentalsService
+            fundamentals_service = FundamentalsService()
+            fundamentals = fundamentals_service.get_fundamental_data(symbol)
+        elif provider == "fmp":
+            from dataproviders.fundamentals.details import FMPCompanyDetailsProvider
+            fmp_provider = FMPCompanyDetailsProvider()
+            fundamentals = {
+                "ticker": symbol,
+                "provider": "fmp",
+                "fetch_date": datetime.now().isoformat(),
+                "current": {},
+                "historical": {}
+            }
+            # Fetch balance sheet and income statement
+            try:
+                balance = fmp_provider.get_balance_sheet(symbol, period="quarterly", limit=4)
+                if balance:
+                    fundamentals["balance_sheet"] = balance
+            except Exception as e:
+                logger.warning(f"Could not fetch FMP balance sheet: {e}")
+            try:
+                income = fmp_provider.get_income_statement(symbol, period="quarterly", limit=4)
+                if income:
+                    fundamentals["income_statement"] = income
+            except Exception as e:
+                logger.warning(f"Could not fetch FMP income statement: {e}")
+            try:
+                cashflow = fmp_provider.get_cashflow_statement(symbol, period="quarterly", limit=4)
+                if cashflow:
+                    fundamentals["cashflow_statement"] = cashflow
+            except Exception as e:
+                logger.warning(f"Could not fetch FMP cashflow: {e}")
+        elif provider == "alphavantage":
+            from dataproviders.fundamentals.details import AlphaVantageCompanyDetailsProvider
+            av_provider = AlphaVantageCompanyDetailsProvider()
+            fundamentals = {
+                "ticker": symbol,
+                "provider": "alphavantage",
+                "fetch_date": datetime.now().isoformat(),
+                "current": {},
+                "historical": {}
+            }
+            try:
+                balance = av_provider.get_balance_sheet(symbol, period="quarterly", limit=4)
+                if balance:
+                    fundamentals["balance_sheet"] = balance
+            except Exception as e:
+                logger.warning(f"Could not fetch AlphaVantage balance sheet: {e}")
+            try:
+                income = av_provider.get_income_statement(symbol, period="quarterly", limit=4)
+                if income:
+                    fundamentals["income_statement"] = income
+            except Exception as e:
+                logger.warning(f"Could not fetch AlphaVantage income statement: {e}")
+            try:
+                cashflow = av_provider.get_cashflow_statement(symbol, period="quarterly", limit=4)
+                if cashflow:
+                    fundamentals["cashflow_statement"] = cashflow
+            except Exception as e:
+                logger.warning(f"Could not fetch AlphaVantage cashflow: {e}")
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown provider: {provider}. Available: yfinance, fmp, alphavantage"
+            )
 
         if fundamentals:
-            logger.info(f"Fetched fundamentals for {symbol}: {len(fundamentals.get('current', {}))} metrics")
+            logger.info(f"Fetched fundamentals for {symbol} from {provider}")
             return fundamentals
         else:
             return {
                 "ticker": symbol,
+                "provider": provider,
                 "current": {},
                 "message": "No fundamental data available"
             }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching fundamentals: {e}", exc_info=True)
         raise HTTPException(
@@ -416,6 +483,7 @@ async def fetch_fundamentals(
 @router.get("/macro/fetch")
 async def fetch_macro(
     indicators: str = Query(..., description="Comma-separated list of indicators (e.g., interest_rate,gdp,inflation)"),
+    provider: str = Query("fred", description="Provider: fred (only FRED is currently supported)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 1 year ago."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today.")
 ):
@@ -424,6 +492,7 @@ async def fetch_macro(
 
     Args:
         indicators: Comma-separated list of indicator IDs
+        provider: Data provider (currently only 'fred' is supported)
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
 
@@ -432,6 +501,13 @@ async def fetch_macro(
     """
     try:
         from app.services.macro import MacroService
+
+        # Validate provider
+        if provider != "fred":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown provider: {provider}. Currently only 'fred' is supported."
+            )
 
         # Parse indicators
         indicator_list = [i.strip() for i in indicators.split(',') if i.strip()]
@@ -453,7 +529,7 @@ async def fetch_macro(
         else:
             start_dt = end_dt - timedelta(days=365)
 
-        logger.info(f"Fetching macro indicators: {indicator_list} from {start_dt.date()} to {end_dt.date()}")
+        logger.info(f"Fetching macro indicators: {indicator_list} from {provider} ({start_dt.date()} to {end_dt.date()})")
 
         macro_service = MacroService()
         macro_data = macro_service.get_macro_data(
@@ -464,6 +540,7 @@ async def fetch_macro(
 
         # Format response
         result = {
+            "provider": provider,
             "start_date": start_dt.strftime("%Y-%m-%d"),
             "end_date": end_dt.strftime("%Y-%m-%d"),
             "indicators": {}
