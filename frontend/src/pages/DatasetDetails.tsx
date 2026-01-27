@@ -1310,14 +1310,14 @@ const DatasetDetails: React.FC = () => {
         )}
       </div>
 
-      {/* Non-Chart Data Table (Fundamental, Sentiment, Macro) */}
+      {/* Non-Chart Data Table (Fundamental, Sentiment, Macro, and other non-chart columns) */}
       {datasetColumns && chartData.length > 0 && (
         (() => {
-          // Get columns that are NOT price or technical
-          const nonChartCategories = ['fundamental', 'sentiment', 'macro'];
-          const nonChartColumns = nonChartCategories
-            .flatMap(cat => datasetColumns.columns[cat] || [])
-            .map(c => c.name)
+          // Get columns that are NOT price or technical (include all other categories)
+          const chartCategories = ['price', 'technical'];  // These are displayed on the chart
+          const nonChartColumns = Object.entries(datasetColumns.columns)
+            .filter(([category]) => !chartCategories.includes(category))
+            .flatMap(([_, cols]) => cols.map(c => c.name))
             .filter(col => chartData[0] && col in chartData[0]);
 
           // Get visible data based on zoom
@@ -1369,8 +1369,8 @@ const DatasetDetails: React.FC = () => {
                     <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                       {displayData.map((row, idx) => (
                         <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                          <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                            {new Date(row.Date).toLocaleDateString()}
+                          <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap font-mono text-xs">
+                            {new Date(row.Date).toLocaleString()}
                           </td>
                           {nonChartColumns.map(col => {
                             const value = (row as any)[col];
