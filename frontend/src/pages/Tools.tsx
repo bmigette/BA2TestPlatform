@@ -667,6 +667,16 @@ const NewsProviderTester: React.FC = () => {
 const FundamentalsTester: React.FC = () => {
   const [symbol, setSymbol] = useState('AAPL');
   const [provider, setProvider] = useState('yfinance');
+  const [dataType, setDataType] = useState('balance_sheet');
+  const [frequency, setFrequency] = useState('quarterly');
+  const [lookbackPeriods, setLookbackPeriods] = useState(8);
+  const [useCustomDates, setUseCustomDates] = useState(false);
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 2);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fundamentals, setFundamentals] = useState<Record<string, any> | null>(null);
@@ -677,13 +687,36 @@ const FundamentalsTester: React.FC = () => {
     { id: 'alphavantage', name: 'Alpha Vantage', description: 'Requires Alpha Vantage API key' },
   ];
 
+  const dataTypes = [
+    { id: 'overview', name: 'Company Overview', description: 'P/E, EPS, Market Cap, etc.' },
+    { id: 'balance_sheet', name: 'Balance Sheet', description: 'Assets, liabilities, equity' },
+    { id: 'income_statement', name: 'Income Statement', description: 'Revenue, expenses, profit' },
+    { id: 'cashflow_statement', name: 'Cash Flow Statement', description: 'Operating, investing, financing' },
+    { id: 'past_earnings', name: 'Past Earnings', description: 'Historical EPS and surprises' },
+    { id: 'earnings_estimates', name: 'Earnings Estimates', description: 'Future EPS forecasts' },
+  ];
+
   const fetchFundamentals = async () => {
     setLoading(true);
     setError(null);
     setFundamentals(null);
 
     try {
-      const params = new URLSearchParams({ symbol, provider });
+      const params = new URLSearchParams({
+        symbol,
+        provider,
+        data_type: dataType,
+        frequency,
+      });
+
+      if (useCustomDates) {
+        params.set('start_date', startDate);
+        params.set('end_date', endDate);
+      } else {
+        params.set('lookback_periods', lookbackPeriods.toString());
+        params.set('end_date', endDate);
+      }
+
       const response = await fetch(`http://localhost:8002/api/tools/fundamentals/fetch?${params}`);
 
       if (response.ok) {
@@ -700,6 +733,191 @@ const FundamentalsTester: React.FC = () => {
     }
   };
 
+  // Format large numbers for display
+  const formatValue = (value: any): string => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'number') {
+      if (Math.abs(value) >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+      if (Math.abs(value) >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
+      if (Math.abs(value) >= 1e3) return `$${(value / 1e3).toFixed(2)}K`;
+      return value.toLocaleString();
+    }
+    return String(value);
+  };
+
+  // Render periods data (balance sheet, income statement, cash flow)
+  const renderPeriods = () => {
+    if (!fundamentals?.periods || fundamentals.periods.length === 0) {
+      return <p className="text-gray-500 dark:text-gray-400">No period data available</p>;
+    }
+
+    return (
+      <div className="space-y-6">
+        {fundamentals.periods.map((period: any, idx: number) => (
+          <div key={idx} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+            <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-3">
+              Period: {period.date}
+            </h4>
+            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Item</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {Object.entries(period.items || {}).map(([key, value]) => (
+                    <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <td className="px-3 py-1 text-gray-900 dark:text-gray-100">{key}</td>
+                      <td className="px-3 py-1 text-right text-gray-600 dark:text-gray-400 font-mono">
+                        {formatValue(value)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Render earnings data
+  const renderEarnings = () => {
+    const earnings = fundamentals?.earnings || [];
+    if (earnings.length === 0) {
+      return <p className="text-gray-500 dark:text-gray-400">No earnings data available</p>;
+    }
+
+    return (
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Date</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Reported EPS</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Estimated EPS</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Surprise</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Surprise %</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {earnings.map((earning: any, idx: number) => (
+              <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <td className="px-4 py-2 text-gray-900 dark:text-gray-100">{earning.fiscal_date_ending}</td>
+                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
+                  ${earning.reported_eps?.toFixed(2) || '-'}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
+                  ${earning.estimated_eps?.toFixed(2) || '-'}
+                </td>
+                <td className={`px-4 py-2 text-right font-mono ${earning.surprise > 0 ? 'text-green-600' : earning.surprise < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                  {earning.surprise != null ? `$${earning.surprise.toFixed(2)}` : '-'}
+                </td>
+                <td className={`px-4 py-2 text-right font-mono ${earning.surprise_percent > 0 ? 'text-green-600' : earning.surprise_percent < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                  {earning.surprise_percent != null ? `${earning.surprise_percent.toFixed(1)}%` : '-'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Render estimates data
+  const renderEstimates = () => {
+    const estimates = fundamentals?.estimates || [];
+    if (estimates.length === 0) {
+      return <p className="text-gray-500 dark:text-gray-400">No estimates data available</p>;
+    }
+
+    return (
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Date</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Avg Estimate</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">High</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Low</th>
+              <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300"># Analysts</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {estimates.map((estimate: any, idx: number) => (
+              <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <td className="px-4 py-2 text-gray-900 dark:text-gray-100">{estimate.fiscal_date_ending}</td>
+                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
+                  ${estimate.estimated_eps_avg?.toFixed(2) || '-'}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
+                  ${estimate.estimated_eps_high?.toFixed(2) || '-'}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
+                  ${estimate.estimated_eps_low?.toFixed(2) || '-'}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-gray-600 dark:text-gray-400">
+                  {estimate.number_of_analysts || '-'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Render overview data (current metrics)
+  const renderOverview = () => {
+    const current = fundamentals?.current || fundamentals?.metrics || {};
+    if (Object.keys(current).length === 0) {
+      return <p className="text-gray-500 dark:text-gray-400">No overview data available</p>;
+    }
+
+    return (
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Metric</th>
+              <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Value</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {Object.entries(current).map(([key, value]) => (
+              <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">
+                  {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                </td>
+                <td className="px-4 py-2 text-gray-600 dark:text-gray-400 font-mono">
+                  {formatValue(value)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Render the appropriate data based on data type
+  const renderData = () => {
+    if (!fundamentals) return null;
+
+    if (dataType === 'overview') {
+      return renderOverview();
+    } else if (dataType === 'past_earnings') {
+      return renderEarnings();
+    } else if (dataType === 'earnings_estimates') {
+      return renderEstimates();
+    } else {
+      return renderPeriods();
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
@@ -707,57 +925,149 @@ const FundamentalsTester: React.FC = () => {
           Test Fundamentals Provider
         </h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-          Fetch fundamental data (P/E, EPS, FCF, etc.) for a ticker.
+          Fetch historical fundamental data (balance sheets, income statements, cash flow, earnings) for a ticker.
         </p>
 
-        <div className="flex flex-wrap gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Symbol
-            </label>
-            <input
-              type="text"
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-              className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-              placeholder="AAPL"
-            />
+        <div className="space-y-4">
+          {/* Row 1: Symbol, Provider, Data Type */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Symbol
+              </label>
+              <input
+                type="text"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                placeholder="AAPL"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Provider
+              </label>
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              >
+                {availableProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Data Type
+              </label>
+              <select
+                value={dataType}
+                onChange={(e) => setDataType(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              >
+                {dataTypes.map((dt) => (
+                  <option key={dt.id} value={dt.id}>
+                    {dt.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Frequency
+              </label>
+              <select
+                value={frequency}
+                onChange={(e) => setFrequency(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                disabled={dataType === 'overview'}
+              >
+                <option value="quarterly">Quarterly</option>
+                <option value="annual">Annual</option>
+              </select>
+            </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Provider
-            </label>
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-            >
-              {availableProviders.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Row 2: Date Range Options */}
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="useCustomDates"
+                checked={useCustomDates}
+                onChange={(e) => setUseCustomDates(e.target.checked)}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              <label htmlFor="useCustomDates" className="text-sm text-gray-700 dark:text-gray-300">
+                Use custom date range
+              </label>
+            </div>
 
-          <button
-            onClick={fetchFundamentals}
-            disabled={loading || !symbol}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-          >
-            {loading ? (
+            {useCustomDates ? (
               <>
-                <Loader size={16} className="animate-spin" />
-                Fetching...
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
               </>
             ) : (
-              <>
-                <Search size={16} />
-                Fetch Fundamentals
-              </>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Lookback Periods
+                </label>
+                <input
+                  type="number"
+                  value={lookbackPeriods}
+                  onChange={(e) => setLookbackPeriods(parseInt(e.target.value) || 8)}
+                  min={1}
+                  max={20}
+                  className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+              </div>
             )}
-          </button>
+
+            <button
+              onClick={fetchFundamentals}
+              disabled={loading || !symbol}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader size={16} className="animate-spin" />
+                  Fetching...
+                </>
+              ) : (
+                <>
+                  <Search size={16} />
+                  Fetch Data
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -772,39 +1082,21 @@ const FundamentalsTester: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Fundamentals for {fundamentals.ticker}
+              {dataTypes.find(dt => dt.id === dataType)?.name} for {fundamentals.symbol || symbol}
             </h3>
-            <span className="px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
-              Provider: {fundamentals.provider || 'yfinance'}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+                Provider: {fundamentals.provider || provider}
+              </span>
+              {fundamentals.frequency && (
+                <span className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded">
+                  {fundamentals.frequency}
+                </span>
+              )}
+            </div>
           </div>
 
-          {fundamentals.current && Object.keys(fundamentals.current).length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50 dark:bg-gray-700">
-                  <tr>
-                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Metric</th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Value</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {Object.entries(fundamentals.current).map(([key, value]) => (
-                    <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">
-                        {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                      </td>
-                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400 font-mono">
-                        {value === null ? '-' : typeof value === 'number' ? value.toLocaleString() : String(value)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="text-gray-500 dark:text-gray-400">No fundamental data available</p>
-          )}
+          {renderData()}
         </div>
       )}
     </div>

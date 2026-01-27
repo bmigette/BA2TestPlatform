@@ -374,100 +374,204 @@ async def list_news_exports():
     }
 
 
+@router.get("/fundamentals/providers")
+async def list_fundamentals_providers():
+    """
+    List available fundamentals providers and their capabilities.
+
+    Returns:
+        List of providers with their supported features
+    """
+    import os
+
+    providers = {
+        "details": [
+            {
+                "id": "yfinance",
+                "name": "Yahoo Finance",
+                "description": "Financial statements from Yahoo Finance",
+                "requires_api_key": False,
+                "api_key_configured": True,
+                "features": ["balance_sheet", "income_statement", "cashflow_statement", "past_earnings", "earnings_estimates"]
+            },
+            {
+                "id": "fmp",
+                "name": "Financial Modeling Prep",
+                "description": "Financial statements from FMP API",
+                "requires_api_key": True,
+                "api_key_configured": bool(os.getenv("FMP_API_KEY")),
+                "features": ["balance_sheet", "income_statement", "cashflow_statement", "past_earnings", "earnings_estimates"]
+            },
+            {
+                "id": "alphavantage",
+                "name": "Alpha Vantage",
+                "description": "Financial statements from Alpha Vantage API",
+                "requires_api_key": True,
+                "api_key_configured": bool(os.getenv("ALPHA_VANTAGE_API_KEY")),
+                "features": ["balance_sheet", "income_statement", "cashflow_statement", "past_earnings"]
+            }
+        ],
+        "overview": [
+            {
+                "id": "fmp",
+                "name": "Financial Modeling Prep",
+                "description": "Company overview and profile from FMP",
+                "requires_api_key": True,
+                "api_key_configured": bool(os.getenv("FMP_API_KEY")),
+                "features": ["fundamentals_overview", "company_profile"]
+            },
+            {
+                "id": "alphavantage",
+                "name": "Alpha Vantage",
+                "description": "Company overview from Alpha Vantage",
+                "requires_api_key": True,
+                "api_key_configured": bool(os.getenv("ALPHA_VANTAGE_API_KEY")),
+                "features": ["fundamentals_overview"]
+            }
+        ]
+    }
+
+    return {
+        "providers": providers,
+        "data_types": ["overview", "balance_sheet", "income_statement", "cashflow_statement", "past_earnings", "earnings_estimates"],
+        "frequencies": ["quarterly", "annual"]
+    }
+
+
 @router.get("/fundamentals/fetch")
 async def fetch_fundamentals(
     symbol: str = Query(..., description="Stock ticker symbol (e.g., AAPL)"),
-    provider: str = Query("yfinance", description="Provider: yfinance, fmp, alphavantage")
+    provider: str = Query("yfinance", description="Provider: yfinance, fmp, alphavantage"),
+    data_type: str = Query("balance_sheet", description="Data type: overview, balance_sheet, income_statement, cashflow_statement, past_earnings, earnings_estimates"),
+    frequency: str = Query("quarterly", description="Frequency: quarterly or annual"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Use either this OR lookback_periods."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
+    lookback_periods: Optional[int] = Query(None, description="Number of periods to look back. Use either this OR start_date. Default: 8")
 ):
     """
-    Fetch fundamental data for a ticker.
+    Fetch fundamental data for a ticker using the dataproviders.
 
     Args:
         symbol: Stock ticker symbol
-        provider: Data provider to use (yfinance, fmp, alphavantage)
+        provider: Data provider (yfinance, fmp, alphavantage)
+        data_type: Type of data (overview, balance_sheet, income_statement, cashflow_statement, past_earnings, earnings_estimates)
+        frequency: Data frequency (quarterly or annual)
+        start_date: Start date for historical data (YYYY-MM-DD)
+        end_date: End date for historical data (YYYY-MM-DD)
+        lookback_periods: Number of periods to look back (alternative to start_date)
 
     Returns:
-        Fundamental data including P/E, EPS, FCF, etc.
+        Fundamental data with historical periods
     """
     try:
-        logger.info(f"Fetching fundamentals for {symbol} using provider: {provider}")
+        logger.info(f"Fetching {data_type} for {symbol} using {provider} ({frequency})")
 
+        # Parse dates
+        if end_date:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end_dt = datetime.now()
+
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start_dt = None
+
+        # Default lookback if neither start_date nor lookback_periods provided
+        if start_dt is None and lookback_periods is None:
+            lookback_periods = 8
+
+        # Handle overview separately (it's from overview providers)
+        if data_type == "overview":
+            return await _fetch_fundamentals_overview(symbol, provider, end_dt)
+
+        # For details data types, use details providers
         if provider == "yfinance":
-            from app.services.fundamentals import FundamentalsService
-            fundamentals_service = FundamentalsService()
-            fundamentals = fundamentals_service.get_fundamental_data(symbol)
+            from dataproviders.fundamentals.details import YFinanceCompanyDetailsProvider
+            details_provider = YFinanceCompanyDetailsProvider()
         elif provider == "fmp":
             from dataproviders.fundamentals.details import FMPCompanyDetailsProvider
-            fmp_provider = FMPCompanyDetailsProvider()
-            fundamentals = {
-                "ticker": symbol,
-                "provider": "fmp",
-                "fetch_date": datetime.now().isoformat(),
-                "current": {},
-                "historical": {}
-            }
-            # Fetch balance sheet and income statement
-            try:
-                balance = fmp_provider.get_balance_sheet(symbol, period="quarterly", limit=4)
-                if balance:
-                    fundamentals["balance_sheet"] = balance
-            except Exception as e:
-                logger.warning(f"Could not fetch FMP balance sheet: {e}")
-            try:
-                income = fmp_provider.get_income_statement(symbol, period="quarterly", limit=4)
-                if income:
-                    fundamentals["income_statement"] = income
-            except Exception as e:
-                logger.warning(f"Could not fetch FMP income statement: {e}")
-            try:
-                cashflow = fmp_provider.get_cashflow_statement(symbol, period="quarterly", limit=4)
-                if cashflow:
-                    fundamentals["cashflow_statement"] = cashflow
-            except Exception as e:
-                logger.warning(f"Could not fetch FMP cashflow: {e}")
+            details_provider = FMPCompanyDetailsProvider()
         elif provider == "alphavantage":
             from dataproviders.fundamentals.details import AlphaVantageCompanyDetailsProvider
-            av_provider = AlphaVantageCompanyDetailsProvider()
-            fundamentals = {
-                "ticker": symbol,
-                "provider": "alphavantage",
-                "fetch_date": datetime.now().isoformat(),
-                "current": {},
-                "historical": {}
-            }
-            try:
-                balance = av_provider.get_balance_sheet(symbol, period="quarterly", limit=4)
-                if balance:
-                    fundamentals["balance_sheet"] = balance
-            except Exception as e:
-                logger.warning(f"Could not fetch AlphaVantage balance sheet: {e}")
-            try:
-                income = av_provider.get_income_statement(symbol, period="quarterly", limit=4)
-                if income:
-                    fundamentals["income_statement"] = income
-            except Exception as e:
-                logger.warning(f"Could not fetch AlphaVantage income statement: {e}")
-            try:
-                cashflow = av_provider.get_cashflow_statement(symbol, period="quarterly", limit=4)
-                if cashflow:
-                    fundamentals["cashflow_statement"] = cashflow
-            except Exception as e:
-                logger.warning(f"Could not fetch AlphaVantage cashflow: {e}")
+            details_provider = AlphaVantageCompanyDetailsProvider()
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}. Available: yfinance, fmp, alphavantage"
             )
 
-        if fundamentals:
-            logger.info(f"Fetched fundamentals for {symbol} from {provider}")
-            return fundamentals
+        # Fetch the requested data type
+        result = None
+        try:
+            if data_type == "balance_sheet":
+                result = details_provider.get_balance_sheet(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    start_date=start_dt,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+            elif data_type == "income_statement":
+                result = details_provider.get_income_statement(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    start_date=start_dt,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+            elif data_type == "cashflow_statement":
+                result = details_provider.get_cashflow_statement(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    start_date=start_dt,
+                    lookback_periods=lookback_periods,
+                    format_type="dict"
+                )
+            elif data_type == "past_earnings":
+                result = details_provider.get_past_earnings(
+                    symbol=symbol,
+                    frequency=frequency,
+                    end_date=end_dt,
+                    lookback_periods=lookback_periods or 8,
+                    format_type="dict"
+                )
+            elif data_type == "earnings_estimates":
+                result = details_provider.get_earnings_estimates(
+                    symbol=symbol,
+                    frequency=frequency,
+                    as_of_date=end_dt,
+                    lookback_periods=lookback_periods or 4,
+                    format_type="dict"
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown data_type: {data_type}. Available: overview, balance_sheet, income_statement, cashflow_statement, past_earnings, earnings_estimates"
+                )
+        except ValueError as e:
+            # Handle provider-specific errors gracefully
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+
+        if result:
+            # Add provider info to result
+            if isinstance(result, dict):
+                result["provider"] = provider
+            logger.info(f"Fetched {data_type} for {symbol} from {provider}: {len(result.get('periods', result.get('earnings', result.get('estimates', []))))} periods")
+            return result
         else:
             return {
-                "ticker": symbol,
+                "symbol": symbol,
                 "provider": provider,
-                "current": {},
-                "message": "No fundamental data available"
+                "data_type": data_type,
+                "periods": [],
+                "message": "No data available"
             }
 
     except HTTPException:
@@ -477,6 +581,46 @@ async def fetch_fundamentals(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch fundamentals: {str(e)}"
+        )
+
+
+async def _fetch_fundamentals_overview(symbol: str, provider: str, as_of_date: datetime) -> Dict[str, Any]:
+    """
+    Fetch company overview from overview providers.
+    """
+    try:
+        if provider == "fmp":
+            from dataproviders.fundamentals.overview import FMPCompanyOverviewProvider
+            overview_provider = FMPCompanyOverviewProvider()
+        elif provider == "alphavantage":
+            from dataproviders.fundamentals.overview import AlphaVantageCompanyOverviewProvider
+            overview_provider = AlphaVantageCompanyOverviewProvider()
+        else:
+            # YFinance doesn't have overview provider, use the simple service
+            from app.services.fundamentals import FundamentalsService
+            fundamentals_service = FundamentalsService()
+            result = fundamentals_service.get_fundamental_data(symbol)
+            result["provider"] = "yfinance"
+            result["data_type"] = "overview"
+            return result
+
+        result = overview_provider.get_fundamentals_overview(
+            symbol=symbol,
+            as_of_date=as_of_date,
+            format_type="dict"
+        )
+
+        if isinstance(result, dict):
+            result["provider"] = provider
+            result["data_type"] = "overview"
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error fetching overview for {symbol}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch overview: {str(e)}"
         )
 
 
