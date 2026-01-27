@@ -2,7 +2,7 @@
 Database configuration and session management
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -14,12 +14,36 @@ load_dotenv()
 # Get database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dl_forecasting.db")
 
+# SQLite connection args for better concurrency
+sqlite_connect_args = {
+    "check_same_thread": False,
+    "timeout": 30,  # Wait up to 30 seconds for locks
+}
+
 # Create engine
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
-    echo=False
+    connect_args=sqlite_connect_args if DATABASE_URL.startswith("sqlite") else {},
+    echo=False,
+    pool_pre_ping=True,  # Test connections before use
 )
+
+
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    """Set SQLite pragmas for better concurrency."""
+    cursor = dbapi_connection.cursor()
+    # Enable WAL mode for concurrent reads during writes
+    cursor.execute("PRAGMA journal_mode=WAL")
+    # Set busy timeout (in milliseconds)
+    cursor.execute("PRAGMA busy_timeout=30000")
+    # Synchronous mode - NORMAL is a good balance of safety and speed
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
+
+# Apply SQLite pragmas on connection
+if DATABASE_URL.startswith("sqlite"):
+    event.listen(engine, "connect", _set_sqlite_pragma)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
