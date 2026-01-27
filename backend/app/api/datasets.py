@@ -244,8 +244,11 @@ async def create_dataset(
                     logger.info(f"Total articles from all sources: {len(all_articles)}")
                     df = sentiment_service.create_sentiment_features(df, all_articles)
                     logger.info(f"Added sentiment features from {len(all_articles)} articles")
+                    # Store articles count in sentiment_config
+                    dataset_create.sentiment_config['articles_count'] = len(all_articles)
                 else:
                     logger.warning("No news articles found for sentiment analysis from any source")
+                    dataset_create.sentiment_config['articles_count'] = 0
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
@@ -965,8 +968,11 @@ async def regenerate_dataset(
                     logger.info(f"Total articles from all sources: {len(all_articles)}")
                     df = sentiment_service.create_sentiment_features(df, all_articles)
                     logger.info(f"Added sentiment features from {len(all_articles)} articles")
+                    # Store articles count in sentiment_config
+                    sentiment_config['articles_count'] = len(all_articles)
                 else:
                     logger.warning("No news articles found for sentiment analysis")
+                    sentiment_config['articles_count'] = 0
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
@@ -1366,8 +1372,15 @@ async def update_dataset(
                     logger.info(f"Total articles from all sources: {len(all_articles)}")
                     df = sentiment_service.create_sentiment_features(df, all_articles)
                     logger.info(f"Added sentiment features from {len(all_articles)} articles")
+                    # Store articles count - copy dict to ensure SQLAlchemy detects change
+                    updated_sentiment_config = dict(dataset.sentiment_config) if dataset.sentiment_config else {}
+                    updated_sentiment_config['articles_count'] = len(all_articles)
+                    dataset.sentiment_config = updated_sentiment_config
                 else:
                     logger.warning("No news articles found for sentiment analysis from any source")
+                    updated_sentiment_config = dict(dataset.sentiment_config) if dataset.sentiment_config else {}
+                    updated_sentiment_config['articles_count'] = 0
+                    dataset.sentiment_config = updated_sentiment_config
 
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")

@@ -1433,28 +1433,19 @@ const DatasetDetails: React.FC = () => {
                 News Articles
               </dt>
               <dd className="text-sm text-gray-900 dark:text-gray-100">
-                {sentimentLoading ? (
-                  <span className="text-gray-500">Loading...</span>
-                ) : sentimentError ? (
-                  <span className="text-red-500">Error loading news</span>
-                ) : sentimentMarkers.length > 0 ? (
+                {dataset.sentiment_config?.articles_count !== undefined ? (
                   <div>
-                    <span className="font-semibold">{sentimentMarkers.length}</span> articles found
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {(() => {
-                        const dates = sentimentMarkers
-                          .map(m => m.date)
-                          .filter(d => d)
-                          .sort();
-                        if (dates.length === 0) return null;
-                        const first = new Date(dates[0]).toLocaleDateString();
-                        const last = new Date(dates[dates.length - 1]).toLocaleDateString();
-                        return `${first} — ${last}`;
-                      })()}
-                    </div>
+                    <span className="font-semibold">{dataset.sentiment_config.articles_count}</span> articles used
+                    {dataset.sentiment_config.news_sources && (
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Sources: {dataset.sentiment_config.news_sources.map((s: string) => s.replace('_news', '')).join(', ')}
+                      </div>
+                    )}
                   </div>
+                ) : dataset.sentiment_config?.enabled ? (
+                  <span className="text-gray-500">Count not available (regenerate dataset)</span>
                 ) : (
-                  <span className="text-gray-500">No news articles found</span>
+                  <span className="text-gray-500">Sentiment not enabled</span>
                 )}
               </dd>
             </div>
