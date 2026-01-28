@@ -3,7 +3,7 @@ Dataset API endpoints
 Updated for preview endpoint and Parquet export
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
+import threading
+import concurrent.futures
 
 from app.models.database import get_db, SessionLocal
 from app.models.dataset import Dataset, DatasetStatus
@@ -61,6 +63,201 @@ DEFAULT_INDICATORS = {
 
 router = APIRouter()
 
+# Thread pool for background dataset generation
+_dataset_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dataset_gen")
+
+
+def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
+    """
+    Build dataset in a background thread.
+
+    This function runs in a separate thread with its own database session
+    to avoid blocking the main event loop and database connection pool.
+
+    Args:
+        dataset_id: ID of the dataset record (already created in BUILDING status)
+        dataset_config: Dictionary containing all dataset creation parameters
+    """
+    # Create a new database session for this thread
+    db = SessionLocal()
+
+    try:
+        logger.info(f"[Thread] Starting background build for dataset {dataset_id}")
+
+        # Load the dataset record
+        db_dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not db_dataset:
+            logger.error(f"[Thread] Dataset {dataset_id} not found")
+            return
+
+        # Extract config
+        ticker = dataset_config['ticker']
+        timeframe = dataset_config['timeframe']
+        start_date = datetime.strptime(dataset_config['start_date'], "%Y-%m-%d") if dataset_config.get('start_date') else datetime.now() - timedelta(days=365)
+        end_date = datetime.strptime(dataset_config['end_date'], "%Y-%m-%d") if dataset_config.get('end_date') else datetime.now()
+        provider_name = dataset_config.get('data_provider') or "yfinance"
+        technical_indicators = dataset_config.get('technical_indicators', [])
+        sentiment_config = dataset_config.get('sentiment_config', {})
+        fundamentals_config = dataset_config.get('fundamentals_config', {})
+        file_path = Path(db_dataset.file_path)
+
+        # Convert timeframe to interval format
+        interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+        }
+        interval = interval_map.get(timeframe, "1d")
+
+        # Fetch OHLC data
+        provider = get_ohlcv_provider(provider_name)
+        logger.info(f"[Thread] Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
+
+        data_points = provider.get_data(
+            symbol=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval
+        )
+
+        if not data_points:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"No data available for {ticker}"
+            db.commit()
+            logger.error(f"[Thread] No data for {ticker}")
+            return
+
+        # Convert to DataFrame
+        df = pd.DataFrame([{
+            'Date': dp.timestamp, 'Open': dp.open, 'High': dp.high,
+            'Low': dp.low, 'Close': dp.close, 'Volume': dp.volume
+        } for dp in data_points])
+        df = df.sort_values('Date').reset_index(drop=True)
+        logger.info(f"[Thread] Fetched {len(df)} OHLC data points")
+
+        # Validate date range (with 5-day tolerance)
+        data_start = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
+        data_end = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
+        req_start = start_date.date() if hasattr(start_date, 'date') else start_date
+        req_end = end_date.date() if hasattr(end_date, 'date') else end_date
+
+        if (data_start - req_start).days > 5:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"Data starts at {data_start}, but requested {req_start}"
+            db.commit()
+            return
+
+        if (req_end - data_end).days > 5:
+            db_dataset.status = DatasetStatus.ERROR.value
+            db_dataset.error_message = f"Data ends at {data_end}, but requested {req_end}"
+            db.commit()
+            return
+
+        # Apply technical indicators
+        if technical_indicators:
+            logger.info(f"[Thread] Applying {len(technical_indicators)} technical indicators...")
+            try:
+                indicators_dict = {}
+                for ind in technical_indicators:
+                    ind_type = ind.get('type', ind.get('name', 'unknown'))
+                    ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
+                    indicators_dict[ind_name] = ind
+                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                logger.info(f"[Thread] Added technical indicators. {len(df.columns)} columns")
+            except Exception as e:
+                logger.error(f"[Thread] Error applying indicators: {e}")
+
+        # Fetch sentiment features
+        if sentiment_config and sentiment_config.get('enabled'):
+            logger.info("[Thread] Fetching sentiment data...")
+            try:
+                sentiment_service = SentimentService()
+                news_sources = sentiment_config.get('news_sources', [])
+                if not news_sources:
+                    news_sources = [sentiment_config.get('provider', 'fmp')]
+
+                all_articles = []
+                for source in news_sources:
+                    source_provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
+                    try:
+                        articles = sentiment_service.fetch_news_for_ticker(
+                            ticker=ticker,
+                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                            provider=source_provider,
+                            enrich_content=sentiment_config.get('enrich_content', True)
+                        )
+                        if articles:
+                            logger.info(f"[Thread] Fetched {len(articles)} articles from {source_provider}")
+                            all_articles.extend(articles)
+                    except Exception as e:
+                        logger.warning(f"[Thread] Error fetching from {source_provider}: {e}")
+
+                if all_articles:
+                    logger.info(f"[Thread] Creating sentiment features from {len(all_articles)} articles")
+                    df = sentiment_service.create_sentiment_features(df, all_articles)
+            except Exception as e:
+                logger.error(f"[Thread] Error fetching sentiment: {e}")
+
+        # Fetch fundamentals
+        if fundamentals_config and fundamentals_config.get('enabled'):
+            logger.info("[Thread] Fetching fundamentals data...")
+            try:
+                statement_types = fundamentals_config.get('statement_types')
+                if statement_types:
+                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
+                    providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
+                    df = FundamentalsService.create_statement_features(
+                        df=df, ticker=ticker, statement_types=statement_types,
+                        lookback_statements=lookback_statements, providers=providers,
+                        frequency='quarterly'
+                    )
+                else:
+                    fundamentals = FundamentalsService.get_fundamental_data(ticker)
+                    if fundamentals and fundamentals.get('current'):
+                        for key, value in fundamentals['current'].items():
+                            if value is not None:
+                                df[f'fundamental_{key}'] = value
+
+                # Macro indicators
+                macro_indicators = fundamentals_config.get('macro_indicators', [])
+                if macro_indicators:
+                    macro_service = MacroService()
+                    df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
+                    for indicator in macro_indicators:
+                        if indicator in df.columns:
+                            df = df.rename(columns={indicator: f'macro_{indicator}'})
+                            if f'{indicator}_yoy_change' in df.columns:
+                                df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+            except Exception as e:
+                logger.error(f"[Thread] Error fetching fundamentals: {e}")
+
+        # Save dataset
+        df.to_csv(file_path, index=False)
+        logger.info(f"[Thread] Saved dataset to {file_path} with {len(df.columns)} columns")
+
+        # Update dataset record
+        db_dataset.start_date = df['Date'].min()
+        db_dataset.end_date = df['Date'].max()
+        db_dataset.rows_count = len(df)
+        db_dataset.status = DatasetStatus.READY.value
+        db_dataset.error_message = None
+        db.commit()
+
+        logger.info(f"[Thread] Dataset {dataset_id} is now READY with {len(df)} rows")
+
+    except Exception as e:
+        logger.error(f"[Thread] Error building dataset {dataset_id}: {e}", exc_info=True)
+        try:
+            db_dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if db_dataset:
+                db_dataset.status = DatasetStatus.ERROR.value
+                db_dataset.error_message = str(e)[:500]
+                db.commit()
+        except Exception:
+            db.rollback()
+    finally:
+        db.close()
+
 
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def create_dataset(
@@ -70,32 +267,19 @@ async def create_dataset(
     """
     Create a new dataset by fetching data from a provider and saving it.
 
+    Dataset generation runs in a background thread to avoid blocking the API.
+    The dataset is created with BUILDING status and updated to READY when complete.
+    Poll GET /datasets/{id} to check status.
+
     Args:
         dataset_create: Dataset creation parameters
         db: Database session
 
     Returns:
-        Created dataset with metadata
+        Created dataset with BUILDING status (generation runs in background)
     """
-    db_dataset = None
     try:
         logger.info(f"Creating dataset for {dataset_create.ticker} with timeframe {dataset_create.timeframe}")
-
-        # Debug log all dataset generation options
-        logger.debug("=" * 60)
-        logger.debug("DATASET GENERATION OPTIONS:")
-        logger.debug(f"  Ticker: {dataset_create.ticker}")
-        logger.debug(f"  Timeframe: {dataset_create.timeframe}")
-        logger.debug(f"  Start Date: {dataset_create.start_date}")
-        logger.debug(f"  End Date: {dataset_create.end_date}")
-        logger.debug(f"  Name: {dataset_create.name}")
-        logger.debug(f"  Data Provider: {dataset_create.data_provider or 'yfinance'}")
-        logger.debug(f"  Normalization Buffer: {dataset_create.normalization_buffer_pct}%")
-        logger.debug(f"  Indicator Collection ID: {dataset_create.indicator_collection_id}")
-        logger.debug(f"  Technical Indicators: {dataset_create.technical_indicators}")
-        logger.debug(f"  Fundamentals Config: {dataset_create.fundamentals_config}")
-        logger.debug(f"  Sentiment Config: {dataset_create.sentiment_config}")
-        logger.debug("=" * 60)
 
         # Generate dataset name if not provided
         if not dataset_create.name:
@@ -127,7 +311,7 @@ async def create_dataset(
         datasets_dir.mkdir(exist_ok=True)
         file_path = datasets_dir / f"{dataset_create.name}.csv"
 
-        # Create database record in PENDING status first
+        # Create database record in BUILDING status first
         db_dataset = Dataset(
             name=dataset_create.name,
             ticker=dataset_create.ticker,
@@ -149,241 +333,28 @@ async def create_dataset(
         db.refresh(db_dataset)
         logger.info(f"Created dataset record with ID {db_dataset.id} in BUILDING status")
 
-        # Now fetch data - if this fails, dataset will remain in BUILDING or ERROR status
-        provider_name = dataset_create.data_provider or "yfinance"
-        provider = get_ohlcv_provider(provider_name)
-        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
-
-        # Convert timeframe to YFinance interval format
-        interval_map = {
-            "1m": "1m",
-            "5m": "5m",
-            "15m": "15m",
-            "30m": "30m",
-            "1h": "1h",
-            "4h": "4h",
-            "1d": "1d",
-            "1w": "1wk",
-            "1mo": "1mo"
+        # Prepare config dict for background thread
+        dataset_config = {
+            'ticker': dataset_create.ticker,
+            'timeframe': dataset_create.timeframe,
+            'start_date': dataset_create.start_date,
+            'end_date': dataset_create.end_date,
+            'data_provider': dataset_create.data_provider,
+            'technical_indicators': dataset_create.technical_indicators,
+            'sentiment_config': dataset_create.sentiment_config,
+            'fundamentals_config': dataset_create.fundamentals_config,
         }
-        interval = interval_map.get(dataset_create.timeframe, "1d")
 
-        data_points = provider.get_data(
-            symbol=dataset_create.ticker,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval
-        )
+        # Submit to background thread pool (non-blocking)
+        _dataset_executor.submit(_build_dataset_in_background, db_dataset.id, dataset_config)
+        logger.info(f"Submitted dataset {db_dataset.id} to background thread for processing")
 
-        if not data_points:
-            db_dataset.status = DatasetStatus.ERROR.value
-            db_dataset.error_message = f"No data available for {dataset_create.ticker}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"No data available for {dataset_create.ticker}"
-            )
-
-        # Convert data points to DataFrame first
-        df = pd.DataFrame([{
-            'Date': dp.timestamp,
-            'Open': dp.open,
-            'High': dp.high,
-            'Low': dp.low,
-            'Close': dp.close,
-            'Volume': dp.volume
-        } for dp in data_points])
-        df = df.sort_values('Date').reset_index(drop=True)
-        logger.info(f"Fetched {len(df)} OHLC data points")
-
-        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
-        # Use date comparison to avoid timezone issues
-        data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
-        data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
-        req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
-        req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
-        tolerance_days = 5
-
-        if (data_start_date - req_start_date).days > tolerance_days:
-            db_dataset.status = DatasetStatus.ERROR.value
-            db_dataset.error_message = f"Data starts at {data_start_date}, but requested {req_start_date}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
-            )
-
-        if (req_end_date - data_end_date).days > tolerance_days:
-            db_dataset.status = DatasetStatus.ERROR.value
-            db_dataset.error_message = f"Data ends at {data_end_date}, but requested {req_end_date}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
-            )
-
-        # Apply technical indicators if configured
-        if dataset_create.technical_indicators:
-            logger.info(f"Applying {len(dataset_create.technical_indicators)} technical indicators...")
-            try:
-                # Convert list format to dict format for add_indicators_to_dataframe
-                indicators_dict = {}
-                for indicator in dataset_create.technical_indicators:
-                    indicator_type = indicator.get('type', indicator.get('name', 'unknown'))
-                    indicator_name = indicator.get('name', f"{indicator_type}_{indicator.get('period', '')}")
-                    indicators_dict[indicator_name] = indicator
-
-                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
-                logger.info(f"Added technical indicators. DataFrame now has {len(df.columns)} columns")
-            except Exception as e:
-                logger.error(f"Error applying technical indicators: {e}")
-                # Continue without indicators rather than failing the whole dataset
-
-        # Fetch and add sentiment features if configured
-        if dataset_create.sentiment_config and dataset_create.sentiment_config.get('enabled'):
-            logger.info("Fetching sentiment data...")
-            logger.debug(f"Sentiment config: {dataset_create.sentiment_config}")
-            try:
-                sentiment_service = SentimentService()
-
-                # Get news sources from config (supports multiple providers)
-                news_sources = dataset_create.sentiment_config.get('news_sources', [])
-                if not news_sources:
-                    # Fallback to legacy 'provider' field
-                    legacy_provider = dataset_create.sentiment_config.get('provider', 'fmp')
-                    news_sources = [legacy_provider]
-
-                logger.info(f"Fetching news from {len(news_sources)} source(s): {news_sources}")
-
-                # Fetch from all configured news sources
-                all_articles = []
-                for source in news_sources:
-                    # Convert source name to provider name (e.g., 'fmp_news' -> 'fmp')
-                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
-                    try:
-                        logger.debug(f"Fetching news from provider: {provider}")
-                        articles = sentiment_service.fetch_news_for_ticker(
-                            ticker=dataset_create.ticker,
-                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
-                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                            provider=provider,
-                            enrich_content=dataset_create.sentiment_config.get('enrich_content', True)
-                        )
-                        if articles:
-                            logger.info(f"Fetched {len(articles)} articles from {provider}")
-                            all_articles.extend(articles)
-                        else:
-                            logger.warning(f"No articles from {provider}")
-                    except Exception as e:
-                        logger.warning(f"Error fetching from {provider}: {e}")
-
-                if all_articles:
-                    # Analyze sentiment and add features
-                    logger.info(f"Total articles from all sources: {len(all_articles)}")
-                    df = sentiment_service.create_sentiment_features(df, all_articles)
-                    logger.info(f"Added sentiment features from {len(all_articles)} articles")
-                    # Store articles count in sentiment_config
-                    dataset_create.sentiment_config['articles_count'] = len(all_articles)
-                else:
-                    logger.warning("No news articles found for sentiment analysis from any source")
-                    dataset_create.sentiment_config['articles_count'] = 0
-
-            except Exception as e:
-                logger.error(f"Error fetching sentiment: {e}")
-                # Continue without sentiment rather than failing the whole dataset
-
-        # Fetch and add fundamentals if configured
-        if dataset_create.fundamentals_config and dataset_create.fundamentals_config.get('enabled'):
-            logger.info("Fetching fundamentals data...")
-            logger.debug(f"Fundamentals config: {dataset_create.fundamentals_config}")
-            try:
-                fundamentals_config = dataset_create.fundamentals_config
-
-                # Check if using new statement-based config
-                statement_types = fundamentals_config.get('statement_types')
-                if statement_types:
-                    # Use new statement-based features with lookback
-                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
-                    providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
-
-                    logger.info(f"Creating statement features: {statement_types} with {lookback_statements} periods")
-                    df = FundamentalsService.create_statement_features(
-                        df=df,
-                        ticker=dataset_create.ticker,
-                        statement_types=statement_types,
-                        lookback_statements=lookback_statements,
-                        providers=providers,
-                        frequency='quarterly'
-                    )
-                    new_cols = [c for c in df.columns if c.startswith(('bs_', 'is_', 'cf_', 'earn_'))]
-                    logger.info(f"Added {len(new_cols)} statement feature columns")
-                else:
-                    # Legacy mode: add current fundamentals as constant columns
-                    fundamentals = FundamentalsService.get_fundamental_data(dataset_create.ticker)
-
-                    if fundamentals and fundamentals.get('current'):
-                        current = fundamentals['current']
-                        added_fundamentals = []
-                        for key, value in current.items():
-                            if value is not None:
-                                df[f'fundamental_{key}'] = value
-                                added_fundamentals.append(key)
-                        logger.info(f"Added {len(added_fundamentals)} fundamental columns: {added_fundamentals}")
-                    else:
-                        logger.warning("No fundamentals data available")
-
-                # Fetch macro indicators if configured
-                macro_indicators = fundamentals_config.get('macro_indicators', [])
-                if macro_indicators:
-                    logger.info(f"Fetching macro indicators: {macro_indicators}")
-                    try:
-                        macro_service = MacroService()
-                        df = macro_service.integrate_macro_with_ohlc(df, macro_indicators)
-                        # Rename columns to have macro_ prefix
-                        for indicator in macro_indicators:
-                            if indicator in df.columns:
-                                df = df.rename(columns={indicator: f'macro_{indicator}'})
-                                if f'{indicator}_yoy_change' in df.columns:
-                                    df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
-                        logger.info(f"Added macro columns for: {macro_indicators}")
-                    except Exception as e:
-                        logger.warning(f"Error fetching macro data: {e}")
-
-            except Exception as e:
-                logger.error(f"Error fetching fundamentals: {e}")
-                # Continue without fundamentals rather than failing the whole dataset
-
-        # Save dataset to file
-        df.to_csv(file_path, index=False)
-        logger.info(f"Saved dataset to {file_path} with {len(df.columns)} columns")
-
-        # Update dataset with actual data and set to READY
-        db_dataset.start_date = df['Date'].min()
-        db_dataset.end_date = df['Date'].max()
-        db_dataset.rows_count = len(df)
-        db_dataset.status = DatasetStatus.READY.value
-        db_dataset.error_message = None
-        db.commit()
-        db.refresh(db_dataset)
-
-        logger.info(f"Dataset {db_dataset.id} is now READY with {len(df)} rows and {len(df.columns)} columns")
-
+        # Return immediately with BUILDING status
         return db_dataset
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error creating dataset: {e}", exc_info=True)
-        # If we have a dataset record, mark it as error
-        if db_dataset and db_dataset.id:
-            try:
-                db_dataset.status = DatasetStatus.ERROR.value
-                db_dataset.error_message = str(e)
-                db.commit()
-            except Exception:
-                db.rollback()
-        else:
-            db.rollback()
+        logger.error(f"Error creating dataset record: {e}", exc_info=True)
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create dataset: {str(e)}"
@@ -412,6 +383,53 @@ async def list_datasets(db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list datasets: {str(e)}"
+        )
+
+
+@router.patch("/{dataset_id}/rename", response_model=DatasetResponse)
+async def rename_dataset(
+    dataset_id: int,
+    new_name: str = Query(..., description="New name for the dataset"),
+    db: Session = Depends(get_db)
+):
+    """
+    Rename a dataset without regenerating data.
+
+    This is a lightweight operation that only updates the name in the database.
+    The underlying file is not renamed.
+
+    Args:
+        dataset_id: Dataset ID
+        new_name: New name for the dataset
+        db: Database session
+
+    Returns:
+        Updated dataset
+    """
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        old_name = dataset.name
+        dataset.name = new_name
+        db.commit()
+        db.refresh(dataset)
+
+        logger.info(f"Renamed dataset {dataset_id} from '{old_name}' to '{new_name}'")
+        return dataset
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error renaming dataset: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to rename dataset: {str(e)}"
         )
 
 
@@ -446,16 +464,28 @@ async def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{dataset_id}/preview")
-async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
+async def get_dataset_preview(
+    dataset_id: int,
+    columns: Optional[str] = Query(None, description="Comma-separated list of columns to include (default: OHLCV only)"),
+    max_rows: int = Query(2000, description="Maximum rows to return (0 for all, default: 2000)"),
+    sample: bool = Query(True, description="Sample evenly if exceeding max_rows (default: True)"),
+    db: Session = Depends(get_db)
+):
     """
-    Get dataset preview data for charting
+    Get dataset preview data for charting with pagination/sampling.
+
+    For large datasets, returns sampled data to improve chart performance.
+    Default returns only OHLCV columns for efficient charting.
 
     Args:
         dataset_id: Dataset ID
+        columns: Comma-separated columns to include (default: Date,Open,High,Low,Close,Volume)
+        max_rows: Maximum rows to return (default: 2000, 0 for all)
+        sample: If True, sample evenly across dataset when exceeding max_rows
         db: Database session
 
     Returns:
-        Dataset preview data (OHLC values)
+        Dataset preview data with OHLC values
     """
     try:
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
@@ -474,17 +504,47 @@ async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
                 detail=f"Dataset file not found: {file_path}"
             )
 
-        df = pd.read_csv(file_path)
+        # Determine which columns to load
+        if columns:
+            usecols = [c.strip() for c in columns.split(',')]
+        else:
+            # Default: only load OHLCV columns for charting
+            usecols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+
+        # Read only specified columns
+        try:
+            df = pd.read_csv(file_path, usecols=usecols)
+        except ValueError:
+            # Some columns don't exist, fall back to loading all
+            df = pd.read_csv(file_path)
+            available_cols = [c for c in usecols if c in df.columns]
+            if available_cols:
+                df = df[available_cols]
+
+        total_rows = len(df)
+
+        # Sample if needed
+        if max_rows > 0 and total_rows > max_rows:
+            if sample:
+                # Sample evenly across the dataset
+                step = total_rows // max_rows
+                indices = list(range(0, total_rows, step))[:max_rows]
+                df = df.iloc[indices]
+            else:
+                # Just take first max_rows
+                df = df.head(max_rows)
 
         # Use pandas to_json with proper NaN handling, then parse back
-        # This is the most reliable way to handle NaN/inf for JSON
         import json
         json_str = df.to_json(orient='records', date_format='iso')
         data = json.loads(json_str)
 
         return {
             "dataset_id": dataset_id,
-            "rows": len(data),
+            "total_rows": total_rows,
+            "returned_rows": len(data),
+            "sampled": max_rows > 0 and total_rows > max_rows,
+            "columns": list(df.columns),
             "data": data
         }
 

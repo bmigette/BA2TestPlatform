@@ -190,12 +190,27 @@ class NewsCacheService:
             db = SessionLocal()
 
         try:
+            # Normalize dates to naive datetime for consistent comparison
+            if start_date is not None and hasattr(start_date, 'tzinfo') and start_date.tzinfo is not None:
+                start_date = start_date.replace(tzinfo=None)
+            if end_date is not None and hasattr(end_date, 'tzinfo') and end_date.tzinfo is not None:
+                end_date = end_date.replace(tzinfo=None)
+
+            # Debug: Check total cached for this ticker/provider
+            total_cached = db.query(NewsCache).filter(
+                NewsCache.ticker == ticker,
+                NewsCache.provider == provider.lower()
+            ).count()
+            logger.debug(f"Cache lookup: {ticker}/{provider.lower()}, date range: {start_date} to {end_date}, total cached: {total_cached}")
+
             cache_entries = db.query(NewsCache).filter(
                 NewsCache.ticker == ticker,
                 NewsCache.provider == provider.lower(),
                 NewsCache.published_at >= start_date,
                 NewsCache.published_at <= end_date
             ).all()
+
+            logger.debug(f"Cache hit: {len(cache_entries)} articles in date range")
 
             articles = []
             for entry in cache_entries:
@@ -265,13 +280,16 @@ class NewsCacheService:
                 content_file_path = self._get_content_file_path(url_hash, provider)
                 self._save_content_file(content, content_file_path)
 
-            # Parse published date
+            # Parse published date and normalize to naive datetime (UTC)
             pub_date = article.get('date')
             if isinstance(pub_date, str):
                 try:
                     pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
                 except ValueError:
                     pub_date = None
+            # Convert timezone-aware datetime to naive (UTC)
+            if pub_date is not None and hasattr(pub_date, 'tzinfo') and pub_date.tzinfo is not None:
+                pub_date = pub_date.replace(tzinfo=None)
 
             # Create cache entry
             cache_entry = NewsCache(
@@ -367,13 +385,16 @@ class NewsCacheService:
                         content_file_path = self._get_content_file_path(url_hash, provider)
                         self._save_content_file(content, content_file_path)
 
-                    # Parse published date
+                    # Parse published date and normalize to naive datetime (UTC)
                     pub_date = article.get('date')
                     if isinstance(pub_date, str):
                         try:
                             pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
                         except ValueError:
                             pub_date = None
+                    # Convert timezone-aware datetime to naive (UTC)
+                    if pub_date is not None and hasattr(pub_date, 'tzinfo') and pub_date.tzinfo is not None:
+                        pub_date = pub_date.replace(tzinfo=None)
 
                     # Create cache entry
                     cache_entry = NewsCache(

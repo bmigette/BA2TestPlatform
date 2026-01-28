@@ -626,14 +626,18 @@ class PredictionTargetService:
         direction: str
     ) -> pd.Series:
         """
-        Calculate a single prediction target.
+        Calculate a single prediction target using High/Low prices bar-by-bar.
+
+        For each bar, simulates entering at Close price, then checks subsequent
+        bars' High/Low to determine if profit target is reached before drawdown
+        limit is breached.
 
         Args:
-            df: DataFrame with Close column
-            profit_pct: Required profit percentage
-            max_dd: Maximum drawdown allowed
-            days: Time horizon in days
-            direction: 'up' or 'down'
+            df: DataFrame with Close, High, Low columns
+            profit_pct: Required profit percentage to hit
+            max_dd: Maximum drawdown allowed before profit target
+            days: Maximum bars to look ahead
+            direction: 'up' (buy order) or 'down' (sell order)
 
         Returns:
             Series with 1 where target is met, 0 otherwise
@@ -642,35 +646,51 @@ class PredictionTargetService:
         targets = np.zeros(n)
 
         close_prices = df['Close'].values
+        high_prices = df['High'].values
+        low_prices = df['Low'].values
 
-        for i in range(n - days):
+        # Calculate price thresholds
+        for i in range(n - 1):  # Need at least 1 future bar
             entry_price = close_prices[i]
-            future_prices = close_prices[i+1:i+days+1]
 
-            if len(future_prices) < days:
-                continue
-
+            # Calculate target and stop prices
             if direction == 'up':
-                # Check if price goes up by profit_pct without drawdown exceeding max_dd
-                max_price = np.max(future_prices)
-                min_price = np.min(future_prices)
+                # BUY order: profit from price going up, drawdown from price going down
+                profit_target = entry_price * (1 + profit_pct / 100)
+                stop_price = entry_price * (1 - max_dd / 100)
+            else:
+                # SELL order: profit from price going down, drawdown from price going up
+                profit_target = entry_price * (1 - profit_pct / 100)
+                stop_price = entry_price * (1 + max_dd / 100)
 
-                profit = (max_price - entry_price) / entry_price * 100
-                drawdown = (entry_price - min_price) / entry_price * 100
+            # Check each subsequent bar up to 'days' bars ahead
+            max_bars = min(days, n - i - 1)
+            for j in range(1, max_bars + 1):
+                bar_idx = i + j
+                bar_high = high_prices[bar_idx]
+                bar_low = low_prices[bar_idx]
 
-                if profit >= profit_pct and drawdown <= max_dd:
-                    targets[i] = 1
-
-            else:  # down
-                # Check if price goes down by profit_pct without drawup exceeding max_dd
-                max_price = np.max(future_prices)
-                min_price = np.min(future_prices)
-
-                profit = (entry_price - min_price) / entry_price * 100
-                drawup = (max_price - entry_price) / entry_price * 100
-
-                if profit >= profit_pct and drawup <= max_dd:
-                    targets[i] = 1
+                if direction == 'up':
+                    # For BUY: check if stopped out first (low breaches stop)
+                    # then check if profit target hit (high reaches target)
+                    # Within same bar, assume stop checked before profit (conservative)
+                    if bar_low <= stop_price:
+                        # Stopped out - drawdown exceeded before profit
+                        break
+                    if bar_high >= profit_target:
+                        # Profit target hit without exceeding drawdown
+                        targets[i] = 1
+                        break
+                else:
+                    # For SELL: check if stopped out first (high breaches stop)
+                    # then check if profit target hit (low reaches target)
+                    if bar_high >= stop_price:
+                        # Stopped out - drawup exceeded before profit
+                        break
+                    if bar_low <= profit_target:
+                        # Profit target hit without exceeding drawup
+                        targets[i] = 1
+                        break
 
         return pd.Series(targets, index=df.index)
 
