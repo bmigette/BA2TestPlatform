@@ -129,10 +129,11 @@
         - Use ML model for news sentiment analysis (Transformers library)
         - Cannot directly incorporate news events into dataset
         - Create aggregated sentiment features:
-          * Count of news in past: 1 day, 1 week, 1 month, 6 months
+          * Count of news in lookback windows: 1 day, 1 week, 1 month, 6 months
           * Sentiment categories: Positive, Neutral, Negative
-          * Impact timeframe: Short-term, Medium-term, Long-term
-          * Example fields: news_1d_positive_short, news_1w_negative_long, etc.
+          * Example fields: news_1d_positive, news_1w_negative, news_1m_neutral, etc.
+        - News sources: AI/ML news providers, financial news APIs
+        - Sentiment score aggregation per lookback window
       </sentiment_analysis>
 
       <dataset_visualization>
@@ -163,6 +164,12 @@
           * Green diamond markers for detected "up" targets (below price)
           * Red diamond markers for detected "down" targets (above price)
           * Legend explaining marker meanings
+        - Trend analysis overlay:
+          * Toggle to show/hide trend detection markers
+          * Color-coded dots: green (uptrend), red (downtrend), amber (sideways)
+          * Configuration popup to adjust detection parameters
+          * Real-time recalculation when parameters change
+          * Distribution statistics showing trend class balance
         - Target statistics display:
           * Clear "Detected" / "Not detected" labels (not progress bars)
           * Count and percentage for each target type
@@ -266,47 +273,65 @@
         - Model is optimized to predict the user-specified outputs, not to optimize the outputs themselves
       </prediction_targets>
 
-      <trend_based_targets status="TODO">
+      <trend_based_targets status="IMPLEMENTED">
         Alternative to price percentage targets - predict market trends/regimes.
-        May provide more balanced class distribution than percentage-based targets.
+        Provides more balanced class distribution than percentage-based targets.
 
         <trend_types>
           - Uptrend: Higher highs and higher lows over N periods
           - Downtrend: Lower highs and lower lows over N periods
           - Sideways/Consolidation: Price range bound within X% for N periods
-          - Breakout: Price moves beyond recent range by X%
-          - Reversal: Trend direction change detected
+          - Breakout Up/Down: Price moves beyond recent range by X%
         </trend_types>
 
         <trend_detection_methods>
-          - Moving average crossovers (e.g., SMA20 > SMA50)
-          - Linear regression slope over N periods
-          - ADX (Average Directional Index) for trend strength
-          - Pivot point analysis (swing highs/lows)
-          - Donchian channel breakouts
+          - moving_average: SMA crossovers (fast > slow = uptrend)
+          - linear_regression: Slope of linear regression over N periods
+          - adx: Average Directional Index for trend strength
+          - pivot_points: Swing high/low analysis
+          - donchian: Donchian channel breakout detection
         </trend_detection_methods>
 
         <configurable_parameters>
-          - Trend detection method to use
-          - Lookback period for trend identification
-          - Minimum trend strength threshold
-          - Trend duration requirements
-          - Prediction horizon (how far ahead to predict)
+          - method: Detection method to use
+          - lookback_period: Period for trend identification (default: 20)
+          - prediction_horizon: How far ahead to predict (default: 5)
+          - fast_period: Fast MA period for moving_average method (default: 10)
+          - slow_period: Slow MA period for moving_average method (default: 30)
+          - trend_strength_threshold: Minimum strength for ADX method (default: 25)
         </configurable_parameters>
 
-        <expected_benefits>
-          - More balanced classes (trends are more common than 10%+ moves)
-          - Easier for models to learn patterns
-          - More actionable for trading strategies
-          - Can combine with percentage targets for multi-output models
-        </expected_benefits>
+        <output_columns>
+          - trend_current: Current detected trend type
+          - trend_target: Predicted trend N periods ahead
+          - trend_strength: Numeric strength indicator
+          - trend_is_uptrend: Binary (1/0) uptrend indicator
+          - trend_is_downtrend: Binary (1/0) downtrend indicator
+          - trend_is_sideways: Binary (1/0) sideways indicator
+          - trend_class: Multi-class target (0=sideways, 1=uptrend, 2=downtrend)
+        </output_columns>
 
-        <implementation_notes>
-          - Add TrendTargetService similar to PredictionTargetService
-          - Support both binary (trend/no-trend) and multi-class (up/down/sideways)
-          - Include trend strength as auxiliary output
-          - Visualize detected trends on chart
-        </implementation_notes>
+        <visualization>
+          - Toggle "Trend Analysis" button on dataset chart
+          - Color-coded dots below price showing current trend
+          - Trend statistics panel with distribution percentages
+          - Configuration popup to adjust detection parameters
+          - Real-time recalculation with different settings
+        </visualization>
+
+        <api_endpoint>
+          GET /api/datasets/{id}/trends
+          - Returns trend analysis with statistics and visualization data
+          - Configurable via query parameters
+          - Reusable for ML training job integration
+        </api_endpoint>
+
+        <implementation>
+          - TrendTargetService in backend/app/services/trend_targets.py
+          - Supports binary and multi-class targets
+          - Includes trend strength as auxiliary feature
+          - Visualization on dataset details chart
+        </implementation>
       </trend_based_targets>
 
       <multi_dataset_training>

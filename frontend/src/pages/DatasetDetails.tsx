@@ -80,6 +80,27 @@ interface PredictionPreview {
   total_rows: number;
 }
 
+interface TrendDataPoint {
+  date: string;
+  trend: 'uptrend' | 'downtrend' | 'sideways' | 'breakout_up' | 'breakout_down';
+  strength: number;
+  close: number;
+}
+
+interface TrendStatistics {
+  total_rows: number;
+  trends: Record<string, { count: number; percentage: number }>;
+  strength: { mean: number; min: number; max: number };
+}
+
+interface TrendConfig {
+  method: 'moving_average' | 'linear_regression' | 'adx' | 'pivot_points' | 'donchian';
+  lookback_period: number;
+  prediction_horizon: number;
+  fast_period: number;
+  slow_period: number;
+}
+
 // Custom diamond shape for prediction target markers
 const DiamondShape = (props: any) => {
   const { cx, cy, fill, stroke, strokeWidth } = props;
@@ -105,6 +126,7 @@ interface IndicatorVisibility {
   showRsi: boolean;
   showSentiment: boolean;
   showTargets: boolean;
+  showTrends: boolean;
 }
 
 interface ColumnInfo {
@@ -194,7 +216,21 @@ const DatasetDetails: React.FC = () => {
     showRsi: false,
     showSentiment: true,
     showTargets: true,
+    showTrends: false,
   });
+
+  // Trend analysis state
+  const [trendData, setTrendData] = useState<TrendDataPoint[]>([]);
+  const [trendStats, setTrendStats] = useState<TrendStatistics | null>(null);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [trendConfig, setTrendConfig] = useState<TrendConfig>({
+    method: 'moving_average',
+    lookback_period: 20,
+    prediction_horizon: 5,
+    fast_period: 10,
+    slow_period: 30,
+  });
+  const [showTrendConfig, setShowTrendConfig] = useState(false);
 
   // Dynamic indicators from dataset columns
   const [datasetColumns, setDatasetColumns] = useState<DatasetColumns | null>(null);
@@ -219,6 +255,32 @@ const DatasetDetails: React.FC = () => {
       console.error('Error fetching columns:', err);
     } finally {
       setColumnsLoading(false);
+    }
+  };
+
+  // Fetch trend analysis data
+  const fetchTrendData = async (datasetId: number, config: TrendConfig) => {
+    setTrendLoading(true);
+    try {
+      const params = new URLSearchParams({
+        method: config.method,
+        lookback_period: config.lookback_period.toString(),
+        prediction_horizon: config.prediction_horizon.toString(),
+        fast_period: config.fast_period.toString(),
+        slow_period: config.slow_period.toString(),
+      });
+      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/trends?${params}`);
+      if (response.ok) {
+        const data = await response.json();
+        setTrendData(data.trends || []);
+        setTrendStats(data.statistics || null);
+      } else {
+        console.error('Failed to fetch trend data');
+      }
+    } catch (err) {
+      console.error('Error fetching trends:', err);
+    } finally {
+      setTrendLoading(false);
     }
   };
 
@@ -483,6 +545,13 @@ const DatasetDetails: React.FC = () => {
     }
   }, [dataset?.id]);
 
+  // Fetch trend data when trends are enabled
+  useEffect(() => {
+    if (dataset && indicators.showTrends && trendData.length === 0) {
+      fetchTrendData(dataset.id, trendConfig);
+    }
+  }, [dataset?.id, indicators.showTrends]);
+
   // Set initial zoom based on data length (show last 100 bars by default)
   useEffect(() => {
     if (chartData.length > 0 && !initialZoomSet) {
@@ -573,6 +642,21 @@ const DatasetDetails: React.FC = () => {
     if (maxCount <= 1) return minRadius;
     const scale = (Math.log(count + 1) / Math.log(maxCount + 1));
     return minRadius + (maxRadius - minRadius) * scale;
+  };
+
+  // Get color for trend type
+  const getTrendColor = (trend: string): string => {
+    switch (trend) {
+      case 'uptrend':
+      case 'breakout_up':
+        return '#10B981'; // green
+      case 'downtrend':
+      case 'breakout_down':
+        return '#EF4444'; // red
+      case 'sideways':
+      default:
+        return '#F59E0B'; // amber
+    }
   };
 
   // Zoom control functions
@@ -963,6 +1047,18 @@ const DatasetDetails: React.FC = () => {
             <Target size={14} />
             Prediction Targets
           </button>
+          <button
+            onClick={() => toggleIndicator('showTrends')}
+            className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1.5 transition-colors ${
+              indicators.showTrends
+                ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300'
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+            }`}
+          >
+            <TrendingUp size={14} />
+            Trend Analysis
+            {trendLoading && <Loader size={12} className="animate-spin" />}
+          </button>
           {/* Target Legend */}
           {indicators.showTargets && predictionPreview && (
             <div className="flex items-center gap-3 ml-2 text-xs">
@@ -1000,6 +1096,30 @@ const DatasetDetails: React.FC = () => {
                   <span className="text-gray-400 text-xs">({newsFrequencyByDate.length} days with news)</span>
                 </>
               )}
+            </div>
+          )}
+          {/* Trend Legend */}
+          {indicators.showTrends && trendData.length > 0 && (
+            <div className="flex items-center gap-3 ml-3 text-xs">
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded bg-green-500"></div>
+                <span className="text-gray-500 dark:text-gray-400">Uptrend</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded bg-red-500"></div>
+                <span className="text-gray-500 dark:text-gray-400">Downtrend</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded bg-amber-500"></div>
+                <span className="text-gray-500 dark:text-gray-400">Sideways</span>
+              </div>
+              <button
+                onClick={() => setShowTrendConfig(!showTrendConfig)}
+                className="ml-2 px-2 py-0.5 text-xs bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300 rounded hover:bg-teal-200 dark:hover:bg-teal-800/50"
+              >
+                <Settings size={10} className="inline mr-1" />
+                Config
+              </button>
             </div>
           )}
         </div>
@@ -1224,6 +1344,27 @@ const DatasetDetails: React.FC = () => {
                   return markers;
                 }).flat().filter(Boolean)
               }
+              {/* Trend Analysis Markers */}
+              {indicators.showTrends && trendData.map((trendPoint, idx) => {
+                const dataPoint = candlestickData.find(d => d.Date === trendPoint.date);
+                if (!dataPoint) return null;
+
+                const color = getTrendColor(trendPoint.trend);
+                // Use a small rectangle at bottom of chart to show trend
+                return (
+                  <ReferenceDot
+                    key={`trend-${idx}`}
+                    x={trendPoint.date}
+                    y={dataPoint.Low * 0.995}
+                    yAxisId="price"
+                    r={3}
+                    fill={color}
+                    fillOpacity={0.7}
+                    stroke={color}
+                    strokeWidth={1}
+                  />
+                );
+              })}
               <Brush
                 key={brushKey}
                 dataKey="Date"
@@ -1615,6 +1756,151 @@ const DatasetDetails: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Trend Analysis Configuration Panel */}
+      {showTrendConfig && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mt-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <TrendingUp size={20} className="text-teal-500" />
+              Trend Analysis Configuration
+            </h2>
+            <button
+              onClick={() => setShowTrendConfig(false)}
+              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+            >
+              <X size={20} className="text-gray-500" />
+            </button>
+          </div>
+
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            Configure trend detection parameters. Trend-based targets can provide more balanced class distributions compared to price percentage targets.
+          </p>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                Detection Method
+              </label>
+              <select
+                value={trendConfig.method}
+                onChange={(e) => setTrendConfig({ ...trendConfig, method: e.target.value as TrendConfig['method'] })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+              >
+                <option value="moving_average">Moving Average</option>
+                <option value="linear_regression">Linear Regression</option>
+                <option value="adx">ADX (Strength)</option>
+                <option value="pivot_points">Pivot Points</option>
+                <option value="donchian">Donchian Channels</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                Lookback Period
+              </label>
+              <input
+                type="number"
+                min="5"
+                max="100"
+                value={trendConfig.lookback_period}
+                onChange={(e) => setTrendConfig({ ...trendConfig, lookback_period: parseInt(e.target.value) || 20 })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                Prediction Horizon
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="30"
+                value={trendConfig.prediction_horizon}
+                onChange={(e) => setTrendConfig({ ...trendConfig, prediction_horizon: parseInt(e.target.value) || 5 })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+              />
+            </div>
+            {trendConfig.method === 'moving_average' && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                    Fast MA Period
+                  </label>
+                  <input
+                    type="number"
+                    min="3"
+                    max="50"
+                    value={trendConfig.fast_period}
+                    onChange={(e) => setTrendConfig({ ...trendConfig, fast_period: parseInt(e.target.value) || 10 })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                    Slow MA Period
+                  </label>
+                  <input
+                    type="number"
+                    min="10"
+                    max="200"
+                    value={trendConfig.slow_period}
+                    onChange={(e) => setTrendConfig({ ...trendConfig, slow_period: parseInt(e.target.value) || 30 })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="flex gap-3 mb-4">
+            <button
+              onClick={() => dataset && fetchTrendData(dataset.id, trendConfig)}
+              disabled={trendLoading}
+              className="px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {trendLoading ? <Loader size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {trendLoading ? 'Analyzing...' : 'Recalculate Trends'}
+            </button>
+          </div>
+
+          {/* Trend Statistics */}
+          {trendStats && (
+            <div className="mt-4">
+              <h4 className="text-sm font-medium mb-2">Trend Distribution:</h4>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                {Object.entries(trendStats.trends).map(([trend, data]) => {
+                  if (data.count === 0) return null;
+                  const color = getTrendColor(trend);
+                  return (
+                    <div key={trend} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-3 h-3 rounded" style={{ backgroundColor: color }}></div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">
+                          {trend.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                        {data.percentage.toFixed(1)}%
+                      </div>
+                      <div className="text-xs text-gray-500">{data.count} periods</div>
+                    </div>
+                  );
+                })}
+              </div>
+              {trendStats.strength && (
+                <div className="mt-3 text-xs text-gray-500">
+                  Trend strength: mean={trendStats.strength.mean.toFixed(2)}, min={trendStats.strength.min.toFixed(2)}, max={trendStats.strength.max.toFixed(2)}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm text-blue-800 dark:text-blue-200">
+            <strong>Tip:</strong> Trend-based targets often provide more balanced class distributions than price percentage targets.
+            Use these for ML training by enabling trend targets in job configuration.
+          </div>
+        </div>
+      )}
 
       {/* Indicator Selection Popup */}
       {showIndicatorPopup && (

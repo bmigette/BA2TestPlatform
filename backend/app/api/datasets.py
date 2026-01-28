@@ -2456,3 +2456,108 @@ async def get_dataset_sentiment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch sentiment: {str(e)}"
         )
+
+
+@router.get("/{dataset_id}/trends")
+async def get_dataset_trends(
+    dataset_id: int,
+    method: str = "moving_average",
+    lookback_period: int = 20,
+    prediction_horizon: int = 5,
+    fast_period: int = 10,
+    slow_period: int = 30,
+    trend_threshold: float = 25.0,
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate and return trend analysis for a dataset.
+
+    This endpoint analyzes the dataset's price data to detect trends
+    using various methods. Results can be used for visualization or
+    as targets for ML training.
+
+    Args:
+        dataset_id: ID of the dataset
+        method: Detection method (moving_average, linear_regression, adx, pivot_points, donchian)
+        lookback_period: Period for trend detection
+        prediction_horizon: How many periods ahead to predict
+        fast_period: Fast MA period (for moving_average method)
+        slow_period: Slow MA period (for moving_average method)
+        trend_threshold: Threshold for ADX method
+
+    Returns:
+        Trend analysis results with statistics and visualization data
+    """
+    from app.services.trend_targets import TrendTargetService
+
+    try:
+        # Get dataset
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset {dataset_id} not found"
+            )
+
+        # Check if file exists
+        if not dataset.file_path or not Path(dataset.file_path).exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Dataset file not found"
+            )
+
+        # Load dataset
+        df = pd.read_csv(dataset.file_path)
+
+        # Ensure we have required columns
+        required_cols = ['Date', 'Open', 'High', 'Low', 'Close']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Dataset missing required columns: {missing_cols}"
+            )
+
+        # Calculate trends
+        trend_service = TrendTargetService()
+        df_with_trends = trend_service.calculate_trend_targets(
+            df=df,
+            method=method,
+            lookback_period=lookback_period,
+            prediction_horizon=prediction_horizon,
+            fast_period=fast_period,
+            slow_period=slow_period,
+            trend_strength_threshold=trend_threshold,
+            include_strength=True
+        )
+
+        # Get statistics
+        stats = trend_service.get_trend_statistics(df_with_trends)
+
+        # Get visualization data (limit to avoid huge response)
+        viz_data = trend_service.get_trend_visualization_data(df_with_trends)
+
+        return {
+            "dataset_id": dataset_id,
+            "ticker": dataset.ticker,
+            "method": method,
+            "parameters": {
+                "lookback_period": lookback_period,
+                "prediction_horizon": prediction_horizon,
+                "fast_period": fast_period,
+                "slow_period": slow_period,
+                "trend_threshold": trend_threshold
+            },
+            "statistics": stats,
+            "trends": viz_data,
+            "total_rows": len(df_with_trends)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating trends for dataset {dataset_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate trends: {str(e)}"
+        )
