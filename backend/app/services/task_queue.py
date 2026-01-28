@@ -482,16 +482,31 @@ class TaskQueueService:
             # Execute handler
             result = handler(task_id, task.payload or {})
 
-            # Mark completed
+            # Check if the result indicates failure
+            result_status = result.get('status', 'completed') if isinstance(result, dict) else 'completed'
+
             db_task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
             if db_task:
-                db_task.status = TaskStatus.COMPLETED.value
-                db_task.progress = 100.0
                 db_task.result = result
                 db_task.completed_at = datetime.now()
-                db.commit()
+                db_task.progress = 100.0
 
-            logger.info(f"Task {task_id} completed successfully")
+                if result_status == 'failed':
+                    # Handler returned a failure status - mark task as failed
+                    db_task.status = TaskStatus.FAILED.value
+                    error_msg = result.get('error', 'Task handler returned failed status')
+                    db_task.error_message = error_msg
+                    logger.warning(f"Task {task_id} marked as failed: {error_msg}")
+                elif result_status == 'partial':
+                    # Partial success - still mark as completed but with warning
+                    db_task.status = TaskStatus.COMPLETED.value
+                    logger.warning(f"Task {task_id} partially completed")
+                else:
+                    # Success
+                    db_task.status = TaskStatus.COMPLETED.value
+                    logger.info(f"Task {task_id} completed successfully")
+
+                db.commit()
 
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")

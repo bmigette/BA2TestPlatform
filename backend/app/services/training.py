@@ -53,7 +53,8 @@ class TrainingService:
         self,
         df: pd.DataFrame,
         target_column: str = 'Close',
-        feature_columns: List[str] = None
+        feature_columns: List[str] = None,
+        timeframe: str = 'daily'
     ) -> Tuple[Any, Any]:
         """
         Prepare data for Darts model training.
@@ -62,6 +63,7 @@ class TrainingService:
             df: DataFrame with Date and target columns
             target_column: Column to predict
             feature_columns: Optional covariate columns
+            timeframe: Dataset timeframe for frequency inference
 
         Returns:
             Tuple of (target_series, covariates_series)
@@ -73,10 +75,19 @@ class TrainingService:
         df_sorted['Date'] = pd.to_datetime(df_sorted['Date'])
         df_sorted = df_sorted.set_index('Date')
 
-        # Create target series
+        # Infer frequency based on timeframe
+        freq = self._infer_frequency(timeframe, df_sorted)
+
+        # Drop rows with NaN in target column
+        if target_column in df_sorted.columns:
+            df_sorted = df_sorted.dropna(subset=[target_column])
+
+        # Create target series with fill_missing_dates to handle gaps (weekends/holidays)
         target_series = TimeSeries.from_dataframe(
             df_sorted[[target_column]],
-            value_cols=target_column
+            value_cols=target_column,
+            fill_missing_dates=True,
+            freq=freq
         )
 
         # Scale the data
@@ -88,15 +99,74 @@ class TrainingService:
         if feature_columns:
             available_cols = [c for c in feature_columns if c in df_sorted.columns]
             if available_cols:
-                covariates = TimeSeries.from_dataframe(
-                    df_sorted[available_cols],
-                    value_cols=available_cols
-                )
-                # Scale covariates
-                cov_scaler = Scaler()
-                covariates = cov_scaler.fit_transform(covariates)
+                # Drop NaN values from covariates
+                cov_df = df_sorted[available_cols].dropna()
+                if len(cov_df) > 0:
+                    covariates = TimeSeries.from_dataframe(
+                        cov_df,
+                        value_cols=available_cols,
+                        fill_missing_dates=True,
+                        freq=freq
+                    )
+                    # Scale covariates
+                    cov_scaler = Scaler()
+                    covariates = cov_scaler.fit_transform(covariates)
 
         return target_series, covariates
+
+    def _infer_frequency(self, timeframe: str, df: pd.DataFrame) -> str:
+        """
+        Infer pandas frequency string from timeframe.
+
+        Args:
+            timeframe: Dataset timeframe (e.g., 'daily', '1h', '4h', '1d')
+            df: DataFrame with DatetimeIndex
+
+        Returns:
+            Pandas frequency string
+        """
+        timeframe_lower = timeframe.lower()
+
+        # Map common timeframes to pandas frequencies
+        freq_map = {
+            '1m': 'T',      # 1 minute
+            '5m': '5T',     # 5 minutes
+            '15m': '15T',   # 15 minutes
+            '30m': '30T',   # 30 minutes
+            '1h': 'H',      # 1 hour
+            '4h': '4H',     # 4 hours
+            '1d': 'D',      # 1 day
+            'daily': 'D',   # daily
+            '1w': 'W',      # 1 week
+            'weekly': 'W',  # weekly
+        }
+
+        if timeframe_lower in freq_map:
+            return freq_map[timeframe_lower]
+
+        # Try to infer from data
+        if len(df) >= 2:
+            try:
+                # Calculate median difference between consecutive rows
+                time_diffs = df.index.to_series().diff().dropna()
+                median_diff = time_diffs.median()
+
+                if median_diff <= pd.Timedelta(minutes=5):
+                    return '5T'
+                elif median_diff <= pd.Timedelta(hours=1):
+                    return 'H'
+                elif median_diff <= pd.Timedelta(hours=4):
+                    return '4H'
+                elif median_diff <= pd.Timedelta(days=1):
+                    return 'D'
+                else:
+                    return 'W'
+            except Exception:
+                pass
+
+        # Default to daily
+        logger.warning(f"Could not infer frequency for timeframe '{timeframe}', using daily")
+        return 'D'
 
     def train_model(
         self,

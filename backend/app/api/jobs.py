@@ -210,14 +210,26 @@ def sync_job_from_task(job_id: str) -> Optional[Dict[str, Any]]:
                 except (IndexError, ValueError):
                     pass
 
-        # Get result data if completed
-        if task_status.get("status") == "completed" and task_status.get("result"):
+        # Get result data if completed or failed
+        if task_status.get("result"):
             result = task_status["result"]
+
+            # Check result status for failures
+            if result.get("status") == "failed":
+                jobs_store[job_id]["error"] = result.get("error", "Training failed")
+
+            # Extract best model info if available
             if result.get("best_model"):
                 best = result["best_model"]
                 jobs_store[job_id]["bestFitness"] = best.get("best_fitness")
                 if best.get("metrics"):
                     jobs_store[job_id]["currentAccuracy"] = best["metrics"].get("fitness")
+
+            # Store models trained count
+            if "models_trained" in result:
+                jobs_store[job_id]["modelsTrained"] = result["models_trained"]
+            if "total_models" in result:
+                jobs_store[job_id]["totalModels"] = result["total_models"]
 
     return jobs_store.get(job_id)
 

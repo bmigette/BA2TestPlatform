@@ -66,7 +66,7 @@ def load_dataset(dataset_id: int) -> Optional[pd.DataFrame]:
 
 
 def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
-    """Get dataset metadata."""
+    """Get dataset metadata including timeframe."""
     db = SessionLocal()
     try:
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
@@ -75,9 +75,9 @@ def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
                 'id': dataset.id,
                 'name': dataset.name,
                 'ticker': dataset.ticker,
-                'timeframe': dataset.timeframe
+                'timeframe': dataset.timeframe or 'daily'
             }
-        return {}
+        return {'timeframe': 'daily'}
     finally:
         db.close()
 
@@ -194,6 +194,9 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         exclude_cols.extend(target_cols)
         feature_columns = [c for c in combined_df.columns if c not in exclude_cols]
 
+        # Get timeframe from first dataset (for frequency inference)
+        timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
+
         # Train each model type
         results = []
         total_models = len(selected_models)
@@ -215,7 +218,8 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                     genetic_config=genetic_config,
                     metrics_config=metrics_config,
                     progress_base=model_progress_base,
-                    progress_range=60.0 / total_models
+                    progress_range=60.0 / total_models,
+                    timeframe=timeframe
                 )
                 results.append(model_result)
 
@@ -235,19 +239,54 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         if successful_results:
             best_result = max(successful_results, key=lambda x: x.get('best_fitness', 0))
 
-        update_job_progress(task_id, 100, "Training completed")
+        # Determine overall job status
+        if len(successful_results) == 0:
+            # All models failed
+            error_messages = [r.get('error', 'Unknown error') for r in results if r.get('status') == 'failed']
+            combined_error = "; ".join(set(error_messages[:3]))  # Dedupe and limit
+            update_job_progress(task_id, 100, f"Training failed: {combined_error}")
 
-        return {
-            'status': 'completed',
-            'models_trained': len(successful_results),
-            'total_models': total_models,
-            'results': results,
-            'best_model': best_result,
-            'datasets': dataset_infos,
-            'train_rows': len(train_df),
-            'test_rows': len(test_df),
-            'completed_at': datetime.now().isoformat()
-        }
+            return {
+                'status': 'failed',
+                'error': f"All {total_models} model(s) failed to train. Errors: {combined_error}",
+                'models_trained': 0,
+                'total_models': total_models,
+                'results': results,
+                'datasets': dataset_infos,
+                'train_rows': len(train_df),
+                'test_rows': len(test_df),
+                'completed_at': datetime.now().isoformat()
+            }
+        elif len(successful_results) < total_models:
+            # Some models failed
+            update_job_progress(task_id, 100, f"Training partially completed ({len(successful_results)}/{total_models} models)")
+
+            return {
+                'status': 'partial',
+                'models_trained': len(successful_results),
+                'total_models': total_models,
+                'results': results,
+                'best_model': best_result,
+                'datasets': dataset_infos,
+                'train_rows': len(train_df),
+                'test_rows': len(test_df),
+                'completed_at': datetime.now().isoformat()
+            }
+        else:
+            # All models succeeded
+            update_job_progress(task_id, 100, "Training completed successfully")
+
+            return {
+                'status': 'completed',
+                'models_trained': len(successful_results),
+                'total_models': total_models,
+                'results': results,
+                'best_model': best_result,
+                'datasets': dataset_infos,
+                'train_rows': len(train_df),
+                'test_rows': len(test_df),
+                'completed_at': datetime.now().isoformat()
+            }
 
     except Exception as e:
         logger.error(f"Training job {task_id} failed: {e}")
@@ -270,7 +309,8 @@ def train_single_model(
     genetic_config: Dict[str, Any],
     metrics_config: Dict[str, Any],
     progress_base: float,
-    progress_range: float
+    progress_range: float,
+    timeframe: str = 'daily'
 ) -> Dict[str, Any]:
     """
     Train a single model type with genetic optimization.
@@ -291,6 +331,7 @@ def train_single_model(
         metrics_config: Metrics configuration
         progress_base: Base progress percentage
         progress_range: Progress range for this model
+        timeframe: Dataset timeframe for frequency inference
 
     Returns:
         Training result dictionary
@@ -319,12 +360,14 @@ def train_single_model(
         train_series, train_covariates = training_service.prepare_data(
             train_df,
             target_column=target_column,
-            feature_columns=feature_columns[:10]  # Limit features for stability
+            feature_columns=feature_columns[:10],  # Limit features for stability
+            timeframe=timeframe
         )
         test_series, test_covariates = training_service.prepare_data(
             test_df,
             target_column=target_column,
-            feature_columns=feature_columns[:10]
+            feature_columns=feature_columns[:10],
+            timeframe=timeframe
         )
     except Exception as e:
         logger.error(f"Failed to prepare data for {model_type}: {e}")
