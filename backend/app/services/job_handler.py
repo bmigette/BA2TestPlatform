@@ -850,7 +850,7 @@ def train_single_model(
         except InterruptedError:
             raise
         except Exception as e:
-            logger.warning(f"Fitness evaluation failed: {e}")
+            logger.error(f"Fitness evaluation failed: {e}")
             return 0.0
 
     def ga_callback(generation: int, best_fitness: float, best_params: Dict):
@@ -1186,7 +1186,7 @@ def train_unified_optimization(
             return fitness
 
         except Exception as e:
-            logger.warning(f"Fitness evaluation failed for {model_type}: {e}")
+            logger.error(f"Fitness evaluation failed for {model_type}: {e}")
             progress_state['error_count'] += 1
             update_job_training_state(
                 task_id,
