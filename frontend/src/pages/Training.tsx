@@ -188,7 +188,6 @@ const Training: React.FC = () => {
   const [useMultiDataset, setUseMultiDataset] = useState(false);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [showStepConfig, setShowStepConfig] = useState(false);
   const [parameterRanges, setParameterRanges] = useState<ParameterRanges>({
     layersMin: 2,
     layersMax: 4,
@@ -477,7 +476,6 @@ const Training: React.FC = () => {
     setSelectedDatasetIds([]);
     setUseMultiDataset(false);
     setSelectedModels([]);
-    setShowStepConfig(false);
     setParameterRanges({
       layersMin: 2,
       layersMax: 4,
@@ -894,21 +892,10 @@ const Training: React.FC = () => {
 
               {/* Parameter Ranges Configuration */}
               <div className="mb-6">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center space-x-2">
-                    <Sliders size={16} className="text-gray-400" />
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Parameter Ranges
-                    </label>
-                  </div>
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showStepConfig}
-                      onChange={(e) => setShowStepConfig(e.target.checked)}
-                      className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                    />
-                    <span className="text-sm text-gray-600 dark:text-gray-400">Configure Steps</span>
+                <div className="flex items-center space-x-2 mb-3">
+                  <Sliders size={16} className="text-gray-400" />
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Parameter Ranges
                   </label>
                 </div>
 
@@ -936,19 +923,15 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('layersMax', parseInt(e.target.value) || 1)}
                         className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      {showStepConfig && (
-                        <>
-                          <span className="text-gray-400">step</span>
-                          <input
-                            type="number"
-                            min="1"
-                            max="5"
-                            value={parameterRanges.layersStep}
-                            onChange={(e) => handleParameterChange('layersStep', parseInt(e.target.value) || 1)}
-                            className="w-16 px-2 py-1 border border-green-400 dark:border-green-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
-                          />
-                        </>
-                      )}
+                      <span className="text-gray-400">step</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="5"
+                        value={parameterRanges.layersStep}
+                        onChange={(e) => handleParameterChange('layersStep', parseInt(e.target.value) || 1)}
+                        className="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                      />
                       <span className="text-xs text-gray-400">layers</span>
                     </div>
                     {parameterRanges.layersMin > parameterRanges.layersMax && (
@@ -981,20 +964,16 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('layerSizeMax', parseInt(e.target.value) || 8)}
                         className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      {showStepConfig && (
-                        <>
-                          <span className="text-gray-400">step</span>
-                          <input
-                            type="number"
-                            min="8"
-                            max="128"
-                            step="8"
-                            value={parameterRanges.layerSizeStep}
-                            onChange={(e) => handleParameterChange('layerSizeStep', parseInt(e.target.value) || 8)}
-                            className="w-16 px-2 py-1 border border-green-400 dark:border-green-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
-                          />
-                        </>
-                      )}
+                      <span className="text-gray-400">step</span>
+                      <input
+                        type="number"
+                        min="8"
+                        max="128"
+                        step="8"
+                        value={parameterRanges.layerSizeStep}
+                        onChange={(e) => handleParameterChange('layerSizeStep', parseInt(e.target.value) || 8)}
+                        className="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                      />
                       <span className="text-xs text-gray-400">neurons</span>
                     </div>
                     {parameterRanges.layerSizeMin > parameterRanges.layerSizeMax && (
@@ -1034,20 +1013,16 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('learningRateMax', parseFloat(e.target.value) || 0.0001)}
                         className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      {showStepConfig && (
-                        <>
-                          <span className="text-gray-400">step</span>
-                          <input
-                            type="number"
-                            min="0.0001"
-                            max="0.01"
-                            step="0.0001"
-                            value={parameterRanges.learningRateStep}
-                            onChange={(e) => handleParameterChange('learningRateStep', parseFloat(e.target.value) || 0.0001)}
-                            className="w-20 px-2 py-1 border border-green-400 dark:border-green-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
-                          />
-                        </>
-                      )}
+                      <span className="text-gray-400">step</span>
+                      <input
+                        type="number"
+                        min="0.0001"
+                        max="0.01"
+                        step="0.0001"
+                        value={parameterRanges.learningRateStep}
+                        onChange={(e) => handleParameterChange('learningRateStep', parseFloat(e.target.value) || 0.0001)}
+                        className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                      />
                     </div>
                     {parameterRanges.learningRateMin > parameterRanges.learningRateMax && (
                       <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>
@@ -1079,20 +1054,16 @@ const Training: React.FC = () => {
                         onChange={(e) => handleParameterChange('dropoutMax', parseFloat(e.target.value) || 0)}
                         className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
                       />
-                      {showStepConfig && (
-                        <>
-                          <span className="text-gray-400">step</span>
-                          <input
-                            type="number"
-                            min="0.05"
-                            max="0.5"
-                            step="0.05"
-                            value={parameterRanges.dropoutStep}
-                            onChange={(e) => handleParameterChange('dropoutStep', parseFloat(e.target.value) || 0.1)}
-                            className="w-16 px-2 py-1 border border-green-400 dark:border-green-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
-                          />
-                        </>
-                      )}
+                      <span className="text-gray-400">step</span>
+                      <input
+                        type="number"
+                        min="0.05"
+                        max="0.5"
+                        step="0.05"
+                        value={parameterRanges.dropoutStep}
+                        onChange={(e) => handleParameterChange('dropoutStep', parseFloat(e.target.value) || 0.1)}
+                        className="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-center text-sm"
+                      />
                     </div>
                     {parameterRanges.dropoutMin > parameterRanges.dropoutMax && (
                       <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>

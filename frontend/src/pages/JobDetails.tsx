@@ -493,25 +493,37 @@ const JobDetails: React.FC = () => {
 
             {/* Overall Progress (generations) */}
             <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="flex items-center space-x-2">
-                  <Timer size={14} className="text-green-500" />
-                  <span>Overall Progress</span>
-                </span>
-                <span className="font-mono">
-                  Generation {(job.currentGeneration || 0) + 1}/{job.totalGenerations || 50}
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
-                <div
-                  className="h-4 rounded-full bg-gradient-to-r from-green-400 to-green-500 transition-all duration-300 flex items-center justify-center"
-                  style={{ width: `${job.progress}%`, minWidth: job.progress > 0 ? '2rem' : 0 }}
-                >
-                  <span className="text-xs text-white font-medium">
-                    {job.progress.toFixed(0)}%
-                  </span>
-                </div>
-              </div>
+              {(() => {
+                // Calculate generation-based progress (not including data loading overhead)
+                const totalGens = job.totalGenerations || 50;
+                const currentGen = job.currentGeneration || 0;
+                const currentInd = job.currentIndividual || 0;
+                const popSize = job.populationSize || 20;
+                const genProgress = ((currentGen + (currentInd / popSize)) / totalGens) * 100;
+                return (
+                  <>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="flex items-center space-x-2">
+                        <Timer size={14} className="text-green-500" />
+                        <span>Overall Progress</span>
+                      </span>
+                      <span className="font-mono">
+                        Generation {currentGen + 1}/{totalGens}
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
+                      <div
+                        className="h-4 rounded-full bg-gradient-to-r from-green-400 to-green-500 transition-all duration-300 flex items-center justify-center"
+                        style={{ width: `${genProgress}%`, minWidth: genProgress > 0 ? '2rem' : 0 }}
+                      >
+                        <span className="text-xs text-white font-medium">
+                          {genProgress.toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
