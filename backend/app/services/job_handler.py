@@ -184,7 +184,8 @@ def save_generation_model(
     """
     try:
         models_dir = get_job_models_dir(task_id)
-        model_name = f"gen{generation:03d}_ind{individual:03d}_{model_type}_f{fitness:.4f}"
+        model_filename = f"gen{generation:03d}_ind{individual:03d}_{model_type}_f{fitness:.4f}"
+        full_path = models_dir / f"{model_filename}.pt"
 
         metadata = {
             'task_id': task_id,
@@ -196,7 +197,17 @@ def save_generation_model(
             'metrics': metrics
         }
 
-        model_path = training_service.save_model(model, str(models_dir / model_name), metadata)
+        # Save model directly to the job models directory
+        model.save(str(full_path))
+        logger.debug(f"Saved model: {full_path}")
+
+        # Save metadata
+        meta_path = models_dir / f"{model_filename}_meta.json"
+        import json
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f, indent=2, default=str)
+
+        model_path = str(full_path)
         logger.debug(f"Saved model: {model_path}")
         return model_path
 
@@ -609,11 +620,15 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
             # Training succeeded
             update_job_progress(task_id, 100, "Training completed successfully")
 
-            # Include all_individuals for visualization
+            # Include all_individuals and error/success counts for visualization
             all_individuals = []
+            total_error_count = 0
+            total_success_count = 0
             for r in results:
                 if 'all_individuals' in r:
                     all_individuals.extend(r['all_individuals'])
+                total_error_count += r.get('error_count', 0)
+                total_success_count += r.get('success_count', 0)
 
             return {
                 'status': 'completed',
@@ -622,6 +637,8 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 'results': results,
                 'best_model': best_result,
                 'all_individuals': all_individuals,  # For UI visualization
+                'error_count': total_error_count,
+                'success_count': total_success_count,
                 'datasets': dataset_infos,
                 'train_rows': len(train_df),
                 'test_rows': len(test_df),

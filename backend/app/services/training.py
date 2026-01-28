@@ -34,7 +34,6 @@ try:
     from darts import TimeSeries
     from darts.models import RNNModel, NBEATSModel
     from darts.dataprocessing.transformers import Scaler
-    from darts.metrics import mape, mae, rmse
     DARTS_AVAILABLE = True
 except ImportError:
     DARTS_AVAILABLE = False
@@ -261,17 +260,29 @@ class TrainingService:
             }
 
             # Calculate training error if possible
+            # Note: Limit prediction to output_chunk_length to avoid needing future covariates
             try:
-                train_pred = model.predict(n=len(train_series) - model.input_chunk_length)
-                train_target = train_series[model.input_chunk_length:]
+                # Use output_chunk_length as prediction horizon to avoid auto-regression
+                # which would require future covariate values
+                n_predict = min(model.output_chunk_length, len(train_series) - model.input_chunk_length)
+                if n_predict > 0:
+                    train_pred = model.predict(n=n_predict)
+                    train_target = train_series[model.input_chunk_length:model.input_chunk_length + n_predict]
 
-                # Align lengths
-                min_len = min(len(train_pred), len(train_target))
-                train_pred = train_pred[:min_len]
-                train_target = train_target[:min_len]
+                    # Align lengths
+                    min_len = min(len(train_pred), len(train_target))
+                    train_pred = train_pred[:min_len]
+                    train_target = train_target[:min_len]
 
-                metrics['train_mape'] = float(mape(train_target, train_pred))
-                metrics['train_mae'] = float(mae(train_target, train_pred))
+                    # Use value-based comparison (predictions and actuals have different
+                    # time indices because from_values() creates separate index spaces)
+                    pred_values = train_pred.values().flatten()
+                    target_values = train_target.values().flatten()
+                    abs_errors = np.abs(pred_values - target_values)
+
+                    if np.all(target_values != 0):
+                        metrics['train_mape'] = float(np.mean(abs_errors / np.abs(target_values)) * 100)
+                    metrics['train_mae'] = float(np.mean(abs_errors))
             except Exception as e:
                 logger.warning(f"Could not calculate training metrics: {e}")
 
@@ -307,27 +318,47 @@ class TrainingService:
 
         try:
             # Make predictions
-            n_predict = len(test_series) - model.input_chunk_length
+            # Limit prediction to output_chunk_length to avoid auto-regression
+            # which would require future covariate values we don't have
+            n_predict = min(model.output_chunk_length, len(test_series) - model.input_chunk_length)
             if n_predict <= 0:
                 return {'error': 'Test series too short'}
 
-            # Check if model supports past_covariates
-            model_name = model.__class__.__name__
-            if covariates is not None and model_name != 'RNNModel':
-                predictions = model.predict(n=n_predict, past_covariates=covariates)
-            else:
-                predictions = model.predict(n=n_predict)
-            actuals = test_series[model.input_chunk_length:]
+            predictions = model.predict(n=n_predict)
+            actuals = test_series[model.input_chunk_length:model.input_chunk_length + n_predict]
 
             # Align lengths
             min_len = min(len(predictions), len(actuals))
             predictions = predictions[:min_len]
             actuals = actuals[:min_len]
 
+            # Debug: Log prediction/actual lengths
+            logger.debug(f"Eval: n_predict={n_predict}, predictions={len(predictions)}, actuals={len(actuals)}")
+
+            if len(predictions) == 0 or len(actuals) == 0:
+                logger.warning(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
+                return {'error': 'No valid predictions could be made'}
+
+            # Use value-based comparison (predictions and actuals have different
+            # time indices because from_values() creates separate index spaces)
+            pred_values = predictions.values().flatten()
+            actual_values = actuals.values().flatten()
+
+            # Calculate metrics manually to avoid time index issues
+            abs_errors = np.abs(pred_values - actual_values)
+
+            if np.all(actual_values != 0):
+                mape_value = np.mean(abs_errors / np.abs(actual_values)) * 100
+            else:
+                mape_value = np.nan
+
+            mae_value = np.mean(abs_errors)
+            rmse_value = np.sqrt(np.mean(abs_errors ** 2))
+
             metrics = {
-                'mape': float(mape(actuals, predictions)),
-                'mae': float(mae(actuals, predictions)),
-                'rmse': float(rmse(actuals, predictions)),
+                'mape': float(mape_value),
+                'mae': float(mae_value),
+                'rmse': float(rmse_value),
                 'test_samples': len(test_series),
                 'predictions_made': len(predictions)
             }

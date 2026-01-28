@@ -450,11 +450,19 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['transformer']['default_params'], **(params or {})}
 
+        # Ensure d_model is divisible by nhead (required by Transformer)
+        d_model = p.get('d_model', 64)
+        nhead = p.get('nhead', 4)
+        if d_model % nhead != 0:
+            # Adjust d_model to be divisible by nhead
+            d_model = ((d_model // nhead) + 1) * nhead
+            logger.info(f"Adjusted d_model to {d_model} to be divisible by nhead={nhead}")
+
         model = TransformerModel(
             input_chunk_length=p['input_chunk_length'],
             output_chunk_length=p['output_chunk_length'],
-            d_model=p.get('d_model', 64),
-            nhead=p.get('nhead', 4),
+            d_model=d_model,
+            nhead=nhead,
             num_encoder_layers=p.get('num_encoder_layers', 2),
             num_decoder_layers=p.get('num_decoder_layers', 2),
             dim_feedforward=p.get('dim_feedforward', 128),
