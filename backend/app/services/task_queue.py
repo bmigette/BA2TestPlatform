@@ -260,7 +260,7 @@ class TaskQueueService:
 
     def resume_task(self, task_id: str) -> bool:
         """
-        Resume a paused task.
+        Resume a paused or stopped (crashed) task.
 
         The task will be re-queued and picked up by a worker,
         which should resume from the last checkpoint.
@@ -275,8 +275,10 @@ class TaskQueueService:
                 logger.warning(f"Task {task_id} not found for resume")
                 return False
 
-            if task.status != TaskStatus.PAUSED.value:
-                logger.warning(f"Task {task_id} is not paused (status={task.status}), cannot resume")
+            # Allow resuming paused or stopped (crashed) tasks
+            resumable_statuses = [TaskStatus.PAUSED.value, TaskStatus.STOPPED.value]
+            if task.status not in resumable_statuses:
+                logger.warning(f"Task {task_id} is not resumable (status={task.status})")
                 return False
 
             # Re-queue the task

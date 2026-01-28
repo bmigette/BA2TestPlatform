@@ -267,10 +267,57 @@ class GeneticOptimizer:
             individual.append(expanded_params.get(param_name, self.param_ranges[param_name]['min']))
         return creator.Individual(individual)
 
+    def resume_from_checkpoint(self, checkpoint: Dict) -> tuple:
+        """
+        Resume optimization from saved checkpoint.
+
+        Args:
+            checkpoint: Saved checkpoint data containing population, generation, etc.
+
+        Returns:
+            Tuple of (start_generation, population_data)
+        """
+        self.history = checkpoint.get('history', [])
+        self.best_fitness = checkpoint.get('best_fitness')
+        self.best_individual = checkpoint.get('best_individual')
+
+        # Restore random state if available
+        if 'random_state' in checkpoint:
+            try:
+                random.setstate(tuple(checkpoint['random_state']))
+            except Exception as e:
+                logger.warning(f"Could not restore random state: {e}")
+
+        logger.info(f"Resuming from generation {checkpoint.get('generation', 0)}")
+        return checkpoint.get('generation', 0) + 1, checkpoint.get('population', [])
+
+    def get_checkpoint_data(self, generation: int, population: list) -> Dict:
+        """
+        Get current state for checkpointing.
+
+        Args:
+            generation: Current generation number
+            population: Current population
+
+        Returns:
+            Checkpoint data dict
+        """
+        return {
+            'generation': generation,
+            'population': [list(ind) for ind in population],
+            'best_individual': list(self.best_individual) if self.best_individual else None,
+            'best_fitness': self.best_fitness,
+            'history': self.history,
+            'random_state': list(random.getstate()),
+        }
+
     def optimize(
         self,
         fitness_function: Callable[[Dict], float],
-        callback: Callable[[int, float, Dict], None] = None
+        callback: Callable[[int, float, Dict], None] = None,
+        start_generation: int = 0,
+        initial_population: list = None,
+        checkpoint_callback: Callable[[int, list], None] = None
     ) -> Dict:
         """
         Run genetic algorithm optimization.
@@ -278,14 +325,21 @@ class GeneticOptimizer:
         Args:
             fitness_function: Function that takes params dict and returns fitness score
             callback: Optional callback(generation, best_fitness, best_params)
+            start_generation: Generation to start from (for resume)
+            initial_population: Initial population data (for resume)
+            checkpoint_callback: Called after each generation with (gen, population) for saving
 
         Returns:
             Dictionary with best parameters and optimization history
         """
-        logger.info(f"Starting genetic optimization: pop={self.population_size}, gen={self.n_generations}")
+        logger.info(f"Starting genetic optimization: pop={self.population_size}, gen={self.n_generations}, start_gen={start_generation}")
 
-        # Create initial population
-        population = self.toolbox.population(n=self.population_size)
+        # Create or restore population
+        if initial_population:
+            population = [creator.Individual(ind) for ind in initial_population]
+            logger.info(f"Restored population of {len(population)} individuals")
+        else:
+            population = self.toolbox.population(n=self.population_size)
 
         # Evaluate fitness function wrapper
         def evaluate(individual):
@@ -309,8 +363,12 @@ class GeneticOptimizer:
         best_fitness_history = []
         no_improvement_count = 0
 
+        # Restore best fitness history from resumed state
+        if self.history:
+            best_fitness_history = [h['best_fitness'] for h in self.history]
+
         # Evolution loop
-        for gen in range(self.n_generations):
+        for gen in range(start_generation, self.n_generations):
             # Evaluate fitness for all individuals
             fitnesses = list(map(self.toolbox.evaluate, population))
             for ind, fit in zip(population, fitnesses):
@@ -335,6 +393,10 @@ class GeneticOptimizer:
             # Call callback if provided
             if callback:
                 callback(gen, best_fit, best_params)
+
+            # Save checkpoint after each generation
+            if checkpoint_callback:
+                checkpoint_callback(gen, population)
 
             # Update best overall
             if self.best_fitness is None or best_fit > self.best_fitness:

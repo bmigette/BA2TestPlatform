@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, X, Database, Calendar, BarChart2, Cpu, Sliders, Target, Trash2, Split, Save, FolderOpen, Play, Clock, CheckCircle, AlertCircle, Loader2, Pause, SkipForward, XCircle, ArrowLeft, Activity, Timer, Zap, FileText, Settings } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
@@ -177,6 +178,7 @@ const generateTargetFieldNames = (target: PredictionTarget) => {
 };
 
 const Training: React.FC = () => {
+  const navigate = useNavigate();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -229,7 +231,7 @@ const Training: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
-  const [isLoadingProgress, setIsLoadingProgress] = useState(false);
+  const [isLoadingProgress, _setIsLoadingProgress] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showIndividuals, setShowIndividuals] = useState(false);
   const [individualsData, setIndividualsData] = useState<IndividualsData | null>(null);
@@ -380,9 +382,7 @@ const Training: React.FC = () => {
   };
 
   const openJobMonitor = (jobId: string) => {
-    setSelectedJobId(jobId);
-    setIsLoadingProgress(true);
-    fetchJobProgress(jobId).finally(() => setIsLoadingProgress(false));
+    navigate(`/training/${jobId}`);
   };
 
   const closeJobMonitor = () => {
@@ -2191,22 +2191,26 @@ const Training: React.FC = () => {
           <div className="space-y-3">
             {jobs.map((job) => {
               const dataset = datasets.find(d => d.id === job.datasetId);
-              const statusIcon = {
+              const statusIcons: Record<string, React.ReactNode> = {
                 queued: <Clock size={16} className="text-yellow-500" />,
                 running: <Loader2 size={16} className="text-blue-500 animate-spin" />,
                 paused: <Pause size={16} className="text-yellow-500" />,
+                stopped: <AlertCircle size={16} className="text-orange-500" />,
                 completed: <CheckCircle size={16} className="text-green-500" />,
                 failed: <AlertCircle size={16} className="text-red-500" />,
                 cancelled: <XCircle size={16} className="text-gray-500" />,
-              }[job.status];
-              const statusColor = {
+              };
+              const statusIcon = statusIcons[job.status] || statusIcons.queued;
+              const statusColors: Record<string, string> = {
                 queued: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300',
                 running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
                 paused: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300',
+                stopped: 'bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-300',
                 completed: 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300',
                 failed: 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-300',
                 cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
-              }[job.status];
+              };
+              const statusColor = statusColors[job.status] || statusColors.queued;
 
               return (
                 <div

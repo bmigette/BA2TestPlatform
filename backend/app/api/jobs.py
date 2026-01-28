@@ -125,6 +125,12 @@ class JobResponse(BaseModel):
     gpuUtilization: Optional[float] = None
     estimatedTimeRemaining: Optional[str] = None
     optimizeMetric: Optional[str] = None  # The metric being optimized
+    # Training progress details
+    currentEpoch: Optional[int] = None
+    totalEpochs: Optional[int] = None
+    currentIndividual: Optional[int] = None
+    populationSize: Optional[int] = None
+    currentModelType: Optional[str] = None
     # Multi-dataset progress
     datasetProgress: Optional[List[DatasetProgress]] = None
     currentDatasetId: Optional[int] = None
@@ -655,7 +661,7 @@ async def pause_job(job_id: str):
 @router.post("/{job_id}/resume")
 async def resume_job(job_id: str):
     """
-    Resume a paused job.
+    Resume a paused or stopped (crashed) job.
 
     Args:
         job_id: Job ID
@@ -670,7 +676,8 @@ async def resume_job(job_id: str):
     sync_job_from_task(job_id)
     job = jobs_store[job_id]
 
-    if job["status"] != "paused":
+    # Allow resuming paused or stopped (crashed) jobs
+    if job["status"] not in ["paused", "stopped"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot resume job in status: {job['status']}"

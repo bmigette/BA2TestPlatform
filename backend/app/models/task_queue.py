@@ -22,6 +22,7 @@ class TaskStatus(str, enum.Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     PAUSED = "paused"
+    STOPPED = "stopped"  # Crashed/interrupted, can be resumed
 
 
 class TaskPriority(int, enum.Enum):
@@ -63,6 +64,9 @@ class TaskQueue(Base):
     # Results
     result = Column(JSON, nullable=True)  # Task output/result
     error_message = Column(Text, nullable=True)
+
+    # Checkpoint for resumability
+    checkpoint_data = Column(JSON, nullable=True)  # GA state for crash recovery
 
     # Worker assignment
     worker_id = Column(Integer, nullable=True, index=True)
@@ -110,4 +114,5 @@ class TaskQueue(Base):
             "queued_at": self.queued_at.isoformat() if self.queued_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "checkpoint_data": self.checkpoint_data,
         }

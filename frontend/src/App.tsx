@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import Datasets from './pages/Datasets';
 import DatasetDetails from './pages/DatasetDetails';
 import Training from './pages/Training';
+import JobDetails from './pages/JobDetails';
 import Models from './pages/Models';
 import ModelDetails from './pages/ModelDetails';
 import Backtesting from './pages/Backtesting';
@@ -20,6 +21,7 @@ function App() {
           <Route path="datasets" element={<Datasets />} />
           <Route path="datasets/:id" element={<DatasetDetails />} />
           <Route path="training" element={<Training />} />
+          <Route path="training/:id" element={<JobDetails />} />
           <Route path="models" element={<Models />} />
           <Route path="models/:id" element={<ModelDetails />} />
           <Route path="backtesting" element={<Backtesting />} />

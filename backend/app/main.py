@@ -196,7 +196,40 @@ async def startup_event():
     task_queue.register_handler('training_job', handle_training_job)
     logger.info("Registered task handlers: dataset_regeneration, training_job")
 
+    # Recover interrupted jobs (crashed while running)
+    recover_interrupted_jobs()
+
     logger.info("Application startup complete")
+
+
+def recover_interrupted_jobs():
+    """Mark running jobs as stopped on startup (they crashed and can be resumed)."""
+    from app.models.database import SessionLocal
+    from app.models.task_queue import TaskQueue, TaskStatus
+
+    db = SessionLocal()
+    try:
+        # Find jobs that were running when the app crashed
+        running_jobs = db.query(TaskQueue).filter(
+            TaskQueue.status == TaskStatus.RUNNING.value
+        ).all()
+
+        for job in running_jobs:
+            logger.warning(f"Found interrupted job {job.task_id}, marking as stopped")
+            job.status = TaskStatus.STOPPED.value
+            job.progress_message = "Interrupted - can be resumed"
+
+        if running_jobs:
+            db.commit()
+            logger.info(f"Recovered {len(running_jobs)} interrupted jobs - marked as 'stopped'")
+        else:
+            logger.info("No interrupted jobs found")
+
+    except Exception as e:
+        logger.error(f"Failed to recover interrupted jobs: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 
 @app.on_event("shutdown")

@@ -56,6 +56,249 @@ def add_job_log(task_id: str, message: str):
         pass
 
 
+def update_job_training_state(
+    task_id: str,
+    current_generation: int = None,
+    total_generations: int = None,
+    current_individual: int = None,
+    population_size: int = None,
+    current_model_type: str = None,
+    current_epoch: int = None,
+    total_epochs: int = None,
+    best_fitness: float = None
+):
+    """Update job training state for real-time progress tracking."""
+    try:
+        from app.api.jobs import jobs_store
+        if task_id in jobs_store:
+            job = jobs_store[task_id]
+            if current_generation is not None:
+                job["currentGeneration"] = current_generation
+            if total_generations is not None:
+                job["totalGenerations"] = total_generations
+            if current_individual is not None:
+                job["currentIndividual"] = current_individual
+            if population_size is not None:
+                job["populationSize"] = population_size
+            if current_model_type is not None:
+                job["currentModelType"] = current_model_type
+            if current_epoch is not None:
+                job["currentEpoch"] = current_epoch
+            if total_epochs is not None:
+                job["totalEpochs"] = total_epochs
+            if best_fitness is not None:
+                job["bestFitness"] = best_fitness
+    except Exception as e:
+        logger.warning(f"Failed to update job training state: {e}")
+
+
+def save_ga_checkpoint(task_id: str, checkpoint_data: Dict[str, Any]):
+    """Save genetic algorithm checkpoint to database for crash recovery."""
+    from app.models.task_queue import TaskQueue
+    db = SessionLocal()
+    try:
+        task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+        if task:
+            task.checkpoint_data = checkpoint_data
+            db.commit()
+            logger.debug(f"Saved GA checkpoint for task {task_id}, gen {checkpoint_data.get('generation', 0)}")
+    except Exception as e:
+        logger.error(f"Failed to save GA checkpoint: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def load_ga_checkpoint(task_id: str) -> Optional[Dict[str, Any]]:
+    """Load genetic algorithm checkpoint from database."""
+    from app.models.task_queue import TaskQueue
+    db = SessionLocal()
+    try:
+        task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+        if task and task.checkpoint_data:
+            logger.info(f"Found GA checkpoint for task {task_id}, gen {task.checkpoint_data.get('generation', 0)}")
+            return task.checkpoint_data
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load GA checkpoint: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def clear_ga_checkpoint(task_id: str):
+    """Clear checkpoint data after successful completion."""
+    from app.models.task_queue import TaskQueue
+    db = SessionLocal()
+    try:
+        task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+        if task:
+            task.checkpoint_data = None
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to clear GA checkpoint: {e}")
+    finally:
+        db.close()
+
+
+def get_job_models_dir(task_id: str) -> Path:
+    """Get the directory for storing job models."""
+    models_dir = Path("trained_models") / task_id
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return models_dir
+
+
+def save_generation_model(
+    task_id: str,
+    model: Any,
+    generation: int,
+    individual: int,
+    model_type: str,
+    fitness: float,
+    params: Dict[str, Any],
+    metrics: Dict[str, Any],
+    training_service: Any
+) -> Optional[str]:
+    """
+    Save a model from a generation.
+
+    Args:
+        task_id: Job ID
+        model: Trained model
+        generation: Generation number
+        individual: Individual number within generation
+        model_type: Type of model (lstm, nbeats, etc.)
+        fitness: Model fitness score
+        params: Model parameters
+        metrics: Evaluation metrics
+        training_service: TrainingService instance for saving
+
+    Returns:
+        Path to saved model or None if failed
+    """
+    try:
+        models_dir = get_job_models_dir(task_id)
+        model_name = f"gen{generation:03d}_ind{individual:03d}_{model_type}_f{fitness:.4f}"
+
+        metadata = {
+            'task_id': task_id,
+            'generation': generation,
+            'individual': individual,
+            'model_type': model_type,
+            'fitness': fitness,
+            'params': params,
+            'metrics': metrics
+        }
+
+        model_path = training_service.save_model(model, str(models_dir / model_name), metadata)
+        logger.debug(f"Saved model: {model_path}")
+        return model_path
+
+    except Exception as e:
+        logger.warning(f"Failed to save generation model: {e}")
+        return None
+
+
+def cleanup_generation_models(task_id: str, generation: int):
+    """
+    Remove all models from a specific generation.
+
+    Args:
+        task_id: Job ID
+        generation: Generation number to clean up
+    """
+    try:
+        models_dir = get_job_models_dir(task_id)
+        pattern = f"gen{generation:03d}_*"
+
+        import glob
+        files_to_remove = list(models_dir.glob(pattern))
+
+        for file_path in files_to_remove:
+            try:
+                file_path.unlink()
+                logger.debug(f"Removed: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove {file_path}: {e}")
+
+        if files_to_remove:
+            logger.info(f"Cleaned up {len(files_to_remove)} files from generation {generation}")
+
+    except Exception as e:
+        logger.warning(f"Failed to cleanup generation {generation} models: {e}")
+
+
+def save_best_model(
+    task_id: str,
+    model: Any,
+    model_type: str,
+    fitness: float,
+    params: Dict[str, Any],
+    metrics: Dict[str, Any],
+    training_service: Any
+) -> Optional[str]:
+    """
+    Save the best model to a permanent location.
+
+    Args:
+        task_id: Job ID
+        model: Best trained model
+        model_type: Type of model
+        fitness: Model fitness score
+        params: Model parameters
+        metrics: Evaluation metrics
+        training_service: TrainingService instance
+
+    Returns:
+        Path to saved model or None if failed
+    """
+    try:
+        models_dir = get_job_models_dir(task_id)
+        model_name = f"best_{model_type}_f{fitness:.4f}"
+
+        metadata = {
+            'task_id': task_id,
+            'model_type': model_type,
+            'fitness': fitness,
+            'params': params,
+            'metrics': metrics,
+            'is_best': True
+        }
+
+        model_path = training_service.save_model(model, str(models_dir / model_name), metadata)
+        logger.info(f"Saved best model: {model_path}")
+        return model_path
+
+    except Exception as e:
+        logger.error(f"Failed to save best model: {e}")
+        return None
+
+
+def cleanup_job_models(task_id: str, keep_best: bool = True):
+    """
+    Clean up all models for a job, optionally keeping the best model.
+
+    Args:
+        task_id: Job ID
+        keep_best: If True, keep files starting with 'best_'
+    """
+    try:
+        models_dir = get_job_models_dir(task_id)
+
+        for file_path in models_dir.iterdir():
+            if keep_best and file_path.name.startswith('best_'):
+                continue
+            try:
+                file_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove {file_path}: {e}")
+
+        logger.info(f"Cleaned up job {task_id} models (keep_best={keep_best})")
+
+    except Exception as e:
+        logger.warning(f"Failed to cleanup job models: {e}")
+
+
 def load_dataset(dataset_id: int) -> Optional[pd.DataFrame]:
     """Load dataset from file."""
     db = SessionLocal()
@@ -659,6 +902,8 @@ def train_unified_optimization(
         'current_generation': 0,
         'current_individual': 0,
         'best_fitness': 0.0,
+        'best_model_type': None,
+        'best_model_params': {},
         'cancelled': False,
         'all_individuals': []  # Track all evaluated individuals for visualization
     }
@@ -692,6 +937,19 @@ def train_unified_optimization(
         individual_progress = (individual_num / population_size) * (progress_range / generations) * 0.8
         current_progress = progress_base + gen_progress + individual_progress
 
+        # Update training state for real-time UI
+        update_job_training_state(
+            task_id,
+            current_generation=gen,
+            total_generations=generations,
+            current_individual=individual_num,
+            population_size=population_size,
+            current_model_type=model_type,
+            current_epoch=0,
+            total_epochs=10,  # Will be updated during training
+            best_fitness=progress_state.get('best_fitness')
+        )
+
         update_job_progress(
             task_id,
             current_progress,
@@ -701,12 +959,25 @@ def train_unified_optimization(
         try:
             # Get model-specific params
             model_params = get_model_params(model_type, params)
+            n_epochs = model_params.get('n_epochs', 10)
+
+            # Update epoch info before training
+            update_job_training_state(
+                task_id,
+                current_epoch=0,
+                total_epochs=n_epochs,
+                current_model_type=model_type
+            )
+
             model = ml_service.create_model(model_type, model_params)
 
             # Train
             training_result = training_service.train_model(
                 model, train_series, covariates=train_covariates, verbose=False
             )
+
+            # Update epoch to complete after training
+            update_job_training_state(task_id, current_epoch=n_epochs)
 
             if training_result.get('status') == 'failed':
                 logger.warning(f"Training failed: {training_result.get('error')}")
@@ -734,9 +1005,24 @@ def train_unified_optimization(
             }
             progress_state['all_individuals'].append(individual_record)
 
+            # Save model for this generation
+            save_generation_model(
+                task_id=task_id,
+                model=model,
+                generation=gen,
+                individual=individual_num,
+                model_type=model_type,
+                fitness=fitness,
+                params=model_params,
+                metrics=eval_result,
+                training_service=training_service
+            )
+
             # Track best
             if fitness > progress_state['best_fitness']:
                 progress_state['best_fitness'] = fitness
+                progress_state['best_model_type'] = model_type
+                progress_state['best_model_params'] = model_params
                 best_model[0] = model
                 best_metrics[0] = eval_result
                 update_job_progress(
@@ -756,14 +1042,44 @@ def train_unified_optimization(
             raise InterruptedError("Task cancelled")
         progress_state['current_generation'] = gen + 1
         progress_state['current_individual'] = 0
+
+        # Cleanup models from previous generation (keep only current gen models)
+        if gen > 0:
+            cleanup_generation_models(task_id, gen - 1)
+
+        # Update training state for UI
+        update_job_training_state(
+            task_id,
+            current_generation=gen + 1,
+            current_individual=0,
+            best_fitness=best_fitness
+        )
+
         update_job_progress(
             task_id,
             progress_base + ((gen + 1) / generations) * progress_range,
             f"Gen {gen + 1}/{generations} complete, best fitness: {best_fitness:.4f}"
         )
 
-    # Run optimization
-    update_job_progress(task_id, progress_base, f"Starting unified optimization (pop={population_size}, gens={generations})")
+    def checkpoint_callback(gen: int, population: list):
+        """Save checkpoint after each generation for crash recovery."""
+        checkpoint_data = optimizer.get_checkpoint_data(gen, population)
+        checkpoint_data['all_individuals'] = progress_state['all_individuals']
+        save_ga_checkpoint(task_id, checkpoint_data)
+
+    # Check for existing checkpoint (for resume)
+    checkpoint = load_ga_checkpoint(task_id)
+    start_generation = 0
+    initial_population = None
+
+    if checkpoint:
+        logger.info(f"Resuming from checkpoint: gen {checkpoint.get('generation', 0)}")
+        update_job_progress(task_id, progress_base, f"Resuming from generation {checkpoint.get('generation', 0)}")
+        progress_state['all_individuals'] = checkpoint.get('all_individuals', [])
+        start_generation = checkpoint.get('generation', 0) + 1
+        initial_population = checkpoint.get('population', [])
+    else:
+        update_job_progress(task_id, progress_base, f"Starting unified optimization (pop={population_size}, gens={generations})")
 
     optimizer = GeneticOptimizer(
         param_ranges=ga_param_ranges,
@@ -774,11 +1090,20 @@ def train_unified_optimization(
         early_stopping_generations=early_stopping
     )
 
+    # Restore optimizer state if resuming
+    if checkpoint:
+        optimizer.resume_from_checkpoint(checkpoint)
+
     try:
         opt_result = optimizer.optimize(
             fitness_function=fitness_function,
-            callback=ga_callback
+            callback=ga_callback,
+            start_generation=start_generation,
+            initial_population=initial_population,
+            checkpoint_callback=checkpoint_callback
         )
+        # Clear checkpoint on successful completion
+        clear_ga_checkpoint(task_id)
     except InterruptedError:
         logger.info(f"Unified optimization cancelled for task {task_id}")
         return {
@@ -799,6 +1124,21 @@ def train_unified_optimization(
         f"Unified optimization complete. Best: {best_model_type.upper()} fitness={opt_result.get('best_fitness', 0):.4f}"
     )
 
+    # Save the best model permanently
+    model_path = None
+    if best_model[0] is not None:
+        model_path = save_best_model(
+            task_id=task_id,
+            model=best_model[0],
+            model_type=progress_state.get('best_model_type', best_model_type),
+            fitness=progress_state['best_fitness'],
+            params=progress_state.get('best_model_params', {}),
+            metrics=best_metrics[0],
+            training_service=training_service
+        )
+        # Cleanup generation models, keep only the best
+        cleanup_job_models(task_id, keep_best=True)
+
     return {
         'model_type': best_model_type,
         'status': 'completed',
@@ -806,7 +1146,7 @@ def train_unified_optimization(
         'best_fitness': opt_result.get('best_fitness'),
         'generations_run': opt_result.get('generations_run'),
         'metrics': best_metrics[0],
-        'model_path': None,
+        'model_path': model_path,
         'history': opt_result.get('history', [])[-5:],
         'all_individuals': progress_state['all_individuals']  # For UI visualization
     }
