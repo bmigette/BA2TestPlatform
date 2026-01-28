@@ -275,6 +275,10 @@ def train_single_model(
     """
     Train a single model type with genetic optimization.
 
+    Provides real-time progress updates for:
+    - Each generation of genetic optimization
+    - Each individual model being trained within a generation
+
     Args:
         task_id: Task ID for progress updates
         model_type: Model type (lstm, nbeats, rnn)
@@ -330,17 +334,60 @@ def train_single_model(
             'error': f'Data preparation failed: {e}'
         }
 
-    # Create fitness function
-    best_model = [None]  # Use list to allow mutation in closure
+    # Progress tracking state - mutable to allow updates from nested functions
+    progress_state = {
+        'current_generation': 0,
+        'current_individual': 0,
+        'best_fitness': 0.0,
+        'cancelled': False
+    }
+
+    # Best model tracking
+    best_model = [None]
     best_metrics = [{}]
 
+    def check_cancelled() -> bool:
+        """Check if task was cancelled - uses short-lived DB session."""
+        task_queue = get_task_queue()
+        status = task_queue.get_task_status(task_id)
+        if status and status.get('status') in ['cancelled', 'paused']:
+            progress_state['cancelled'] = True
+            return True
+        return False
+
     def fitness_function(params: Dict) -> float:
-        """Evaluate model with given parameters."""
+        """
+        Evaluate model with given parameters.
+        Updates progress for each individual being trained.
+        """
+        # Check for cancellation before training
+        if progress_state['cancelled'] or check_cancelled():
+            raise InterruptedError("Task cancelled")
+
+        # Update progress for this individual
+        progress_state['current_individual'] += 1
+        individual_num = progress_state['current_individual']
+        gen = progress_state['current_generation']
+
+        # Calculate fine-grained progress:
+        # Each generation covers (progress_range / generations) percent
+        # Within each generation, each individual covers a fraction of that
+        gen_progress = (gen / generations) * progress_range * 0.9  # 90% for generations
+        individual_progress = (individual_num / population_size) * (progress_range / generations) * 0.9
+
+        current_progress = progress_base + gen_progress + individual_progress
+
+        update_job_progress(
+            task_id,
+            current_progress,
+            f"{model_type.upper()}: Gen {gen}/{generations}, Training individual {individual_num}/{population_size}"
+        )
+
         try:
             # Create model
             model = ml_service.create_model(model_type, params)
 
-            # Train
+            # Train - this is the time-consuming part
             train_result = training_service.train_model(
                 model,
                 train_series,
@@ -350,6 +397,10 @@ def train_single_model(
 
             if train_result.get('status') == 'failed':
                 return 0.0
+
+            # Check cancellation after training
+            if check_cancelled():
+                raise InterruptedError("Task cancelled")
 
             # Evaluate
             eval_result = training_service.evaluate_model(
@@ -374,30 +425,50 @@ def train_single_model(
             if best_model[0] is None or fitness > best_metrics[0].get('fitness', 0):
                 best_model[0] = model
                 best_metrics[0] = {**eval_result, 'fitness': fitness, 'params': params}
+                progress_state['best_fitness'] = fitness
+
+                # Update progress with new best
+                update_job_progress(
+                    task_id,
+                    current_progress,
+                    f"{model_type.upper()}: Gen {gen}/{generations}, New best fitness: {fitness:.4f}"
+                )
 
             return fitness
 
+        except InterruptedError:
+            raise
         except Exception as e:
             logger.warning(f"Fitness evaluation failed: {e}")
             return 0.0
 
-    # Progress callback for genetic optimizer
     def ga_callback(generation: int, best_fitness: float, best_params: Dict):
-        progress = progress_base + (generation / generations) * progress_range * 0.8
+        """Called after each generation completes."""
+        # Reset individual counter for next generation
+        progress_state['current_generation'] = generation + 1
+        progress_state['current_individual'] = 0
+
+        # Update progress at generation boundary
+        progress = progress_base + ((generation + 1) / generations) * progress_range * 0.9
         update_job_progress(
             task_id,
             progress,
-            f"{model_type.upper()}: Gen {generation}/{generations}, Fitness: {best_fitness:.4f}"
+            f"{model_type.upper()}: Completed Gen {generation + 1}/{generations}, Best: {best_fitness:.4f}"
         )
 
         # Check if task is paused/cancelled
-        task_queue = get_task_queue()
-        if task_queue.is_task_paused(task_id):
-            raise InterruptedError("Task paused")
+        if check_cancelled():
+            raise InterruptedError("Task paused/cancelled")
 
     # Run genetic optimization
     logger.info(f"Starting genetic optimization for {model_type}")
     logger.info(f"Population: {population_size}, Generations: {generations}")
+
+    update_job_progress(
+        task_id,
+        progress_base,
+        f"{model_type.upper()}: Starting optimization (pop={population_size}, gens={generations})"
+    )
 
     optimizer = GeneticOptimizer(
         param_ranges=ga_param_ranges,
@@ -414,15 +485,26 @@ def train_single_model(
             callback=ga_callback
         )
     except InterruptedError:
+        update_job_progress(
+            task_id,
+            progress_base + progress_range * 0.5,
+            f"{model_type.upper()}: Training interrupted"
+        )
         return {
             'model_type': model_type,
             'status': 'paused',
-            'generations_run': len(optimizer.history)
+            'generations_run': progress_state['current_generation'],
+            'best_fitness': progress_state['best_fitness']
         }
 
     # Save best model if found
     model_path = None
     if best_model[0] is not None:
+        update_job_progress(
+            task_id,
+            progress_base + progress_range * 0.95,
+            f"{model_type.upper()}: Saving best model..."
+        )
         try:
             model_name = f"job_{task_id}_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             model_path = training_service.save_model(
@@ -439,6 +521,12 @@ def train_single_model(
             logger.info(f"Saved best {model_type} model to {model_path}")
         except Exception as e:
             logger.warning(f"Failed to save model: {e}")
+
+    update_job_progress(
+        task_id,
+        progress_base + progress_range,
+        f"{model_type.upper()}: Completed with fitness {opt_result.get('best_fitness', 0):.4f}"
+    )
 
     return {
         'model_type': model_type,
