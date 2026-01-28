@@ -234,14 +234,30 @@ async def get_worker_status(worker_id: int, db: Session = Depends(get_db)):
         cpu_percent = psutil.cpu_percent()
         memory = psutil.virtual_memory()
         gpu_utilization = None
+        gpu_memory_used = None
+        gpu_memory_total = None
 
+        # Try pynvml for accurate NVIDIA GPU stats
         try:
-            import torch
-            if torch.cuda.is_available():
-                # Note: Getting real GPU utilization requires pynvml
-                gpu_utilization = 0  # Placeholder
-        except ImportError:
-            pass
+            import pynvml
+            pynvml.nvmlInit()
+            device_count = pynvml.nvmlDeviceGetCount()
+            if device_count > 0:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                gpu_utilization = util.gpu
+                mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                gpu_memory_used = mem_info.used // (1024 * 1024)
+                gpu_memory_total = mem_info.total // (1024 * 1024)
+            pynvml.nvmlShutdown()
+        except Exception:
+            # Fallback to torch for basic detection
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    gpu_utilization = 0  # Can't get real utilization without pynvml
+            except ImportError:
+                pass
 
         return {
             "id": worker.id,
@@ -250,6 +266,8 @@ async def get_worker_status(worker_id: int, db: Session = Depends(get_db)):
             "memoryUsed": memory.used // (1024 * 1024),
             "memoryTotal": memory.total // (1024 * 1024),
             "gpuUtilization": gpu_utilization,
+            "gpuMemoryUsed": gpu_memory_used,
+            "gpuMemoryTotal": gpu_memory_total,
             "activeJobs": worker.active_jobs_count,
             "lastHeartbeat": datetime.utcnow().isoformat()
         }

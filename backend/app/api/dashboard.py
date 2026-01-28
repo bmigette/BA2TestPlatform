@@ -161,16 +161,32 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     gpu_memory_used = None
     gpu_memory_total = None
 
+    # Try pynvml for accurate NVIDIA GPU stats (works for any process using GPU)
     try:
-        import torch
-        if torch.cuda.is_available():
-            gpu_utilization = 0  # Placeholder - real GPU util requires pynvml
-            props = torch.cuda.get_device_properties(0)
-            gpu_memory_total = props.total_memory // (1024 * 1024)
-            # Get current memory usage
-            gpu_memory_used = torch.cuda.memory_allocated(0) // (1024 * 1024)
-    except ImportError:
-        pass
+        import pynvml
+        pynvml.nvmlInit()
+        device_count = pynvml.nvmlDeviceGetCount()
+        if device_count > 0:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            # Get GPU utilization
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            gpu_utilization = util.gpu  # GPU compute utilization percentage
+            # Get memory info
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            gpu_memory_used = mem_info.used // (1024 * 1024)
+            gpu_memory_total = mem_info.total // (1024 * 1024)
+        pynvml.nvmlShutdown()
+    except Exception:
+        # Fallback to torch for basic info
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_utilization = 0  # Can't get real utilization without pynvml
+                props = torch.cuda.get_device_properties(0)
+                gpu_memory_total = props.total_memory // (1024 * 1024)
+                gpu_memory_used = torch.cuda.memory_allocated(0) // (1024 * 1024)
+        except ImportError:
+            pass
 
     system_resources = SystemResources(
         cpuPercent=round(cpu_percent, 1),
