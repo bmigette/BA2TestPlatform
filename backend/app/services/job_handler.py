@@ -280,13 +280,13 @@ def cleanup_job_models(task_id: str, keep_best: bool = True):
 
     Args:
         task_id: Job ID
-        keep_best: If True, keep files starting with 'best_'
+        keep_best: If True, keep files starting with 'best_' or 'elite_'
     """
     try:
         models_dir = get_job_models_dir(task_id)
 
         for file_path in models_dir.iterdir():
-            if keep_best and file_path.name.startswith('best_'):
+            if keep_best and (file_path.name.startswith('best_') or file_path.name.startswith('elite_')):
                 continue
             try:
                 file_path.unlink()
@@ -297,6 +297,91 @@ def cleanup_job_models(task_id: str, keep_best: bool = True):
 
     except Exception as e:
         logger.warning(f"Failed to cleanup job models: {e}")
+
+
+def save_elite_models(
+    task_id: str,
+    all_individuals: List[Dict[str, Any]],
+    elitism_percent: float = 10.0,
+    population_size: int = 20,
+    default_elite_count: int = 10
+) -> List[str]:
+    """
+    Rename/mark the top N models as elite models to preserve them.
+
+    The number of elite models is determined by:
+    - If elitism_percent > 0: (elitism_percent / 100) * population_size
+    - Otherwise: default_elite_count (default 10)
+
+    Args:
+        task_id: Job ID
+        all_individuals: List of all evaluated individuals with their info
+        elitism_percent: Percentage of population to keep as elite
+        population_size: Size of population for calculating elite count
+        default_elite_count: Default number of models to keep if no elitism
+
+    Returns:
+        List of paths to elite models
+    """
+    try:
+        models_dir = get_job_models_dir(task_id)
+
+        # Calculate number of elite models to keep
+        if elitism_percent > 0:
+            elite_count = max(1, int((elitism_percent / 100.0) * population_size))
+        else:
+            elite_count = default_elite_count
+
+        # Sort individuals by fitness (descending) and get top N
+        sorted_individuals = sorted(
+            all_individuals,
+            key=lambda x: x.get('fitness', 0),
+            reverse=True
+        )
+        elite_individuals = sorted_individuals[:elite_count]
+
+        logger.info(f"Saving {len(elite_individuals)} elite models (elitism={elitism_percent}%, pop={population_size})")
+
+        elite_paths = []
+        for rank, ind in enumerate(elite_individuals, 1):
+            gen = ind.get('generation', 0)
+            individual_num = ind.get('individual', 0)
+            model_type = ind.get('model_type', 'unknown')
+            fitness = ind.get('fitness', 0)
+
+            # Find the original model file
+            original_pattern = f"gen{gen:03d}_ind{individual_num:03d}_{model_type}_*"
+            matching_files = list(models_dir.glob(original_pattern))
+
+            if not matching_files:
+                logger.warning(f"Could not find model for gen{gen}_ind{individual_num}_{model_type}")
+                continue
+
+            for original_path in matching_files:
+                # Create new elite filename with rank
+                suffix = original_path.suffix
+                if suffix == '.json':
+                    new_name = f"elite_{rank:02d}_{model_type}_f{fitness:.4f}_meta.json"
+                else:
+                    new_name = f"elite_{rank:02d}_{model_type}_f{fitness:.4f}{suffix}"
+
+                new_path = models_dir / new_name
+
+                try:
+                    # Rename to elite
+                    original_path.rename(new_path)
+                    if not suffix == '.json':
+                        elite_paths.append(str(new_path))
+                    logger.debug(f"Renamed {original_path.name} -> {new_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to rename {original_path}: {e}")
+
+        logger.info(f"Saved {len(elite_paths)} elite models")
+        return elite_paths
+
+    except Exception as e:
+        logger.error(f"Failed to save elite models: {e}")
+        return []
 
 
 def load_dataset(dataset_id: int) -> Optional[pd.DataFrame]:
@@ -1043,9 +1128,8 @@ def train_unified_optimization(
         progress_state['current_generation'] = gen + 1
         progress_state['current_individual'] = 0
 
-        # Cleanup models from previous generation (keep only current gen models)
-        if gen > 0:
-            cleanup_generation_models(task_id, gen - 1)
+        # Note: We keep all models during training and cleanup at the end
+        # to preserve elite models from any generation
 
         # Update training state for UI
         update_job_training_state(
@@ -1124,20 +1208,21 @@ def train_unified_optimization(
         f"Unified optimization complete. Best: {best_model_type.upper()} fitness={opt_result.get('best_fitness', 0):.4f}"
     )
 
-    # Save the best model permanently
-    model_path = None
-    if best_model[0] is not None:
-        model_path = save_best_model(
-            task_id=task_id,
-            model=best_model[0],
-            model_type=progress_state.get('best_model_type', best_model_type),
-            fitness=progress_state['best_fitness'],
-            params=progress_state.get('best_model_params', {}),
-            metrics=best_metrics[0],
-            training_service=training_service
-        )
-        # Cleanup generation models, keep only the best
-        cleanup_job_models(task_id, keep_best=True)
+    # Save elite models (top N based on elitism percent or default 10)
+    elitism_percent = genetic_config.get('elitismPercent', 10.0)
+    elite_paths = save_elite_models(
+        task_id=task_id,
+        all_individuals=progress_state['all_individuals'],
+        elitism_percent=elitism_percent,
+        population_size=population_size,
+        default_elite_count=10
+    )
+
+    # Cleanup all generation models, keep only elite models
+    cleanup_job_models(task_id, keep_best=True)
+
+    # Get path to the best model (elite_01)
+    model_path = elite_paths[0] if elite_paths else None
 
     return {
         'model_type': best_model_type,
