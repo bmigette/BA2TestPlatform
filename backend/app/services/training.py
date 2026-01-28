@@ -121,9 +121,14 @@ class TrainingService:
         if feature_columns:
             available_cols = [c for c in feature_columns if c in df_sorted.columns]
             if available_cols:
-                # Drop NaN values from covariates
-                cov_df = df_sorted[available_cols].dropna()
-                if len(cov_df) > 0:
+                # Use the same rows as target series to ensure alignment
+                # Fill NaN with forward fill then backward fill instead of dropping rows
+                cov_df = df_sorted[available_cols].ffill().bfill()
+
+                # If still has NaN (e.g., all NaN column), fill with 0
+                cov_df = cov_df.fillna(0)
+
+                if len(cov_df) > 0 and len(cov_df) == len(df_sorted):
                     if is_intraday:
                         cov_values = cov_df[available_cols].values
                         covariates = TimeSeries.from_values(cov_values)
@@ -141,6 +146,10 @@ class TrainingService:
                     # MPS (Apple Silicon GPU) doesn't support float64
                     if MPS_WILL_BE_USED:
                         covariates = covariates.astype('float32')
+
+                    logger.info(f"Created covariates with {len(covariates)} points from {len(available_cols)} features")
+                else:
+                    logger.warning(f"Covariate length mismatch: {len(cov_df)} vs target {len(df_sorted)}, skipping covariates")
 
         return target_series, covariates
 
@@ -233,19 +242,13 @@ class TrainingService:
                 # RNNModel (LSTM, GRU, RNN) only supports future_covariates, not past_covariates
                 model_name = model.__class__.__name__
                 if model_name == 'RNNModel':
-                    # RNN-based models don't support past_covariates
-                    logger.warning(f"{model_name} does not support past_covariates, training without covariates")
+                    # RNN-based models don't support past_covariates, this is expected
+                    logger.info(f"{model_name} does not support past_covariates, training without covariates")
                     model.fit(train_series, verbose=verbose)
                 else:
-                    # Try with covariates, fall back to without if alignment fails
-                    try:
-                        model.fit(train_series, past_covariates=covariates, verbose=verbose)
-                    except ValueError as ve:
-                        if "past_covariates" in str(ve) or "covariate" in str(ve).lower():
-                            logger.warning(f"{model_name} past_covariates alignment failed, training without: {ve}")
-                            model.fit(train_series, verbose=verbose)
-                        else:
-                            raise
+                    # Train with covariates - fail if alignment issues occur
+                    # (covariate alignment is fixed in prepare_data, so errors here are real problems)
+                    model.fit(train_series, past_covariates=covariates, verbose=verbose)
             else:
                 model.fit(train_series, verbose=verbose)
 
