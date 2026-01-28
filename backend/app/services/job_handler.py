@@ -588,6 +588,24 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
 
         logger.info(f"Train: {len(train_df)} rows, Test: {len(test_df)} rows")
 
+        # Validate classification targets have samples in both sets
+        if target_column.startswith('price_'):
+            train_positives = (train_df[target_column] == 1).sum()
+            test_positives = (test_df[target_column] == 1).sum()
+            train_pct = 100 * train_positives / len(train_df) if len(train_df) > 0 else 0
+            test_pct = 100 * test_positives / len(test_df) if len(test_df) > 0 else 0
+
+            logger.info(f"Target '{target_column}': train={train_positives} ({train_pct:.1f}%), "
+                       f"test={test_positives} ({test_pct:.1f}%) positive samples")
+
+            if train_positives == 0:
+                logger.warning(f"WARNING: No positive samples in training set for {target_column}!")
+                logger.warning("Model cannot learn to predict positive cases. Consider less strict target criteria.")
+
+            if test_positives == 0:
+                logger.warning(f"WARNING: No positive samples in test set for {target_column}!")
+                logger.warning("F1/precision/recall will be 0 since there are no positives to evaluate.")
+
         # Get feature columns (exclude Date, OHLCV, and target columns)
         exclude_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'ticker']
         target_cols = [c for c in combined_df.columns if c.startswith('price_')]
@@ -1054,6 +1072,21 @@ def train_unified_optimization(
             feature_columns=feature_columns[:10],
             timeframe=timeframe
         )
+
+        # Validate series lengths
+        # RNN models need: training_length (3*input_chunk) + output_chunk samples
+        # Other models need: input_chunk + output_chunk samples
+        min_train_length = 100  # Reasonable minimum for training
+        min_test_length = 50   # Reasonable minimum for evaluation
+
+        logger.info(f"Data prepared: train={len(train_series)}, test={len(test_series)} samples")
+
+        if len(train_series) < min_train_length:
+            logger.warning(f"Train series ({len(train_series)}) is short. Models may fail to train.")
+
+        if len(test_series) < min_test_length:
+            logger.warning(f"Test series ({len(test_series)}) is very short. Consider larger dataset or different split.")
+
     except Exception as e:
         logger.error(f"Failed to prepare data: {e}", exc_info=True)
         return {
