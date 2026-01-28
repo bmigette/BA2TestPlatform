@@ -45,6 +45,8 @@ interface Job {
   // Epoch-level tracking
   currentModelParams?: Record<string, number | string>;
   epochHistory?: EpochMetric[];
+  // Optimization settings
+  optimizeMetric?: string;
 }
 
 interface Individual {
@@ -702,23 +704,29 @@ const JobDetails: React.FC = () => {
         );
       })()}
 
-      {/* Fitness Chart */}
+      {/* Fitness Chart - Genetic Optimization Progress */}
       {chartData.length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">Fitness Over Generations</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">
+            Genetic Optimization Progress
+            <span className="text-xs text-gray-500 ml-2">
+              (Optimizing: {(job.optimizeMetric || 'fitness').replace(/_/g, ' ')})
+            </span>
+          </h3>
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="generation" stroke="#6B7280" fontSize={12} />
-              <YAxis stroke="#6B7280" fontSize={12} domain={[0, 'auto']} />
+              <XAxis dataKey="generation" stroke="#6B7280" fontSize={12} label={{ value: 'Generation', position: 'insideBottom', offset: -5, fontSize: 11, fill: '#6B7280' }} />
+              <YAxis stroke="#6B7280" fontSize={12} domain={[0, 'auto']} label={{ value: 'Fitness', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#6B7280' }} />
               <Tooltip
                 contentStyle={{ backgroundColor: '#1F2937', border: 'none', borderRadius: '8px' }}
                 labelStyle={{ color: '#9CA3AF' }}
+                formatter={(value) => typeof value === 'number' ? value.toFixed(4) : value}
               />
               <Legend />
-              <Line type="monotone" dataKey="best" stroke="#22C55E" name="Best" strokeWidth={2} />
-              <Line type="monotone" dataKey="avg" stroke="#3B82F6" name="Average" strokeWidth={2} />
-              <Line type="monotone" dataKey="min" stroke="#EF4444" name="Min" strokeWidth={1} dot={false} />
+              <Line type="monotone" dataKey="best" stroke="#22C55E" name="Best Fitness" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="avg" stroke="#3B82F6" name="Avg Fitness" strokeWidth={2} dot={{ r: 2 }} />
+              <Line type="monotone" dataKey="min" stroke="#EF4444" name="Min Fitness" strokeWidth={1} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -744,11 +752,26 @@ const JobDetails: React.FC = () => {
               <span className="font-medium text-green-600">{individualsData.best_individual.fitness.toFixed(4)}</span>
             </div>
             <div>
-              <span className="text-gray-500">MAPE:</span>{' '}
-              <span className="font-medium">{(individualsData.best_individual.metrics?.mape || 0).toFixed(2)}%</span>
+              <span className="text-gray-500">{(job.optimizeMetric || 'f1_score').replace(/_/g, ' ').toUpperCase()}:</span>{' '}
+              <span className="font-medium">
+                {(() => {
+                  const metric = job.optimizeMetric || 'f1_score';
+                  const value = individualsData.best_individual.metrics?.[metric];
+                  if (value === undefined || value === null) return '--';
+                  return metric === 'mape' ? `${value.toFixed(2)}%` : value.toFixed(4);
+                })()}
+              </span>
             </div>
           </div>
           <div className="mt-3 text-xs text-gray-500 flex flex-wrap gap-2">
+            <strong>Metrics:</strong>
+            {Object.entries(individualsData.best_individual.metrics || {}).slice(0, 6).map(([k, v]) => (
+              <span key={k} className="bg-blue-100 dark:bg-blue-900/50 px-2 py-0.5 rounded text-blue-700 dark:text-blue-300">
+                {k}={typeof v === 'number' ? v.toFixed(4) : v}
+              </span>
+            ))}
+          </div>
+          <div className="mt-2 text-xs text-gray-500 flex flex-wrap gap-2">
             <strong>Params:</strong>
             {Object.entries(individualsData.best_individual.params || {}).map(([k, v]) => (
               <span key={k} className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">
@@ -805,8 +828,8 @@ const JobDetails: React.FC = () => {
                           <th className="text-left py-1 px-2">#</th>
                           <th className="text-left py-1 px-2">Model</th>
                           <th className="text-left py-1 px-2">Fitness</th>
-                          <th className="text-left py-1 px-2">MAPE</th>
-                          <th className="text-left py-1 px-2">Key Params</th>
+                          <th className="text-left py-1 px-2">{(job.optimizeMetric || 'f1_score').replace(/_/g, ' ')}</th>
+                          <th className="text-left py-1 px-2">Other Metrics</th>
                           <th className="text-right py-1 px-2">Details</th>
                         </tr>
                       </thead>
@@ -822,11 +845,20 @@ const JobDetails: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-2 px-2 font-medium">{ind.fitness.toFixed(4)}</td>
-                              <td className="py-2 px-2">{(ind.metrics?.mape || 0).toFixed(2)}%</td>
+                              <td className="py-2 px-2">
+                                {(() => {
+                                  const metric = job.optimizeMetric || 'f1_score';
+                                  const value = ind.metrics?.[metric];
+                                  if (value === undefined || value === null) return '--';
+                                  return metric === 'mape' ? `${value.toFixed(2)}%` : value.toFixed(4);
+                                })()}
+                              </td>
                               <td className="py-2 px-2 text-xs text-gray-500">
-                                {ind.params?.hidden_dim && `dim=${ind.params.hidden_dim}`}
-                                {ind.params?.n_rnn_layers && ` layers=${ind.params.n_rnn_layers}`}
-                                {ind.params?.learning_rate && ` lr=${Number(ind.params.learning_rate).toFixed(4)}`}
+                                {Object.entries(ind.metrics || {})
+                                  .filter(([k]) => k !== (job.optimizeMetric || 'f1_score'))
+                                  .slice(0, 3)
+                                  .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(2) : v}`)
+                                  .join(', ')}
                               </td>
                               <td className="py-2 px-2 text-right">
                                 <button
