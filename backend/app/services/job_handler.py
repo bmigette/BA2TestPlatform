@@ -29,14 +29,31 @@ except ImportError as e:
 
 
 def update_job_progress(task_id: str, progress: float, message: str):
-    """Update job progress in the task queue."""
+    """Update job progress in the task queue and add to logs."""
     from app.services.task_queue import get_task_queue
     try:
         task_queue = get_task_queue()
         task_queue.update_progress(task_id, progress, message)
         logger.info(f"Job {task_id}: {message} ({progress:.1f}%)")
+        # Also add to job_progress_data for UI logs
+        add_job_log(task_id, message)
     except Exception as e:
         logger.warning(f"Failed to update job progress: {e}")
+
+
+def add_job_log(task_id: str, message: str):
+    """Add a log entry to the job's progress data."""
+    from datetime import datetime
+    try:
+        # Import here to avoid circular imports
+        from app.api.jobs import job_progress_data
+        if task_id in job_progress_data:
+            job_progress_data[task_id]["logs"].append(
+                f"[{datetime.now().isoformat()}] {message}"
+            )
+    except Exception as e:
+        # Silently fail if job_progress_data not available
+        pass
 
 
 def load_dataset(dataset_id: int) -> Optional[pd.DataFrame]:
@@ -615,8 +632,14 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk:
     dropout_min = ranges.get('dropoutMin', 0.0)
     dropout_max = ranges.get('dropoutMax', 0.5)
 
-    # Constrain input_chunk_length based on data length
-    input_chunk_max = min(max_input_chunk, 60)
+    # Constrain input_chunk_length based on data length and model type
+    # For RNN models (LSTM/GRU): training_length defaults to 24, so input_chunk_length must be <= 24
+    model_type_lower = model_type.lower()
+    if model_type_lower in ['lstm', 'gru', 'rnn', 'rcnn']:
+        # RNNModel has training_length=24 by default, input_chunk must be <= training_length
+        input_chunk_max = min(max_input_chunk, 24)
+    else:
+        input_chunk_max = min(max_input_chunk, 60)
     input_chunk_min = min(10, input_chunk_max)
 
     # Apply model-specific layer size scaling
@@ -624,8 +647,7 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk:
     # - Transformer/TCN: use as-is (1x)
     # - N-BEATS: multiply by 2 (2x)
     # - LSTM/GRU/RNN: multiply by 4 (4x)
-    model_type_lower = model_type.lower()
-    if model_type_lower in ['lstm', 'gru', 'rnn']:
+    if model_type_lower in ['lstm', 'gru', 'rnn', 'rcnn']:
         # LSTM/GRU/RNN: 4x the base layer size
         layer_size_multiplier = 4
     elif model_type_lower in ['nbeats']:

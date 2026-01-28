@@ -205,7 +205,7 @@ class MLModelsService:
 
         Args:
             params: Model parameters (uses defaults if not provided)
-                   - hidden_dim: Can be int (same for all layers) or list/tuple (per-layer)
+                   - hidden_dim: Must be int (Darts RNNModel uses same size for all layers)
 
         Returns:
             Darts RNNModel configured as LSTM
@@ -215,21 +215,15 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['lstm']['default_params'], **(params or {})}
 
-        # Handle per-layer hidden dimensions
+        # Darts RNNModel requires hidden_dim to be a single int (same for all layers)
         hidden_dim = p['hidden_dim']
         n_rnn_layers = p['n_rnn_layers']
 
-        # If hidden_dim is a list/tuple, validate length matches n_rnn_layers
+        # If hidden_dim is a list/tuple, use the first value (or average)
         if isinstance(hidden_dim, (list, tuple)):
-            if len(hidden_dim) != n_rnn_layers:
-                # Truncate or extend to match n_rnn_layers
-                if len(hidden_dim) > n_rnn_layers:
-                    hidden_dim = hidden_dim[:n_rnn_layers]
-                else:
-                    # Extend with last value
-                    hidden_dim = list(hidden_dim) + [hidden_dim[-1]] * (n_rnn_layers - len(hidden_dim))
-            hidden_dim = tuple(hidden_dim)
-            logger.info(f"Using per-layer hidden dimensions: {hidden_dim}")
+            # Use the first value - all RNN layers will have this size
+            hidden_dim = int(hidden_dim[0])
+            logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
 
         model = RNNModel(
             model='LSTM',
@@ -269,6 +263,7 @@ class MLModelsService:
         # Handle layer widths - must be int OR list with length = num_stacks
         layer_widths = p['layer_widths']
         num_stacks = p['num_stacks']
+        num_layers = p['num_layers']
 
         # NBEATS requires layer_widths to be either:
         # - An integer (same width for all stacks)
@@ -318,21 +313,14 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['rnn']['default_params'], **(params or {})}
 
-        # Handle per-layer hidden dimensions
+        # Darts RNNModel requires hidden_dim to be a single int (same for all layers)
         hidden_dim = p['hidden_dim']
         n_rnn_layers = p['n_rnn_layers']
 
-        # If hidden_dim is a list/tuple, validate length matches n_rnn_layers
+        # If hidden_dim is a list/tuple, use the first value
         if isinstance(hidden_dim, (list, tuple)):
-            if len(hidden_dim) != n_rnn_layers:
-                # Truncate or extend to match n_rnn_layers
-                if len(hidden_dim) > n_rnn_layers:
-                    hidden_dim = hidden_dim[:n_rnn_layers]
-                else:
-                    # Extend with last value
-                    hidden_dim = list(hidden_dim) + [hidden_dim[-1]] * (n_rnn_layers - len(hidden_dim))
-            hidden_dim = tuple(hidden_dim)
-            logger.info(f"Using per-layer hidden dimensions: {hidden_dim}")
+            hidden_dim = int(hidden_dim[0])
+            logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
 
         model = RNNModel(
             model='RNN',
@@ -359,6 +347,7 @@ class MLModelsService:
 
         Args:
             params: Model parameters (uses defaults if not provided)
+                   - hidden_dim: Must be int (Darts RNNModel uses same size for all layers)
 
         Returns:
             Darts RNNModel configured as GRU
@@ -368,18 +357,14 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['gru']['default_params'], **(params or {})}
 
-        # Handle per-layer hidden dimensions
+        # Darts RNNModel requires hidden_dim to be a single int (same for all layers)
         hidden_dim = p['hidden_dim']
         n_rnn_layers = p['n_rnn_layers']
 
+        # If hidden_dim is a list/tuple, use the first value
         if isinstance(hidden_dim, (list, tuple)):
-            if len(hidden_dim) != n_rnn_layers:
-                if len(hidden_dim) > n_rnn_layers:
-                    hidden_dim = hidden_dim[:n_rnn_layers]
-                else:
-                    hidden_dim = list(hidden_dim) + [hidden_dim[-1]] * (n_rnn_layers - len(hidden_dim))
-            hidden_dim = tuple(hidden_dim)
-            logger.info(f"Using per-layer hidden dimensions: {hidden_dim}")
+            hidden_dim = int(hidden_dim[0])
+            logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
 
         model = RNNModel(
             model='GRU',

@@ -214,7 +214,9 @@ class GeneticOptimizer:
             elif key.startswith('layer_widths_layer_'):
                 # For N-BEATS models
                 layer_num = int(key.split('_')[-1])
-                if layer_num <= raw_params.get('num_layers', 4):
+                # Use num_stacks for NBEATS (not num_layers which is for FC layers per block)
+                num_stacks = raw_params.get('num_stacks', raw_params.get('num_layers', 30))
+                if layer_num <= num_stacks:
                     hidden_dims.append((layer_num, value))
             else:
                 params[key] = value

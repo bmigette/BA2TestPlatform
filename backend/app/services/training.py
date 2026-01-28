@@ -237,7 +237,15 @@ class TrainingService:
                     logger.warning(f"{model_name} does not support past_covariates, training without covariates")
                     model.fit(train_series, verbose=verbose)
                 else:
-                    model.fit(train_series, past_covariates=covariates, verbose=verbose)
+                    # Try with covariates, fall back to without if alignment fails
+                    try:
+                        model.fit(train_series, past_covariates=covariates, verbose=verbose)
+                    except ValueError as ve:
+                        if "past_covariates" in str(ve) or "covariate" in str(ve).lower():
+                            logger.warning(f"{model_name} past_covariates alignment failed, training without: {ve}")
+                            model.fit(train_series, verbose=verbose)
+                        else:
+                            raise
             else:
                 model.fit(train_series, verbose=verbose)
 
