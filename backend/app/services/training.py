@@ -229,7 +229,15 @@ class TrainingService:
 
         try:
             if covariates is not None:
-                model.fit(train_series, past_covariates=covariates, verbose=verbose)
+                # Check if model supports past_covariates
+                # RNNModel (LSTM, GRU, RNN) only supports future_covariates, not past_covariates
+                model_name = model.__class__.__name__
+                if model_name == 'RNNModel':
+                    # RNN-based models don't support past_covariates
+                    logger.warning(f"{model_name} does not support past_covariates, training without covariates")
+                    model.fit(train_series, verbose=verbose)
+                else:
+                    model.fit(train_series, past_covariates=covariates, verbose=verbose)
             else:
                 model.fit(train_series, verbose=verbose)
 
@@ -292,7 +300,12 @@ class TrainingService:
             if n_predict <= 0:
                 return {'error': 'Test series too short'}
 
-            predictions = model.predict(n=n_predict, past_covariates=covariates)
+            # Check if model supports past_covariates
+            model_name = model.__class__.__name__
+            if covariates is not None and model_name != 'RNNModel':
+                predictions = model.predict(n=n_predict, past_covariates=covariates)
+            else:
+                predictions = model.predict(n=n_predict)
             actuals = test_series[model.input_chunk_length:]
 
             # Align lengths

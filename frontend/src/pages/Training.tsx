@@ -910,6 +910,13 @@ const Training: React.FC = () => {
                     {parameterRanges.layerSizeMin > parameterRanges.layerSizeMax && (
                       <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>
                     )}
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Base size for Transformer/TCN. Scaled per model: LSTM/GRU 4x, N-BEATS 2x.
+                      <br />
+                      <span className="text-gray-400">
+                        e.g., 128 base = Transformer 128, N-BEATS 256, LSTM 512
+                      </span>
+                    </p>
                   </div>
 
                   {/* Learning Rate */}

@@ -17,6 +17,7 @@ import json
 from app.services.task_queue import get_task_queue
 from app.models.database import SessionLocal
 from app.models.dataset import Dataset
+from app.models.task_queue import TaskQueue
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,9 @@ router = APIRouter()
 
 # In-memory job store for quick access (synced with task queue)
 jobs_store: dict = {}
+
+# Flag to track if we've loaded jobs from DB
+_jobs_loaded_from_db = False
 
 # Training progress data (metrics over time)
 job_progress_data: Dict[str, Dict[str, Any]] = {}
@@ -149,6 +153,103 @@ class JobProgressResponse(BaseModel):
 class JobListResponse(BaseModel):
     jobs: List[JobResponse]
     total: int
+
+
+def load_jobs_from_database():
+    """
+    Load jobs from database into jobs_store on startup or first access.
+    This ensures jobs persist across app restarts.
+    """
+    global _jobs_loaded_from_db
+    if _jobs_loaded_from_db:
+        return
+
+    db = SessionLocal()
+    try:
+        # Load all training_job tasks from database
+        tasks = db.query(TaskQueue).filter(
+            TaskQueue.task_type == 'training_job'
+        ).order_by(TaskQueue.created_at.desc()).limit(100).all()
+
+        for task in tasks:
+            if task.task_id not in jobs_store:
+                # Reconstruct job from task payload and status
+                payload = task.payload or {}
+
+                # Get dataset info
+                dataset_ids = payload.get('dataset_ids', [])
+                if not dataset_ids and payload.get('dataset_id'):
+                    dataset_ids = [payload['dataset_id']]
+
+                dataset_names = []
+                dataset_progress = []
+                for ds_id in dataset_ids:
+                    ds_info = get_dataset_info(ds_id)
+                    dataset_names.append(ds_info['datasetName'])
+                    dataset_progress.append(ds_info)
+
+                # Get genetic config with defaults
+                genetic_config = payload.get('genetic_config', {})
+                metrics_config = payload.get('metrics_config', {})
+                param_ranges = payload.get('parameter_ranges', {})
+
+                job_data = {
+                    'id': task.task_id,
+                    'datasetId': dataset_ids[0] if len(dataset_ids) == 1 else None,
+                    'datasetIds': dataset_ids if len(dataset_ids) > 1 else None,
+                    'datasetNames': dataset_names if len(dataset_ids) > 1 else None,
+                    'selectedModels': payload.get('selected_models', []),
+                    'parameterRanges': param_ranges,
+                    'predictionTargets': payload.get('prediction_targets', []),
+                    'trainTestSplit': payload.get('train_test_split', 80),
+                    'crossValidation': payload.get('cross_validation'),
+                    'geneticConfig': genetic_config,
+                    'metricsConfig': metrics_config,
+                    'status': task.status,
+                    'progress': task.progress or 0.0,
+                    'createdAt': task.created_at.isoformat() if task.created_at else datetime.now().isoformat(),
+                    'startedAt': task.started_at.isoformat() if task.started_at else None,
+                    'completedAt': task.completed_at.isoformat() if task.completed_at else None,
+                    'error': task.error_message,
+                    'currentGeneration': 0,
+                    'totalGenerations': genetic_config.get('generations', 50),
+                    'currentLoss': None,
+                    'currentAccuracy': None,
+                    'bestFitness': None,
+                    'gpuUtilization': None,
+                    'estimatedTimeRemaining': None,
+                    'optimizeMetric': metrics_config.get('optimizeMetric', 'f1_score'),
+                    'datasetProgress': dataset_progress if len(dataset_ids) > 1 else None,
+                    'currentDatasetId': None,
+                    'foldResults': None,
+                    'totalCombinations': None
+                }
+
+                # Extract result data if available
+                if task.result:
+                    result = task.result
+                    if result.get('best_model'):
+                        best = result['best_model']
+                        job_data['bestFitness'] = best.get('best_fitness')
+                        if best.get('metrics'):
+                            job_data['currentAccuracy'] = best['metrics'].get('fitness')
+
+                jobs_store[task.task_id] = job_data
+
+                # Initialize progress data
+                if task.task_id not in job_progress_data:
+                    job_progress_data[task.task_id] = {
+                        "metrics": [],
+                        "logs": [f"[{task.created_at.isoformat() if task.created_at else datetime.now().isoformat()}] Job loaded from database"]
+                    }
+
+        _jobs_loaded_from_db = True
+        logger.info(f"Loaded {len(tasks)} jobs from database")
+
+    except Exception as e:
+        logger.error(f"Failed to load jobs from database: {e}")
+    finally:
+        db.close()
 
 
 def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
@@ -361,12 +462,15 @@ async def list_jobs():
     """
     List all optimization jobs.
 
-    Syncs status from task queue before returning.
+    Loads jobs from database on first access, then syncs status from task queue.
 
     Returns:
         List of jobs with status
     """
     try:
+        # Load jobs from database if not already loaded (for persistence across restarts)
+        load_jobs_from_database()
+
         # Sync all jobs from task queue
         for job_id in list(jobs_store.keys()):
             sync_job_from_task(job_id)
@@ -393,7 +497,7 @@ async def get_job(job_id: str):
     """
     Get a specific job by ID.
 
-    Syncs status from task queue before returning.
+    Loads from database if needed, then syncs status from task queue.
 
     Args:
         job_id: Job ID
@@ -401,6 +505,9 @@ async def get_job(job_id: str):
     Returns:
         Job details
     """
+    # Load jobs from database first to ensure we have all jobs
+    load_jobs_from_database()
+
     if job_id not in jobs_store:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -418,9 +525,14 @@ async def delete_job(job_id: str):
     """
     Delete a job by ID.
 
+    Deletes from both in-memory store and database.
+
     Args:
         job_id: Job ID
     """
+    # Load jobs from database first to ensure we have all jobs
+    load_jobs_from_database()
+
     if job_id not in jobs_store:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -431,6 +543,19 @@ async def delete_job(job_id: str):
     task_queue = get_task_queue()
     task_queue.cancel_task(job_id)
 
+    # Delete from database
+    db = SessionLocal()
+    try:
+        db.query(TaskQueue).filter(TaskQueue.task_id == job_id).delete()
+        db.commit()
+        logger.info(f"Deleted job {job_id} from database")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to delete job {job_id} from database: {e}")
+    finally:
+        db.close()
+
+    # Delete from in-memory stores
     del jobs_store[job_id]
     if job_id in job_progress_data:
         del job_progress_data[job_id]

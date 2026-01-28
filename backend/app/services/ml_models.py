@@ -34,7 +34,9 @@ try:
         RNNModel,
         NBEATSModel,
         TFTModel,
-        BlockRNNModel
+        BlockRNNModel,
+        TCNModel,
+        TransformerModel
     )
     from darts.dataprocessing.transformers import Scaler
     DARTS_AVAILABLE = True
@@ -106,6 +108,49 @@ class MLModelsService:
                 'hidden_size': 64,
                 'lstm_layers': 1,
                 'num_attention_heads': 4,
+                'dropout': 0.1,
+                'batch_size': 32,
+                'n_epochs': 100
+            }
+        },
+        'gru': {
+            'name': 'GRU',
+            'description': 'Gated Recurrent Unit network for sequence modeling',
+            'default_params': {
+                'input_chunk_length': 30,
+                'output_chunk_length': 7,
+                'hidden_dim': 64,
+                'n_rnn_layers': 2,
+                'dropout': 0.1,
+                'batch_size': 32,
+                'n_epochs': 100
+            }
+        },
+        'tcn': {
+            'name': 'TCN',
+            'description': 'Temporal Convolutional Network for sequence modeling',
+            'default_params': {
+                'input_chunk_length': 30,
+                'output_chunk_length': 7,
+                'kernel_size': 3,
+                'num_filters': 64,
+                'dilation_base': 2,
+                'dropout': 0.1,
+                'batch_size': 32,
+                'n_epochs': 100
+            }
+        },
+        'transformer': {
+            'name': 'Transformer',
+            'description': 'Transformer model for time series forecasting',
+            'default_params': {
+                'input_chunk_length': 30,
+                'output_chunk_length': 7,
+                'd_model': 64,
+                'nhead': 4,
+                'num_encoder_layers': 2,
+                'num_decoder_layers': 2,
+                'dim_feedforward': 128,
                 'dropout': 0.1,
                 'batch_size': 32,
                 'n_epochs': 100
@@ -221,20 +266,22 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['nbeats']['default_params'], **(params or {})}
 
-        # Handle per-layer widths
+        # Handle layer widths - must be int OR list with length = num_stacks
         layer_widths = p['layer_widths']
-        num_layers = p['num_layers']
+        num_stacks = p['num_stacks']
 
-        # If layer_widths is a list, validate length matches num_layers
+        # NBEATS requires layer_widths to be either:
+        # - An integer (same width for all stacks)
+        # - A list of integers with length = num_stacks
         if isinstance(layer_widths, (list, tuple)):
-            if len(layer_widths) != num_layers:
-                # Truncate or extend to match num_layers
-                if len(layer_widths) > num_layers:
-                    layer_widths = list(layer_widths[:num_layers])
+            if len(layer_widths) != num_stacks:
+                # Truncate or extend to match num_stacks
+                if len(layer_widths) > num_stacks:
+                    layer_widths = list(layer_widths[:num_stacks])
                 else:
                     # Extend with last value
-                    layer_widths = list(layer_widths) + [layer_widths[-1]] * (num_layers - len(layer_widths))
-            logger.info(f"Using per-layer widths: {layer_widths}")
+                    layer_widths = list(layer_widths) + [layer_widths[-1]] * (num_stacks - len(layer_widths))
+            logger.info(f"Using per-stack widths ({len(layer_widths)} for {num_stacks} stacks): {layer_widths[:5]}...")
 
         model = NBEATSModel(
             input_chunk_length=p['input_chunk_length'],
@@ -306,21 +353,148 @@ class MLModelsService:
         logger.info(f"Created RNN model with params: {p}")
         return model
 
+    def create_gru_model(self, params: Dict = None) -> Any:
+        """
+        Create GRU model architecture using Darts.
+
+        Args:
+            params: Model parameters (uses defaults if not provided)
+
+        Returns:
+            Darts RNNModel configured as GRU
+        """
+        if not DARTS_AVAILABLE:
+            raise RuntimeError("Darts library not available")
+
+        p = {**self.MODEL_ARCHITECTURES['gru']['default_params'], **(params or {})}
+
+        # Handle per-layer hidden dimensions
+        hidden_dim = p['hidden_dim']
+        n_rnn_layers = p['n_rnn_layers']
+
+        if isinstance(hidden_dim, (list, tuple)):
+            if len(hidden_dim) != n_rnn_layers:
+                if len(hidden_dim) > n_rnn_layers:
+                    hidden_dim = hidden_dim[:n_rnn_layers]
+                else:
+                    hidden_dim = list(hidden_dim) + [hidden_dim[-1]] * (n_rnn_layers - len(hidden_dim))
+            hidden_dim = tuple(hidden_dim)
+            logger.info(f"Using per-layer hidden dimensions: {hidden_dim}")
+
+        model = RNNModel(
+            model='GRU',
+            input_chunk_length=p['input_chunk_length'],
+            output_chunk_length=p['output_chunk_length'],
+            hidden_dim=hidden_dim,
+            n_rnn_layers=n_rnn_layers,
+            dropout=p['dropout'],
+            batch_size=p['batch_size'],
+            n_epochs=p['n_epochs'],
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
+            pl_trainer_kwargs={
+                'accelerator': 'gpu' if self.use_gpu else 'cpu',
+                'devices': 1 if self.use_gpu else 'auto'
+            }
+        )
+
+        logger.info(f"Created GRU model with params: {p}")
+        return model
+
+    def create_tcn_model(self, params: Dict = None) -> Any:
+        """
+        Create TCN (Temporal Convolutional Network) model using Darts.
+
+        Args:
+            params: Model parameters (uses defaults if not provided)
+
+        Returns:
+            Darts TCNModel
+        """
+        if not DARTS_AVAILABLE:
+            raise RuntimeError("Darts library not available")
+
+        p = {**self.MODEL_ARCHITECTURES['tcn']['default_params'], **(params or {})}
+
+        model = TCNModel(
+            input_chunk_length=p['input_chunk_length'],
+            output_chunk_length=p['output_chunk_length'],
+            kernel_size=p.get('kernel_size', 3),
+            num_filters=p.get('num_filters', 64),
+            dilation_base=p.get('dilation_base', 2),
+            dropout=p['dropout'],
+            batch_size=p['batch_size'],
+            n_epochs=p['n_epochs'],
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
+            pl_trainer_kwargs={
+                'accelerator': 'gpu' if self.use_gpu else 'cpu',
+                'devices': 1 if self.use_gpu else 'auto'
+            }
+        )
+
+        logger.info(f"Created TCN model with params: {p}")
+        return model
+
+    def create_transformer_model(self, params: Dict = None) -> Any:
+        """
+        Create Transformer model using Darts.
+
+        Args:
+            params: Model parameters (uses defaults if not provided)
+
+        Returns:
+            Darts TransformerModel
+        """
+        if not DARTS_AVAILABLE:
+            raise RuntimeError("Darts library not available")
+
+        p = {**self.MODEL_ARCHITECTURES['transformer']['default_params'], **(params or {})}
+
+        model = TransformerModel(
+            input_chunk_length=p['input_chunk_length'],
+            output_chunk_length=p['output_chunk_length'],
+            d_model=p.get('d_model', 64),
+            nhead=p.get('nhead', 4),
+            num_encoder_layers=p.get('num_encoder_layers', 2),
+            num_decoder_layers=p.get('num_decoder_layers', 2),
+            dim_feedforward=p.get('dim_feedforward', 128),
+            dropout=p['dropout'],
+            batch_size=p['batch_size'],
+            n_epochs=p['n_epochs'],
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
+            pl_trainer_kwargs={
+                'accelerator': 'gpu' if self.use_gpu else 'cpu',
+                'devices': 1 if self.use_gpu else 'auto'
+            }
+        )
+
+        logger.info(f"Created Transformer model with params: {p}")
+        return model
+
     def create_model(self, model_type: str, params: Dict = None) -> Any:
         """
         Create a model of the specified type.
 
         Args:
-            model_type: One of 'lstm', 'nbeats', 'rnn', 'tft'
+            model_type: One of 'lstm', 'nbeats', 'rnn', 'gru', 'tcn', 'transformer'
             params: Model parameters
 
         Returns:
             Configured Darts model
         """
+        # Map aliases to canonical names
+        model_type = model_type.lower()
+        if model_type == 'rcnn':
+            # RCNN is not a Darts model - map to GRU which is similar
+            logger.warning("RCNN is not supported, using GRU instead")
+            model_type = 'gru'
+
         creators = {
             'lstm': self.create_lstm_model,
             'nbeats': self.create_nbeats_model,
-            'rnn': self.create_rnn_model
+            'rnn': self.create_rnn_model,
+            'gru': self.create_gru_model,
+            'tcn': self.create_tcn_model,
+            'transformer': self.create_transformer_model
         }
 
         if model_type not in creators:

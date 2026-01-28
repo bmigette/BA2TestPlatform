@@ -342,20 +342,7 @@ def train_single_model(
     ml_service = MLModelsService()
     training_service = TrainingService()
 
-    # Build parameter ranges for genetic optimizer
-    ga_param_ranges = build_param_ranges(model_type, parameter_ranges)
-
-    # Get genetic config
-    population_size = genetic_config.get('populationSize', 20)
-    generations = genetic_config.get('generations', 50)
-    crossover_prob = genetic_config.get('crossoverProb', 0.7)
-    mutation_prob = genetic_config.get('mutationProb', 0.2)
-    early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
-
-    # Optimize metric
-    optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
-
-    # Prepare data for Darts
+    # Prepare data for Darts FIRST to know data length for constraints
     try:
         train_series, train_covariates = training_service.prepare_data(
             train_df,
@@ -376,6 +363,23 @@ def train_single_model(
             'status': 'failed',
             'error': f'Data preparation failed: {e}'
         }
+
+    # Build parameter ranges with data length constraints
+    # For RNN: training_length defaults to 3 * input_chunk_length
+    # Ensure input_chunk_length <= train_series_length / 4 to have enough data
+    train_length = len(train_series)
+    max_input_chunk = min(60, max(10, train_length // 4))
+    ga_param_ranges = build_param_ranges(model_type, parameter_ranges, max_input_chunk=max_input_chunk)
+
+    # Get genetic config
+    population_size = genetic_config.get('populationSize', 20)
+    generations = genetic_config.get('generations', 50)
+    crossover_prob = genetic_config.get('crossoverProb', 0.7)
+    mutation_prob = genetic_config.get('mutationProb', 0.2)
+    early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
+
+    # Optimize metric
+    optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
 
     # Progress tracking state - mutable to allow updates from nested functions
     progress_state = {
@@ -583,13 +587,20 @@ def train_single_model(
     }
 
 
-def build_param_ranges(model_type: str, ranges: Dict[str, Any]) -> Dict[str, Dict]:
+def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk: int = 60) -> Dict[str, Dict]:
     """
     Build genetic algorithm parameter ranges from job config.
+
+    Different model types have different appropriate layer size ranges:
+    - LSTM/GRU/RNN: hidden_dim 32-1024 (recurrent units)
+    - N-BEATS: layer_widths 128-512 (FC layers per stack)
+    - TCN: num_filters 32-256 (convolutional filters)
+    - Transformer: d_model 32-256 (embedding dimension)
 
     Args:
         model_type: Model type
         ranges: Parameter ranges from job config
+        max_input_chunk: Maximum allowed input_chunk_length based on data length
 
     Returns:
         Parameter ranges for GeneticOptimizer
@@ -604,27 +615,59 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any]) -> Dict[str, Dic
     dropout_min = ranges.get('dropoutMin', 0.0)
     dropout_max = ranges.get('dropoutMax', 0.5)
 
+    # Constrain input_chunk_length based on data length
+    input_chunk_max = min(max_input_chunk, 60)
+    input_chunk_min = min(10, input_chunk_max)
+
+    # Apply model-specific layer size scaling
+    # User specifies layer size for Transformer (base), then:
+    # - Transformer/TCN: use as-is (1x)
+    # - N-BEATS: multiply by 2 (2x)
+    # - LSTM/GRU/RNN: multiply by 4 (4x)
+    model_type_lower = model_type.lower()
+    if model_type_lower in ['lstm', 'gru', 'rnn']:
+        # LSTM/GRU/RNN: 4x the base layer size
+        layer_size_multiplier = 4
+    elif model_type_lower in ['nbeats']:
+        # N-BEATS: 2x the base layer size
+        layer_size_multiplier = 2
+    else:
+        # Transformer/TCN: use base layer size (1x)
+        layer_size_multiplier = 1
+
+    effective_layer_size_min = layer_size_min * layer_size_multiplier
+    effective_layer_size_max = layer_size_max * layer_size_multiplier
+
     param_ranges = {
         'n_rnn_layers': {'min': layers_min, 'max': layers_max, 'step': 1, 'type': 'int'},
         'dropout': {'min': dropout_min, 'max': dropout_max, 'step': 0.1, 'type': 'float'},
         'learning_rate': {'min': lr_min, 'max': lr_max, 'step': 0.0001, 'type': 'float'},
         'batch_size': {'min': 16, 'max': 128, 'step': 16, 'type': 'int'},
-        'input_chunk_length': {'min': 10, 'max': 60, 'step': 5, 'type': 'int'}
+        'input_chunk_length': {'min': input_chunk_min, 'max': input_chunk_max, 'step': 5, 'type': 'int'}
     }
 
-    # Add per-layer hidden dimensions
+    # Add per-layer hidden dimensions with model-appropriate sizes
     for i in range(1, 5):  # Up to 4 layers
         param_ranges[f'hidden_dim_layer_{i}'] = {
-            'min': layer_size_min,
-            'max': layer_size_max,
+            'min': effective_layer_size_min,
+            'max': effective_layer_size_max,
             'step': 16,
             'type': 'int'
         }
 
     # Model-specific adjustments
-    if model_type == 'nbeats':
+    if model_type_lower == 'nbeats':
         param_ranges['num_stacks'] = {'min': 10, 'max': 50, 'step': 10, 'type': 'int'}
         param_ranges['num_blocks'] = {'min': 1, 'max': 3, 'step': 1, 'type': 'int'}
         param_ranges['num_layers'] = {'min': 2, 'max': 6, 'step': 1, 'type': 'int'}
+    elif model_type_lower == 'tcn':
+        param_ranges['kernel_size'] = {'min': 2, 'max': 7, 'step': 1, 'type': 'int'}
+        param_ranges['num_filters'] = {'min': 32, 'max': 128, 'step': 16, 'type': 'int'}
+        param_ranges['dilation_base'] = {'min': 2, 'max': 4, 'step': 1, 'type': 'int'}
+    elif model_type_lower == 'transformer':
+        param_ranges['d_model'] = {'min': 32, 'max': 256, 'step': 32, 'type': 'int'}
+        param_ranges['nhead'] = {'min': 2, 'max': 8, 'step': 2, 'type': 'int'}
+        param_ranges['num_encoder_layers'] = {'min': 1, 'max': 4, 'step': 1, 'type': 'int'}
+        param_ranges['num_decoder_layers'] = {'min': 1, 'max': 4, 'step': 1, 'type': 'int'}
 
     return param_ranges
