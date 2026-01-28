@@ -1134,20 +1134,25 @@ async def get_job_individuals(job_id: str, generation: Optional[int] = None, mod
             detail=f"Job {job_id} not found"
         )
 
-    # Get result from task queue
-    task_queue = get_task_queue()
-    task_status = task_queue.get_task_status(job_id)
-
+    # First check jobs_store for real-time data during running jobs
     all_individuals = []
-    if task_status and task_status.get("result"):
-        result = task_status["result"]
-        all_individuals = result.get("all_individuals", [])
+    if job_id in jobs_store and "allIndividuals" in jobs_store[job_id]:
+        all_individuals = jobs_store[job_id]["allIndividuals"]
 
-        # Also check in results array
-        if not all_individuals and "results" in result:
-            for r in result["results"]:
-                if "all_individuals" in r:
-                    all_individuals.extend(r["all_individuals"])
+    # If not in jobs_store, check task queue result (for completed jobs)
+    if not all_individuals:
+        task_queue = get_task_queue()
+        task_status = task_queue.get_task_status(job_id)
+
+        if task_status and task_status.get("result"):
+            result = task_status["result"]
+            all_individuals = result.get("all_individuals", [])
+
+            # Also check in results array
+            if not all_individuals and "results" in result:
+                for r in result["results"]:
+                    if "all_individuals" in r:
+                        all_individuals.extend(r["all_individuals"])
 
     # Apply filters
     if generation is not None:

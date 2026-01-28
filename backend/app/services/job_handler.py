@@ -118,6 +118,21 @@ def update_job_training_state(
         logger.warning(f"Failed to update job training state: {e}")
 
 
+def add_individual_to_job(task_id: str, individual_record: Dict[str, Any]):
+    """Add an evaluated individual to the job store for real-time UI access."""
+    try:
+        from app.api.jobs import jobs_store
+        if task_id in jobs_store:
+            job = jobs_store[task_id]
+            if "allIndividuals" not in job:
+                job["allIndividuals"] = []
+            job["allIndividuals"].append(individual_record)
+            # Also update the individuals count
+            job["individualsCount"] = len(job["allIndividuals"])
+    except Exception as e:
+        logger.warning(f"Failed to add individual to job store: {e}")
+
+
 def save_ga_checkpoint(task_id: str, checkpoint_data: Dict[str, Any]):
     """Save genetic algorithm checkpoint to database for crash recovery."""
     from app.models.task_queue import TaskQueue
@@ -1211,6 +1226,9 @@ def train_unified_optimization(
                 'metrics': eval_result
             }
             progress_state['all_individuals'].append(individual_record)
+
+            # Also add to jobs_store for real-time UI access
+            add_individual_to_job(task_id, individual_record)
 
             # Save model for this generation
             save_result = save_generation_model(
