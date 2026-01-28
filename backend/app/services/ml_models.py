@@ -49,7 +49,12 @@ try:
     from pytorch_lightning.callbacks import Callback
 
     class EpochProgressCallback(Callback):
-        """Callback to report epoch progress during training with metrics tracking."""
+        """Callback to report epoch progress during training with metrics tracking.
+
+        Captures train_loss and val_loss (if validation series is provided during training).
+        Note: Classification metrics (accuracy, F1) are computed during evaluation, not training,
+        since Darts models are designed for regression and don't compute these natively.
+        """
 
         def __init__(self, on_epoch_end: callable = None):
             super().__init__()
@@ -68,7 +73,7 @@ try:
                 current_epoch = trainer.current_epoch + 1  # 0-indexed to 1-indexed
                 max_epochs = trainer.max_epochs
 
-                # Collect all available metrics
+                # Collect all available metrics (train_loss, val_loss, etc.)
                 metrics = {}
                 if trainer.logged_metrics:
                     for key, value in trainer.logged_metrics.items():

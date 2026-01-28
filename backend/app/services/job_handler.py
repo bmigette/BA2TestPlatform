@@ -217,6 +217,12 @@ def save_generation_model(
             'metrics': metrics
         }
 
+        # Clear callbacks before saving to avoid serialization errors with local functions
+        if hasattr(model, 'trainer_params') and model.trainer_params:
+            model.trainer_params.pop('callbacks', None)
+        if hasattr(model, 'pl_trainer_kwargs') and model.pl_trainer_kwargs:
+            model.pl_trainer_kwargs.pop('callbacks', None)
+
         # Save model directly to the job models directory
         model.save(str(full_path))
         logger.debug(f"Saved model: {full_path}")
@@ -833,10 +839,11 @@ def train_single_model(
             # Create model with epoch callback
             model = ml_service.create_model(model_type, params, epoch_callback=epoch_callback)
 
-            # Train - this is the time-consuming part
+            # Train with validation series to get val_loss during training
             train_result = training_service.train_model(
                 model,
                 train_series,
+                val_series=test_series,  # Use test series for validation metrics
                 covariates=train_covariates,
                 verbose=False
             )
@@ -1142,9 +1149,12 @@ def train_unified_optimization(
 
             model = ml_service.create_model(model_type, model_params, epoch_callback=epoch_callback)
 
-            # Train
+            # Train with validation series to get val_loss during training
             training_result = training_service.train_model(
-                model, train_series, covariates=train_covariates, verbose=False
+                model, train_series,
+                val_series=test_series,  # Use test series for validation metrics
+                covariates=train_covariates,
+                verbose=False
             )
 
             # Update epoch to complete after training
@@ -1203,7 +1213,7 @@ def train_unified_optimization(
             progress_state['all_individuals'].append(individual_record)
 
             # Save model for this generation
-            save_generation_model(
+            save_result = save_generation_model(
                 task_id=task_id,
                 model=model,
                 generation=gen,
@@ -1214,6 +1224,14 @@ def train_unified_optimization(
                 metrics=eval_result,
                 training_service=training_service
             )
+            if save_result is None:
+                # Model save failed - increment error counter
+                progress_state['error_count'] += 1
+                update_job_training_state(
+                    task_id,
+                    error_count=progress_state['error_count'],
+                    success_count=progress_state['success_count']
+                )
 
             # Track best
             if fitness > progress_state['best_fitness']:
