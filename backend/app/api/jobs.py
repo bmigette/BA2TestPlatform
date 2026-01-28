@@ -164,7 +164,7 @@ def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
                 "status": "pending",
                 "progress": 0.0,
                 "rowsProcessed": 0,
-                "totalRows": dataset.row_count or 0
+                "totalRows": dataset.rows_count or 0
             }
         return {
             "datasetId": dataset_id,
