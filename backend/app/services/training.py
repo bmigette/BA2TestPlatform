@@ -396,6 +396,12 @@ class TrainingService:
                 # Actuals should be binary (0 or 1) - round to handle any float noise
                 actual_binary = np.round(actual_values).astype(int)
 
+                # Debug: log prediction and actual distributions
+                pred_binary = (pred_proba >= threshold).astype(int)
+                logger.debug(f"Classification debug: pred_proba range=[{pred_proba.min():.4f}, {pred_proba.max():.4f}], "
+                           f"pred_binary sum={pred_binary.sum()}/{len(pred_binary)}, "
+                           f"actual_binary sum={actual_binary.sum()}/{len(actual_binary)}")
+
                 # Calculate all classification metrics
                 class_metrics = ClassificationMetrics.calculate_all(actual_binary, pred_proba, threshold)
 
@@ -461,6 +467,13 @@ class TrainingService:
             Path to saved model
         """
         model_path = self.models_dir / f"{model_name}.pt"
+
+        # Clear callbacks before saving to avoid serialization errors with local functions
+        # The callbacks (like epoch_callback) are closures that can't be serialized
+        if hasattr(model, 'trainer_params') and model.trainer_params:
+            model.trainer_params.pop('callbacks', None)
+        if hasattr(model, 'pl_trainer_kwargs') and model.pl_trainer_kwargs:
+            model.pl_trainer_kwargs.pop('callbacks', None)
 
         # Save model
         model.save(str(model_path))
