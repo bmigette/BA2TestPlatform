@@ -315,6 +315,13 @@ class TrainingService:
 
             training_time = (datetime.now() - start_time).total_seconds()
 
+            # Clear callbacks after training to allow model serialization
+            # Darts uses pickle which can't serialize local function callbacks
+            if hasattr(model, 'trainer_params') and model.trainer_params:
+                model.trainer_params.pop('callbacks', None)
+            if hasattr(model, 'pl_trainer_kwargs') and model.pl_trainer_kwargs:
+                model.pl_trainer_kwargs.pop('callbacks', None)
+
             metrics = {
                 'training_time_seconds': training_time,
                 'train_samples': len(train_series),
