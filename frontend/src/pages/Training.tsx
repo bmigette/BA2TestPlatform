@@ -60,7 +60,7 @@ interface MetricsConfig {
   optimizeMetric: string;
 }
 
-const AVAILABLE_METRICS = [
+const CLASSIFICATION_METRICS = [
   { id: 'f1_score', name: 'F1 Score', description: 'Harmonic mean of precision and recall' },
   { id: 'accuracy', name: 'Accuracy', description: 'Overall correctness (caution: misleading for imbalanced data)' },
   { id: 'balanced_accuracy', name: 'Balanced Accuracy', description: 'Average of recall per class' },
@@ -68,6 +68,12 @@ const AVAILABLE_METRICS = [
   { id: 'recall', name: 'Recall', description: 'Minimize false negatives' },
   { id: 'auc_roc', name: 'AUC-ROC', description: 'Area under ROC curve' },
   { id: 'mcc', name: 'MCC', description: 'Matthews Correlation Coefficient' },
+];
+
+const REGRESSION_METRICS = [
+  { id: 'mape', name: 'MAPE', description: 'Mean Absolute Percentage Error (requires positive values)' },
+  { id: 'mae', name: 'MAE', description: 'Mean Absolute Error' },
+  { id: 'rmse', name: 'RMSE', description: 'Root Mean Square Error' },
 ];
 
 interface PredictionTarget {
@@ -1124,101 +1130,101 @@ const Training: React.FC = () => {
                   </label>
                 </div>
 
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                  <div className="grid grid-cols-2 gap-6">
-                    {/* Left Column - Genetic Algorithm */}
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">Genetic Algorithm</h4>
+                <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
+                  {/* Top Section - Genetic Algorithm */}
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2 mb-3">Genetic Algorithm</h4>
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Population Size</label>
-                          <input
-                            type="number"
-                            min="10"
-                            max="200"
-                            value={geneticConfig.populationSize}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, populationSize: parseInt(e.target.value) || 20 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Generations</label>
-                          <input
-                            type="number"
-                            min="5"
-                            max="500"
-                            value={geneticConfig.generations}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, generations: parseInt(e.target.value) || 50 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Elitism %</label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="50"
-                            value={geneticConfig.elitismPercent}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, elitismPercent: parseFloat(e.target.value) || 10 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Training Epochs</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="500"
-                            value={geneticConfig.trainingEpochs}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, trainingEpochs: parseInt(e.target.value) || 10 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Early Stop (gens)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="50"
-                            value={geneticConfig.earlyStoppingGenerations}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, earlyStoppingGenerations: parseInt(e.target.value) || 5 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Crossover Prob</label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="1"
-                            step="0.1"
-                            value={geneticConfig.crossoverProb}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, crossoverProb: parseFloat(e.target.value) || 0.7 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Mutation Prob</label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="1"
-                            step="0.1"
-                            value={geneticConfig.mutationProb}
-                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, mutationProb: parseFloat(e.target.value) || 0.2 }))}
-                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
-                          />
-                        </div>
+                    <div className="grid grid-cols-4 gap-4">
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Population Size</label>
+                        <input
+                          type="number"
+                          min="10"
+                          max="200"
+                          value={geneticConfig.populationSize}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, populationSize: parseInt(e.target.value) || 20 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Generations</label>
+                        <input
+                          type="number"
+                          min="5"
+                          max="500"
+                          value={geneticConfig.generations}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, generations: parseInt(e.target.value) || 50 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Elitism %</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="50"
+                          value={geneticConfig.elitismPercent}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, elitismPercent: parseFloat(e.target.value) || 10 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Training Epochs</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="500"
+                          value={geneticConfig.trainingEpochs}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, trainingEpochs: parseInt(e.target.value) || 10 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Early Stop (gens)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={geneticConfig.earlyStoppingGenerations}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, earlyStoppingGenerations: parseInt(e.target.value) || 5 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Crossover Prob</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={geneticConfig.crossoverProb}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, crossoverProb: parseFloat(e.target.value) || 0.7 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Mutation Prob</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={geneticConfig.mutationProb}
+                          onChange={(e) => setGeneticConfig(prev => ({ ...prev, mutationProb: parseFloat(e.target.value) || 0.2 }))}
+                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                        />
                       </div>
                     </div>
+                  </div>
 
-                    {/* Right Column - Metrics */}
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">Optimization Metric</h4>
-
-                      <div className="space-y-2">
-                        {AVAILABLE_METRICS.map((metric) => (
+                  {/* Bottom Section - Metrics Side by Side */}
+                  <div className="grid grid-cols-2 gap-6">
+                    {/* Left Column - Classification Metrics */}
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2 mb-3">Classification Metrics</h4>
+                      <div className="space-y-1">
+                        {CLASSIFICATION_METRICS.map((metric) => (
                           <label
                             key={metric.id}
                             className={`flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors ${
@@ -1234,6 +1240,36 @@ const Training: React.FC = () => {
                               checked={metricsConfig.optimizeMetric === metric.id}
                               onChange={(e) => setMetricsConfig({ optimizeMetric: e.target.value })}
                               className="w-4 h-4 text-green-600"
+                            />
+                            <div>
+                              <div className="text-sm font-medium">{metric.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">{metric.description}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right Column - Regression Metrics */}
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2 mb-3">Regression Metrics</h4>
+                      <div className="space-y-1">
+                        {REGRESSION_METRICS.map((metric) => (
+                          <label
+                            key={metric.id}
+                            className={`flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                              metricsConfig.optimizeMetric === metric.id
+                                ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-500'
+                                : 'hover:bg-gray-100 dark:hover:bg-gray-600 border border-transparent'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="optimizeMetric"
+                              value={metric.id}
+                              checked={metricsConfig.optimizeMetric === metric.id}
+                              onChange={(e) => setMetricsConfig({ optimizeMetric: e.target.value })}
+                              className="w-4 h-4 text-blue-600"
                             />
                             <div>
                               <div className="text-sm font-medium">{metric.name}</div>

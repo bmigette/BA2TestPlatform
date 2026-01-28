@@ -806,24 +806,31 @@ def train_single_model(
             if check_cancelled():
                 raise InterruptedError("Task cancelled")
 
-            # Evaluate
+            # Evaluate with the selected optimization metric
             eval_result = training_service.evaluate_model(
                 model,
                 test_series,
-                covariates=test_covariates
+                covariates=test_covariates,
+                optimize_metric=optimize_metric
             )
 
             if 'error' in eval_result:
                 return 0.0
 
-            # Calculate fitness based on metric
+            # Calculate fitness based on metric type
             if optimize_metric == 'mape':
-                # Lower MAPE is better
-                mape = eval_result.get('mape', 100)
-                fitness = 1.0 / (1.0 + mape / 100)
+                # Lower MAPE is better - convert to fitness (higher is better)
+                mape_val = eval_result.get('mape', 100)
+                if mape_val is None:
+                    mape_val = 100
+                fitness = 1.0 / (1.0 + mape_val / 100)
+            elif optimize_metric in {'mae', 'rmse'}:
+                # Lower is better for regression metrics
+                metric_val = eval_result.get(optimize_metric, 100)
+                fitness = 1.0 / (1.0 + metric_val)
             else:
-                # For other metrics, use directly or calculate
-                fitness = 1.0 - eval_result.get('mape', 100) / 100
+                # Classification metrics (f1_score, accuracy, etc.) - higher is better
+                fitness = eval_result.get(optimize_metric, 0.0)
 
             # Track best
             if best_model[0] is None or fitness > best_metrics[0].get('fitness', 0):
@@ -1103,8 +1110,12 @@ def train_unified_optimization(
                 )
                 return 0.0
 
-            # Evaluate
-            eval_result = training_service.evaluate_model(model, test_series, covariates=test_covariates)
+            # Evaluate with the selected optimization metric
+            eval_result = training_service.evaluate_model(
+                model, test_series,
+                covariates=test_covariates,
+                optimize_metric=optimize_metric
+            )
 
             if 'error' in eval_result:
                 progress_state['error_count'] += 1
@@ -1115,10 +1126,20 @@ def train_unified_optimization(
                 )
                 return 0.0
 
-            # Calculate fitness
-            fitness = eval_result.get(optimize_metric, eval_result.get('mape', 0))
+            # Calculate fitness based on metric type
             if optimize_metric == 'mape':
-                fitness = max(0, 100 - fitness) / 100
+                # Lower MAPE is better - convert to fitness (higher is better)
+                mape_val = eval_result.get('mape', 100)
+                if mape_val is None:
+                    mape_val = 100
+                fitness = 1.0 / (1.0 + mape_val / 100)
+            elif optimize_metric in {'mae', 'rmse'}:
+                # Lower is better for regression metrics
+                metric_val = eval_result.get(optimize_metric, 100)
+                fitness = 1.0 / (1.0 + metric_val)
+            else:
+                # Classification metrics (f1_score, accuracy, etc.) - higher is better
+                fitness = eval_result.get(optimize_metric, 0.0)
 
             # Track this individual for visualization
             individual_record = {

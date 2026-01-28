@@ -322,11 +322,16 @@ class TrainingService:
                 'error': str(e)
             }
 
+    # Classification metrics that require thresholding predictions
+    CLASSIFICATION_METRICS = {'f1_score', 'accuracy', 'precision', 'recall', 'auc_roc', 'balanced_accuracy', 'mcc', 'auc_pr'}
+
     def evaluate_model(
         self,
         model: Any,
         test_series: Any,
-        covariates: Any = None
+        covariates: Any = None,
+        optimize_metric: str = 'mape',
+        threshold: float = 0.5
     ) -> Dict[str, float]:
         """
         Evaluate model on test set.
@@ -335,6 +340,8 @@ class TrainingService:
             model: Trained Darts model
             test_series: Test TimeSeries
             covariates: Optional covariate TimeSeries
+            optimize_metric: Metric to optimize ('f1_score', 'accuracy', 'mape', etc.)
+            threshold: Classification threshold for binary metrics (default 0.5)
 
         Returns:
             Evaluation metrics
@@ -363,9 +370,7 @@ class TrainingService:
                 logger.warning(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
                 return {'error': 'No valid predictions could be made'}
 
-            # Inverse-transform to original scale for MAPE calculation
-            # MAPE requires strictly positive values (can't divide by zero/negative)
-            # Scaled data has zero mean so contains negatives
+            # Inverse-transform to original scale
             if self.scaler is not None:
                 predictions_orig = self.scaler.inverse_transform(predictions)
                 actuals_orig = self.scaler.inverse_transform(actuals)
@@ -373,18 +378,65 @@ class TrainingService:
                 predictions_orig = predictions
                 actuals_orig = actuals
 
-            # Use Darts native metric functions on original scale
-            # These require matching time indices, which is ensured by using
-            # prepare_data_split (creates one TimeSeries then splits it)
-            metrics = {
-                'mape': float(mape(actuals_orig, predictions_orig)),
-                'mae': float(mae(actuals_orig, predictions_orig)),
-                'rmse': float(rmse(actuals_orig, predictions_orig)),
-                'test_samples': len(test_series),
-                'predictions_made': len(predictions)
-            }
+            # Get numpy arrays for metric calculation
+            pred_values = predictions_orig.values().flatten()
+            actual_values = actuals_orig.values().flatten()
 
-            logger.info(f"Evaluation complete: MAPE={metrics['mape']:.4f}")
+            # Determine if using classification or regression metrics
+            is_classification = optimize_metric in self.CLASSIFICATION_METRICS
+
+            if is_classification:
+                # Classification metrics - import here to avoid circular imports
+                from app.services.metrics import ClassificationMetrics
+
+                # For classification: predictions are probabilities, actuals are 0/1
+                # Clip predictions to [0, 1] range (model may output values outside)
+                pred_proba = np.clip(pred_values, 0, 1)
+
+                # Actuals should be binary (0 or 1) - round to handle any float noise
+                actual_binary = np.round(actual_values).astype(int)
+
+                # Calculate all classification metrics
+                class_metrics = ClassificationMetrics.calculate_all(actual_binary, pred_proba, threshold)
+
+                metrics = {
+                    'f1_score': class_metrics['f1_score'],
+                    'accuracy': class_metrics['accuracy'],
+                    'precision': class_metrics['precision'],
+                    'recall': class_metrics['recall'],
+                    'balanced_accuracy': class_metrics['balanced_accuracy'],
+                    'mcc': class_metrics['mcc'],
+                    'auc_roc': class_metrics.get('auc_roc', 0.0),
+                    'auc_pr': class_metrics.get('auc_pr', 0.0),
+                    'true_positives': class_metrics['true_positives'],
+                    'false_positives': class_metrics['false_positives'],
+                    'true_negatives': class_metrics['true_negatives'],
+                    'false_negatives': class_metrics['false_negatives'],
+                    'threshold': threshold,
+                    'test_samples': len(test_series),
+                    'predictions_made': len(predictions)
+                }
+
+                logger.info(f"Classification eval: {optimize_metric}={metrics.get(optimize_metric, 0):.4f}, F1={metrics['f1_score']:.4f}")
+            else:
+                # Regression metrics
+                metrics = {
+                    'mae': float(mae(actuals_orig, predictions_orig)),
+                    'rmse': float(rmse(actuals_orig, predictions_orig)),
+                    'test_samples': len(test_series),
+                    'predictions_made': len(predictions)
+                }
+
+                # MAPE requires strictly positive values
+                if actual_values.min() > 0:
+                    metrics['mape'] = float(mape(actuals_orig, predictions_orig))
+                else:
+                    # Skip MAPE for data with zeros/negatives
+                    metrics['mape'] = None
+                    logger.debug("MAPE skipped - data contains non-positive values")
+
+                logger.info(f"Regression eval: MAE={metrics['mae']:.4f}, RMSE={metrics['rmse']:.4f}")
+
             return metrics
 
         except Exception as e:
