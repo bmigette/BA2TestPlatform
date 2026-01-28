@@ -498,6 +498,138 @@ async def get_dataset_preview(dataset_id: int, db: Session = Depends(get_db)):
         )
 
 
+@router.post("/{dataset_id}/preview-targets")
+async def preview_prediction_targets(
+    dataset_id: int,
+    request_body: Dict[str, Any],
+    db: Session = Depends(get_db)
+):
+    """
+    Preview prediction target distribution for a dataset.
+
+    Calculates prediction targets and returns counts of positive/negative
+    samples in train/test splits. Used by job wizard to warn about imbalanced data.
+
+    Args:
+        dataset_id: Dataset ID
+        request_body: {
+            targets: [{profitPercent, maxDrawdownPercent, timePeriodDays}],
+            trainRatio: float (0.0-1.0, default 0.8)
+        }
+        db: Database session
+
+    Returns:
+        Target distribution with warnings
+    """
+    try:
+        from app.services.ml_models import PredictionTargetService
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+        total_rows = len(df)
+
+        # Parse request
+        targets_input = request_body.get('targets', [])
+        train_ratio = request_body.get('trainRatio', 0.8)
+
+        # Calculate train/test split
+        split_idx = int(total_rows * train_ratio)
+        train_rows = split_idx
+        test_rows = total_rows - split_idx
+
+        # Calculate prediction targets
+        target_service = PredictionTargetService()
+        targets_config = []
+        for t in targets_input:
+            targets_config.append({
+                'profit_pct': t.get('profitPercent', 10),
+                'max_dd': t.get('maxDrawdownPercent', 5),
+                'days': t.get('timePeriodDays', 7),
+                'direction': 'up'
+            })
+
+        if not targets_config:
+            return {
+                "dataset_id": dataset_id,
+                "dataset_rows": total_rows,
+                "train_rows": train_rows,
+                "test_rows": test_rows,
+                "targets": []
+            }
+
+        df_with_targets = target_service.calculate_prediction_targets(df.copy(), targets_config)
+
+        # Analyze each target
+        targets_result = []
+        for t in targets_config:
+            col_name = f"price_up_{t['profit_pct']}pct_{t['max_dd']}dd_{t['days']}d"
+            if col_name not in df_with_targets.columns:
+                continue
+
+            values = df_with_targets[col_name]
+            train_values = values.iloc[:split_idx]
+            test_values = values.iloc[split_idx:]
+
+            train_pos = int((train_values == 1).sum())
+            train_neg = int((train_values == 0).sum())
+            test_pos = int((test_values == 1).sum())
+            test_neg = int((test_values == 0).sum())
+
+            # Generate warnings
+            warnings = []
+            if train_pos == 0:
+                warnings.append("No positive samples in training set - model cannot learn to predict positive cases")
+            if test_pos == 0:
+                warnings.append("No positive samples in test set - F1/precision/recall will be 0")
+            if train_pos > 0 and train_pos / len(train_values) < 0.01:
+                warnings.append(f"Very low positive rate in training ({100*train_pos/len(train_values):.1f}%) - model may struggle")
+            if test_pos > 0 and test_pos / len(test_values) < 0.01:
+                warnings.append(f"Very low positive rate in test ({100*test_pos/len(test_values):.1f}%)")
+
+            targets_result.append({
+                "name": col_name,
+                "label": f"{t['profit_pct']}% profit / {t['max_dd']}% DD / {t['days']}d",
+                "train_positive": train_pos,
+                "train_negative": train_neg,
+                "train_positive_pct": round(100 * train_pos / len(train_values), 2) if len(train_values) > 0 else 0,
+                "test_positive": test_pos,
+                "test_negative": test_neg,
+                "test_positive_pct": round(100 * test_pos / len(test_values), 2) if len(test_values) > 0 else 0,
+                "warnings": warnings
+            })
+
+        return {
+            "dataset_id": dataset_id,
+            "dataset_rows": total_rows,
+            "train_rows": train_rows,
+            "test_rows": test_rows,
+            "targets": targets_result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error previewing prediction targets: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to preview prediction targets: {str(e)}"
+        )
+
+
 @router.get("/{dataset_id}/stats")
 async def get_dataset_stats(dataset_id: int, db: Session = Depends(get_db)):
     """

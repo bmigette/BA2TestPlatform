@@ -29,11 +29,6 @@ Quality Diversity (QD) algorithms aim to find a diverse collection of high-perfo
    - [ ] Identify any configuration options for QD parameters
    - [ ] Compare Shinka's approach with other QD libraries
 
-4. **Parallel Training**
-   - [ ] Architecture for training multiple networks in parallel
-   - [ ] Resource management and GPU utilization
-   - [ ] Aggregation strategies for ensemble predictions
-
 ### References to Research
 - [ ] Original MapElites paper: Mouret & Clune (2015)
 - [ ] DCRL papers and implementations
@@ -43,3 +38,6 @@ Quality Diversity (QD) algorithms aim to find a diverse collection of high-perfo
 - Consider behavioral descriptors: risk metrics, drawdown patterns, trade frequency
 - GPU parallelization for fitness evaluation
 - Storage strategy for elite archive
+
+
+Check price that is used for target predictions
