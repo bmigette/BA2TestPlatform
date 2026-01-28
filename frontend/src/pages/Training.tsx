@@ -114,6 +114,8 @@ interface Job {
   bestFitness?: number;
   gpuUtilization?: number;
   estimatedTimeRemaining?: string;
+  errorCount?: number;
+  successCount?: number;
 }
 
 interface TrainingMetric {
@@ -2293,6 +2295,21 @@ const Training: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex items-center space-x-3">
+                    {/* Error/Success count */}
+                    {(job.errorCount !== undefined || job.successCount !== undefined) && (
+                      <div className="flex items-center space-x-1 text-xs">
+                        {job.errorCount !== undefined && job.errorCount > 0 && (
+                          <span className="px-2 py-0.5 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full" title="Errors">
+                            {job.errorCount} err
+                          </span>
+                        )}
+                        {job.successCount !== undefined && job.successCount > 0 && (
+                          <span className="px-2 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 rounded-full" title="Successes">
+                            {job.successCount} ok
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <span className={`px-2 py-1 text-xs rounded-full ${statusColor}`}>
                       {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
                     </span>

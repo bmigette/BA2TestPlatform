@@ -176,7 +176,9 @@ async def startup_event():
         Path(directory).mkdir(exist_ok=True)
 
     # Initialize database tables
+    # Import all models before init_db to ensure tables are created
     from app.models.database import init_db
+    from app.models.optimization_profile import OptimizationProfile  # noqa: F401
     init_db()
 
     # Initialize default indicator collections
