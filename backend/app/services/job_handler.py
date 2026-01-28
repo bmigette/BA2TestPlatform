@@ -980,6 +980,7 @@ def train_unified_optimization(
     crossover_prob = genetic_config.get('crossoverProb', 0.7)
     mutation_prob = genetic_config.get('mutationProb', 0.2)
     early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
+    training_epochs = genetic_config.get('trainingEpochs', 10)
     optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
 
     # Progress tracking
@@ -1043,7 +1044,7 @@ def train_unified_optimization(
 
         try:
             # Get model-specific params
-            model_params = get_model_params(model_type, params)
+            model_params = get_model_params(model_type, params, training_epochs)
             n_epochs = model_params.get('n_epochs', 10)
 
             # Update epoch info before training
@@ -1237,12 +1238,18 @@ def train_unified_optimization(
     }
 
 
-def get_model_params(model_type: str, params: Dict) -> Dict:
-    """Extract model-specific parameters from unified params."""
+def get_model_params(model_type: str, params: Dict, training_epochs: int = 10) -> Dict:
+    """Extract model-specific parameters from unified params.
+
+    Args:
+        model_type: Type of model (lstm, nbeats, etc.)
+        params: Unified parameters from genetic optimization
+        training_epochs: Number of epochs for training (from geneticConfig)
+    """
     model_params = {
         'input_chunk_length': int(params.get('input_chunk_length', 24)),
         'output_chunk_length': 7,
-        'n_epochs': 10,  # Reduced for faster GA evaluation
+        'n_epochs': training_epochs,
         'batch_size': int(params.get('batch_size', 32)),
         'learning_rate': params.get('learning_rate', 0.001),
         'dropout': params.get('dropout', 0.1),

@@ -63,6 +63,7 @@ class GeneticConfig(BaseModel):
     crossoverProb: float = 0.7
     mutationProb: float = 0.2
     earlyStoppingGenerations: int = 5  # Stop if no improvement for N generations
+    trainingEpochs: int = 10  # Number of epochs for training each model
 
 
 class MetricsConfig(BaseModel):

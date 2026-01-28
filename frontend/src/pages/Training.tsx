@@ -52,6 +52,7 @@ interface GeneticConfig {
   crossoverProb: number;
   mutationProb: number;
   earlyStoppingGenerations: number;
+  trainingEpochs: number;
 }
 
 interface MetricsConfig {
@@ -210,6 +211,7 @@ const Training: React.FC = () => {
     crossoverProb: 0.7,
     mutationProb: 0.2,
     earlyStoppingGenerations: 5,
+    trainingEpochs: 10,
   });
   const [metricsConfig, setMetricsConfig] = useState<MetricsConfig>({
     optimizeMetric: 'f1_score',
@@ -502,6 +504,7 @@ const Training: React.FC = () => {
       crossoverProb: 0.7,
       mutationProb: 0.2,
       earlyStoppingGenerations: 5,
+      trainingEpochs: 10,
     });
     setMetricsConfig({
       optimizeMetric: 'f1_score',
@@ -1186,6 +1189,17 @@ const Training: React.FC = () => {
                             max="50"
                             value={geneticConfig.elitismPercent}
                             onChange={(e) => setGeneticConfig(prev => ({ ...prev, elitismPercent: parseFloat(e.target.value) || 10 }))}
+                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Training Epochs</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="500"
+                            value={geneticConfig.trainingEpochs}
+                            onChange={(e) => setGeneticConfig(prev => ({ ...prev, trainingEpochs: parseInt(e.target.value) || 10 }))}
                             className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm"
                           />
                         </div>
