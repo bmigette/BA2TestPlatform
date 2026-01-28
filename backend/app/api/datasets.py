@@ -466,7 +466,7 @@ async def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
 @router.get("/{dataset_id}/preview")
 async def get_dataset_preview(
     dataset_id: int,
-    columns: Optional[str] = Query(None, description="Comma-separated list of columns to include (default: OHLCV only)"),
+    columns: Optional[str] = Query(None, description="Comma-separated list of columns to include (default: all columns)"),
     max_rows: int = Query(2000, description="Maximum rows to return (0 for all, default: 2000)"),
     sample: bool = Query(True, description="Sample evenly if exceeding max_rows (default: True)"),
     db: Session = Depends(get_db)
@@ -475,17 +475,17 @@ async def get_dataset_preview(
     Get dataset preview data for charting with pagination/sampling.
 
     For large datasets, returns sampled data to improve chart performance.
-    Default returns only OHLCV columns for efficient charting.
+    Returns all columns by default with max 2000 rows sampled evenly.
 
     Args:
         dataset_id: Dataset ID
-        columns: Comma-separated columns to include (default: Date,Open,High,Low,Close,Volume)
+        columns: Comma-separated columns to include (default: all columns)
         max_rows: Maximum rows to return (default: 2000, 0 for all)
         sample: If True, sample evenly across dataset when exceeding max_rows
         db: Database session
 
     Returns:
-        Dataset preview data with OHLC values
+        Dataset preview data
     """
     try:
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
@@ -507,19 +507,18 @@ async def get_dataset_preview(
         # Determine which columns to load
         if columns:
             usecols = [c.strip() for c in columns.split(',')]
+            # Read only specified columns
+            try:
+                df = pd.read_csv(file_path, usecols=usecols)
+            except ValueError:
+                # Some columns don't exist, fall back to loading all then filter
+                df = pd.read_csv(file_path)
+                available_cols = [c for c in usecols if c in df.columns]
+                if available_cols:
+                    df = df[available_cols]
         else:
-            # Default: only load OHLCV columns for charting
-            usecols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-
-        # Read only specified columns
-        try:
-            df = pd.read_csv(file_path, usecols=usecols)
-        except ValueError:
-            # Some columns don't exist, fall back to loading all
+            # Default: load all columns
             df = pd.read_csv(file_path)
-            available_cols = [c for c in usecols if c in df.columns]
-            if available_cols:
-                df = df[available_cols]
 
         total_rows = len(df)
 
