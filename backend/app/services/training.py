@@ -128,17 +128,18 @@ class TrainingService:
         timeframe_lower = timeframe.lower()
 
         # Map common timeframes to pandas frequencies
+        # Note: Using lowercase 'h' for hours and 'min' for minutes (uppercase deprecated in pandas 2.2+)
         freq_map = {
-            '1m': 'T',      # 1 minute
-            '5m': '5T',     # 5 minutes
-            '15m': '15T',   # 15 minutes
-            '30m': '30T',   # 30 minutes
-            '1h': 'H',      # 1 hour
-            '4h': '4H',     # 4 hours
-            '1d': 'D',      # 1 day
-            'daily': 'D',   # daily
-            '1w': 'W',      # 1 week
-            'weekly': 'W',  # weekly
+            '1m': 'min',     # 1 minute
+            '5m': '5min',    # 5 minutes
+            '15m': '15min',  # 15 minutes
+            '30m': '30min',  # 30 minutes
+            '1h': 'h',       # 1 hour
+            '4h': '4h',      # 4 hours
+            '1d': 'D',       # 1 day
+            'daily': 'D',    # daily
+            '1w': 'W',       # 1 week
+            'weekly': 'W',   # weekly
         }
 
         if timeframe_lower in freq_map:
@@ -152,11 +153,11 @@ class TrainingService:
                 median_diff = time_diffs.median()
 
                 if median_diff <= pd.Timedelta(minutes=5):
-                    return '5T'
+                    return '5min'
                 elif median_diff <= pd.Timedelta(hours=1):
-                    return 'H'
+                    return 'h'
                 elif median_diff <= pd.Timedelta(hours=4):
-                    return '4H'
+                    return '4h'
                 elif median_diff <= pd.Timedelta(days=1):
                     return 'D'
                 else:
