@@ -104,10 +104,13 @@ def test_model_initialization():
 
     results = {}
 
+    # Convert target series to float32 for MPS compatibility
+    target_series = target_series.astype('float32')
+
     # Test LSTM
     logger.info("\n--- Testing LSTM ---")
     try:
-        model = RNNModel(model="LSTM", input_chunk_length=24, output_chunk_length=1, n_epochs=1)
+        model = RNNModel(model="LSTM", input_chunk_length=24, output_chunk_length=1, n_epochs=1, force_reset=True)
         logger.info("✓ LSTM initialized")
         logger.info("  Fitting LSTM (1 epoch)...")
         model.fit(target_series)
@@ -124,7 +127,7 @@ def test_model_initialization():
     # Test GRU
     logger.info("\n--- Testing GRU ---")
     try:
-        model = RNNModel(model="GRU", input_chunk_length=24, output_chunk_length=1, n_epochs=1)
+        model = RNNModel(model="GRU", input_chunk_length=24, output_chunk_length=1, n_epochs=1, force_reset=True)
         logger.info("✓ GRU initialized")
         logger.info("  Fitting GRU (1 epoch)...")
         model.fit(target_series)

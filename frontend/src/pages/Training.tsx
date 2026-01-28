@@ -318,6 +318,19 @@ const Training: React.FC = () => {
     return () => clearInterval(interval);
   }, [selectedJobId, jobProgress?.job.status, fetchJobProgress]);
 
+  // Auto-refresh jobs list when there are active jobs
+  useEffect(() => {
+    const hasActiveJobs = jobs.some(j => ['running', 'paused', 'queued'].includes(j.status));
+
+    if (!hasActiveJobs) return;
+
+    const interval = setInterval(() => {
+      fetchJobs();
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [jobs]);
+
   const submitJob = async () => {
     if (!selectedDatasetId || selectedModels.length === 0 || !isParameterValid() || predictionTargets.length === 0) {
       return;

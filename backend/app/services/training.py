@@ -20,8 +20,15 @@ logger = logging.getLogger(__name__)
 try:
     import torch
     TORCH_AVAILABLE = True
+    # Check if MPS (Apple Silicon GPU) will be used - it doesn't support float64
+    MPS_WILL_BE_USED = (
+        hasattr(torch.backends, 'mps') and
+        torch.backends.mps.is_available() and
+        torch.backends.mps.is_built()
+    )
 except ImportError:
     TORCH_AVAILABLE = False
+    MPS_WILL_BE_USED = False
 
 try:
     from darts import TimeSeries
@@ -82,17 +89,32 @@ class TrainingService:
         if target_column in df_sorted.columns:
             df_sorted = df_sorted.dropna(subset=[target_column])
 
-        # Create target series with fill_missing_dates to handle gaps (weekends/holidays)
-        target_series = TimeSeries.from_dataframe(
-            df_sorted[[target_column]],
-            value_cols=target_column,
-            fill_missing_dates=True,
-            freq=freq
-        )
+        # For intraday stock data (1h, 4h, etc.), don't use fill_missing_dates
+        # because market data has irregular timestamps (market hours, weekends, holidays)
+        # that cannot be filled with a regular frequency grid
+        is_intraday = timeframe.lower() in ['1m', '5m', '15m', '30m', '1h', '4h']
+
+        if is_intraday:
+            # For intraday stock data: use from_values() which treats data as
+            # an ordered sequence without time semantics (ignores market hours gaps)
+            target_values = df_sorted[[target_column]].values
+            target_series = TimeSeries.from_values(target_values)
+        else:
+            # For daily/weekly: fill missing dates (weekends/holidays)
+            target_series = TimeSeries.from_dataframe(
+                df_sorted[[target_column]],
+                value_cols=target_column,
+                fill_missing_dates=True,
+                freq=freq
+            )
 
         # Scale the data
         self.scaler = Scaler()
         target_series = self.scaler.fit_transform(target_series)
+
+        # MPS (Apple Silicon GPU) doesn't support float64, convert to float32
+        if MPS_WILL_BE_USED:
+            target_series = target_series.astype('float32')
 
         # Create covariates if specified
         covariates = None
@@ -102,15 +124,23 @@ class TrainingService:
                 # Drop NaN values from covariates
                 cov_df = df_sorted[available_cols].dropna()
                 if len(cov_df) > 0:
-                    covariates = TimeSeries.from_dataframe(
-                        cov_df,
-                        value_cols=available_cols,
-                        fill_missing_dates=True,
-                        freq=freq
-                    )
+                    if is_intraday:
+                        cov_values = cov_df[available_cols].values
+                        covariates = TimeSeries.from_values(cov_values)
+                    else:
+                        covariates = TimeSeries.from_dataframe(
+                            cov_df,
+                            value_cols=available_cols,
+                            fill_missing_dates=True,
+                            freq=freq
+                        )
                     # Scale covariates
                     cov_scaler = Scaler()
                     covariates = cov_scaler.fit_transform(covariates)
+
+                    # MPS (Apple Silicon GPU) doesn't support float64
+                    if MPS_WILL_BE_USED:
+                        covariates = covariates.astype('float32')
 
         return target_series, covariates
 
