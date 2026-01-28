@@ -2,7 +2,7 @@
 Optimization Profile model for storing reusable optimization configurations
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text
 from sqlalchemy.sql import func
 from .database import Base
 
@@ -16,10 +16,15 @@ class OptimizationProfile(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
-    # Configuration
-    model_types = Column(JSON, nullable=False)
-    parameter_ranges = Column(JSON, nullable=False)
-    prediction_targets = Column(JSON, nullable=False)
+    # Model configuration
+    model_types = Column(JSON, nullable=False)  # List of selected model types
+    parameter_ranges = Column(JSON, nullable=False)  # Hyperparameter ranges
+    prediction_targets = Column(JSON, nullable=False)  # Target configurations
+
+    # Training configuration
+    train_test_split = Column(Float, default=80.0)  # Train/test split percentage
+    genetic_config = Column(JSON, nullable=True)  # Genetic algorithm settings
+    metrics_config = Column(JSON, nullable=True)  # Optimization metric settings
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

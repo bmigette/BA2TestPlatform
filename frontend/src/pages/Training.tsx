@@ -84,9 +84,10 @@ interface PredictionTarget {
 }
 
 interface JobProfile {
-  id: string;
+  id: number;
   name: string;
   createdAt: string;
+  updatedAt?: string;
   selectedModels: string[];
   parameterRanges: ParameterRanges;
   predictionTargets: Omit<PredictionTarget, 'id'>[];
@@ -95,7 +96,6 @@ interface JobProfile {
   metricsConfig?: MetricsConfig;
 }
 
-const PROFILES_STORAGE_KEY = 'ba2ml_job_profiles';
 
 interface Job {
   id: string;
@@ -247,16 +247,20 @@ const Training: React.FC = () => {
   const [selectedGeneration, setSelectedGeneration] = useState<number | null>(null);
   const [selectedModelTypeFilter, setSelectedModelTypeFilter] = useState<string>('');
 
-  // Load profiles from localStorage on mount
+  // Load profiles from API on mount
   useEffect(() => {
-    const savedProfiles = localStorage.getItem(PROFILES_STORAGE_KEY);
-    if (savedProfiles) {
+    const fetchProfiles = async () => {
       try {
-        setProfiles(JSON.parse(savedProfiles));
+        const response = await fetch('http://localhost:8002/api/jobs/profiles');
+        if (response.ok) {
+          const data = await response.json();
+          setProfiles(data.profiles || []);
+        }
       } catch (e) {
         console.error('Failed to load profiles:', e);
       }
-    }
+    };
+    fetchProfiles();
   }, []);
 
   const fetchDatasets = async () => {
@@ -622,47 +626,63 @@ const Training: React.FC = () => {
 
   const allModelsSelected = selectedModels.length === MODEL_TYPES.length;
 
-  const saveProfile = () => {
+  const saveProfile = async () => {
     if (!newProfileName.trim()) return;
 
-    const newProfile: JobProfile = {
-      id: `profile_${Date.now()}`,
-      name: newProfileName.trim(),
-      createdAt: new Date().toISOString(),
-      selectedModels,
-      parameterRanges,
-      predictionTargets: predictionTargets.map(({ profitPercent, maxDrawdownPercent, timePeriodDays }) => ({
-        profitPercent,
-        maxDrawdownPercent,
-        timePeriodDays,
-      })),
-      trainTestSplit,
-      geneticConfig,
-      metricsConfig,
-    };
+    try {
+      const profileData = {
+        name: newProfileName.trim(),
+        selectedModels,
+        parameterRanges,
+        predictionTargets: predictionTargets.map(({ profitPercent, maxDrawdownPercent, timePeriodDays }) => ({
+          profitPercent,
+          maxDrawdownPercent,
+          timePeriodDays,
+        })),
+        trainTestSplit,
+        geneticConfig,
+        metricsConfig,
+      };
 
-    const updatedProfiles = [...profiles, newProfile];
-    setProfiles(updatedProfiles);
-    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(updatedProfiles));
+      const response = await fetch('http://localhost:8002/api/jobs/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profileData),
+      });
 
-    setNewProfileName('');
-    setSaveProfileSuccess(true);
-    setTimeout(() => {
-      setSaveProfileSuccess(false);
-      setShowSaveProfileDialog(false);
-    }, 1500);
+      if (response.ok) {
+        const savedProfile = await response.json();
+        setProfiles([...profiles, savedProfile]);
+        setNewProfileName('');
+        setSaveProfileSuccess(true);
+        setTimeout(() => {
+          setSaveProfileSuccess(false);
+          setShowSaveProfileDialog(false);
+        }, 1500);
+      } else {
+        console.error('Failed to save profile');
+      }
+    } catch (e) {
+      console.error('Failed to save profile:', e);
+    }
   };
 
   const loadProfile = (profile: JobProfile) => {
-    setSelectedModels(profile.selectedModels);
-    setParameterRanges(profile.parameterRanges);
+    setSelectedModels(profile.selectedModels || []);
+    setParameterRanges(profile.parameterRanges || {
+      inputChunkLengthMin: 10, inputChunkLengthMax: 100, inputChunkLengthStep: 10,
+      outputChunkLength: 7, hiddenDimMin: 16, hiddenDimMax: 256, hiddenDimStep: 16,
+      numLayersMin: 1, numLayersMax: 4, numLayersStep: 1, learningRateMin: 0.001,
+      learningRateMax: 0.01, learningRateStep: 0.001, dropoutMin: 0, dropoutMax: 0.5,
+      dropoutStep: 0.1, activationFunctions: ['ReLU']
+    });
     setPredictionTargets(
-      profile.predictionTargets.map((t, idx) => ({
+      (profile.predictionTargets || []).map((t, idx) => ({
         ...t,
         id: `target_${Date.now()}_${idx}`,
       }))
     );
-    setTrainTestSplit(profile.trainTestSplit);
+    setTrainTestSplit(profile.trainTestSplit || 80);
     if (profile.geneticConfig) {
       setGeneticConfig(profile.geneticConfig);
     }
@@ -672,10 +692,20 @@ const Training: React.FC = () => {
     setShowLoadProfileDialog(false);
   };
 
-  const deleteProfile = (profileId: string) => {
-    const updatedProfiles = profiles.filter(p => p.id !== profileId);
-    setProfiles(updatedProfiles);
-    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(updatedProfiles));
+  const deleteProfile = async (profileId: number) => {
+    try {
+      const response = await fetch(`http://localhost:8002/api/jobs/profiles/${profileId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setProfiles(profiles.filter(p => p.id !== profileId));
+      } else {
+        console.error('Failed to delete profile');
+      }
+    } catch (e) {
+      console.error('Failed to delete profile:', e);
+    }
   };
 
   return (
