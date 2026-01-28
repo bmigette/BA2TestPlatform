@@ -225,10 +225,16 @@ class MLModelsService:
             hidden_dim = int(hidden_dim[0])
             logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
 
+        # RNNModel requires training_length >= input_chunk_length
+        # Default training_length is 24, so we set it dynamically
+        input_chunk_length = p['input_chunk_length']
+        training_length = max(input_chunk_length + 1, 3 * input_chunk_length)
+
         model = RNNModel(
             model='LSTM',
-            input_chunk_length=p['input_chunk_length'],
+            input_chunk_length=input_chunk_length,
             output_chunk_length=p['output_chunk_length'],
+            training_length=training_length,
             hidden_dim=hidden_dim,
             n_rnn_layers=n_rnn_layers,
             dropout=p['dropout'],
@@ -322,10 +328,15 @@ class MLModelsService:
             hidden_dim = int(hidden_dim[0])
             logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
 
+        # RNNModel requires training_length >= input_chunk_length
+        input_chunk_length = p['input_chunk_length']
+        training_length = max(input_chunk_length + 1, 3 * input_chunk_length)
+
         model = RNNModel(
             model='RNN',
-            input_chunk_length=p['input_chunk_length'],
+            input_chunk_length=input_chunk_length,
             output_chunk_length=p['output_chunk_length'],
+            training_length=training_length,
             hidden_dim=hidden_dim,
             n_rnn_layers=n_rnn_layers,
             dropout=p['dropout'],
@@ -366,10 +377,15 @@ class MLModelsService:
             hidden_dim = int(hidden_dim[0])
             logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
 
+        # RNNModel requires training_length >= input_chunk_length
+        input_chunk_length = p['input_chunk_length']
+        training_length = max(input_chunk_length + 1, 3 * input_chunk_length)
+
         model = RNNModel(
             model='GRU',
-            input_chunk_length=p['input_chunk_length'],
+            input_chunk_length=input_chunk_length,
             output_chunk_length=p['output_chunk_length'],
+            training_length=training_length,
             hidden_dim=hidden_dim,
             n_rnn_layers=n_rnn_layers,
             dropout=p['dropout'],

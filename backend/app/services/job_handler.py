@@ -65,7 +65,9 @@ def update_job_training_state(
     current_model_type: str = None,
     current_epoch: int = None,
     total_epochs: int = None,
-    best_fitness: float = None
+    best_fitness: float = None,
+    error_count: int = None,
+    success_count: int = None
 ):
     """Update job training state for real-time progress tracking."""
     try:
@@ -88,6 +90,10 @@ def update_job_training_state(
                 job["totalEpochs"] = total_epochs
             if best_fitness is not None:
                 job["bestFitness"] = best_fitness
+            if error_count is not None:
+                job["errorCount"] = error_count
+            if success_count is not None:
+                job["successCount"] = success_count
     except Exception as e:
         logger.warning(f"Failed to update job training state: {e}")
 
@@ -991,7 +997,9 @@ def train_unified_optimization(
         'best_model_type': None,
         'best_model_params': {},
         'cancelled': False,
-        'all_individuals': []  # Track all evaluated individuals for visualization
+        'all_individuals': [],  # Track all evaluated individuals for visualization
+        'error_count': 0,  # Track training/evaluation errors
+        'success_count': 0  # Track successful evaluations
     }
 
     best_model = [None]
@@ -1033,7 +1041,9 @@ def train_unified_optimization(
             current_model_type=model_type,
             current_epoch=0,
             total_epochs=10,  # Will be updated during training
-            best_fitness=progress_state.get('best_fitness')
+            best_fitness=progress_state.get('best_fitness'),
+            error_count=progress_state.get('error_count', 0),
+            success_count=progress_state.get('success_count', 0)
         )
 
         update_job_progress(
@@ -1067,12 +1077,14 @@ def train_unified_optimization(
 
             if training_result.get('status') == 'failed':
                 logger.warning(f"Training failed: {training_result.get('error')}")
+                progress_state['error_count'] += 1
                 return 0.0
 
             # Evaluate
             eval_result = training_service.evaluate_model(model, test_series, covariates=test_covariates)
 
             if 'error' in eval_result:
+                progress_state['error_count'] += 1
                 return 0.0
 
             # Calculate fitness
@@ -1116,10 +1128,12 @@ def train_unified_optimization(
                     f"Gen {gen}/{generations}, New best: {model_type.upper()} fitness={fitness:.4f}"
                 )
 
+            progress_state['success_count'] += 1
             return fitness
 
         except Exception as e:
             logger.warning(f"Fitness evaluation failed for {model_type}: {e}")
+            progress_state['error_count'] += 1
             return 0.0
 
     def ga_callback(gen: int, best_fitness: float, best_params: Dict):
@@ -1234,7 +1248,9 @@ def train_unified_optimization(
         'metrics': best_metrics[0],
         'model_path': model_path,
         'history': opt_result.get('history', [])[-5:],
-        'all_individuals': progress_state['all_individuals']  # For UI visualization
+        'all_individuals': progress_state['all_individuals'],  # For UI visualization
+        'error_count': progress_state.get('error_count', 0),
+        'success_count': progress_state.get('success_count', 0)
     }
 
 
@@ -1297,8 +1313,8 @@ def build_unified_param_ranges(
     dropout_min = ranges.get('dropoutMin', 0.0)
     dropout_max = ranges.get('dropoutMax', 0.5)
 
-    # Constrain input_chunk_length (use min of all model constraints)
-    input_chunk_max = min(max_input_chunk, 24)  # RNN constraint
+    # input_chunk_length constraints (RNN models now set training_length dynamically)
+    input_chunk_max = max_input_chunk
     input_chunk_min = min(10, input_chunk_max)
 
     param_ranges = {

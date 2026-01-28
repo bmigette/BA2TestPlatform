@@ -30,6 +30,9 @@ interface Job {
   currentIndividual?: number;
   populationSize?: number;
   currentModelType?: string;
+  // Error tracking
+  errorCount?: number;
+  successCount?: number;
 }
 
 interface Individual {
@@ -379,7 +382,7 @@ const JobDetails: React.FC = () => {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
           <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
             <Target size={16} />
@@ -428,6 +431,17 @@ const JobDetails: React.FC = () => {
             <span className="text-xs">Progress</span>
           </div>
           <div className="text-2xl font-bold">{job.progress.toFixed(1)}%</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
+          <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
+            <AlertCircle size={16} />
+            <span className="text-xs">Errors / Success</span>
+          </div>
+          <div className="text-2xl font-bold">
+            <span className={(job.errorCount || 0) > 0 ? 'text-red-600' : 'text-gray-400'}>{job.errorCount || 0}</span>
+            <span className="text-gray-400 mx-1">/</span>
+            <span className="text-green-600">{job.successCount || 0}</span>
+          </div>
         </div>
       </div>
 
