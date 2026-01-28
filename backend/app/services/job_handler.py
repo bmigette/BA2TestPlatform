@@ -588,15 +588,21 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
 
         logger.info(f"Train: {len(train_df)} rows, Test: {len(test_df)} rows")
 
+        # Calculate target distribution for both train and test sets
+        train_positives = 0
+        test_positives = 0
+        train_positives_pct = 0.0
+        test_positives_pct = 0.0
+
         # Validate classification targets have samples in both sets
         if target_column.startswith('price_'):
-            train_positives = (train_df[target_column] == 1).sum()
-            test_positives = (test_df[target_column] == 1).sum()
-            train_pct = 100 * train_positives / len(train_df) if len(train_df) > 0 else 0
-            test_pct = 100 * test_positives / len(test_df) if len(test_df) > 0 else 0
+            train_positives = int((train_df[target_column] == 1).sum())
+            test_positives = int((test_df[target_column] == 1).sum())
+            train_positives_pct = 100 * train_positives / len(train_df) if len(train_df) > 0 else 0
+            test_positives_pct = 100 * test_positives / len(test_df) if len(test_df) > 0 else 0
 
-            logger.info(f"Target '{target_column}': train={train_positives} ({train_pct:.1f}%), "
-                       f"test={test_positives} ({test_pct:.1f}%) positive samples")
+            logger.info(f"Target '{target_column}': train={train_positives} ({train_positives_pct:.1f}%), "
+                       f"test={test_positives} ({test_positives_pct:.1f}%) positive samples")
 
             if train_positives == 0:
                 logger.warning(f"WARNING: No positive samples in training set for {target_column}!")
@@ -670,6 +676,11 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 'datasets': dataset_infos,
                 'train_rows': len(train_df),
                 'test_rows': len(test_df),
+                'target_column': target_column,
+                'train_positives': train_positives,
+                'test_positives': test_positives,
+                'train_positives_pct': round(train_positives_pct, 2),
+                'test_positives_pct': round(test_positives_pct, 2),
                 'completed_at': datetime.now().isoformat()
             }
         else:
@@ -698,6 +709,11 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 'datasets': dataset_infos,
                 'train_rows': len(train_df),
                 'test_rows': len(test_df),
+                'target_column': target_column,
+                'train_positives': train_positives,
+                'test_positives': test_positives,
+                'train_positives_pct': round(train_positives_pct, 2),
+                'test_positives_pct': round(test_positives_pct, 2),
                 'completed_at': datetime.now().isoformat()
             }
 

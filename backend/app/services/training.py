@@ -429,14 +429,14 @@ class TrainingService:
             # Use historical_forecasts for rolling evaluation
             # This makes predictions starting from different points in the test series
             try:
-                # Calculate stride (how many points to skip between forecasts)
-                # Use a stride to balance coverage vs computation time
-                max_forecasts = 50  # Limit number of forecasts for speed
-                total_possible = len(test_series) - min_required + 1
-                stride = max(1, total_possible // max_forecasts)
+                # For classification, we must evaluate ALL test samples for accurate metrics
+                # Using stride=1 ensures every sample is predicted
+                stride = 1
 
+                total_possible = len(test_series) - min_required + 1
                 logger.debug(f"Historical forecasts: test_len={len(test_series)}, "
-                           f"input_chunk={input_chunk}, output_chunk={output_chunk}, stride={stride}")
+                           f"input_chunk={input_chunk}, output_chunk={output_chunk}, "
+                           f"stride={stride}, expected_predictions={total_possible}")
 
                 # Build kwargs for historical_forecasts
                 # Only pass past_covariates if model was trained with them

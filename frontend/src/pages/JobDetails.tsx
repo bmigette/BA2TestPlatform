@@ -50,6 +50,14 @@ interface Job {
   // Real-time individuals tracking
   individualsCount?: number;
   allIndividuals?: Individual[];
+  // Dataset statistics
+  trainRows?: number;
+  testRows?: number;
+  targetColumn?: string;
+  trainPositives?: number;
+  testPositives?: number;
+  trainPositivesPct?: number;
+  testPositivesPct?: number;
 }
 
 interface Individual {
@@ -484,6 +492,45 @@ const JobDetails: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Dataset Statistics */}
+      {(job.trainRows || job.testRows) && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Dataset Statistics</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-sm">
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Target:</span>
+              <span className="ml-2 font-mono text-xs">{job.targetColumn || '--'}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Train Rows:</span>
+              <span className="ml-2 font-bold">{job.trainRows?.toLocaleString() || '--'}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Test Rows:</span>
+              <span className="ml-2 font-bold">{job.testRows?.toLocaleString() || '--'}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Train Positives:</span>
+              <span className="ml-2 font-bold text-green-600">
+                {job.trainPositives ?? '--'}
+                {job.trainPositivesPct != null && <span className="text-gray-400 ml-1">({job.trainPositivesPct}%)</span>}
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Test Positives:</span>
+              <span className="ml-2 font-bold text-blue-600">
+                {job.testPositives ?? '--'}
+                {job.testPositivesPct != null && <span className="text-gray-400 ml-1">({job.testPositivesPct}%)</span>}
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Total:</span>
+              <span className="ml-2 font-bold">{((job.trainRows || 0) + (job.testRows || 0)).toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Training Progress (for running jobs) */}
       {job.status === 'running' && (

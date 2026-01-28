@@ -144,6 +144,14 @@ class JobResponse(BaseModel):
     foldResults: Optional[List[Dict[str, Any]]] = None
     # Parameter combinations count
     totalCombinations: Optional[int] = None
+    # Dataset statistics
+    trainRows: Optional[int] = None
+    testRows: Optional[int] = None
+    targetColumn: Optional[str] = None
+    trainPositives: Optional[int] = None
+    testPositives: Optional[int] = None
+    trainPositivesPct: Optional[float] = None
+    testPositivesPct: Optional[float] = None
 
 
 class TrainingMetrics(BaseModel):
@@ -343,6 +351,22 @@ def sync_job_from_task(job_id: str) -> Optional[Dict[str, Any]]:
                 jobs_store[job_id]["modelsTrained"] = result["models_trained"]
             if "total_models" in result:
                 jobs_store[job_id]["totalModels"] = result["total_models"]
+
+            # Store dataset statistics
+            if "train_rows" in result:
+                jobs_store[job_id]["trainRows"] = result["train_rows"]
+            if "test_rows" in result:
+                jobs_store[job_id]["testRows"] = result["test_rows"]
+            if "target_column" in result:
+                jobs_store[job_id]["targetColumn"] = result["target_column"]
+            if "train_positives" in result:
+                jobs_store[job_id]["trainPositives"] = result["train_positives"]
+            if "test_positives" in result:
+                jobs_store[job_id]["testPositives"] = result["test_positives"]
+            if "train_positives_pct" in result:
+                jobs_store[job_id]["trainPositivesPct"] = result["train_positives_pct"]
+            if "test_positives_pct" in result:
+                jobs_store[job_id]["testPositivesPct"] = result["test_positives_pct"]
 
     return jobs_store.get(job_id)
 
