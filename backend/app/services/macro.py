@@ -201,31 +201,54 @@ class MacroService:
         result_df = ohlc_df.copy()
         result_df['Date'] = pd.to_datetime(result_df['Date'])
 
-        # Get date range from OHLC data
+        # Normalize dates to timezone-naive for proper merging
+        # FRED data is timezone-naive, OHLC data may be timezone-aware (UTC)
+        if result_df['Date'].dt.tz is not None:
+            result_df['Date'] = result_df['Date'].dt.tz_localize(None)
+
+        # Get date range from OHLC data (convert to naive datetime for API call)
         start_date = result_df['Date'].min()
         end_date = result_df['Date'].max()
+        if hasattr(start_date, 'to_pydatetime'):
+            start_date = start_date.to_pydatetime()
+        if hasattr(end_date, 'to_pydatetime'):
+            end_date = end_date.to_pydatetime()
 
         # Fetch macro data
         macro_data = self.get_macro_data(indicators, start_date, end_date)
 
-        # Merge each indicator using forward-fill
+        # Merge each indicator using merge_asof for proper time-based alignment
+        # This handles the case where FRED releases data monthly (e.g., 1st of month)
+        # and OHLC data is daily/intraday
+        result_df = result_df.sort_values('Date').reset_index(drop=True)
+
         for indicator, macro_df in macro_data.items():
             if macro_df.empty:
                 result_df[indicator] = np.nan
+                logger.warning(f"No macro data for {indicator}, filling with NaN")
                 continue
 
-            # Merge on date, then forward-fill missing values
-            result_df = result_df.merge(
+            # Ensure macro dates are also timezone-naive
+            macro_df = macro_df.copy()
+            macro_df['Date'] = pd.to_datetime(macro_df['Date'])
+            if macro_df['Date'].dt.tz is not None:
+                macro_df['Date'] = macro_df['Date'].dt.tz_localize(None)
+
+            # Sort macro data for merge_asof
+            macro_df = macro_df.sort_values('Date').reset_index(drop=True)
+
+            # Use merge_asof to get the most recent macro value for each OHLC row
+            # This is the correct way to align less-frequent data with more-frequent data
+            result_df = pd.merge_asof(
+                result_df,
                 macro_df[['Date', indicator]],
                 on='Date',
-                how='left'
+                direction='backward'  # Get the most recent macro value at or before each OHLC date
             )
 
-            # Forward-fill to propagate last known value
-            result_df[indicator] = result_df[indicator].ffill()
+            logger.debug(f"Merged {indicator}: {result_df[indicator].notna().sum()} non-null values")
 
-            # Also add derived features
-            # Year-over-year change (if enough data)
+            # Add derived features - Year-over-year change (if enough data)
             result_df[f'{indicator}_yoy_change'] = result_df[indicator].pct_change(periods=252, fill_method=None) * 100
 
         logger.info(f"Integrated {len(indicators)} macro indicators with OHLC data")
@@ -244,21 +267,38 @@ class MacroService:
         result_df = ohlc_df.copy()
         result_df['Date'] = pd.to_datetime(result_df['Date'])
 
+        # Normalize dates to timezone-naive for proper merging
+        if result_df['Date'].dt.tz is not None:
+            result_df['Date'] = result_df['Date'].dt.tz_localize(None)
+
+        # Sort for merge_asof
+        result_df = result_df.sort_values('Date').reset_index(drop=True)
+
         start_date = result_df['Date'].min()
         end_date = result_df['Date'].max()
+        if hasattr(start_date, 'to_pydatetime'):
+            start_date = start_date.to_pydatetime()
+        if hasattr(end_date, 'to_pydatetime'):
+            end_date = end_date.to_pydatetime()
 
         # Fetch 2Y and 10Y yields
         yield_data = self.get_macro_data(['yield_2y', 'yield_10y'], start_date, end_date)
 
-        # Merge yields
+        # Merge yields using merge_asof for proper time alignment
         for indicator, macro_df in yield_data.items():
             if not macro_df.empty:
-                result_df = result_df.merge(
+                macro_df = macro_df.copy()
+                macro_df['Date'] = pd.to_datetime(macro_df['Date'])
+                if macro_df['Date'].dt.tz is not None:
+                    macro_df['Date'] = macro_df['Date'].dt.tz_localize(None)
+                macro_df = macro_df.sort_values('Date').reset_index(drop=True)
+
+                result_df = pd.merge_asof(
+                    result_df,
                     macro_df[['Date', indicator]],
                     on='Date',
-                    how='left'
+                    direction='backward'
                 )
-                result_df[indicator] = result_df[indicator].ffill()
 
         # Calculate yield curve spread (10Y - 2Y)
         if 'yield_10y' in result_df.columns and 'yield_2y' in result_df.columns:
