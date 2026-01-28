@@ -144,7 +144,7 @@ def save_ga_checkpoint(task_id: str, checkpoint_data: Dict[str, Any]):
             db.commit()
             logger.debug(f"Saved GA checkpoint for task {task_id}, gen {checkpoint_data.get('generation', 0)}")
     except Exception as e:
-        logger.error(f"Failed to save GA checkpoint: {e}")
+        logger.error(f"Failed to save GA checkpoint: {e}", exc_info=True)
         db.rollback()
     finally:
         db.close()
@@ -161,7 +161,7 @@ def load_ga_checkpoint(task_id: str) -> Optional[Dict[str, Any]]:
             return task.checkpoint_data
         return None
     except Exception as e:
-        logger.error(f"Failed to load GA checkpoint: {e}")
+        logger.error(f"Failed to load GA checkpoint: {e}", exc_info=True)
         return None
     finally:
         db.close()
@@ -232,11 +232,8 @@ def save_generation_model(
             'metrics': metrics
         }
 
-        # Clear callbacks before saving to avoid serialization errors with local functions
-        if hasattr(model, 'trainer_params') and model.trainer_params:
-            model.trainer_params.pop('callbacks', None)
-        if hasattr(model, 'pl_trainer_kwargs') and model.pl_trainer_kwargs:
-            model.pl_trainer_kwargs.pop('callbacks', None)
+        # Note: Callbacks are now serializable (EpochProgressCallback implements
+        # __getstate__/__setstate__), so no need to clear them before saving.
 
         # Save model directly to the job models directory
         model.save(str(full_path))
@@ -253,7 +250,7 @@ def save_generation_model(
         return model_path
 
     except Exception as e:
-        logger.error(f"Failed to save generation model: {e}")
+        logger.error(f"Failed to save generation model: {e}", exc_info=True)
         return None
 
 
@@ -328,7 +325,7 @@ def save_best_model(
         return model_path
 
     except Exception as e:
-        logger.error(f"Failed to save best model: {e}")
+        logger.error(f"Failed to save best model: {e}", exc_info=True)
         return None
 
 
@@ -438,7 +435,7 @@ def save_elite_models(
         return elite_paths
 
     except Exception as e:
-        logger.error(f"Failed to save elite models: {e}")
+        logger.error(f"Failed to save elite models: {e}", exc_info=True)
         return []
 
 
@@ -621,7 +618,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
             results = [model_result]
 
         except Exception as e:
-            logger.error(f"Failed unified optimization: {e}")
+            logger.error(f"Failed unified optimization: {e}", exc_info=True)
             import traceback
             traceback.print_exc()
             results = [{
@@ -687,7 +684,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
             }
 
     except Exception as e:
-        logger.error(f"Training job {task_id} failed: {e}")
+        logger.error(f"Training job {task_id} failed: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
         return {
@@ -755,7 +752,7 @@ def train_single_model(
             timeframe=timeframe
         )
     except Exception as e:
-        logger.error(f"Failed to prepare data for {model_type}: {e}")
+        logger.error(f"Failed to prepare data for {model_type}: {e}", exc_info=True)
         return {
             'model_type': model_type,
             'status': 'failed',
@@ -919,7 +916,7 @@ def train_single_model(
         except InterruptedError:
             raise
         except Exception as e:
-            logger.error(f"Fitness evaluation failed: {e}")
+            logger.error(f"Fitness evaluation failed: {e}", exc_info=True)
             return 0.0
 
     def ga_callback(generation: int, best_fitness: float, best_params: Dict):
@@ -1000,7 +997,7 @@ def train_single_model(
             )
             logger.info(f"Saved best {model_type} model to {model_path}")
         except Exception as e:
-            logger.error(f"Failed to save model: {e}")
+            logger.error(f"Failed to save model: {e}", exc_info=True)
 
     update_job_progress(
         task_id,
@@ -1058,7 +1055,7 @@ def train_unified_optimization(
             timeframe=timeframe
         )
     except Exception as e:
-        logger.error(f"Failed to prepare data: {e}")
+        logger.error(f"Failed to prepare data: {e}", exc_info=True)
         return {
             'model_type': 'unified',
             'status': 'failed',
@@ -1282,7 +1279,7 @@ def train_unified_optimization(
             return fitness
 
         except Exception as e:
-            logger.error(f"Fitness evaluation failed for {model_type}: {e}")
+            logger.error(f"Fitness evaluation failed for {model_type}: {e}", exc_info=True)
             progress_state['error_count'] += 1
             update_job_training_state(
                 task_id,

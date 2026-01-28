@@ -504,6 +504,308 @@ async def list_jobs():
         )
 
 
+# ============================================================================
+# Optimization Profiles (Database-backed)
+# Must be defined BEFORE /{job_id} routes to avoid path parameter conflicts
+# ============================================================================
+
+from app.models.optimization_profile import OptimizationProfile as OptimizationProfileModel
+
+
+class OptimizationProfileCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    selectedModels: List[str]
+    parameterRanges: ParameterRanges
+    predictionTargets: List[PredictionTarget]
+    trainTestSplit: float = 80.0
+    geneticConfig: Optional[GeneticConfig] = None
+    metricsConfig: Optional[MetricsConfig] = None
+
+
+class ProfileResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    selectedModels: List[str]
+    parameterRanges: Dict[str, Any]
+    predictionTargets: List[Dict[str, Any]]
+    trainTestSplit: float
+    geneticConfig: Optional[Dict[str, Any]] = None
+    metricsConfig: Optional[Dict[str, Any]] = None
+    createdAt: str
+    updatedAt: Optional[str] = None
+
+
+def _profile_to_response(profile: OptimizationProfileModel) -> ProfileResponse:
+    """Convert database model to response."""
+    return ProfileResponse(
+        id=profile.id,
+        name=profile.name,
+        description=profile.description,
+        selectedModels=profile.model_types or [],
+        parameterRanges=profile.parameter_ranges or {},
+        predictionTargets=profile.prediction_targets or [],
+        trainTestSplit=profile.train_test_split or 80.0,
+        geneticConfig=profile.genetic_config,
+        metricsConfig=profile.metrics_config,
+        createdAt=profile.created_at.isoformat() if profile.created_at else datetime.now().isoformat(),
+        updatedAt=profile.updated_at.isoformat() if profile.updated_at else None
+    )
+
+
+@router.post("/profiles", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
+async def create_profile(profile: OptimizationProfileCreate, db: Session = Depends(get_db)):
+    """
+    Create a new optimization profile.
+
+    Profiles save optimization settings that can be reused for multiple jobs.
+
+    Args:
+        profile: Profile settings
+
+    Returns:
+        Created profile with ID
+    """
+    try:
+        db_profile = OptimizationProfileModel(
+            name=profile.name,
+            description=profile.description,
+            model_types=profile.selectedModels,
+            parameter_ranges=profile.parameterRanges.dict() if profile.parameterRanges else {},
+            prediction_targets=[t.dict() for t in profile.predictionTargets] if profile.predictionTargets else [],
+            train_test_split=profile.trainTestSplit,
+            genetic_config=profile.geneticConfig.dict() if profile.geneticConfig else None,
+            metrics_config=profile.metricsConfig.dict() if profile.metricsConfig else None
+        )
+
+        db.add(db_profile)
+        db.commit()
+        db.refresh(db_profile)
+
+        logger.info(f"Created optimization profile: {profile.name} (id={db_profile.id})")
+        return _profile_to_response(db_profile)
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create profile: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create profile: {str(e)}"
+        )
+
+
+@router.get("/profiles")
+async def list_profiles(db: Session = Depends(get_db)):
+    """
+    List all optimization profiles.
+
+    Returns:
+        List of profiles
+    """
+    profiles = db.query(OptimizationProfileModel).order_by(OptimizationProfileModel.created_at.desc()).all()
+
+    return {
+        "profiles": [_profile_to_response(p) for p in profiles],
+        "total": len(profiles)
+    }
+
+
+@router.get("/profiles/{profile_id}", response_model=ProfileResponse)
+async def get_profile(profile_id: int, db: Session = Depends(get_db)):
+    """
+    Get a specific optimization profile.
+
+    Args:
+        profile_id: Profile ID
+
+    Returns:
+        Profile details
+    """
+    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Profile {profile_id} not found"
+        )
+
+    return _profile_to_response(profile)
+
+
+@router.delete("/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_profile(profile_id: int, db: Session = Depends(get_db)):
+    """
+    Delete an optimization profile.
+
+    Args:
+        profile_id: Profile ID
+    """
+    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Profile {profile_id} not found"
+        )
+
+    db.delete(profile)
+    db.commit()
+    logger.info(f"Deleted profile {profile_id}")
+
+
+@router.post("/profiles/{profile_id}/apply")
+async def apply_profile_to_job(profile_id: int, dataset_id: int, db: Session = Depends(get_db)):
+    """
+    Create a new job using settings from a profile.
+
+    Args:
+        profile_id: Profile ID to apply
+        dataset_id: Dataset ID for the new job
+
+    Returns:
+        Created job
+    """
+    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Profile {profile_id} not found"
+        )
+
+    # Create job from profile
+    job_create = JobCreate(
+        datasetId=dataset_id,
+        selectedModels=profile.model_types or [],
+        parameterRanges=ParameterRanges(**(profile.parameter_ranges or {})),
+        predictionTargets=[PredictionTarget(**t) for t in (profile.prediction_targets or [])],
+        trainTestSplit=int(profile.train_test_split or 80),
+        geneticConfig=GeneticConfig(**(profile.genetic_config or {})) if profile.genetic_config else None,
+        metricsConfig=MetricsConfig(**(profile.metrics_config or {})) if profile.metrics_config else None
+    )
+
+    # Reuse create_job logic
+    return await create_job(job_create)
+
+
+@router.put("/profiles/{profile_id}", response_model=ProfileResponse)
+async def update_profile(profile_id: int, profile: OptimizationProfileCreate, db: Session = Depends(get_db)):
+    """
+    Update an existing optimization profile.
+
+    Args:
+        profile_id: Profile ID
+        profile: Updated profile settings
+
+    Returns:
+        Updated profile
+    """
+    db_profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
+    if not db_profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Profile {profile_id} not found"
+        )
+
+    db_profile.name = profile.name
+    db_profile.description = profile.description
+    db_profile.model_types = profile.selectedModels
+    db_profile.parameter_ranges = profile.parameterRanges.dict() if profile.parameterRanges else {}
+    db_profile.prediction_targets = [t.dict() for t in profile.predictionTargets] if profile.predictionTargets else []
+    db_profile.train_test_split = profile.trainTestSplit
+    db_profile.genetic_config = profile.geneticConfig.dict() if profile.geneticConfig else None
+    db_profile.metrics_config = profile.metricsConfig.dict() if profile.metricsConfig else None
+
+    db.commit()
+    db.refresh(db_profile)
+    logger.info(f"Updated profile {profile_id}")
+
+    return _profile_to_response(db_profile)
+
+
+@router.get("/profiles/{profile_id}/export")
+async def export_profile(profile_id: int, db: Session = Depends(get_db)):
+    """
+    Export optimization profile to JSON format.
+
+    Args:
+        profile_id: Profile ID
+
+    Returns:
+        JSON representation of the profile
+    """
+    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Profile {profile_id} not found"
+        )
+
+    # Create exportable format (exclude internal IDs)
+    export_data = {
+        "name": profile.name,
+        "description": profile.description,
+        "selectedModels": profile.model_types or [],
+        "parameterRanges": profile.parameter_ranges or {},
+        "predictionTargets": profile.prediction_targets or [],
+        "trainTestSplit": profile.train_test_split or 80,
+        "geneticConfig": profile.genetic_config,
+        "metricsConfig": profile.metrics_config,
+        "exportedAt": datetime.now().isoformat(),
+        "version": "1.0"
+    }
+
+    return export_data
+
+
+@router.post("/profiles/import", response_model=ProfileResponse)
+async def import_profile(profile_data: Dict[str, Any], db: Session = Depends(get_db)):
+    """
+    Import optimization profile from JSON format.
+
+    Args:
+        profile_data: JSON profile data
+
+    Returns:
+        Created profile with new ID
+    """
+    try:
+        # Validate required fields
+        required_fields = ["name", "selectedModels", "parameterRanges", "predictionTargets", "trainTestSplit"]
+        for field in required_fields:
+            if field not in profile_data:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Missing required field: {field}"
+                )
+
+        # Create profile from import data
+        profile = OptimizationProfileCreate(
+            name=profile_data["name"],
+            description=profile_data.get("description"),
+            selectedModels=profile_data["selectedModels"],
+            parameterRanges=ParameterRanges(**profile_data["parameterRanges"]),
+            predictionTargets=[PredictionTarget(**t) for t in profile_data["predictionTargets"]],
+            trainTestSplit=profile_data["trainTestSplit"],
+            geneticConfig=GeneticConfig(**profile_data["geneticConfig"]) if profile_data.get("geneticConfig") else None,
+            metricsConfig=MetricsConfig(**profile_data["metricsConfig"]) if profile_data.get("metricsConfig") else None
+        )
+
+        # Create as new profile
+        return await create_profile(profile, db)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to import profile: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid profile format: {str(e)}"
+        )
+
+
+# ============================================================================
+# Job-specific Routes (must come AFTER /profiles routes)
+# ============================================================================
+
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(job_id: str):
     """
@@ -858,257 +1160,6 @@ async def get_job_logs(job_id: str, limit: int = 100):
     }
 
 
-# ============================================================================
-# Optimization Profiles (Database-backed)
-# ============================================================================
-
-from app.models.optimization_profile import OptimizationProfile as OptimizationProfileModel
-
-
-class OptimizationProfileCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-    selectedModels: List[str]
-    parameterRanges: ParameterRanges
-    predictionTargets: List[PredictionTarget]
-    trainTestSplit: float = 80.0
-    geneticConfig: Optional[GeneticConfig] = None
-    metricsConfig: Optional[MetricsConfig] = None
-
-
-class ProfileResponse(BaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
-    selectedModels: List[str]
-    parameterRanges: Dict[str, Any]
-    predictionTargets: List[Dict[str, Any]]
-    trainTestSplit: float
-    geneticConfig: Optional[Dict[str, Any]] = None
-    metricsConfig: Optional[Dict[str, Any]] = None
-    createdAt: str
-    updatedAt: Optional[str] = None
-
-
-def _profile_to_response(profile: OptimizationProfileModel) -> ProfileResponse:
-    """Convert database model to response."""
-    return ProfileResponse(
-        id=profile.id,
-        name=profile.name,
-        description=profile.description,
-        selectedModels=profile.model_types or [],
-        parameterRanges=profile.parameter_ranges or {},
-        predictionTargets=profile.prediction_targets or [],
-        trainTestSplit=profile.train_test_split or 80.0,
-        geneticConfig=profile.genetic_config,
-        metricsConfig=profile.metrics_config,
-        createdAt=profile.created_at.isoformat() if profile.created_at else datetime.now().isoformat(),
-        updatedAt=profile.updated_at.isoformat() if profile.updated_at else None
-    )
-
-
-@router.post("/profiles", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
-async def create_profile(profile: OptimizationProfileCreate, db: Session = Depends(get_db)):
-    """
-    Create a new optimization profile.
-
-    Profiles save optimization settings that can be reused for multiple jobs.
-
-    Args:
-        profile: Profile settings
-
-    Returns:
-        Created profile with ID
-    """
-    try:
-        db_profile = OptimizationProfileModel(
-            name=profile.name,
-            description=profile.description,
-            model_types=profile.selectedModels,
-            parameter_ranges=profile.parameterRanges.dict() if profile.parameterRanges else {},
-            prediction_targets=[t.dict() for t in profile.predictionTargets] if profile.predictionTargets else [],
-            train_test_split=profile.trainTestSplit,
-            genetic_config=profile.geneticConfig.dict() if profile.geneticConfig else None,
-            metrics_config=profile.metricsConfig.dict() if profile.metricsConfig else None
-        )
-
-        db.add(db_profile)
-        db.commit()
-        db.refresh(db_profile)
-
-        logger.info(f"Created optimization profile: {profile.name} (id={db_profile.id})")
-        return _profile_to_response(db_profile)
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Failed to create profile: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create profile: {str(e)}"
-        )
-
-
-@router.get("/profiles")
-async def list_profiles(db: Session = Depends(get_db)):
-    """
-    List all optimization profiles.
-
-    Returns:
-        List of profiles
-    """
-    profiles = db.query(OptimizationProfileModel).order_by(OptimizationProfileModel.created_at.desc()).all()
-
-    return {
-        "profiles": [_profile_to_response(p) for p in profiles],
-        "total": len(profiles)
-    }
-
-
-@router.get("/profiles/{profile_id}", response_model=ProfileResponse)
-async def get_profile(profile_id: int, db: Session = Depends(get_db)):
-    """
-    Get a specific optimization profile.
-
-    Args:
-        profile_id: Profile ID
-
-    Returns:
-        Profile details
-    """
-    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
-    if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile {profile_id} not found"
-        )
-
-    return _profile_to_response(profile)
-
-
-@router.delete("/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_profile(profile_id: int, db: Session = Depends(get_db)):
-    """
-    Delete an optimization profile.
-
-    Args:
-        profile_id: Profile ID
-    """
-    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
-    if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile {profile_id} not found"
-        )
-
-    db.delete(profile)
-    db.commit()
-    logger.info(f"Deleted profile {profile_id}")
-
-
-@router.post("/profiles/{profile_id}/apply")
-async def apply_profile_to_job(profile_id: int, dataset_id: int, db: Session = Depends(get_db)):
-    """
-    Create a new job using settings from a profile.
-
-    Args:
-        profile_id: Profile ID to apply
-        dataset_id: Dataset ID for the new job
-
-    Returns:
-        Created job
-    """
-    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
-    if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile {profile_id} not found"
-        )
-
-    # Create job from profile
-    job_create = JobCreate(
-        datasetId=dataset_id,
-        selectedModels=profile.model_types or [],
-        parameterRanges=ParameterRanges(**(profile.parameter_ranges or {})),
-        predictionTargets=[PredictionTarget(**t) for t in (profile.prediction_targets or [])],
-        trainTestSplit=int(profile.train_test_split or 80),
-        geneticConfig=GeneticConfig(**(profile.genetic_config or {})) if profile.genetic_config else None,
-        metricsConfig=MetricsConfig(**(profile.metrics_config or {})) if profile.metrics_config else None
-    )
-
-    # Reuse create_job logic
-    return await create_job(job_create, db)
-
-
-@router.put("/profiles/{profile_id}", response_model=ProfileResponse)
-async def update_profile(profile_id: int, profile: OptimizationProfileCreate, db: Session = Depends(get_db)):
-    """
-    Update an existing optimization profile.
-
-    Args:
-        profile_id: Profile ID
-        profile: Updated profile settings
-
-    Returns:
-        Updated profile
-    """
-    db_profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
-    if not db_profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile {profile_id} not found"
-        )
-
-    db_profile.name = profile.name
-    db_profile.description = profile.description
-    db_profile.model_types = profile.selectedModels
-    db_profile.parameter_ranges = profile.parameterRanges.dict() if profile.parameterRanges else {}
-    db_profile.prediction_targets = [t.dict() for t in profile.predictionTargets] if profile.predictionTargets else []
-    db_profile.train_test_split = profile.trainTestSplit
-    db_profile.genetic_config = profile.geneticConfig.dict() if profile.geneticConfig else None
-    db_profile.metrics_config = profile.metricsConfig.dict() if profile.metricsConfig else None
-
-    db.commit()
-    db.refresh(db_profile)
-    logger.info(f"Updated profile {profile_id}")
-
-    return _profile_to_response(db_profile)
-
-
-@router.get("/profiles/{profile_id}/export")
-async def export_profile(profile_id: int, db: Session = Depends(get_db)):
-    """
-    Export optimization profile to JSON format.
-
-    Args:
-        profile_id: Profile ID
-
-    Returns:
-        JSON representation of the profile
-    """
-    profile = db.query(OptimizationProfileModel).filter(OptimizationProfileModel.id == profile_id).first()
-    if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile {profile_id} not found"
-        )
-
-    # Create exportable format (exclude internal IDs)
-    export_data = {
-        "name": profile.name,
-        "description": profile.description,
-        "selectedModels": profile.model_types or [],
-        "parameterRanges": profile.parameter_ranges or {},
-        "predictionTargets": profile.prediction_targets or [],
-        "trainTestSplit": profile.train_test_split or 80,
-        "geneticConfig": profile.genetic_config,
-        "metricsConfig": profile.metrics_config,
-        "exportedAt": datetime.now().isoformat(),
-        "version": "1.0"
-    }
-
-    return export_data
-
-
 @router.get("/{job_id}/individuals")
 async def get_job_individuals(job_id: str, generation: Optional[int] = None, model_type: Optional[str] = None):
     """
@@ -1241,49 +1292,3 @@ async def get_job_generations(job_id: str):
         "total_generations": len(generations),
         "generations": generations
     }
-
-
-@router.post("/profiles/import", response_model=ProfileResponse)
-async def import_profile(profile_data: Dict[str, Any], db: Session = Depends(get_db)):
-    """
-    Import optimization profile from JSON format.
-
-    Args:
-        profile_data: JSON profile data
-
-    Returns:
-        Created profile with new ID
-    """
-    try:
-        # Validate required fields
-        required_fields = ["name", "selectedModels", "parameterRanges", "predictionTargets", "trainTestSplit"]
-        for field in required_fields:
-            if field not in profile_data:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Missing required field: {field}"
-                )
-
-        # Create profile from import data
-        profile = OptimizationProfileCreate(
-            name=profile_data["name"],
-            description=profile_data.get("description"),
-            selectedModels=profile_data["selectedModels"],
-            parameterRanges=ParameterRanges(**profile_data["parameterRanges"]),
-            predictionTargets=[PredictionTarget(**t) for t in profile_data["predictionTargets"]],
-            trainTestSplit=profile_data["trainTestSplit"],
-            geneticConfig=GeneticConfig(**profile_data["geneticConfig"]) if profile_data.get("geneticConfig") else None,
-            metricsConfig=MetricsConfig(**profile_data["metricsConfig"]) if profile_data.get("metricsConfig") else None
-        )
-
-        # Create as new profile
-        return await create_profile(profile, db)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to import profile: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid profile format: {str(e)}"
-        )

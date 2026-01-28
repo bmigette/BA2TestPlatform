@@ -31,7 +31,7 @@ except ImportError:
     MPS_WILL_BE_USED = False
 
 try:
-    from darts import TimeSeries
+    from darts import TimeSeries, concatenate
     from darts.models import RNNModel, NBEATSModel
     from darts.dataprocessing.transformers import Scaler
     from darts.metrics import mape, mae, rmse
@@ -315,12 +315,8 @@ class TrainingService:
 
             training_time = (datetime.now() - start_time).total_seconds()
 
-            # Clear callbacks after training to allow model serialization
-            # Darts uses pickle which can't serialize local function callbacks
-            if hasattr(model, 'trainer_params') and model.trainer_params:
-                model.trainer_params.pop('callbacks', None)
-            if hasattr(model, 'pl_trainer_kwargs') and model.pl_trainer_kwargs:
-                model.pl_trainer_kwargs.pop('callbacks', None)
+            # Note: Callbacks are now serializable (EpochProgressCallback implements
+            # __getstate__/__setstate__), so no need to clear them before saving.
 
             metrics = {
                 'training_time_seconds': training_time,
@@ -356,6 +352,11 @@ class TrainingService:
         """
         Evaluate model on test set.
 
+        For classification metrics, uses historical_forecasts to make rolling predictions
+        across the test set, ensuring enough samples for meaningful metrics.
+
+        For regression metrics, uses single prediction for efficiency.
+
         Args:
             model: Trained Darts model
             test_series: Test TimeSeries
@@ -370,104 +371,213 @@ class TrainingService:
             raise RuntimeError("Darts library not available")
 
         try:
-            # Make predictions
-            # Predictions continue from where training ended, so they correspond
-            # to the first n time steps of test_series (not offset by input_chunk_length)
-            n_predict = min(model.output_chunk_length, len(test_series))
+            is_classification = optimize_metric in self.CLASSIFICATION_METRICS
+
+            if is_classification:
+                # For classification, use historical_forecasts to get predictions
+                # across the entire test set for meaningful metrics
+                return self._evaluate_classification(
+                    model, test_series, covariates, optimize_metric, threshold
+                )
+            else:
+                # For regression, use simple prediction
+                return self._evaluate_regression(
+                    model, test_series, covariates, optimize_metric
+                )
+
+        except Exception as e:
+            logger.error(f"Evaluation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': str(e)}
+
+    def _evaluate_classification(
+        self,
+        model: Any,
+        test_series: Any,
+        covariates: Any = None,
+        optimize_metric: str = 'f1_score',
+        threshold: float = 0.5
+    ) -> Dict[str, float]:
+        """
+        Evaluate classification model using historical forecasts.
+
+        Makes rolling predictions to cover the entire test set, ensuring
+        enough samples for meaningful classification metrics.
+        """
+        from app.services.metrics import ClassificationMetrics
+
+        input_chunk = model.input_chunk_length
+        output_chunk = model.output_chunk_length
+
+        # We need to make predictions that cover most of the test series
+        # historical_forecasts requires the series to have at least
+        # input_chunk_length + output_chunk_length points
+
+        min_required = input_chunk + output_chunk
+        if len(test_series) < min_required:
+            # Fall back to simple prediction for very short test series
+            logger.warning(f"Test series too short ({len(test_series)} < {min_required}), "
+                          "falling back to simple prediction")
+            n_predict = min(output_chunk, len(test_series))
             if n_predict <= 0:
                 return {'error': 'Test series too short'}
 
             predictions = model.predict(n=n_predict)
-            # Actuals are the first n_predict values of test_series (matching prediction indices)
             actuals = test_series[:n_predict]
+        else:
+            # Use historical_forecasts for rolling evaluation
+            # This makes predictions starting from different points in the test series
+            try:
+                # Calculate stride (how many points to skip between forecasts)
+                # Use a stride to balance coverage vs computation time
+                max_forecasts = 50  # Limit number of forecasts for speed
+                total_possible = len(test_series) - min_required + 1
+                stride = max(1, total_possible // max_forecasts)
 
-            # Debug: Log prediction/actual lengths and time indices
-            logger.debug(f"Eval: n_predict={n_predict}, predictions={len(predictions)}, actuals={len(actuals)}")
-            logger.debug(f"Prediction time range: {predictions.time_index[0]} to {predictions.time_index[-1]}")
-            logger.debug(f"Actuals time range: {actuals.time_index[0]} to {actuals.time_index[-1]}")
+                logger.debug(f"Historical forecasts: test_len={len(test_series)}, "
+                           f"input_chunk={input_chunk}, output_chunk={output_chunk}, stride={stride}")
 
-            if len(predictions) == 0 or len(actuals) == 0:
-                logger.error(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
-                return {'error': 'No valid predictions could be made'}
+                # Make historical forecasts
+                # forecast_horizon=1 means we predict 1 step ahead at each position
+                # This gives us one prediction per stride position
+                forecasts = model.historical_forecasts(
+                    series=test_series,
+                    past_covariates=covariates if covariates is not None else None,
+                    start=input_chunk,  # Start after input_chunk
+                    forecast_horizon=1,  # Predict 1 step at a time
+                    stride=stride,
+                    retrain=False,
+                    verbose=False,
+                    last_points_only=True  # Get single value per forecast
+                )
 
-            # Inverse-transform to original scale
-            if self.scaler is not None:
-                predictions_orig = self.scaler.inverse_transform(predictions)
-                actuals_orig = self.scaler.inverse_transform(actuals)
-            else:
-                predictions_orig = predictions
-                actuals_orig = actuals
-
-            # Get numpy arrays for metric calculation
-            pred_values = predictions_orig.values().flatten()
-            actual_values = actuals_orig.values().flatten()
-
-            # Determine if using classification or regression metrics
-            is_classification = optimize_metric in self.CLASSIFICATION_METRICS
-
-            if is_classification:
-                # Classification metrics - import here to avoid circular imports
-                from app.services.metrics import ClassificationMetrics
-
-                # For classification: predictions are probabilities, actuals are 0/1
-                # Clip predictions to [0, 1] range (model may output values outside)
-                pred_proba = np.clip(pred_values, 0, 1)
-
-                # Actuals should be binary (0 or 1) - round to handle any float noise
-                actual_binary = np.round(actual_values).astype(int)
-
-                # Debug: log prediction and actual distributions
-                pred_binary = (pred_proba >= threshold).astype(int)
-                logger.debug(f"Classification debug: pred_proba range=[{pred_proba.min():.4f}, {pred_proba.max():.4f}], "
-                           f"pred_binary sum={pred_binary.sum()}/{len(pred_binary)}, "
-                           f"actual_binary sum={actual_binary.sum()}/{len(actual_binary)}")
-
-                # Calculate all classification metrics
-                class_metrics = ClassificationMetrics.calculate_all(actual_binary, pred_proba, threshold)
-
-                metrics = {
-                    'f1_score': class_metrics['f1_score'],
-                    'accuracy': class_metrics['accuracy'],
-                    'precision': class_metrics['precision'],
-                    'recall': class_metrics['recall'],
-                    'balanced_accuracy': class_metrics['balanced_accuracy'],
-                    'mcc': class_metrics['mcc'],
-                    'auc_roc': class_metrics.get('auc_roc', 0.0),
-                    'auc_pr': class_metrics.get('auc_pr', 0.0),
-                    'true_positives': class_metrics['true_positives'],
-                    'false_positives': class_metrics['false_positives'],
-                    'true_negatives': class_metrics['true_negatives'],
-                    'false_negatives': class_metrics['false_negatives'],
-                    'threshold': threshold,
-                    'test_samples': len(test_series),
-                    'predictions_made': len(predictions)
-                }
-
-                logger.info(f"Classification eval: {optimize_metric}={metrics.get(optimize_metric, 0):.4f}, F1={metrics['f1_score']:.4f}")
-            else:
-                # Regression metrics
-                metrics = {
-                    'mae': float(mae(actuals_orig, predictions_orig)),
-                    'rmse': float(rmse(actuals_orig, predictions_orig)),
-                    'test_samples': len(test_series),
-                    'predictions_made': len(predictions)
-                }
-
-                # MAPE requires strictly positive values
-                if actual_values.min() > 0:
-                    metrics['mape'] = float(mape(actuals_orig, predictions_orig))
+                # Combine all forecasts into a single series for comparison
+                if isinstance(forecasts, list):
+                    if len(forecasts) == 0:
+                        return {'error': 'No forecasts generated'}
+                    # Concatenate all forecast points
+                    predictions = concatenate(forecasts)
                 else:
-                    # Skip MAPE for data with zeros/negatives
-                    metrics['mape'] = None
-                    logger.debug("MAPE skipped - data contains non-positive values")
+                    predictions = forecasts
 
-                logger.info(f"Regression eval: MAE={metrics['mae']:.4f}, RMSE={metrics['rmse']:.4f}")
+                # Get actuals corresponding to prediction indices
+                # The predictions start at index input_chunk and go with stride
+                pred_indices = predictions.time_index
+                actuals = test_series.slice_intersect(predictions)
 
-            return metrics
+                logger.debug(f"Historical forecasts: {len(predictions)} predictions, {len(actuals)} actuals")
 
-        except Exception as e:
-            logger.error(f"Evaluation failed: {e}")
-            return {'error': str(e)}
+            except Exception as e:
+                logger.warning(f"Historical forecasts failed: {e}, falling back to simple prediction")
+                n_predict = min(output_chunk, len(test_series))
+                predictions = model.predict(n=n_predict)
+                actuals = test_series[:n_predict]
+
+        if len(predictions) == 0 or len(actuals) == 0:
+            return {'error': 'No valid predictions could be made'}
+
+        # Inverse-transform to original scale
+        if self.scaler is not None:
+            predictions_orig = self.scaler.inverse_transform(predictions)
+            actuals_orig = self.scaler.inverse_transform(actuals)
+        else:
+            predictions_orig = predictions
+            actuals_orig = actuals
+
+        # Get numpy arrays
+        pred_values = predictions_orig.values().flatten()
+        actual_values = actuals_orig.values().flatten()
+
+        # For classification: predictions are probabilities, actuals are 0/1
+        # Clip predictions to [0, 1] range (model may output values outside)
+        pred_proba = np.clip(pred_values, 0, 1)
+
+        # Actuals should be binary (0 or 1) - round to handle any float noise
+        actual_binary = np.round(actual_values).astype(int)
+
+        # Debug: log prediction and actual distributions
+        pred_binary = (pred_proba >= threshold).astype(int)
+        n_samples = len(pred_proba)
+        n_pred_positive = pred_binary.sum()
+        n_actual_positive = actual_binary.sum()
+        logger.debug(f"Classification debug: n_samples={n_samples}, "
+                   f"pred_proba range=[{pred_proba.min():.4f}, {pred_proba.max():.4f}], "
+                   f"pred_positive={n_pred_positive}/{n_samples} ({100*n_pred_positive/n_samples:.1f}%), "
+                   f"actual_positive={n_actual_positive}/{n_samples} ({100*n_actual_positive/n_samples:.1f}%)")
+
+        # Calculate all classification metrics
+        class_metrics = ClassificationMetrics.calculate_all(actual_binary, pred_proba, threshold)
+
+        metrics = {
+            'f1_score': class_metrics['f1_score'],
+            'accuracy': class_metrics['accuracy'],
+            'precision': class_metrics['precision'],
+            'recall': class_metrics['recall'],
+            'balanced_accuracy': class_metrics['balanced_accuracy'],
+            'mcc': class_metrics['mcc'],
+            'auc_roc': class_metrics.get('auc_roc', 0.0),
+            'auc_pr': class_metrics.get('auc_pr', 0.0),
+            'true_positives': class_metrics['true_positives'],
+            'false_positives': class_metrics['false_positives'],
+            'true_negatives': class_metrics['true_negatives'],
+            'false_negatives': class_metrics['false_negatives'],
+            'threshold': threshold,
+            'test_samples': len(test_series),
+            'predictions_made': n_samples
+        }
+
+        logger.info(f"Classification eval ({n_samples} samples): "
+                   f"{optimize_metric}={metrics.get(optimize_metric, 0):.4f}, "
+                   f"F1={metrics['f1_score']:.4f}, acc={metrics['accuracy']:.4f}")
+
+        return metrics
+
+    def _evaluate_regression(
+        self,
+        model: Any,
+        test_series: Any,
+        covariates: Any = None,
+        optimize_metric: str = 'mape'
+    ) -> Dict[str, float]:
+        """Evaluate regression model using simple prediction."""
+        n_predict = min(model.output_chunk_length, len(test_series))
+        if n_predict <= 0:
+            return {'error': 'Test series too short'}
+
+        predictions = model.predict(n=n_predict)
+        actuals = test_series[:n_predict]
+
+        if len(predictions) == 0 or len(actuals) == 0:
+            return {'error': 'No valid predictions could be made'}
+
+        # Inverse-transform to original scale
+        if self.scaler is not None:
+            predictions_orig = self.scaler.inverse_transform(predictions)
+            actuals_orig = self.scaler.inverse_transform(actuals)
+        else:
+            predictions_orig = predictions
+            actuals_orig = actuals
+
+        actual_values = actuals_orig.values().flatten()
+
+        metrics = {
+            'mae': float(mae(actuals_orig, predictions_orig)),
+            'rmse': float(rmse(actuals_orig, predictions_orig)),
+            'test_samples': len(test_series),
+            'predictions_made': len(predictions)
+        }
+
+        # MAPE requires strictly positive values
+        if actual_values.min() > 0:
+            metrics['mape'] = float(mape(actuals_orig, predictions_orig))
+        else:
+            metrics['mape'] = None
+            logger.debug("MAPE skipped - data contains non-positive values")
+
+        logger.info(f"Regression eval: MAE={metrics['mae']:.4f}, RMSE={metrics['rmse']:.4f}")
+
+        return metrics
 
     def save_model(
         self,
@@ -488,12 +598,8 @@ class TrainingService:
         """
         model_path = self.models_dir / f"{model_name}.pt"
 
-        # Clear callbacks before saving to avoid serialization errors with local functions
-        # The callbacks (like epoch_callback) are closures that can't be serialized
-        if hasattr(model, 'trainer_params') and model.trainer_params:
-            model.trainer_params.pop('callbacks', None)
-        if hasattr(model, 'pl_trainer_kwargs') and model.pl_trainer_kwargs:
-            model.pl_trainer_kwargs.pop('callbacks', None)
+        # Note: Callbacks are now serializable (EpochProgressCallback implements
+        # __getstate__/__setstate__), so no need to clear them before saving.
 
         # Save model
         model.save(str(model_path))

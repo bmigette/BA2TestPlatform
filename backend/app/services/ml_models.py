@@ -54,11 +54,26 @@ try:
         Captures train_loss and val_loss (if validation series is provided during training).
         Note: Classification metrics (accuracy, F1) are computed during evaluation, not training,
         since Darts models are designed for regression and don't compute these natively.
+
+        This callback is SERIALIZABLE - it implements __getstate__/__setstate__ to allow
+        the Darts model to be saved even when callbacks are attached.
+        The callable reference is excluded from serialization (Darts uses pickle internally).
         """
 
         def __init__(self, on_epoch_end: callable = None):
             super().__init__()
             self.on_epoch_end_fn = on_epoch_end
+            # Store metrics history for access after training
+            self.metrics_history = []
+
+        def __getstate__(self):
+            """Return serializable state (exclude the callable)."""
+            return {'metrics_history': self.metrics_history}
+
+        def __setstate__(self, state):
+            """Restore state (callable will be None after loading)."""
+            self.on_epoch_end_fn = None
+            self.metrics_history = state.get('metrics_history', [])
 
         def _tensor_to_float(self, value):
             """Convert tensor or numpy value to Python float."""
@@ -69,29 +84,41 @@ try:
             return float(value)
 
         def on_train_epoch_end(self, trainer, pl_module):
-            if self.on_epoch_end_fn:
-                current_epoch = trainer.current_epoch + 1  # 0-indexed to 1-indexed
-                max_epochs = trainer.max_epochs
+            current_epoch = trainer.current_epoch + 1  # 0-indexed to 1-indexed
+            max_epochs = trainer.max_epochs
 
-                # Collect all available metrics (train_loss, val_loss, etc.)
-                metrics = {}
-                if trainer.logged_metrics:
-                    for key, value in trainer.logged_metrics.items():
+            # Collect all available metrics (train_loss, val_loss, etc.)
+            metrics = {}
+            if trainer.logged_metrics:
+                for key, value in trainer.logged_metrics.items():
+                    try:
+                        metrics[key] = self._tensor_to_float(value)
+                    except (TypeError, ValueError):
+                        pass  # Skip non-numeric metrics
+
+            # Also check callback_metrics for validation metrics
+            if hasattr(trainer, 'callback_metrics') and trainer.callback_metrics:
+                for key, value in trainer.callback_metrics.items():
+                    if key not in metrics:
                         try:
                             metrics[key] = self._tensor_to_float(value)
                         except (TypeError, ValueError):
-                            pass  # Skip non-numeric metrics
+                            pass
 
-                # Also check callback_metrics for validation metrics
-                if hasattr(trainer, 'callback_metrics') and trainer.callback_metrics:
-                    for key, value in trainer.callback_metrics.items():
-                        if key not in metrics:
-                            try:
-                                metrics[key] = self._tensor_to_float(value)
-                            except (TypeError, ValueError):
-                                pass
+            # Store in history
+            self.metrics_history.append({
+                'epoch': current_epoch,
+                'max_epochs': max_epochs,
+                **metrics
+            })
 
-                self.on_epoch_end_fn(current_epoch, max_epochs, metrics)
+            # Call the callback function if provided
+            if self.on_epoch_end_fn:
+                try:
+                    self.on_epoch_end_fn(current_epoch, max_epochs, metrics)
+                except Exception as e:
+                    # Don't let callback errors break training
+                    logger.warning(f"Epoch callback error: {e}")
 
     LIGHTNING_CALLBACK_AVAILABLE = True
 except ImportError:
