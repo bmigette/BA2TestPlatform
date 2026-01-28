@@ -69,7 +69,8 @@ def update_job_training_state(
     error_count: int = None,
     success_count: int = None,
     current_model_params: Dict[str, Any] = None,
-    epoch_metrics: Dict[str, float] = None
+    epoch_metrics: Dict[str, float] = None,
+    reset_epoch_history: bool = False
 ):
     """Update job training state for real-time progress tracking."""
     try:
@@ -98,6 +99,9 @@ def update_job_training_state(
                 job["successCount"] = success_count
             if current_model_params is not None:
                 job["currentModelParams"] = current_model_params
+            # Reset epoch history when starting a new individual/model
+            if reset_epoch_history:
+                job["epochHistory"] = []
             if epoch_metrics is not None:
                 # Append to epoch history for graphing
                 if "epochHistory" not in job:
@@ -803,9 +807,31 @@ def train_single_model(
             f"{model_type.upper()}: Gen {gen}/{generations}, Training individual {individual_num}/{population_size}"
         )
 
+        # Update training state for real-time UI (reset epoch history for new model)
+        update_job_training_state(
+            task_id,
+            current_generation=gen,
+            total_generations=generations,
+            current_individual=individual_num,
+            population_size=population_size,
+            current_model_type=model_type,
+            current_epoch=0,
+            reset_epoch_history=True
+        )
+
         try:
-            # Create model
-            model = ml_service.create_model(model_type, params)
+            # Epoch callback to track training progress
+            def epoch_callback(current_epoch: int, total_epochs: int, metrics: Dict[str, float] = None):
+                update_job_training_state(
+                    task_id,
+                    current_epoch=current_epoch,
+                    total_epochs=total_epochs,
+                    current_model_params=params,
+                    epoch_metrics=metrics
+                )
+
+            # Create model with epoch callback
+            model = ml_service.create_model(model_type, params, epoch_callback=epoch_callback)
 
             # Train - this is the time-consuming part
             train_result = training_service.train_model(
@@ -1068,7 +1094,7 @@ def train_unified_optimization(
         individual_progress = (individual_num / population_size) * (progress_range / generations) * 0.8
         current_progress = progress_base + gen_progress + individual_progress
 
-        # Update training state for real-time UI
+        # Update training state for real-time UI (reset epoch history for new model)
         update_job_training_state(
             task_id,
             current_generation=gen,
@@ -1080,7 +1106,8 @@ def train_unified_optimization(
             total_epochs=10,  # Will be updated during training
             best_fitness=progress_state.get('best_fitness'),
             error_count=progress_state.get('error_count', 0),
-            success_count=progress_state.get('success_count', 0)
+            success_count=progress_state.get('success_count', 0),
+            reset_epoch_history=True
         )
 
         update_job_progress(
@@ -1109,6 +1136,7 @@ def train_unified_optimization(
                     task_id,
                     current_epoch=current_epoch,
                     total_epochs=total_epochs,
+                    current_model_params=model_params,
                     epoch_metrics=metrics
                 )
 

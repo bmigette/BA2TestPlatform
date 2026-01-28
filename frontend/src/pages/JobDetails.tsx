@@ -10,6 +10,15 @@ import {
   ResponsiveContainer, Legend
 } from 'recharts';
 
+interface EpochMetric {
+  epoch: number;
+  train_loss?: number;
+  val_loss?: number;
+  accuracy?: number;
+  val_accuracy?: number;
+  [key: string]: number | undefined;
+}
+
 interface Job {
   id: string;
   datasetId: number;
@@ -33,6 +42,9 @@ interface Job {
   // Error tracking
   errorCount?: number;
   successCount?: number;
+  // Epoch-level tracking
+  currentModelParams?: Record<string, number | string>;
+  epochHistory?: EpochMetric[];
 }
 
 interface Individual {
@@ -482,6 +494,23 @@ const JobDetails: React.FC = () => {
               </div>
             </div>
 
+            {/* Current Model Parameters */}
+            {job.currentModelParams && Object.keys(job.currentModelParams).length > 0 && (
+              <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-2">Current Model Parameters</div>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(job.currentModelParams).map(([key, value]) => (
+                    <span key={key} className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded text-xs">
+                      <span className="text-gray-500">{key}:</span>{' '}
+                      <span className="font-mono font-medium">
+                        {typeof value === 'number' ? value.toFixed(4) : value}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Generation Progress (individuals in current generation) */}
             <div>
               <div className="flex justify-between text-sm mb-1">
@@ -601,6 +630,77 @@ const JobDetails: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Epoch Metrics Chart (for running jobs with epoch history) */}
+      {job.epochHistory && job.epochHistory.length > 0 && (() => {
+        // Define metric colors and labels
+        const metricConfig: Record<string, { color: string; name: string }> = {
+          train_loss: { color: '#EF4444', name: 'Train Loss' },
+          val_loss: { color: '#F97316', name: 'Val Loss' },
+          loss: { color: '#EF4444', name: 'Loss' },
+          accuracy: { color: '#22C55E', name: 'Accuracy' },
+          val_accuracy: { color: '#10B981', name: 'Val Accuracy' },
+          train_accuracy: { color: '#84CC16', name: 'Train Accuracy' },
+          f1_score: { color: '#8B5CF6', name: 'F1 Score' },
+          precision: { color: '#06B6D4', name: 'Precision' },
+          recall: { color: '#EC4899', name: 'Recall' },
+        };
+
+        // Find all metric keys present in the data (excluding 'epoch')
+        const availableMetrics = new Set<string>();
+        job.epochHistory!.forEach(entry => {
+          Object.keys(entry).forEach(key => {
+            if (key !== 'epoch' && entry[key] !== undefined) {
+              availableMetrics.add(key);
+            }
+          });
+        });
+
+        // Generate colors for unknown metrics
+        const defaultColors = ['#6366F1', '#14B8A6', '#F59E0B', '#DC2626', '#7C3AED'];
+        let colorIndex = 0;
+
+        return (
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">
+              Current Model Epoch Metrics
+              <span className="text-xs text-gray-500 ml-2">
+                ({job.epochHistory!.length} epochs)
+              </span>
+            </h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={job.epochHistory}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                <XAxis dataKey="epoch" stroke="#6B7280" fontSize={12} />
+                <YAxis stroke="#6B7280" fontSize={12} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#1F2937', border: 'none', borderRadius: '8px' }}
+                  labelStyle={{ color: '#9CA3AF' }}
+                  formatter={(value) => typeof value === 'number' ? value.toFixed(4) : value}
+                />
+                <Legend />
+                {Array.from(availableMetrics).map(metricKey => {
+                  const config = metricConfig[metricKey] || {
+                    color: defaultColors[colorIndex++ % defaultColors.length],
+                    name: metricKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                  };
+                  return (
+                    <Line
+                      key={metricKey}
+                      type="monotone"
+                      dataKey={metricKey}
+                      stroke={config.color}
+                      name={config.name}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  );
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
 
       {/* Fitness Chart */}
       {chartData.length > 0 && (
