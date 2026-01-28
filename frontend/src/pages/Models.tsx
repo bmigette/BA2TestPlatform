@@ -112,11 +112,13 @@ const Models: React.FC = () => {
   const getModelTypeColor = (type: string) => {
     const colors: Record<string, string> = {
       'LSTM': 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
+      'GRU': 'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300',
       'N-BEATS': 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-      'RNN': 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-      'RCNN': 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300'
+      'TCN': 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
+      'TRANSFORMER': 'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300',
+      'TFT': 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300',
     };
-    return colors[type] || 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300';
+    return colors[type.toUpperCase()] || 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300';
   };
 
   const handleSort = (field: SortField) => {

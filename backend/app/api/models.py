@@ -51,7 +51,7 @@ class PerformanceMetrics(BaseModel):
 class ModelResponse(BaseModel):
     id: str
     name: str
-    modelType: str  # LSTM, N-BEATS, RNN, RCNN
+    modelType: str  # LSTM, GRU, N-BEATS, Transformer, TCN, RNN
     datasetId: int
     jobId: str
     status: str  # trained, failed, exported

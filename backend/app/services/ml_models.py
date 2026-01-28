@@ -2,7 +2,7 @@
 ML Models Service
 
 Provides machine learning model architectures using PyTorch and Darts library.
-Supports LSTM, N-BEATS, RNN for timeseries forecasting.
+Supports LSTM, GRU, N-BEATS, TCN, Transformer for timeseries forecasting.
 """
 
 import pandas as pd
@@ -34,7 +34,6 @@ try:
         RNNModel,
         NBEATSModel,
         TFTModel,
-        BlockRNNModel,
         TCNModel,
         TransformerModel
     )
@@ -45,6 +44,28 @@ except ImportError:
     DARTS_AVAILABLE = False
     logger.warning("Darts not available. Install with: pip install darts")
 
+# PyTorch Lightning callback for epoch progress updates
+try:
+    from pytorch_lightning.callbacks import Callback
+
+    class EpochProgressCallback(Callback):
+        """Callback to report epoch progress during training."""
+
+        def __init__(self, on_epoch_end: callable = None):
+            super().__init__()
+            self.on_epoch_end_fn = on_epoch_end
+
+        def on_train_epoch_end(self, trainer, pl_module):
+            if self.on_epoch_end_fn:
+                current_epoch = trainer.current_epoch + 1  # 0-indexed to 1-indexed
+                max_epochs = trainer.max_epochs
+                self.on_epoch_end_fn(current_epoch, max_epochs)
+
+    LIGHTNING_CALLBACK_AVAILABLE = True
+except ImportError:
+    LIGHTNING_CALLBACK_AVAILABLE = False
+    EpochProgressCallback = None
+
 
 class MLModelsService:
     """
@@ -52,9 +73,10 @@ class MLModelsService:
 
     Supports:
     - LSTM (Long Short-Term Memory)
+    - GRU (Gated Recurrent Unit)
     - N-BEATS (Neural Basis Expansion Analysis)
-    - RNN (Recurrent Neural Network)
-    - TFT (Temporal Fusion Transformer)
+    - TCN (Temporal Convolutional Network)
+    - Transformer (Attention-based model)
     """
 
     # Model architecture configurations
@@ -82,19 +104,6 @@ class MLModelsService:
                 'num_blocks': 1,
                 'num_layers': 4,
                 'layer_widths': 256,
-                'batch_size': 32,
-                'n_epochs': 100
-            }
-        },
-        'rnn': {
-            'name': 'RNN',
-            'description': 'Recurrent Neural Network for sequence prediction',
-            'default_params': {
-                'input_chunk_length': 30,
-                'output_chunk_length': 7,
-                'hidden_dim': 64,
-                'n_rnn_layers': 2,
-                'dropout': 0.1,
                 'batch_size': 32,
                 'n_epochs': 100
             }
@@ -199,7 +208,20 @@ class MLModelsService:
 
         return info
 
-    def create_lstm_model(self, params: Dict = None) -> Any:
+    def _build_trainer_kwargs(self, epoch_callback: callable = None) -> Dict:
+        """Build PyTorch Lightning trainer kwargs with optional epoch callback."""
+        kwargs = {
+            'accelerator': 'gpu' if self.use_gpu else 'cpu',
+            'devices': 1 if self.use_gpu else 'auto'
+        }
+
+        # Add epoch progress callback if provided and available
+        if epoch_callback and LIGHTNING_CALLBACK_AVAILABLE and EpochProgressCallback:
+            kwargs['callbacks'] = [EpochProgressCallback(on_epoch_end=epoch_callback)]
+
+        return kwargs
+
+    def create_lstm_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
         """
         Create LSTM model architecture using Darts.
 
@@ -241,16 +263,13 @@ class MLModelsService:
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
             optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs={
-                'accelerator': 'gpu' if self.use_gpu else 'cpu',
-                'devices': 1 if self.use_gpu else 'auto'
-            }
+            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
         )
 
         logger.info(f"Created LSTM model with params: {p}")
         return model
 
-    def create_nbeats_model(self, params: Dict = None) -> Any:
+    def create_nbeats_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
         """
         Create N-BEATS model architecture using Darts.
 
@@ -294,65 +313,13 @@ class MLModelsService:
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
             optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs={
-                'accelerator': 'gpu' if self.use_gpu else 'cpu',
-                'devices': 1 if self.use_gpu else 'auto'
-            }
+            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
         )
 
         logger.info(f"Created N-BEATS model with params: {p}")
         return model
 
-    def create_rnn_model(self, params: Dict = None) -> Any:
-        """
-        Create RNN model architecture using Darts.
-
-        Args:
-            params: Model parameters (uses defaults if not provided)
-                   - hidden_dim: Can be int (same for all layers) or list/tuple (per-layer)
-
-        Returns:
-            Darts RNNModel configured as vanilla RNN
-        """
-        if not DARTS_AVAILABLE:
-            raise RuntimeError("Darts library not available")
-
-        p = {**self.MODEL_ARCHITECTURES['rnn']['default_params'], **(params or {})}
-
-        # Darts RNNModel requires hidden_dim to be a single int (same for all layers)
-        hidden_dim = p['hidden_dim']
-        n_rnn_layers = p['n_rnn_layers']
-
-        # If hidden_dim is a list/tuple, use the first value
-        if isinstance(hidden_dim, (list, tuple)):
-            hidden_dim = int(hidden_dim[0])
-            logger.info(f"RNNModel requires int hidden_dim, using first value: {hidden_dim}")
-
-        # RNNModel requires training_length >= input_chunk_length
-        input_chunk_length = p['input_chunk_length']
-        training_length = max(input_chunk_length + 1, 3 * input_chunk_length)
-
-        model = RNNModel(
-            model='RNN',
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=p['output_chunk_length'],
-            training_length=training_length,
-            hidden_dim=hidden_dim,
-            n_rnn_layers=n_rnn_layers,
-            dropout=p['dropout'],
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs={
-                'accelerator': 'gpu' if self.use_gpu else 'cpu',
-                'devices': 1 if self.use_gpu else 'auto'
-            }
-        )
-
-        logger.info(f"Created RNN model with params: {p}")
-        return model
-
-    def create_gru_model(self, params: Dict = None) -> Any:
+    def create_gru_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
         """
         Create GRU model architecture using Darts.
 
@@ -392,16 +359,13 @@ class MLModelsService:
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
             optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs={
-                'accelerator': 'gpu' if self.use_gpu else 'cpu',
-                'devices': 1 if self.use_gpu else 'auto'
-            }
+            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
         )
 
         logger.info(f"Created GRU model with params: {p}")
         return model
 
-    def create_tcn_model(self, params: Dict = None) -> Any:
+    def create_tcn_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
         """
         Create TCN (Temporal Convolutional Network) model using Darts.
 
@@ -426,16 +390,13 @@ class MLModelsService:
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
             optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs={
-                'accelerator': 'gpu' if self.use_gpu else 'cpu',
-                'devices': 1 if self.use_gpu else 'auto'
-            }
+            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
         )
 
         logger.info(f"Created TCN model with params: {p}")
         return model
 
-    def create_transformer_model(self, params: Dict = None) -> Any:
+    def create_transformer_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
         """
         Create Transformer model using Darts.
 
@@ -470,46 +431,74 @@ class MLModelsService:
             batch_size=p['batch_size'],
             n_epochs=p['n_epochs'],
             optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs={
-                'accelerator': 'gpu' if self.use_gpu else 'cpu',
-                'devices': 1 if self.use_gpu else 'auto'
-            }
+            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
         )
 
         logger.info(f"Created Transformer model with params: {p}")
         return model
 
-    def create_model(self, model_type: str, params: Dict = None) -> Any:
+    def create_tft_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+        """
+        Create TFT (Temporal Fusion Transformer) model using Darts.
+
+        TFT combines LSTM with attention for multi-horizon forecasting.
+        Developed by Google, provides interpretable outputs.
+
+        Args:
+            params: Model parameters (uses defaults if not provided)
+
+        Returns:
+            Darts TFTModel
+        """
+        if not DARTS_AVAILABLE:
+            raise RuntimeError("Darts library not available")
+
+        p = {**self.MODEL_ARCHITECTURES['tft']['default_params'], **(params or {})}
+
+        model = TFTModel(
+            input_chunk_length=p['input_chunk_length'],
+            output_chunk_length=p['output_chunk_length'],
+            hidden_size=p.get('hidden_size', 64),
+            lstm_layers=p.get('lstm_layers', 1),
+            num_attention_heads=p.get('num_attention_heads', 4),
+            dropout=p['dropout'],
+            batch_size=p['batch_size'],
+            n_epochs=p['n_epochs'],
+            add_relative_index=True,  # Auto-generate future covariates from time index
+            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
+            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
+        )
+
+        logger.info(f"Created TFT model with params: {p}")
+        return model
+
+    def create_model(self, model_type: str, params: Dict = None, epoch_callback: callable = None) -> Any:
         """
         Create a model of the specified type.
 
         Args:
-            model_type: One of 'lstm', 'nbeats', 'rnn', 'gru', 'tcn', 'transformer'
+            model_type: One of 'lstm', 'nbeats', 'gru', 'tcn', 'transformer', 'tft'
             params: Model parameters
+            epoch_callback: Optional callback function(current_epoch, total_epochs) called after each epoch
 
         Returns:
             Configured Darts model
         """
-        # Map aliases to canonical names
         model_type = model_type.lower()
-        if model_type == 'rcnn':
-            # RCNN is not a Darts model - map to GRU which is similar
-            logger.warning("RCNN is not supported, using GRU instead")
-            model_type = 'gru'
 
         creators = {
             'lstm': self.create_lstm_model,
             'nbeats': self.create_nbeats_model,
-            'rnn': self.create_rnn_model,
             'gru': self.create_gru_model,
             'tcn': self.create_tcn_model,
-            'transformer': self.create_transformer_model
+            'transformer': self.create_transformer_model,
+            'tft': self.create_tft_model
         }
 
         if model_type not in creators:
             raise ValueError(f"Unknown model type: {model_type}. Supported: {list(creators.keys())}")
 
-        return creators[model_type](params)
+        return creators[model_type](params, epoch_callback=epoch_callback)
 
     @staticmethod
     def get_available_models() -> Dict[str, Dict]:

@@ -16,10 +16,11 @@ interface Dataset {
 
 const MODEL_TYPES = [
   { id: 'lstm', name: 'LSTM', description: 'Long Short-Term Memory' },
+  { id: 'gru', name: 'GRU', description: 'Gated Recurrent Unit' },
   { id: 'nbeats', name: 'N-BEATS', description: 'Neural Basis Expansion Analysis' },
-  { id: 'transformer', name: 'Transformer', description: 'Temporal Fusion Transformer' },
   { id: 'tcn', name: 'TCN', description: 'Temporal Convolutional Network' },
-  { id: 'rcnn', name: 'RCNN', description: 'Recurrent Convolutional Neural Network' },
+  { id: 'transformer', name: 'Transformer', description: 'Standard Transformer' },
+  { id: 'tft', name: 'TFT', description: 'Temporal Fusion Transformer (Google)' },
 ];
 
 const ACTIVATION_FUNCTIONS = [
@@ -980,10 +981,10 @@ const Training: React.FC = () => {
                       <p className="text-red-500 text-xs mt-1">Min must be less than or equal to max</p>
                     )}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Base size for Transformer/TCN. Scaled per model: LSTM/GRU 4x, N-BEATS 2x.
+                      Base size for Transformer/TCN/TFT (1x). Scaled: LSTM/GRU 4x, N-BEATS 2x.
                       <br />
                       <span className="text-gray-400">
-                        e.g., 128 base = Transformer 128, N-BEATS 256, LSTM 512
+                        e.g., 128 base = Transformer/TCN/TFT 128, N-BEATS 256, LSTM/GRU 512
                       </span>
                     </p>
                   </div>
@@ -2094,6 +2095,7 @@ const Training: React.FC = () => {
                                   nbeats: 'bg-purple-500',
                                   tcn: 'bg-orange-500',
                                   transformer: 'bg-pink-500',
+                                  tft: 'bg-cyan-500',
                                 };
                                 return (
                                   <div key={type} className={`${colors[type] || 'bg-gray-500'} text-white px-3 py-1 rounded-full text-sm`}>
@@ -2136,6 +2138,7 @@ const Training: React.FC = () => {
                                             ind.model_type === 'gru' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' :
                                             ind.model_type === 'nbeats' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300' :
                                             ind.model_type === 'tcn' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300' :
+                                            ind.model_type === 'tft' ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300' :
                                             'bg-pink-100 text-pink-800 dark:bg-pink-900/50 dark:text-pink-300'
                                           }`}>
                                             {ind.model_type.toUpperCase()}

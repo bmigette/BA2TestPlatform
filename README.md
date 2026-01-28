@@ -22,12 +22,40 @@ This platform provides two main components:
 - Export to CSV/Parquet formats
 
 ### Model Building
-- State-of-the-art models: LSTM, N-BEATS, RNN, RCNN
+- State-of-the-art deep learning models (see [Supported Models](#supported-models) below)
 - Genetic algorithm optimization for hyperparameters
 - User-configurable prediction targets (profit %, max drawdown, timeframe)
 - GPU-accelerated training with PyTorch
 - Real-time training progress via WebSocket
 - Optimization profiles for reusable configurations
+
+## Supported Models
+
+The platform supports 6 modern deep learning architectures optimized for time series forecasting:
+
+| Model | Description | Best For |
+|-------|-------------|----------|
+| **LSTM** | Long Short-Term Memory | Capturing long-term dependencies in sequences |
+| **GRU** | Gated Recurrent Unit | Similar to LSTM, faster training, fewer parameters |
+| **N-BEATS** | Neural Basis Expansion Analysis | Pure deep learning forecasting, interpretable |
+| **TCN** | Temporal Convolutional Network | Parallelizable, efficient long-range patterns |
+| **Transformer** | Standard attention-based model | General purpose time series |
+| **TFT** | Temporal Fusion Transformer (Google) | Multi-horizon forecasting, interpretability |
+
+### Layer Size Scaling
+
+When configuring model parameters, the UI uses a base layer size that is automatically scaled per model type:
+
+| Model | Scaling Factor | Example (base=128) |
+|-------|---------------|-------------------|
+| LSTM | 4x | hidden_dim = 512 |
+| GRU | 4x | hidden_dim = 512 |
+| N-BEATS | 2x | layer_widths = 256 |
+| TCN | 1x | num_filters = 128 |
+| Transformer | 1x | d_model = 128 |
+| TFT | 1x | hidden_size = 128 |
+
+This scaling ensures appropriate capacity for each architecture's computational requirements.
 
 ### Strategy Backtesting
 - Model-based trading strategies

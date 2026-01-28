@@ -90,6 +90,7 @@ const MODEL_COLORS: Record<string, string> = {
   nbeats: 'bg-purple-500',
   tcn: 'bg-orange-500',
   transformer: 'bg-pink-500',
+  tft: 'bg-cyan-500',
 };
 
 const MODEL_TEXT_COLORS: Record<string, string> = {
@@ -98,6 +99,7 @@ const MODEL_TEXT_COLORS: Record<string, string> = {
   nbeats: 'text-purple-600 bg-purple-100 dark:bg-purple-900/50 dark:text-purple-300',
   tcn: 'text-orange-600 bg-orange-100 dark:bg-orange-900/50 dark:text-orange-300',
   transformer: 'text-pink-600 bg-pink-100 dark:bg-pink-900/50 dark:text-pink-300',
+  tft: 'text-cyan-600 bg-cyan-100 dark:bg-cyan-900/50 dark:text-cyan-300',
 };
 
 const JobDetails: React.FC = () => {

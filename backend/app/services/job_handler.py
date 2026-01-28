@@ -1079,7 +1079,11 @@ def train_unified_optimization(
                 current_model_type=model_type
             )
 
-            model = ml_service.create_model(model_type, model_params)
+            # Create epoch callback to update UI during training
+            def epoch_callback(current_epoch: int, total_epochs: int):
+                update_job_training_state(task_id, current_epoch=current_epoch, total_epochs=total_epochs)
+
+            model = ml_service.create_model(model_type, model_params, epoch_callback=epoch_callback)
 
             # Train
             training_result = training_service.train_model(
@@ -1307,7 +1311,7 @@ def get_model_params(model_type: str, params: Dict, training_epochs: int = 10) -
 
     model_type_lower = model_type.lower()
 
-    if model_type_lower in ['lstm', 'gru', 'rnn']:
+    if model_type_lower in ['lstm', 'gru']:
         # RNN models use hidden_dim (single int)
         model_params['hidden_dim'] = int(params.get('hidden_dim_layer_1', 128))
         model_params['n_rnn_layers'] = int(params.get('n_rnn_layers', 2))
@@ -1326,6 +1330,10 @@ def get_model_params(model_type: str, params: Dict, training_epochs: int = 10) -
         model_params['num_encoder_layers'] = int(params.get('num_encoder_layers', 2))
         model_params['num_decoder_layers'] = int(params.get('num_decoder_layers', 2))
         model_params['dim_feedforward'] = int(params.get('hidden_dim_layer_1', 128))
+    elif model_type_lower == 'tft':
+        model_params['hidden_size'] = int(params.get('hidden_dim_layer_1', 64))
+        model_params['lstm_layers'] = int(params.get('n_rnn_layers', 1))
+        model_params['num_attention_heads'] = int(params.get('nhead', 4))
 
     return model_params
 
@@ -1390,11 +1398,10 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk:
     """
     Build genetic algorithm parameter ranges from job config.
 
-    Different model types have different appropriate layer size ranges:
-    - LSTM/GRU/RNN: hidden_dim 32-1024 (recurrent units)
-    - N-BEATS: layer_widths 128-512 (FC layers per stack)
-    - TCN: num_filters 32-256 (convolutional filters)
-    - Transformer: d_model 32-256 (embedding dimension)
+    Layer size scaling from base (user specifies Transformer/TCN/TFT base size):
+    - LSTM/GRU: 4x base (e.g., base=128 -> hidden_dim=512)
+    - N-BEATS: 2x base (e.g., base=128 -> layer_widths=256)
+    - Transformer/TCN/TFT: 1x base (e.g., base=128 -> d_model/num_filters/hidden_size=128)
 
     Args:
         model_type: Model type
@@ -1417,7 +1424,7 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk:
     # Constrain input_chunk_length based on data length and model type
     # For RNN models (LSTM/GRU): training_length defaults to 24, so input_chunk_length must be <= 24
     model_type_lower = model_type.lower()
-    if model_type_lower in ['lstm', 'gru', 'rnn', 'rcnn']:
+    if model_type_lower in ['lstm', 'gru']:
         # RNNModel has training_length=24 by default, input_chunk must be <= training_length
         input_chunk_max = min(max_input_chunk, 24)
     else:
@@ -1426,17 +1433,17 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk:
 
     # Apply model-specific layer size scaling
     # User specifies layer size for Transformer (base), then:
-    # - Transformer/TCN: use as-is (1x)
+    # - Transformer/TCN/TFT: use as-is (1x)
     # - N-BEATS: multiply by 2 (2x)
-    # - LSTM/GRU/RNN: multiply by 4 (4x)
-    if model_type_lower in ['lstm', 'gru', 'rnn', 'rcnn']:
-        # LSTM/GRU/RNN: 4x the base layer size
+    # - LSTM/GRU: multiply by 4 (4x)
+    if model_type_lower in ['lstm', 'gru']:
+        # LSTM/GRU: 4x the base layer size
         layer_size_multiplier = 4
     elif model_type_lower in ['nbeats']:
         # N-BEATS: 2x the base layer size
         layer_size_multiplier = 2
     else:
-        # Transformer/TCN: use base layer size (1x)
+        # Transformer/TCN/TFT: use base layer size (1x)
         layer_size_multiplier = 1
 
     effective_layer_size_min = layer_size_min * layer_size_multiplier
