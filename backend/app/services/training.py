@@ -287,9 +287,6 @@ class TrainingService:
         try:
             # Build fit kwargs with optional val_series for validation metrics during training
             fit_kwargs = {'verbose': verbose}
-            if val_series is not None:
-                fit_kwargs['val_series'] = val_series
-                logger.debug(f"Training with validation set ({len(val_series)} points)")
 
             if covariates is not None:
                 # Check if model supports past_covariates
@@ -298,15 +295,22 @@ class TrainingService:
                 if model_name == 'RNNModel':
                     # RNN-based models don't support past_covariates, this is expected
                     logger.info(f"{model_name} does not support past_covariates, training without covariates")
+                    # Can use val_series for RNN models since no covariates needed
+                    if val_series is not None:
+                        fit_kwargs['val_series'] = val_series
+                        logger.debug(f"Training with validation set ({len(val_series)} points)")
                     model.fit(train_series, **fit_kwargs)
                 else:
-                    # Train with covariates - fail if alignment issues occur
-                    # (covariate alignment is fixed in prepare_data, so errors here are real problems)
+                    # Train with covariates - skip val_series to avoid covariate alignment issues
+                    # Validation covariates would need to cover the test range which complicates things
                     fit_kwargs['past_covariates'] = covariates
-                    if val_series is not None:
-                        fit_kwargs['val_past_covariates'] = covariates  # Use same covariates for validation
+                    logger.debug(f"Training with covariates, skipping val_series to avoid alignment issues")
                     model.fit(train_series, **fit_kwargs)
             else:
+                # No covariates - can safely use val_series
+                if val_series is not None:
+                    fit_kwargs['val_series'] = val_series
+                    logger.debug(f"Training with validation set ({len(val_series)} points)")
                 model.fit(train_series, **fit_kwargs)
 
             training_time = (datetime.now() - start_time).total_seconds()
