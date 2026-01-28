@@ -400,59 +400,47 @@ class TrainingService:
         threshold: float = 0.5
     ) -> Dict[str, float]:
         """
-        Evaluate classification model using historical forecasts.
+        Evaluate classification model using historical_forecasts.
 
-        Makes rolling predictions to cover the entire test set, ensuring
-        enough samples for meaningful classification metrics.
+        Uses stride=1 to evaluate ALL test samples, simulating real-time
+        predictions where at each time T we predict T+1 using history up to T.
         """
         from app.services.metrics import ClassificationMetrics
 
         input_chunk = model.input_chunk_length
         output_chunk = model.output_chunk_length
 
-        # We need to make predictions that cover most of the test series
-        # historical_forecasts requires the series to have at least
-        # input_chunk_length + output_chunk_length points
-
         min_required = input_chunk + output_chunk
         if len(test_series) < min_required:
-            # Fall back to simple prediction for very short test series
-            logger.warning(f"Test series too short ({len(test_series)} < {min_required}), "
-                          "falling back to simple prediction")
+            logger.warning(f"Test series too short ({len(test_series)} < {min_required})")
             n_predict = min(output_chunk, len(test_series))
             if n_predict <= 0:
                 return {'error': 'Test series too short'}
-
             predictions = model.predict(n=n_predict)
             actuals = test_series[:n_predict]
         else:
-            # Use historical_forecasts for rolling evaluation
-            # This makes predictions starting from different points in the test series
             try:
-                # For classification, we must evaluate ALL test samples for accurate metrics
-                # Using stride=1 ensures every sample is predicted
+                # Use stride=1 to evaluate EVERY test sample
                 stride = 1
+                expected_predictions = len(test_series) - input_chunk
 
-                total_possible = len(test_series) - min_required + 1
                 logger.debug(f"Historical forecasts: test_len={len(test_series)}, "
                            f"input_chunk={input_chunk}, output_chunk={output_chunk}, "
-                           f"stride={stride}, expected_predictions={total_possible}")
+                           f"stride={stride}, expected_predictions={expected_predictions}")
 
                 # Build kwargs for historical_forecasts
-                # Only pass past_covariates if model was trained with them
                 hf_kwargs = {
                     'series': test_series,
-                    'start': input_chunk,  # Start after input_chunk
+                    'start': input_chunk,  # Start after enough history
                     'forecast_horizon': 1,  # Predict 1 step at a time
                     'stride': stride,
                     'retrain': False,
                     'verbose': False,
                     'show_warnings': False,
-                    'last_points_only': True  # Get single value per forecast
+                    'last_points_only': True
                 }
 
-                # Check if model was trained with past_covariates
-                # Only pass covariates if the model expects them
+                # Add covariates if model was trained with them
                 model_uses_covariates = (
                     hasattr(model, 'past_covariate_series') and
                     model.past_covariate_series is not None
@@ -464,18 +452,15 @@ class TrainingService:
                 # Make historical forecasts
                 forecasts = model.historical_forecasts(**hf_kwargs)
 
-                # Combine all forecasts into a single series for comparison
+                # Combine all forecasts
                 if isinstance(forecasts, list):
                     if len(forecasts) == 0:
                         return {'error': 'No forecasts generated'}
-                    # Concatenate all forecast points
                     predictions = concatenate(forecasts)
                 else:
                     predictions = forecasts
 
-                # Get actuals corresponding to prediction indices
-                # The predictions start at index input_chunk and go with stride
-                pred_indices = predictions.time_index
+                # Get actuals matching the prediction time indices
                 actuals = test_series.slice_intersect(predictions)
 
                 logger.debug(f"Historical forecasts: {len(predictions)} predictions, {len(actuals)} actuals")
