@@ -460,7 +460,17 @@ const JobDetails: React.FC = () => {
             <Clock size={16} />
             <span className="text-xs">Progress</span>
           </div>
-          <div className="text-2xl font-bold">{job.progress.toFixed(1)}%</div>
+          <div className="text-2xl font-bold">
+            {(() => {
+              // Use generation-based progress for consistency with overall progress bar
+              const totalGens = job.totalGenerations || 50;
+              const currentGen = job.currentGeneration || 0;
+              const currentInd = job.currentIndividual || 0;
+              const popSize = job.populationSize || 20;
+              const genProgress = ((currentGen + (currentInd / popSize)) / totalGens) * 100;
+              return `${genProgress.toFixed(1)}%`;
+            })()}
+          </div>
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
           <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">
