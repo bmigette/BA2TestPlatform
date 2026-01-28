@@ -661,6 +661,27 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
 
         # Determine overall job status (unified optimization counts as 1 model)
         total_models = 1
+
+        # Check if job was cancelled
+        cancelled_results = [r for r in results if r.get('status') == 'cancelled']
+        if cancelled_results:
+            update_job_progress(task_id, 100, "Training cancelled by user")
+            return {
+                'status': 'cancelled',
+                'models_trained': 0,
+                'total_models': total_models,
+                'results': results,
+                'datasets': dataset_infos,
+                'train_rows': len(train_df),
+                'test_rows': len(test_df),
+                'target_column': target_column,
+                'train_positives': train_positives,
+                'test_positives': test_positives,
+                'train_positives_pct': round(train_positives_pct, 2),
+                'test_positives_pct': round(test_positives_pct, 2),
+                'completed_at': datetime.now().isoformat()
+            }
+
         if len(successful_results) == 0:
             # Training failed
             error_messages = [r.get('error', 'Unknown error') for r in results if r.get('status') == 'failed']
