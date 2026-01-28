@@ -160,13 +160,6 @@ def test_individual_models():
 
     print(f"Loaded dataset with {len(df)} rows")
 
-    # Train/test split
-    train_size = int(len(df) * 0.8)
-    train_df = df.iloc[:train_size].copy()
-    test_df = df.iloc[train_size:].copy()
-
-    print(f"Train: {len(train_df)} rows, Test: {len(test_df)} rows")
-
     # Initialize services
     ml_service = MLModelsService()
     training_service = TrainingService()
@@ -185,14 +178,13 @@ def test_individual_models():
     conn.close()
     print(f"Dataset timeframe: {timeframe}")
 
-    train_series, train_cov = training_service.prepare_data(
-        train_df, target_column='Close', feature_columns=feature_cols, timeframe=timeframe
-    )
-    test_series, test_cov = training_service.prepare_data(
-        test_df, target_column='Close', feature_columns=feature_cols, timeframe=timeframe
+    # Use prepare_data_split to ensure train/test share the same index space
+    # This is required for Darts metric functions to work correctly
+    train_series, test_series, train_cov, test_cov = training_service.prepare_data_split(
+        df, train_ratio=0.8, target_column='Close', feature_columns=feature_cols, timeframe=timeframe
     )
 
-    print(f"Train series length: {len(train_series)}")
+    print(f"Train series length: {len(train_series)}, Test series length: {len(test_series)}")
     print(f"Covariates: {'Yes' if train_cov is not None else 'No'}")
 
     models_to_test = ['lstm', 'nbeats', 'transformer']

@@ -34,6 +34,7 @@ try:
     from darts import TimeSeries
     from darts.models import RNNModel, NBEATSModel
     from darts.dataprocessing.transformers import Scaler
+    from darts.metrics import mape, mae, rmse
     DARTS_AVAILABLE = True
 except ImportError:
     DARTS_AVAILABLE = False
@@ -152,6 +153,54 @@ class TrainingService:
 
         return target_series, covariates
 
+    def prepare_data_split(
+        self,
+        df: pd.DataFrame,
+        train_ratio: float = 0.8,
+        target_column: str = 'Close',
+        feature_columns: List[str] = None,
+        timeframe: str = 'daily'
+    ) -> Tuple[Any, Any, Any, Any]:
+        """
+        Prepare data and split into train/test TimeSeries with continuous indices.
+
+        This ensures train and test series share the same index space, which is
+        required for Darts metric functions (mape, mae, etc.) to work correctly.
+
+        Args:
+            df: Full DataFrame with Date and target columns
+            train_ratio: Fraction of data for training (0.0 to 1.0)
+            target_column: Column to predict
+            feature_columns: Optional covariate columns
+            timeframe: Dataset timeframe for frequency inference
+
+        Returns:
+            Tuple of (train_series, test_series, train_covariates, test_covariates)
+        """
+        # Prepare full data as one TimeSeries
+        full_series, full_covariates = self.prepare_data(
+            df, target_column, feature_columns, timeframe
+        )
+
+        # Calculate split point
+        split_idx = int(len(full_series) * train_ratio)
+
+        # Split series using slicing (preserves index continuity)
+        train_series = full_series[:split_idx]
+        test_series = full_series[split_idx:]
+
+        # Split covariates if present
+        train_covariates = None
+        test_covariates = None
+        if full_covariates is not None:
+            train_covariates = full_covariates[:split_idx]
+            test_covariates = full_covariates[split_idx:]
+
+        logger.info(f"Split data: train={len(train_series)}, test={len(test_series)} "
+                    f"(indices {split_idx} to {len(full_series)-1})")
+
+        return train_series, test_series, train_covariates, test_covariates
+
     def _infer_frequency(self, timeframe: str, df: pd.DataFrame) -> str:
         """
         Infer pandas frequency string from timeframe.
@@ -259,32 +308,9 @@ class TrainingService:
                 'status': 'completed'
             }
 
-            # Calculate training error if possible
-            # Note: Limit prediction to output_chunk_length to avoid needing future covariates
-            try:
-                # Use output_chunk_length as prediction horizon to avoid auto-regression
-                # which would require future covariate values
-                n_predict = min(model.output_chunk_length, len(train_series) - model.input_chunk_length)
-                if n_predict > 0:
-                    train_pred = model.predict(n=n_predict)
-                    train_target = train_series[model.input_chunk_length:model.input_chunk_length + n_predict]
-
-                    # Align lengths
-                    min_len = min(len(train_pred), len(train_target))
-                    train_pred = train_pred[:min_len]
-                    train_target = train_target[:min_len]
-
-                    # Use value-based comparison (predictions and actuals have different
-                    # time indices because from_values() creates separate index spaces)
-                    pred_values = train_pred.values().flatten()
-                    target_values = train_target.values().flatten()
-                    abs_errors = np.abs(pred_values - target_values)
-
-                    if np.all(target_values != 0):
-                        metrics['train_mape'] = float(np.mean(abs_errors / np.abs(target_values)) * 100)
-                    metrics['train_mae'] = float(np.mean(abs_errors))
-            except Exception as e:
-                logger.warning(f"Could not calculate training metrics: {e}")
+            # Note: Training metrics (train_mape, train_mae) are not calculated here
+            # because model.predict() forecasts future values beyond the training data,
+            # not within it. Use evaluate_model() with a proper test set for metrics.
 
             logger.info(f"Training completed in {training_time:.2f} seconds")
             return metrics
@@ -318,47 +344,32 @@ class TrainingService:
 
         try:
             # Make predictions
-            # Limit prediction to output_chunk_length to avoid auto-regression
-            # which would require future covariate values we don't have
-            n_predict = min(model.output_chunk_length, len(test_series) - model.input_chunk_length)
+            # Predictions continue from where training ended, so they correspond
+            # to the first n time steps of test_series (not offset by input_chunk_length)
+            n_predict = min(model.output_chunk_length, len(test_series))
             if n_predict <= 0:
                 return {'error': 'Test series too short'}
 
             predictions = model.predict(n=n_predict)
-            actuals = test_series[model.input_chunk_length:model.input_chunk_length + n_predict]
+            # Actuals are the first n_predict values of test_series (matching prediction indices)
+            actuals = test_series[:n_predict]
 
-            # Align lengths
-            min_len = min(len(predictions), len(actuals))
-            predictions = predictions[:min_len]
-            actuals = actuals[:min_len]
-
-            # Debug: Log prediction/actual lengths
+            # Debug: Log prediction/actual lengths and time indices
             logger.debug(f"Eval: n_predict={n_predict}, predictions={len(predictions)}, actuals={len(actuals)}")
+            logger.debug(f"Prediction time range: {predictions.time_index[0]} to {predictions.time_index[-1]}")
+            logger.debug(f"Actuals time range: {actuals.time_index[0]} to {actuals.time_index[-1]}")
 
             if len(predictions) == 0 or len(actuals) == 0:
                 logger.warning(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
                 return {'error': 'No valid predictions could be made'}
 
-            # Use value-based comparison (predictions and actuals have different
-            # time indices because from_values() creates separate index spaces)
-            pred_values = predictions.values().flatten()
-            actual_values = actuals.values().flatten()
-
-            # Calculate metrics manually to avoid time index issues
-            abs_errors = np.abs(pred_values - actual_values)
-
-            if np.all(actual_values != 0):
-                mape_value = np.mean(abs_errors / np.abs(actual_values)) * 100
-            else:
-                mape_value = np.nan
-
-            mae_value = np.mean(abs_errors)
-            rmse_value = np.sqrt(np.mean(abs_errors ** 2))
-
+            # Use Darts native metric functions
+            # These require matching time indices, which is ensured by using
+            # prepare_data_split (creates one TimeSeries then splits it)
             metrics = {
-                'mape': float(mape_value),
-                'mae': float(mae_value),
-                'rmse': float(rmse_value),
+                'mape': float(mape(actuals, predictions)),
+                'mae': float(mae(actuals, predictions)),
+                'rmse': float(rmse(actuals, predictions)),
                 'test_samples': len(test_series),
                 'predictions_made': len(predictions)
             }

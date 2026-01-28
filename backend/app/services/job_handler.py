@@ -566,8 +566,8 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
             model_result = train_unified_optimization(
                 task_id=task_id,
                 selected_models=selected_models,
-                train_df=train_df,
-                test_df=test_df,
+                full_df=combined_df,
+                train_ratio=train_ratio,
                 target_column=target_column,
                 feature_columns=feature_columns,
                 parameter_ranges=parameter_ranges,
@@ -947,8 +947,8 @@ def train_single_model(
 def train_unified_optimization(
     task_id: str,
     selected_models: List[str],
-    train_df: pd.DataFrame,
-    test_df: pd.DataFrame,
+    full_df: pd.DataFrame,
+    train_ratio: float,
     target_column: str,
     feature_columns: List[str],
     parameter_ranges: Dict[str, Any],
@@ -970,16 +970,13 @@ def train_unified_optimization(
     ml_service = MLModelsService()
     training_service = TrainingService()
 
-    # Prepare data once (shared across all model types)
+    # Prepare data once with proper train/test split
+    # Using prepare_data_split ensures train and test series share the same
+    # index space, which is required for Darts metric functions to work correctly
     try:
-        train_series, train_covariates = training_service.prepare_data(
-            train_df,
-            target_column=target_column,
-            feature_columns=feature_columns[:10],
-            timeframe=timeframe
-        )
-        test_series, test_covariates = training_service.prepare_data(
-            test_df,
+        train_series, test_series, train_covariates, test_covariates = training_service.prepare_data_split(
+            full_df,
+            train_ratio=train_ratio,
             target_column=target_column,
             feature_columns=feature_columns[:10],
             timeframe=timeframe
