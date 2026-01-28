@@ -47,6 +47,9 @@ interface Job {
   epochHistory?: EpochMetric[];
   // Optimization settings
   optimizeMetric?: string;
+  // Real-time individuals tracking
+  individualsCount?: number;
+  allIndividuals?: Individual[];
 }
 
 interface Individual {
@@ -405,7 +408,16 @@ const JobDetails: React.FC = () => {
             <span className="text-xs">Best Fitness</span>
           </div>
           <div className="text-2xl font-bold text-green-600">
-            {individualsData?.summary?.best_fitness?.toFixed(4) || job.bestFitness?.toFixed(4) || '--'}
+            {(() => {
+              // Priority: job.bestFitness (real-time) > individualsData > allIndividuals computed
+              const jobBest = job.bestFitness;
+              const summaryBest = individualsData?.summary?.best_fitness;
+              const computedBest = job.allIndividuals?.length
+                ? Math.max(...job.allIndividuals.map(i => i.fitness || 0))
+                : null;
+              const best = jobBest ?? summaryBest ?? computedBest;
+              return best != null && best > 0 ? best.toFixed(4) : '--';
+            })()}
           </div>
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
@@ -430,7 +442,9 @@ const JobDetails: React.FC = () => {
             <Info size={16} />
             <span className="text-xs">Individuals</span>
           </div>
-          <div className="text-2xl font-bold">{individualsData?.summary?.total_individuals || 0}</div>
+          <div className="text-2xl font-bold">
+            {job.individualsCount || job.allIndividuals?.length || individualsData?.summary?.total_individuals || 0}
+          </div>
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
           <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 mb-1">

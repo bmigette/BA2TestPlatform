@@ -908,6 +908,11 @@ def train_single_model(
                     current_progress,
                     f"{model_type.upper()}: Gen {gen}/{generations}, New best fitness: {fitness:.4f}"
                 )
+                # Update jobs_store with new best fitness
+                update_job_training_state(
+                    task_id,
+                    best_fitness=fitness
+                )
 
             return fitness
 
@@ -1261,6 +1266,11 @@ def train_unified_optimization(
                 update_job_progress(
                     task_id, current_progress,
                     f"Gen {gen}/{generations}, New best: {model_type.upper()} fitness={fitness:.4f}"
+                )
+                # Update jobs_store with new best fitness
+                update_job_training_state(
+                    task_id,
+                    best_fitness=fitness
                 )
 
             progress_state['success_count'] += 1
