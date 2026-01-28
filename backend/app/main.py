@@ -29,11 +29,23 @@ logger = get_logger(__name__)
 class APILoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to log all API requests and responses."""
 
+    # Endpoints that are polled frequently - don't log to reduce noise
+    QUIET_ENDPOINTS = (
+        '/progress',
+        '/generations',
+        '/individuals',
+        '/api/dashboard/stats',
+    )
+
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
+        path = request.url.path
 
-        # Log the incoming request
-        logger.info(f"API Request: {request.method} {request.url.path}")
+        # Skip logging for frequently polled endpoints
+        should_log = not any(path.endswith(ep) or path == ep for ep in self.QUIET_ENDPOINTS)
+
+        if should_log:
+            logger.info(f"API Request: {request.method} {path}")
 
         # Process the request
         response = await call_next(request)
@@ -41,11 +53,11 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
         # Calculate duration
         duration = time.time() - start_time
 
-        # Log the response
-        logger.info(
-            f"API Response: {request.method} {request.url.path} - "
-            f"Status: {response.status_code} - Duration: {duration:.3f}s"
-        )
+        if should_log:
+            logger.info(
+                f"API Response: {request.method} {path} - "
+                f"Status: {response.status_code} - Duration: {duration:.3f}s"
+            )
 
         return response
 
