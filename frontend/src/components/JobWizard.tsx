@@ -883,7 +883,14 @@ const Step1Settings: React.FC<Step1Props> = ({
                   <div key={profile.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded">
                     <button onClick={() => loadProfile(profile)} className="text-left flex-1">
                       <div className="font-medium">{profile.name}</div>
-                      <div className="text-xs text-gray-500">{profile.selectedModels?.length || 0} models</div>
+                      <div className="text-xs text-gray-500">
+                        {profile.selectedModels?.length || 0} models
+                        {profile.createdAt && (
+                          <span className="ml-2">
+                            · {new Date(profile.createdAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
                     </button>
                     <button onClick={() => onDeleteProfile(profile.id)} className="text-red-500 p-1">
                       <Trash2 size={14} />
