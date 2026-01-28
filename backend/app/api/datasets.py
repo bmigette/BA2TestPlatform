@@ -637,9 +637,11 @@ async def get_dataset_columns(dataset_id: int, db: Session = Depends(get_db)):
 
         # Categorize columns
         price_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']
-        technical_patterns = ['SMA', 'EMA', 'RSI', 'MACD', 'BB_', 'ATR', 'ADX', 'CCI', 'MFI',
-                             'OBV', 'VWAP', 'Stoch', 'Williams', 'ROC', 'MOM', 'TRIX',
-                             'DX', 'PLUS_DI', 'MINUS_DI', 'Aroon', 'CMO', 'PPO', 'UO']
+        technical_patterns = ['SMA', 'EMA', 'RSI', 'MACD', 'BB_', 'BBANDS', 'ATR', 'ADX', 'CCI', 'MFI',
+                             'OBV', 'VWAP', 'STOCH', 'WILLR', 'WILLIAMS', 'ROC', 'MOM', 'TRIX',
+                             'DX', 'PLUS_DI', 'MINUS_DI', 'AROON', 'CMO', 'PPO', 'UO',
+                             'SLOWK', 'SLOWD', 'FASTK', 'FASTD', 'UPPER', 'MIDDLE', 'LOWER',
+                             'REAL', 'BBAND']
         fundamental_patterns = ['fundamental_', 'PE', 'EPS', 'FCF', 'Revenue', 'Debt', 'ROE', 'ROA',
                                'BookValue', 'Dividend', 'MarketCap', 'PB', 'PS',
                                'days_to', 'last_', 'next_']
