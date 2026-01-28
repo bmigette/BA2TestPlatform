@@ -26,6 +26,17 @@ STATEMENT_PREFIXES = {
     'earnings': 'earn'
 }
 
+# Legacy metric names mapped to their statement types
+# These allow using legacy config names with the statement-based system
+LEGACY_TO_STATEMENT = {
+    'fcf': 'cash_flow',           # Free cash flow is in cash flow statement
+    'pe': 'income_statement',      # P/E ratio comes from EPS in income statement
+    'eps': 'income_statement',     # EPS is in income statement
+    'revenue': 'income_statement', # Revenue is in income statement
+    'debt_equity': 'balance_sheet', # Debt/equity is in balance sheet
+    'roe': 'balance_sheet',        # ROE is derived from balance sheet + income
+}
+
 # Key fields to extract for each statement type (subset of available fields)
 STATEMENT_KEY_FIELDS = {
     'balance_sheet': [
@@ -364,15 +375,24 @@ class FundamentalsService:
         if 'Date' in result_df.columns:
             result_df['Date'] = pd.to_datetime(result_df['Date'])
 
-        # Filter to only valid statement types
-        valid_statement_types = [st for st in statement_types if st in STATEMENT_PREFIXES]
-        invalid_types = [st for st in statement_types if st not in STATEMENT_PREFIXES]
-        if invalid_types:
-            logger.warning(f"Ignoring invalid statement types (use legacy mode for these): {invalid_types}")
+        # Convert legacy metric names to statement types
+        converted_types = set()
+        for st in statement_types:
+            if st in STATEMENT_PREFIXES:
+                converted_types.add(st)
+            elif st in LEGACY_TO_STATEMENT:
+                converted_types.add(LEGACY_TO_STATEMENT[st])
+                logger.debug(f"Converted legacy type '{st}' to '{LEGACY_TO_STATEMENT[st]}'")
+            else:
+                logger.warning(f"Unknown statement type: {st}")
+
+        valid_statement_types = list(converted_types)
 
         if not valid_statement_types:
             logger.warning("No valid statement types provided")
             return result_df
+
+        logger.info(f"Processing statement types: {valid_statement_types}")
 
         # Import the provider-based service
         try:

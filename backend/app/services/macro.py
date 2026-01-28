@@ -226,7 +226,7 @@ class MacroService:
 
             # Also add derived features
             # Year-over-year change (if enough data)
-            result_df[f'{indicator}_yoy_change'] = result_df[indicator].pct_change(periods=252) * 100
+            result_df[f'{indicator}_yoy_change'] = result_df[indicator].pct_change(periods=252, fill_method=None) * 100
 
         logger.info(f"Integrated {len(indicators)} macro indicators with OHLC data")
         return result_df
