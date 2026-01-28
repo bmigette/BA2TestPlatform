@@ -49,7 +49,7 @@ try:
     from pytorch_lightning.callbacks import Callback
 
     class EpochProgressCallback(Callback):
-        """Callback to report epoch progress during training."""
+        """Callback to report epoch progress during training with loss tracking."""
 
         def __init__(self, on_epoch_end: callable = None):
             super().__init__()
@@ -59,7 +59,15 @@ try:
             if self.on_epoch_end_fn:
                 current_epoch = trainer.current_epoch + 1  # 0-indexed to 1-indexed
                 max_epochs = trainer.max_epochs
-                self.on_epoch_end_fn(current_epoch, max_epochs)
+                # Get the training loss from the logged metrics
+                loss = None
+                if trainer.logged_metrics:
+                    loss = trainer.logged_metrics.get('train_loss')
+                    if loss is not None and hasattr(loss, 'item'):
+                        loss = float(loss.item())  # Convert tensor to float
+                    elif loss is not None:
+                        loss = float(loss)
+                self.on_epoch_end_fn(current_epoch, max_epochs, loss)
 
     LIGHTNING_CALLBACK_AVAILABLE = True
 except ImportError:

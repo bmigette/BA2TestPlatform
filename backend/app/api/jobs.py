@@ -132,6 +132,10 @@ class JobResponse(BaseModel):
     currentIndividual: Optional[int] = None
     populationSize: Optional[int] = None
     currentModelType: Optional[str] = None
+    currentModelParams: Optional[Dict[str, Any]] = None  # Current model hyperparameters
+    epochHistory: Optional[List[Dict[str, Any]]] = None  # Epoch-level loss history
+    errorCount: Optional[int] = None  # Number of training errors
+    successCount: Optional[int] = None  # Number of successful trainings
     # Multi-dataset progress
     datasetProgress: Optional[List[DatasetProgress]] = None
     currentDatasetId: Optional[int] = None

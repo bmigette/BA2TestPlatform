@@ -67,7 +67,9 @@ def update_job_training_state(
     total_epochs: int = None,
     best_fitness: float = None,
     error_count: int = None,
-    success_count: int = None
+    success_count: int = None,
+    current_model_params: Dict[str, Any] = None,
+    epoch_loss: float = None
 ):
     """Update job training state for real-time progress tracking."""
     try:
@@ -94,6 +96,19 @@ def update_job_training_state(
                 job["errorCount"] = error_count
             if success_count is not None:
                 job["successCount"] = success_count
+            if current_model_params is not None:
+                job["currentModelParams"] = current_model_params
+            if epoch_loss is not None:
+                # Append to epoch history for graphing
+                if "epochHistory" not in job:
+                    job["epochHistory"] = []
+                job["epochHistory"].append({
+                    "epoch": current_epoch or len(job["epochHistory"]) + 1,
+                    "loss": epoch_loss
+                })
+                # Keep only last 100 epochs to prevent memory bloat
+                if len(job["epochHistory"]) > 100:
+                    job["epochHistory"] = job["epochHistory"][-100:]
     except Exception as e:
         logger.warning(f"Failed to update job training state: {e}")
 
@@ -212,7 +227,7 @@ def save_generation_model(
         return model_path
 
     except Exception as e:
-        logger.warning(f"Failed to save generation model: {e}")
+        logger.error(f"Failed to save generation model: {e}")
         return None
 
 
@@ -931,7 +946,7 @@ def train_single_model(
             )
             logger.info(f"Saved best {model_type} model to {model_path}")
         except Exception as e:
-            logger.warning(f"Failed to save model: {e}")
+            logger.error(f"Failed to save model: {e}")
 
     update_job_progress(
         task_id,
@@ -1078,17 +1093,23 @@ def train_unified_optimization(
             model_params = get_model_params(model_type, params, training_epochs)
             n_epochs = model_params.get('n_epochs', 10)
 
-            # Update epoch info before training
+            # Update epoch info and current model params before training
             update_job_training_state(
                 task_id,
                 current_epoch=0,
                 total_epochs=n_epochs,
-                current_model_type=model_type
+                current_model_type=model_type,
+                current_model_params=model_params
             )
 
-            # Create epoch callback to update UI during training
-            def epoch_callback(current_epoch: int, total_epochs: int):
-                update_job_training_state(task_id, current_epoch=current_epoch, total_epochs=total_epochs)
+            # Create epoch callback to update UI during training with loss
+            def epoch_callback(current_epoch: int, total_epochs: int, loss: float = None):
+                update_job_training_state(
+                    task_id,
+                    current_epoch=current_epoch,
+                    total_epochs=total_epochs,
+                    epoch_loss=loss
+                )
 
             model = ml_service.create_model(model_type, model_params, epoch_callback=epoch_callback)
 
@@ -1101,7 +1122,7 @@ def train_unified_optimization(
             update_job_training_state(task_id, current_epoch=n_epochs)
 
             if training_result.get('status') == 'failed':
-                logger.warning(f"Training failed: {training_result.get('error')}")
+                logger.error(f"Training failed: {training_result.get('error')}")
                 progress_state['error_count'] += 1
                 update_job_training_state(
                     task_id,

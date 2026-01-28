@@ -367,7 +367,7 @@ class TrainingService:
             logger.debug(f"Actuals time range: {actuals.time_index[0]} to {actuals.time_index[-1]}")
 
             if len(predictions) == 0 or len(actuals) == 0:
-                logger.warning(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
+                logger.error(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
                 return {'error': 'No valid predictions could be made'}
 
             # Inverse-transform to original scale
