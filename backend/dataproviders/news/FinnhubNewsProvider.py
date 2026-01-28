@@ -155,7 +155,8 @@ class FinnhubNewsProvider(MarketNewsInterface):
             news_data = response.json()
             
             if not news_data or not isinstance(news_data, list):
-                logger.warning(f"No news data returned from Finnhub for {symbol}")
+                # Use debug level - this is normal when fetching in chunks (some periods may have no news)
+                logger.debug(f"No news data returned from Finnhub for {symbol} in date range {actual_start_date.date()} to {end_date.date()}")
                 return self._format_empty_response(symbol, actual_start_date, end_date, format_type)
             
             # Limit results if needed

@@ -1308,8 +1308,7 @@ async def duplicate_dataset(
 @router.put("/{dataset_id}", response_model=DatasetResponse)
 async def update_dataset(
     dataset_id: int,
-    dataset_update: DatasetUpdate,
-    db: Session = Depends(get_db)
+    dataset_update: DatasetUpdate
 ):
     """
     Update dataset properties and regenerate the dataset.
@@ -1317,16 +1316,20 @@ async def update_dataset(
     OHLCV data is fetched synchronously for validation. If validation passes,
     heavy processing (indicators, sentiment, fundamentals) is done in background.
 
+    Uses short-lived DB sessions to prevent database locking during OHLCV fetch.
+
     Args:
         dataset_id: Dataset ID to update
         dataset_update: Fields to update
-        db: Database session
 
     Returns:
         Updated dataset with status="building"
     """
     from app.services.task_queue import get_task_queue
+    from app.models.database import SessionLocal
 
+    # Phase 1: Read dataset and update fields (short session)
+    db = SessionLocal()
     try:
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not dataset:
@@ -1410,6 +1413,7 @@ async def update_dataset(
 
         # Save updated generation_config with new dates and provider
         dataset.generation_config = gen_config
+        dataset_name = dataset.name  # Save for later use
 
         # Log all updates
         if updates:
@@ -1422,8 +1426,14 @@ async def update_dataset(
         dataset.error_message = None
         db.commit()
 
-        # Fetch OHLC data synchronously for validation
+        # Get provider name for OHLCV fetch
         provider_name = gen_config.get("data_provider", "yfinance")
+
+    finally:
+        db.close()  # Release DB connection before OHLCV fetch
+
+    # Phase 2: Fetch OHLCV data (NO DB connection held)
+    try:
         provider = get_ohlcv_provider(provider_name)
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -1439,99 +1449,127 @@ async def update_dataset(
             end_date=end_date,
             interval=interval
         )
-
-        if not data_points:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = f"No data available for {new_ticker}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"No data available for {new_ticker}"
-            )
-
-        # Convert to DataFrame for validation
-        ohlcv_data = [{
-            'Date': dp.timestamp.isoformat() if hasattr(dp.timestamp, 'isoformat') else str(dp.timestamp),
-            'Open': dp.open,
-            'High': dp.high,
-            'Low': dp.low,
-            'Close': dp.close,
-            'Volume': dp.volume
-        } for dp in data_points]
-
-        df = pd.DataFrame(ohlcv_data)
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.sort_values('Date').reset_index(drop=True)
-        logger.info(f"Fetched {len(df)} OHLC data points")
-
-        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
-        data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
-        data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
-        req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
-        req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
-        tolerance_days = 5
-
-        if (data_start_date - req_start_date).days > tolerance_days:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = f"Data starts at {data_start_date}, but requested {req_start_date}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
-            )
-
-        if (req_end_date - data_end_date).days > tolerance_days:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = f"Data ends at {data_end_date}, but requested {req_end_date}"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
-            )
-
-        # OHLCV validation passed - queue background task for heavy processing
-        logger.info(f"OHLCV validation passed. Queuing background task for dataset {dataset_id}")
-
-        task_queue = get_task_queue()
-        task_id = task_queue.queue_task(
-            task_type='dataset_regeneration',
-            name=f'Regenerate dataset {dataset.name}',
-            description=f'Processing indicators, sentiment, and fundamentals for dataset {dataset_id}',
-            payload={
-                'dataset_id': dataset_id,
-                'ohlcv_data': ohlcv_data,
-                'ticker': new_ticker,
-                'timeframe': new_timeframe,
-                'start_date': start_date.isoformat(),
-                'end_date': end_date.isoformat()
-            },
-            max_retries=1,
-            timeout_seconds=600
-        )
-
-        # Store task_id on dataset for tracking
-        dataset.task_id = task_id
-        db.commit()
-        db.refresh(dataset)
-
-        logger.info(f"Dataset {dataset_id} update queued as background task {task_id}")
-        return dataset
-
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error updating dataset: {e}", exc_info=True)
-        # Mark as error
+        # Update status to error with short session
+        db = SessionLocal()
         try:
-            dataset.status = DatasetStatus.ERROR.value
-            dataset.error_message = str(e)
-            db.commit()
-        except Exception:
-            db.rollback()
+            dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if dataset:
+                dataset.status = DatasetStatus.ERROR.value
+                dataset.error_message = f"OHLCV fetch failed: {str(e)}"
+                db.commit()
+        finally:
+            db.close()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update dataset: {str(e)}"
+            detail=f"Failed to fetch OHLCV data: {str(e)}"
         )
+
+    # Phase 3: Validate OHLCV data (NO DB connection held)
+    if not data_points:
+        db = SessionLocal()
+        try:
+            dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if dataset:
+                dataset.status = DatasetStatus.ERROR.value
+                dataset.error_message = f"No data available for {new_ticker}"
+                db.commit()
+        finally:
+            db.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No data available for {new_ticker}"
+        )
+
+    # Convert to DataFrame for validation
+    ohlcv_data = [{
+        'Date': dp.timestamp.isoformat() if hasattr(dp.timestamp, 'isoformat') else str(dp.timestamp),
+        'Open': dp.open,
+        'High': dp.high,
+        'Low': dp.low,
+        'Close': dp.close,
+        'Volume': dp.volume
+    } for dp in data_points]
+
+    df = pd.DataFrame(ohlcv_data)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values('Date').reset_index(drop=True)
+    logger.info(f"Fetched {len(df)} OHLC data points")
+
+    # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+    data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
+    data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
+    req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
+    req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
+    tolerance_days = 5
+
+    if (data_start_date - req_start_date).days > tolerance_days:
+        db = SessionLocal()
+        try:
+            dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if dataset:
+                dataset.status = DatasetStatus.ERROR.value
+                dataset.error_message = f"Data starts at {data_start_date}, but requested {req_start_date}"
+                db.commit()
+        finally:
+            db.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
+        )
+
+    if (req_end_date - data_end_date).days > tolerance_days:
+        db = SessionLocal()
+        try:
+            dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if dataset:
+                dataset.status = DatasetStatus.ERROR.value
+                dataset.error_message = f"Data ends at {data_end_date}, but requested {req_end_date}"
+                db.commit()
+        finally:
+            db.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
+        )
+
+    # Phase 4: Queue background task and return (short session)
+    logger.info(f"OHLCV validation passed. Queuing background task for dataset {dataset_id}")
+
+    task_queue = get_task_queue()
+    task_id = task_queue.queue_task(
+        task_type='dataset_regeneration',
+        name=f'Regenerate dataset {dataset_name}',
+        description=f'Processing indicators, sentiment, and fundamentals for dataset {dataset_id}',
+        payload={
+            'dataset_id': dataset_id,
+            'ohlcv_data': ohlcv_data,
+            'ticker': new_ticker,
+            'timeframe': new_timeframe,
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat()
+        },
+        max_retries=1,
+        timeout_seconds=600
+    )
+
+    # Store task_id on dataset for tracking
+    db = SessionLocal()
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if dataset:
+            dataset.task_id = task_id
+            db.commit()
+            db.refresh(dataset)
+            logger.info(f"Dataset {dataset_id} update queued as background task {task_id}")
+            return dataset
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset {dataset_id} not found after queuing task"
+            )
+    finally:
+        db.close()
 
 
 @router.post("/{dataset_id}/calculate-indicators")

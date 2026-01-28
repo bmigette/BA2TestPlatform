@@ -314,15 +314,17 @@ class NewsCacheService:
         self,
         articles: List[Dict[str, Any]],
         provider: str,
-        ticker: str = None
+        ticker: str = None,
+        batch_size: int = 50
     ) -> Tuple[int, int]:
         """
-        Cache multiple articles.
+        Cache multiple articles with batched commits to reduce DB lock contention.
 
         Args:
             articles: List of article dictionaries
             provider: News provider name
             ticker: Optional ticker symbol
+            batch_size: Number of articles to commit in each batch (default: 50)
 
         Returns:
             Tuple of (cached_count, skipped_count)
@@ -330,16 +332,88 @@ class NewsCacheService:
         db = SessionLocal()
         cached = 0
         skipped = 0
+        pending_count = 0
 
         try:
-            for article in articles:
-                result = self.cache_article(article, provider, ticker, db)
-                if result:
+            for i, article in enumerate(articles):
+                url = article.get('url', '')
+                if not url:
+                    skipped += 1
+                    continue
+
+                url_hash = self._get_url_hash(url)
+
+                # Check if already cached
+                existing = db.query(NewsCache).filter(
+                    NewsCache.url_hash == url_hash
+                ).first()
+
+                if existing:
+                    # Update sentiment if newly analyzed
+                    if article.get('sentiment') and not existing.sentiment_label:
+                        existing.sentiment_label = article.get('sentiment')
+                        existing.sentiment_score = article.get('sentiment_score')
+                        existing.positive_prob = article.get('positive_prob')
+                        existing.neutral_prob = article.get('neutral_prob')
+                        existing.negative_prob = article.get('negative_prob')
+                        existing.analyzed_at = datetime.now()
+                        pending_count += 1
                     cached += 1
                 else:
-                    skipped += 1
+                    # Save content to file
+                    content = article.get('content', '')
+                    content_file_path = None
+                    if content:
+                        content_file_path = self._get_content_file_path(url_hash, provider)
+                        self._save_content_file(content, content_file_path)
+
+                    # Parse published date
+                    pub_date = article.get('date')
+                    if isinstance(pub_date, str):
+                        try:
+                            pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
+                        except ValueError:
+                            pub_date = None
+
+                    # Create cache entry
+                    cache_entry = NewsCache(
+                        provider=provider.lower(),
+                        original_url=url,
+                        resolved_url=article.get('resolved_url'),
+                        url_hash=url_hash,
+                        ticker=ticker,
+                        title=article.get('title', '')[:500] if article.get('title') else None,
+                        source=article.get('source', '')[:200] if article.get('source') else None,
+                        published_at=pub_date,
+                        sentiment_label=article.get('sentiment'),
+                        sentiment_score=article.get('sentiment_score'),
+                        positive_prob=article.get('positive_prob'),
+                        neutral_prob=article.get('neutral_prob'),
+                        negative_prob=article.get('negative_prob'),
+                        content_file_path=content_file_path,
+                        content_fetched=1 if article.get('content_fetched') else 0,
+                        fetched_at=datetime.now(),
+                        analyzed_at=datetime.now() if article.get('sentiment') else None
+                    )
+                    db.add(cache_entry)
+                    pending_count += 1
+                    cached += 1
+
+                # Commit in batches to reduce lock contention
+                if pending_count >= batch_size:
+                    db.commit()
+                    pending_count = 0
+
+            # Commit any remaining
+            if pending_count > 0:
+                db.commit()
 
             logger.info(f"Cached {cached} articles, skipped {skipped}")
+            return cached, skipped
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to cache articles batch: {e}")
             return cached, skipped
 
         finally:
@@ -392,6 +466,65 @@ class NewsCacheService:
         finally:
             if close_db:
                 db.close()
+
+    def update_sentiment_batch(
+        self,
+        sentiment_updates: List[Tuple[str, Dict[str, Any]]],
+        batch_size: int = 50
+    ) -> int:
+        """
+        Update sentiment for multiple cached articles with batched commits.
+
+        Args:
+            sentiment_updates: List of (url, sentiment_result) tuples
+            batch_size: Number of updates to commit in each batch
+
+        Returns:
+            Number of successfully updated articles
+        """
+        if not sentiment_updates:
+            return 0
+
+        db = SessionLocal()
+        updated = 0
+        pending_count = 0
+
+        try:
+            for url, sentiment_result in sentiment_updates:
+                url_hash = self._get_url_hash(url)
+                cache_entry = db.query(NewsCache).filter(
+                    NewsCache.url_hash == url_hash
+                ).first()
+
+                if cache_entry:
+                    cache_entry.sentiment_label = sentiment_result.get('label')
+                    cache_entry.sentiment_score = sentiment_result.get('score')
+                    cache_entry.positive_prob = sentiment_result.get('positive_prob')
+                    cache_entry.neutral_prob = sentiment_result.get('neutral_prob')
+                    cache_entry.negative_prob = sentiment_result.get('negative_prob')
+                    cache_entry.analyzed_at = datetime.now()
+                    updated += 1
+                    pending_count += 1
+
+                    # Commit in batches
+                    if pending_count >= batch_size:
+                        db.commit()
+                        pending_count = 0
+
+            # Commit any remaining
+            if pending_count > 0:
+                db.commit()
+
+            logger.debug(f"Batch updated sentiment for {updated} articles")
+            return updated
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to batch update sentiment: {e}")
+            return updated
+
+        finally:
+            db.close()
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """

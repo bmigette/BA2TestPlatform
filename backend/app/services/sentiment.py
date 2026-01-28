@@ -190,6 +190,7 @@ class SentimentService:
         results = []
         analyzed_count = 0
         cached_count = 0
+        sentiment_updates = []  # Collect updates for batch processing
 
         for i, article in enumerate(articles):
             url = article.get('url', '')
@@ -246,9 +247,13 @@ class SentimentService:
             results.append(result)
             analyzed_count += 1
 
-            # Update cache with sentiment
+            # Collect cache update for batch processing
             if self.use_cache and self._cache_service and url:
-                self._cache_service.update_sentiment(url, sentiment)
+                sentiment_updates.append((url, sentiment))
+
+        # Batch update sentiment in cache (reduces DB lock contention)
+        if sentiment_updates and self._cache_service:
+            self._cache_service.update_sentiment_batch(sentiment_updates)
 
         logger.info(f"Sentiment analysis: {analyzed_count} analyzed, {cached_count} from cache (total {len(results)})")
         return results
@@ -509,7 +514,7 @@ class SentimentService:
                 min_summary_length=100
             )
 
-        # Convert to standard format and cache new articles
+        # Convert to standard format
         articles = []
         for article in raw_articles:
             pub_date = article.get("published_at", "")
@@ -533,9 +538,10 @@ class SentimentService:
             }
             articles.append(standard_article)
 
-            # Cache the article
-            if use_cache and self.use_cache and self._cache_service:
-                self._cache_service.cache_article(standard_article, provider, ticker)
+        # Cache articles in batch (reduces DB lock contention)
+        if use_cache and self.use_cache and self._cache_service and articles:
+            cached_count, _ = self._cache_service.cache_articles_batch(articles, provider, ticker)
+            logger.debug(f"Batch cached {cached_count} articles for {ticker}")
 
         # Combine cached articles with newly fetched articles
         all_articles = cached_articles + articles
