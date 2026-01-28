@@ -214,39 +214,35 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
 
-        # Train each model type
-        results = []
-        total_models = len(selected_models)
+        # Train with unified optimization (model type is an optimization parameter)
+        update_job_progress(task_id, 25, f"Starting unified optimization across {len(selected_models)} model types...")
 
-        for model_idx, model_type in enumerate(selected_models):
-            model_progress_base = 25 + (model_idx / total_models) * 60
+        try:
+            model_result = train_unified_optimization(
+                task_id=task_id,
+                selected_models=selected_models,
+                train_df=train_df,
+                test_df=test_df,
+                target_column=target_column,
+                feature_columns=feature_columns,
+                parameter_ranges=parameter_ranges,
+                genetic_config=genetic_config,
+                metrics_config=metrics_config,
+                progress_base=25,
+                progress_range=65,
+                timeframe=timeframe
+            )
+            results = [model_result]
 
-            update_job_progress(task_id, model_progress_base, f"Training {model_type.upper()} model...")
-
-            try:
-                model_result = train_single_model(
-                    task_id=task_id,
-                    model_type=model_type,
-                    train_df=train_df,
-                    test_df=test_df,
-                    target_column=target_column,
-                    feature_columns=feature_columns,
-                    parameter_ranges=parameter_ranges,
-                    genetic_config=genetic_config,
-                    metrics_config=metrics_config,
-                    progress_base=model_progress_base,
-                    progress_range=60.0 / total_models,
-                    timeframe=timeframe
-                )
-                results.append(model_result)
-
-            except Exception as e:
-                logger.error(f"Failed to train {model_type}: {e}")
-                results.append({
-                    'model_type': model_type,
-                    'status': 'failed',
-                    'error': str(e)
-                })
+        except Exception as e:
+            logger.error(f"Failed unified optimization: {e}")
+            import traceback
+            traceback.print_exc()
+            results = [{
+                'model_type': 'unified',
+                'status': 'failed',
+                'error': str(e)
+            }]
 
         # Find best model
         update_job_progress(task_id, 90, "Analyzing results...")
@@ -256,16 +252,17 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         if successful_results:
             best_result = max(successful_results, key=lambda x: x.get('best_fitness', 0))
 
-        # Determine overall job status
+        # Determine overall job status (unified optimization counts as 1 model)
+        total_models = 1
         if len(successful_results) == 0:
-            # All models failed
+            # Training failed
             error_messages = [r.get('error', 'Unknown error') for r in results if r.get('status') == 'failed']
             combined_error = "; ".join(set(error_messages[:3]))  # Dedupe and limit
             update_job_progress(task_id, 100, f"Training failed: {combined_error}")
 
             return {
                 'status': 'failed',
-                'error': f"All {total_models} model(s) failed to train. Errors: {combined_error}",
+                'error': f"Training failed: {combined_error}",
                 'models_trained': 0,
                 'total_models': total_models,
                 'results': results,
@@ -274,24 +271,15 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 'test_rows': len(test_df),
                 'completed_at': datetime.now().isoformat()
             }
-        elif len(successful_results) < total_models:
-            # Some models failed
-            update_job_progress(task_id, 100, f"Training partially completed ({len(successful_results)}/{total_models} models)")
-
-            return {
-                'status': 'partial',
-                'models_trained': len(successful_results),
-                'total_models': total_models,
-                'results': results,
-                'best_model': best_result,
-                'datasets': dataset_infos,
-                'train_rows': len(train_df),
-                'test_rows': len(test_df),
-                'completed_at': datetime.now().isoformat()
-            }
         else:
-            # All models succeeded
+            # Training succeeded
             update_job_progress(task_id, 100, "Training completed successfully")
+
+            # Include all_individuals for visualization
+            all_individuals = []
+            for r in results:
+                if 'all_individuals' in r:
+                    all_individuals.extend(r['all_individuals'])
 
             return {
                 'status': 'completed',
@@ -299,6 +287,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 'total_models': total_models,
                 'results': results,
                 'best_model': best_result,
+                'all_individuals': all_individuals,  # For UI visualization
                 'datasets': dataset_infos,
                 'train_rows': len(train_df),
                 'test_rows': len(test_df),
@@ -602,6 +591,317 @@ def train_single_model(
         'model_path': model_path,
         'history': opt_result.get('history', [])[-5:]  # Last 5 generations
     }
+
+
+def train_unified_optimization(
+    task_id: str,
+    selected_models: List[str],
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    target_column: str,
+    feature_columns: List[str],
+    parameter_ranges: Dict[str, Any],
+    genetic_config: Dict[str, Any],
+    metrics_config: Dict[str, Any],
+    progress_base: float,
+    progress_range: float,
+    timeframe: str = 'daily'
+) -> Dict[str, Any]:
+    """
+    Unified optimization where model type is an optimization parameter.
+
+    Each individual in the population can be a different model type,
+    allowing the GA to compare and optimize across model architectures.
+    """
+    from app.services.task_queue import get_task_queue
+
+    # Initialize services
+    ml_service = MLModelsService()
+    training_service = TrainingService()
+
+    # Prepare data once (shared across all model types)
+    try:
+        train_series, train_covariates = training_service.prepare_data(
+            train_df,
+            target_column=target_column,
+            feature_columns=feature_columns[:10],
+            timeframe=timeframe
+        )
+        test_series, test_covariates = training_service.prepare_data(
+            test_df,
+            target_column=target_column,
+            feature_columns=feature_columns[:10],
+            timeframe=timeframe
+        )
+    except Exception as e:
+        logger.error(f"Failed to prepare data: {e}")
+        return {
+            'model_type': 'unified',
+            'status': 'failed',
+            'error': f'Data preparation failed: {e}'
+        }
+
+    # Build unified parameter ranges including model_type_idx
+    train_length = len(train_series)
+    max_input_chunk = min(60, max(10, train_length // 4))
+    ga_param_ranges = build_unified_param_ranges(selected_models, parameter_ranges, max_input_chunk)
+
+    # Get genetic config
+    population_size = genetic_config.get('populationSize', 20)
+    generations = genetic_config.get('generations', 50)
+    crossover_prob = genetic_config.get('crossoverProb', 0.7)
+    mutation_prob = genetic_config.get('mutationProb', 0.2)
+    early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
+    optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
+
+    # Progress tracking
+    progress_state = {
+        'current_generation': 0,
+        'current_individual': 0,
+        'best_fitness': 0.0,
+        'cancelled': False,
+        'all_individuals': []  # Track all evaluated individuals for visualization
+    }
+
+    best_model = [None]
+    best_metrics = [{}]
+
+    def check_cancelled() -> bool:
+        task_queue = get_task_queue()
+        status = task_queue.get_task_status(task_id)
+        if status and status.get('status') in ['cancelled', 'paused']:
+            progress_state['cancelled'] = True
+            return True
+        return False
+
+    def fitness_function(params: Dict) -> float:
+        """Evaluate model with given parameters including model type."""
+        if progress_state['cancelled'] or check_cancelled():
+            raise InterruptedError("Task cancelled")
+
+        progress_state['current_individual'] += 1
+        individual_num = progress_state['current_individual']
+        gen = progress_state['current_generation']
+
+        # Get model type from params
+        model_type_idx = int(params.get('model_type_idx', 0))
+        model_type = selected_models[model_type_idx % len(selected_models)]
+
+        # Calculate progress
+        gen_progress = (gen / generations) * progress_range
+        individual_progress = (individual_num / population_size) * (progress_range / generations) * 0.8
+        current_progress = progress_base + gen_progress + individual_progress
+
+        update_job_progress(
+            task_id,
+            current_progress,
+            f"Gen {gen}/{generations}, {model_type.upper()} #{individual_num}/{population_size}"
+        )
+
+        try:
+            # Get model-specific params
+            model_params = get_model_params(model_type, params)
+            model = ml_service.create_model(model_type, model_params)
+
+            # Train
+            training_result = training_service.train_model(
+                model, train_series, covariates=train_covariates, verbose=False
+            )
+
+            if training_result.get('status') == 'failed':
+                logger.warning(f"Training failed: {training_result.get('error')}")
+                return 0.0
+
+            # Evaluate
+            eval_result = training_service.evaluate_model(model, test_series, covariates=test_covariates)
+
+            if 'error' in eval_result:
+                return 0.0
+
+            # Calculate fitness
+            fitness = eval_result.get(optimize_metric, eval_result.get('mape', 0))
+            if optimize_metric == 'mape':
+                fitness = max(0, 100 - fitness) / 100
+
+            # Track this individual for visualization
+            individual_record = {
+                'generation': gen,
+                'individual': individual_num,
+                'model_type': model_type,
+                'params': model_params,
+                'fitness': fitness,
+                'metrics': eval_result
+            }
+            progress_state['all_individuals'].append(individual_record)
+
+            # Track best
+            if fitness > progress_state['best_fitness']:
+                progress_state['best_fitness'] = fitness
+                best_model[0] = model
+                best_metrics[0] = eval_result
+                update_job_progress(
+                    task_id, current_progress,
+                    f"Gen {gen}/{generations}, New best: {model_type.upper()} fitness={fitness:.4f}"
+                )
+
+            return fitness
+
+        except Exception as e:
+            logger.warning(f"Fitness evaluation failed for {model_type}: {e}")
+            return 0.0
+
+    def ga_callback(gen: int, best_fitness: float, best_params: Dict):
+        """Called after each generation completes."""
+        if check_cancelled():
+            raise InterruptedError("Task cancelled")
+        progress_state['current_generation'] = gen + 1
+        progress_state['current_individual'] = 0
+        update_job_progress(
+            task_id,
+            progress_base + ((gen + 1) / generations) * progress_range,
+            f"Gen {gen + 1}/{generations} complete, best fitness: {best_fitness:.4f}"
+        )
+
+    # Run optimization
+    update_job_progress(task_id, progress_base, f"Starting unified optimization (pop={population_size}, gens={generations})")
+
+    optimizer = GeneticOptimizer(
+        param_ranges=ga_param_ranges,
+        population_size=population_size,
+        n_generations=generations,
+        crossover_prob=crossover_prob,
+        mutation_prob=mutation_prob,
+        early_stopping_generations=early_stopping
+    )
+
+    try:
+        opt_result = optimizer.optimize(
+            fitness_function=fitness_function,
+            callback=ga_callback
+        )
+    except InterruptedError:
+        logger.info(f"Unified optimization cancelled for task {task_id}")
+        return {
+            'model_type': 'unified',
+            'status': 'cancelled',
+            'best_fitness': progress_state['best_fitness'],
+            'all_individuals': progress_state['all_individuals']
+        }
+
+    # Get best model type from best params
+    best_params = opt_result.get('best_params', {})
+    best_model_type_idx = int(best_params.get('model_type_idx', 0))
+    best_model_type = selected_models[best_model_type_idx % len(selected_models)]
+
+    update_job_progress(
+        task_id,
+        progress_base + progress_range,
+        f"Unified optimization complete. Best: {best_model_type.upper()} fitness={opt_result.get('best_fitness', 0):.4f}"
+    )
+
+    return {
+        'model_type': best_model_type,
+        'status': 'completed',
+        'best_params': best_params,
+        'best_fitness': opt_result.get('best_fitness'),
+        'generations_run': opt_result.get('generations_run'),
+        'metrics': best_metrics[0],
+        'model_path': None,
+        'history': opt_result.get('history', [])[-5:],
+        'all_individuals': progress_state['all_individuals']  # For UI visualization
+    }
+
+
+def get_model_params(model_type: str, params: Dict) -> Dict:
+    """Extract model-specific parameters from unified params."""
+    model_params = {
+        'input_chunk_length': int(params.get('input_chunk_length', 24)),
+        'output_chunk_length': 7,
+        'n_epochs': 10,  # Reduced for faster GA evaluation
+        'batch_size': int(params.get('batch_size', 32)),
+        'learning_rate': params.get('learning_rate', 0.001),
+        'dropout': params.get('dropout', 0.1),
+    }
+
+    model_type_lower = model_type.lower()
+
+    if model_type_lower in ['lstm', 'gru', 'rnn']:
+        # RNN models use hidden_dim (single int)
+        model_params['hidden_dim'] = int(params.get('hidden_dim_layer_1', 128))
+        model_params['n_rnn_layers'] = int(params.get('n_rnn_layers', 2))
+    elif model_type_lower == 'nbeats':
+        model_params['num_stacks'] = int(params.get('num_stacks', 30))
+        model_params['num_blocks'] = int(params.get('num_blocks', 1))
+        model_params['num_layers'] = int(params.get('num_layers', 4))
+        model_params['layer_widths'] = int(params.get('hidden_dim_layer_1', 256))
+    elif model_type_lower == 'tcn':
+        model_params['kernel_size'] = int(params.get('kernel_size', 3))
+        model_params['num_filters'] = int(params.get('num_filters', 64))
+        model_params['dilation_base'] = int(params.get('dilation_base', 2))
+    elif model_type_lower == 'transformer':
+        model_params['d_model'] = int(params.get('d_model', 64))
+        model_params['nhead'] = int(params.get('nhead', 4))
+        model_params['num_encoder_layers'] = int(params.get('num_encoder_layers', 2))
+        model_params['num_decoder_layers'] = int(params.get('num_decoder_layers', 2))
+        model_params['dim_feedforward'] = int(params.get('hidden_dim_layer_1', 128))
+
+    return model_params
+
+
+def build_unified_param_ranges(
+    selected_models: List[str],
+    ranges: Dict[str, Any],
+    max_input_chunk: int = 60
+) -> Dict[str, Dict]:
+    """
+    Build parameter ranges for unified optimization including model_type_idx.
+    """
+    layers_min = ranges.get('layersMin', 1)
+    layers_max = ranges.get('layersMax', 4)
+    layer_size_min = ranges.get('layerSizeMin', 32)
+    layer_size_max = ranges.get('layerSizeMax', 256)
+    lr_min = ranges.get('learningRateMin', 0.0001)
+    lr_max = ranges.get('learningRateMax', 0.01)
+    dropout_min = ranges.get('dropoutMin', 0.0)
+    dropout_max = ranges.get('dropoutMax', 0.5)
+
+    # Constrain input_chunk_length (use min of all model constraints)
+    input_chunk_max = min(max_input_chunk, 24)  # RNN constraint
+    input_chunk_min = min(10, input_chunk_max)
+
+    param_ranges = {
+        # Model type selection (index into selected_models)
+        'model_type_idx': {'min': 0, 'max': len(selected_models) - 1, 'step': 1, 'type': 'int'},
+        # Common parameters
+        'n_rnn_layers': {'min': layers_min, 'max': layers_max, 'step': 1, 'type': 'int'},
+        'dropout': {'min': dropout_min, 'max': dropout_max, 'step': 0.1, 'type': 'float'},
+        'learning_rate': {'min': lr_min, 'max': lr_max, 'step': 0.0001, 'type': 'float'},
+        'batch_size': {'min': 16, 'max': 128, 'step': 16, 'type': 'int'},
+        'input_chunk_length': {'min': input_chunk_min, 'max': input_chunk_max, 'step': 5, 'type': 'int'},
+    }
+
+    # Add hidden dim layers (scaled appropriately per model during evaluation)
+    for i in range(1, 5):
+        param_ranges[f'hidden_dim_layer_{i}'] = {
+            'min': layer_size_min,
+            'max': layer_size_max,
+            'step': 16,
+            'type': 'int'
+        }
+
+    # Model-specific params (used by respective models)
+    param_ranges['num_stacks'] = {'min': 10, 'max': 50, 'step': 10, 'type': 'int'}
+    param_ranges['num_blocks'] = {'min': 1, 'max': 3, 'step': 1, 'type': 'int'}
+    param_ranges['num_layers'] = {'min': 2, 'max': 6, 'step': 1, 'type': 'int'}
+    param_ranges['kernel_size'] = {'min': 2, 'max': 7, 'step': 1, 'type': 'int'}
+    param_ranges['num_filters'] = {'min': 32, 'max': 128, 'step': 16, 'type': 'int'}
+    param_ranges['dilation_base'] = {'min': 2, 'max': 4, 'step': 1, 'type': 'int'}
+    param_ranges['d_model'] = {'min': 32, 'max': 256, 'step': 32, 'type': 'int'}
+    param_ranges['nhead'] = {'min': 2, 'max': 8, 'step': 2, 'type': 'int'}
+    param_ranges['num_encoder_layers'] = {'min': 1, 'max': 4, 'step': 1, 'type': 'int'}
+    param_ranges['num_decoder_layers'] = {'min': 1, 'max': 4, 'step': 1, 'type': 'int'}
+
+    return param_ranges
 
 
 def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk: int = 60) -> Dict[str, Dict]:

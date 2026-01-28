@@ -123,6 +123,44 @@ interface JobProgress {
   logs: string[];
 }
 
+interface Individual {
+  generation: number;
+  individual: number;
+  model_type: string;
+  params: Record<string, number | string>;
+  fitness: number;
+  metrics: Record<string, number>;
+}
+
+interface IndividualsData {
+  job_id: string;
+  summary: {
+    total_individuals: number;
+    generations: number[];
+    model_types: string[];
+    best_fitness: number;
+    avg_fitness: number;
+  };
+  best_individual: Individual | null;
+  individuals: Individual[];
+}
+
+interface GenerationSummary {
+  generation: number;
+  individual_count: number;
+  best_fitness: number;
+  avg_fitness: number;
+  min_fitness: number;
+  model_types: Record<string, number>;
+  best_individual: Individual | null;
+}
+
+interface GenerationsData {
+  job_id: string;
+  total_generations: number;
+  generations: GenerationSummary[];
+}
+
 const PREDICTION_PRESETS = [
   { label: '10% / 5% DD / 7d', profit: 10, drawdown: 5, days: 7 },
   { label: '20% / 10% DD / 30d', profit: 20, drawdown: 10, days: 30 },
@@ -193,6 +231,11 @@ const Training: React.FC = () => {
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
   const [isLoadingProgress, setIsLoadingProgress] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [showIndividuals, setShowIndividuals] = useState(false);
+  const [individualsData, setIndividualsData] = useState<IndividualsData | null>(null);
+  const [generationsData, setGenerationsData] = useState<GenerationsData | null>(null);
+  const [selectedGeneration, setSelectedGeneration] = useState<number | null>(null);
+  const [selectedModelTypeFilter, setSelectedModelTypeFilter] = useState<string>('');
 
   // Load profiles from localStorage on mount
   useEffect(() => {
@@ -249,6 +292,30 @@ const Training: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to fetch job progress:', err);
+    }
+  }, []);
+
+  const fetchIndividuals = useCallback(async (jobId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/individuals`);
+      if (response.ok) {
+        const data: IndividualsData = await response.json();
+        setIndividualsData(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch individuals:', err);
+    }
+  }, []);
+
+  const fetchGenerations = useCallback(async (jobId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/generations`);
+      if (response.ok) {
+        const data: GenerationsData = await response.json();
+        setGenerationsData(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch generations:', err);
     }
   }, []);
 
@@ -1888,6 +1955,220 @@ const Training: React.FC = () => {
                           ))
                         ) : (
                           <div className="text-gray-500">No logs yet...</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Model Individuals Visualization Section */}
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mt-6">
+                    <button
+                      onClick={() => {
+                        setShowIndividuals(!showIndividuals);
+                        if (!showIndividuals && !individualsData) {
+                          fetchIndividuals(jobProgress.job.id);
+                          fetchGenerations(jobProgress.job.id);
+                        }
+                      }}
+                      className="flex items-center justify-between w-full text-left"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <BarChart2 size={16} className="text-gray-500" />
+                        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Model Individuals ({individualsData?.summary?.total_individuals || 0} total)
+                        </h3>
+                      </div>
+                      <span className="text-gray-500">{showIndividuals ? '▲' : '▼'}</span>
+                    </button>
+
+                    {showIndividuals && (
+                      <div className="mt-4 space-y-4">
+                        {/* Summary Stats */}
+                        {individualsData && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">Total Individuals</div>
+                              <div className="text-xl font-bold">{individualsData.summary.total_individuals}</div>
+                            </div>
+                            <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">Generations</div>
+                              <div className="text-xl font-bold">{individualsData.summary.generations.length}</div>
+                            </div>
+                            <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">Best Fitness</div>
+                              <div className="text-xl font-bold text-green-600">{individualsData.summary.best_fitness.toFixed(4)}</div>
+                            </div>
+                            <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">Avg Fitness</div>
+                              <div className="text-xl font-bold">{individualsData.summary.avg_fitness.toFixed(4)}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Best Individual */}
+                        {individualsData?.best_individual && (
+                          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border-2 border-green-500">
+                            <h4 className="text-sm font-semibold text-green-600 mb-2">Best Individual</h4>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                              <div>
+                                <span className="text-gray-500">Model:</span>{' '}
+                                <span className="font-medium">{individualsData.best_individual.model_type.toUpperCase()}</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Generation:</span>{' '}
+                                <span className="font-medium">{individualsData.best_individual.generation}</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Fitness:</span>{' '}
+                                <span className="font-medium text-green-600">{individualsData.best_individual.fitness.toFixed(4)}</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">MAPE:</span>{' '}
+                                <span className="font-medium">{(individualsData.best_individual.metrics?.mape || 0).toFixed(2)}%</span>
+                              </div>
+                            </div>
+                            <div className="mt-2 text-xs text-gray-500">
+                              <strong>Params:</strong>{' '}
+                              {Object.entries(individualsData.best_individual.params || {}).map(([k, v]) => (
+                                <span key={k} className="mr-2">{k}={typeof v === 'number' ? v.toFixed(4) : v}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Filters */}
+                        <div className="flex items-center space-x-4">
+                          <div>
+                            <label className="text-xs text-gray-500 dark:text-gray-400 mr-2">Generation:</label>
+                            <select
+                              value={selectedGeneration ?? ''}
+                              onChange={(e) => setSelectedGeneration(e.target.value ? parseInt(e.target.value) : null)}
+                              className="px-2 py-1 text-sm border rounded dark:bg-gray-800 dark:border-gray-600"
+                            >
+                              <option value="">All</option>
+                              {individualsData?.summary.generations.map(g => (
+                                <option key={g} value={g}>Gen {g}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 dark:text-gray-400 mr-2">Model:</label>
+                            <select
+                              value={selectedModelTypeFilter}
+                              onChange={(e) => setSelectedModelTypeFilter(e.target.value)}
+                              className="px-2 py-1 text-sm border rounded dark:bg-gray-800 dark:border-gray-600"
+                            >
+                              <option value="">All</option>
+                              {individualsData?.summary.model_types.map(m => (
+                                <option key={m} value={m}>{m.toUpperCase()}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <button
+                            onClick={() => {
+                              fetchIndividuals(jobProgress.job.id);
+                              fetchGenerations(jobProgress.job.id);
+                            }}
+                            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+                          >
+                            Refresh
+                          </button>
+                        </div>
+
+                        {/* Fitness by Generation Chart */}
+                        {generationsData && generationsData.generations.length > 0 && (
+                          <div className="bg-white dark:bg-gray-800 rounded-lg p-4">
+                            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">Fitness by Generation</h4>
+                            <ResponsiveContainer width="100%" height={200}>
+                              <LineChart data={generationsData.generations}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                                <XAxis dataKey="generation" stroke="#6B7280" fontSize={12} />
+                                <YAxis stroke="#6B7280" fontSize={12} domain={[0, 1]} />
+                                <Tooltip
+                                  contentStyle={{ backgroundColor: '#1F2937', border: 'none', borderRadius: '8px' }}
+                                  labelStyle={{ color: '#9CA3AF' }}
+                                />
+                                <Legend />
+                                <Line type="monotone" dataKey="best_fitness" stroke="#22C55E" name="Best" strokeWidth={2} />
+                                <Line type="monotone" dataKey="avg_fitness" stroke="#3B82F6" name="Average" strokeWidth={2} />
+                                <Line type="monotone" dataKey="min_fitness" stroke="#EF4444" name="Min" strokeWidth={1} dot={false} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+
+                        {/* Model Type Distribution */}
+                        {generationsData && generationsData.generations.length > 0 && (
+                          <div className="bg-white dark:bg-gray-800 rounded-lg p-4">
+                            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">Model Type Distribution (Latest Gen)</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {Object.entries(generationsData.generations[generationsData.generations.length - 1]?.model_types || {}).map(([type, count]) => {
+                                const colors: Record<string, string> = {
+                                  lstm: 'bg-blue-500',
+                                  gru: 'bg-green-500',
+                                  nbeats: 'bg-purple-500',
+                                  tcn: 'bg-orange-500',
+                                  transformer: 'bg-pink-500',
+                                };
+                                return (
+                                  <div key={type} className={`${colors[type] || 'bg-gray-500'} text-white px-3 py-1 rounded-full text-sm`}>
+                                    {type.toUpperCase()}: {count}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Individuals Table */}
+                        {individualsData && (
+                          <div className="bg-white dark:bg-gray-800 rounded-lg overflow-hidden">
+                            <div className="max-h-64 overflow-y-auto">
+                              <table className="w-full text-sm">
+                                <thead className="bg-gray-100 dark:bg-gray-700 sticky top-0">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left">Gen</th>
+                                    <th className="px-3 py-2 text-left">Model</th>
+                                    <th className="px-3 py-2 text-left">Fitness</th>
+                                    <th className="px-3 py-2 text-left">MAPE</th>
+                                    <th className="px-3 py-2 text-left">Key Params</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {individualsData.individuals
+                                    .filter(ind =>
+                                      (selectedGeneration === null || ind.generation === selectedGeneration) &&
+                                      (selectedModelTypeFilter === '' || ind.model_type === selectedModelTypeFilter)
+                                    )
+                                    .sort((a, b) => b.fitness - a.fitness)
+                                    .slice(0, 50)
+                                    .map((ind, idx) => (
+                                      <tr key={idx} className={`border-t dark:border-gray-700 ${idx === 0 ? 'bg-green-50 dark:bg-green-900/20' : ''}`}>
+                                        <td className="px-3 py-2">{ind.generation}</td>
+                                        <td className="px-3 py-2">
+                                          <span className={`px-2 py-0.5 rounded text-xs ${
+                                            ind.model_type === 'lstm' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300' :
+                                            ind.model_type === 'gru' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' :
+                                            ind.model_type === 'nbeats' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300' :
+                                            ind.model_type === 'tcn' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300' :
+                                            'bg-pink-100 text-pink-800 dark:bg-pink-900/50 dark:text-pink-300'
+                                          }`}>
+                                            {ind.model_type.toUpperCase()}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 font-medium">{ind.fitness.toFixed(4)}</td>
+                                        <td className="px-3 py-2">{(ind.metrics?.mape || 0).toFixed(2)}%</td>
+                                        <td className="px-3 py-2 text-xs text-gray-500">
+                                          {ind.params?.hidden_dim && `dim=${ind.params.hidden_dim}`}
+                                          {ind.params?.n_rnn_layers && ` layers=${ind.params.n_rnn_layers}`}
+                                          {ind.params?.learning_rate && ` lr=${Number(ind.params.learning_rate).toFixed(4)}`}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
                         )}
                       </div>
                     )}

@@ -1076,6 +1076,135 @@ async def export_profile(profile_id: str):
     return export_data
 
 
+@router.get("/{job_id}/individuals")
+async def get_job_individuals(job_id: str, generation: Optional[int] = None, model_type: Optional[str] = None):
+    """
+    Get all individuals evaluated during optimization for visualization.
+
+    Returns data for each individual including model type, parameters, fitness, and metrics.
+    Used to visualize optimization progress across generations and model types.
+
+    Args:
+        job_id: Job ID
+        generation: Filter by specific generation (optional)
+        model_type: Filter by model type (optional)
+
+    Returns:
+        List of individual evaluations with parameters and metrics
+    """
+    # Load jobs from database if needed
+    load_jobs_from_database()
+
+    if job_id not in jobs_store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found"
+        )
+
+    # Get result from task queue
+    task_queue = get_task_queue()
+    task_status = task_queue.get_task_status(job_id)
+
+    all_individuals = []
+    if task_status and task_status.get("result"):
+        result = task_status["result"]
+        all_individuals = result.get("all_individuals", [])
+
+        # Also check in results array
+        if not all_individuals and "results" in result:
+            for r in result["results"]:
+                if "all_individuals" in r:
+                    all_individuals.extend(r["all_individuals"])
+
+    # Apply filters
+    if generation is not None:
+        all_individuals = [i for i in all_individuals if i.get("generation") == generation]
+    if model_type:
+        all_individuals = [i for i in all_individuals if i.get("model_type", "").lower() == model_type.lower()]
+
+    # Calculate summary stats
+    summary = {
+        "total_individuals": len(all_individuals),
+        "generations": sorted(set(i.get("generation", 0) for i in all_individuals)),
+        "model_types": sorted(set(i.get("model_type", "unknown") for i in all_individuals)),
+        "best_fitness": max((i.get("fitness", 0) for i in all_individuals), default=0),
+        "avg_fitness": sum(i.get("fitness", 0) for i in all_individuals) / len(all_individuals) if all_individuals else 0
+    }
+
+    # Find best individual
+    best_individual = None
+    if all_individuals:
+        best_individual = max(all_individuals, key=lambda x: x.get("fitness", 0))
+
+    return {
+        "job_id": job_id,
+        "summary": summary,
+        "best_individual": best_individual,
+        "individuals": all_individuals
+    }
+
+
+@router.get("/{job_id}/generations")
+async def get_job_generations(job_id: str):
+    """
+    Get generation-by-generation summary of optimization progress.
+
+    Returns aggregated stats for each generation including best/avg fitness,
+    model type distribution, and top individuals.
+
+    Args:
+        job_id: Job ID
+
+    Returns:
+        List of generation summaries
+    """
+    # Get all individuals
+    individuals_response = await get_job_individuals(job_id)
+    all_individuals = individuals_response["individuals"]
+
+    # Group by generation
+    generations_data = {}
+    for ind in all_individuals:
+        gen = ind.get("generation", 0)
+        if gen not in generations_data:
+            generations_data[gen] = {
+                "generation": gen,
+                "individuals": [],
+                "model_types": {},
+                "best_fitness": 0,
+                "avg_fitness": 0
+            }
+        generations_data[gen]["individuals"].append(ind)
+
+        # Count model types
+        model_type = ind.get("model_type", "unknown")
+        generations_data[gen]["model_types"][model_type] = \
+            generations_data[gen]["model_types"].get(model_type, 0) + 1
+
+    # Calculate stats per generation
+    generations = []
+    for gen, data in sorted(generations_data.items()):
+        individuals = data["individuals"]
+        fitnesses = [i.get("fitness", 0) for i in individuals]
+
+        gen_summary = {
+            "generation": gen,
+            "individual_count": len(individuals),
+            "best_fitness": max(fitnesses) if fitnesses else 0,
+            "avg_fitness": sum(fitnesses) / len(fitnesses) if fitnesses else 0,
+            "min_fitness": min(fitnesses) if fitnesses else 0,
+            "model_types": data["model_types"],
+            "best_individual": max(individuals, key=lambda x: x.get("fitness", 0)) if individuals else None
+        }
+        generations.append(gen_summary)
+
+    return {
+        "job_id": job_id,
+        "total_generations": len(generations),
+        "generations": generations
+    }
+
+
 @router.post("/profiles/import", response_model=ProfileResponse)
 async def import_profile(profile_data: Dict[str, Any]):
     """
