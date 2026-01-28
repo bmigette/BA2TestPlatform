@@ -1092,6 +1092,11 @@ def train_unified_optimization(
             if training_result.get('status') == 'failed':
                 logger.warning(f"Training failed: {training_result.get('error')}")
                 progress_state['error_count'] += 1
+                update_job_training_state(
+                    task_id,
+                    error_count=progress_state['error_count'],
+                    success_count=progress_state['success_count']
+                )
                 return 0.0
 
             # Evaluate
@@ -1099,6 +1104,11 @@ def train_unified_optimization(
 
             if 'error' in eval_result:
                 progress_state['error_count'] += 1
+                update_job_training_state(
+                    task_id,
+                    error_count=progress_state['error_count'],
+                    success_count=progress_state['success_count']
+                )
                 return 0.0
 
             # Calculate fitness
@@ -1143,11 +1153,21 @@ def train_unified_optimization(
                 )
 
             progress_state['success_count'] += 1
+            update_job_training_state(
+                task_id,
+                error_count=progress_state['error_count'],
+                success_count=progress_state['success_count']
+            )
             return fitness
 
         except Exception as e:
             logger.warning(f"Fitness evaluation failed for {model_type}: {e}")
             progress_state['error_count'] += 1
+            update_job_training_state(
+                task_id,
+                error_count=progress_state['error_count'],
+                success_count=progress_state['success_count']
+            )
             return 0.0
 
     def ga_callback(gen: int, best_fitness: float, best_params: Dict):
