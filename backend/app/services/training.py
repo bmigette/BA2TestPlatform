@@ -363,13 +363,23 @@ class TrainingService:
                 logger.warning(f"Empty predictions or actuals: pred_len={len(predictions)}, actual_len={len(actuals)}")
                 return {'error': 'No valid predictions could be made'}
 
-            # Use Darts native metric functions
+            # Inverse-transform to original scale for MAPE calculation
+            # MAPE requires strictly positive values (can't divide by zero/negative)
+            # Scaled data has zero mean so contains negatives
+            if self.scaler is not None:
+                predictions_orig = self.scaler.inverse_transform(predictions)
+                actuals_orig = self.scaler.inverse_transform(actuals)
+            else:
+                predictions_orig = predictions
+                actuals_orig = actuals
+
+            # Use Darts native metric functions on original scale
             # These require matching time indices, which is ensured by using
             # prepare_data_split (creates one TimeSeries then splits it)
             metrics = {
-                'mape': float(mape(actuals, predictions)),
-                'mae': float(mae(actuals, predictions)),
-                'rmse': float(rmse(actuals, predictions)),
+                'mape': float(mape(actuals_orig, predictions_orig)),
+                'mae': float(mae(actuals_orig, predictions_orig)),
+                'rmse': float(rmse(actuals_orig, predictions_orig)),
                 'test_samples': len(test_series),
                 'predictions_made': len(predictions)
             }
