@@ -7,6 +7,7 @@ from .indicator_collection import IndicatorCollection
 from .dataset import Dataset
 from .normalization_config import NormalizationConfig
 from .training_checkpoint import TrainingCheckpoint
+from .news_cache import NewsCache
 
 __all__ = [
     "Base", "engine", "SessionLocal", "get_db",
@@ -15,5 +16,6 @@ __all__ = [
     "IndicatorCollection",
     "Dataset",
     "NormalizationConfig",
-    "TrainingCheckpoint"
+    "TrainingCheckpoint",
+    "NewsCache"
 ]

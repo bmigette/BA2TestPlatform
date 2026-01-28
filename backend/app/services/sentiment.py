@@ -4,6 +4,9 @@ Sentiment Analysis Service
 Provides news sentiment analysis using Transformers library with
 financial sentiment models. Creates aggregated sentiment features
 for ML model training.
+
+Includes caching functionality to avoid redundant API calls and
+sentiment re-analysis.
 """
 
 import pandas as pd
@@ -14,6 +17,14 @@ import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+# Import cache service
+try:
+    from app.services.news_cache import NewsCacheService
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+    logger.warning("NewsCacheService not available, caching disabled")
 
 # Try to import transformers
 try:
@@ -50,16 +61,27 @@ class SentimentService:
     # Default financial sentiment model
     DEFAULT_MODEL = 'ProsusAI/finbert'
 
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: str = None, use_cache: bool = True):
         """
         Initialize SentimentService.
 
         Args:
             model_name: Hugging Face model name for sentiment analysis
+            use_cache: Whether to use news caching (default: True)
         """
         self.model_name = model_name or self.DEFAULT_MODEL
         self._pipeline = None
         self._initialized = False
+        self.use_cache = use_cache and CACHE_AVAILABLE
+        self._cache_service = None
+
+        if self.use_cache:
+            try:
+                self._cache_service = NewsCacheService()
+                logger.info("News cache service initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize cache service: {e}")
+                self.use_cache = False
 
     def _initialize_pipeline(self):
         """Lazy initialization of the sentiment pipeline."""
@@ -148,20 +170,53 @@ class SentimentService:
 
     def analyze_news_articles(
         self,
-        articles: List[Dict[str, Any]]
+        articles: List[Dict[str, Any]],
+        provider: str = None,
+        ticker: str = None
     ) -> List[Dict[str, Any]]:
         """
         Analyze sentiment of multiple news articles.
 
+        Uses cache to skip re-analysis of previously analyzed articles.
+
         Args:
             articles: List of article dicts with 'title', 'content', 'date' keys
+            provider: Optional provider name for cache updates
+            ticker: Optional ticker for cache updates
 
         Returns:
             List of articles with sentiment added
         """
         results = []
+        analyzed_count = 0
+        cached_count = 0
 
         for i, article in enumerate(articles):
+            url = article.get('url', '')
+
+            # Check if already has sentiment (from cache or provider)
+            if article.get('sentiment') and article.get('sentiment_score'):
+                results.append(article)
+                cached_count += 1
+                continue
+
+            # Check cache for existing sentiment
+            if self.use_cache and self._cache_service and url:
+                cached = self._cache_service.get_cached_article(url, provider or 'unknown')
+                if cached and cached.get('sentiment'):
+                    # Use cached sentiment
+                    result = {
+                        **article,
+                        'sentiment': cached['sentiment'],
+                        'sentiment_score': cached['sentiment_score'],
+                        'positive_prob': cached.get('positive_prob', 0),
+                        'neutral_prob': cached.get('neutral_prob', 0),
+                        'negative_prob': cached.get('negative_prob', 0)
+                    }
+                    results.append(result)
+                    cached_count += 1
+                    continue
+
             # Combine title and content for analysis
             title = article.get('title', '')
             content = article.get('content', '')[:500]
@@ -189,14 +244,21 @@ class SentimentService:
                 'negative_prob': sentiment['negative_prob']
             }
             results.append(result)
+            analyzed_count += 1
 
-        logger.info(f"Analyzed sentiment for {len(results)} articles")
+            # Update cache with sentiment
+            if self.use_cache and self._cache_service and url:
+                self._cache_service.update_sentiment(url, sentiment)
+
+        logger.info(f"Sentiment analysis: {analyzed_count} analyzed, {cached_count} from cache (total {len(results)})")
         return results
 
     def create_sentiment_features(
         self,
         ohlc_df: pd.DataFrame,
-        news_articles: List[Dict[str, Any]]
+        news_articles: List[Dict[str, Any]],
+        provider: str = None,
+        ticker: str = None
     ) -> pd.DataFrame:
         """
         Create aggregated sentiment features for dataset.
@@ -211,6 +273,8 @@ class SentimentService:
         Args:
             ohlc_df: DataFrame with Date column
             news_articles: List of analyzed news articles with dates
+            provider: Optional news provider name for caching
+            ticker: Optional ticker symbol for caching
 
         Returns:
             DataFrame with sentiment features added
@@ -224,8 +288,8 @@ class SentimentService:
         # Analyze articles if not already analyzed
         if news_articles:
             first_article = news_articles[0]
-            if 'sentiment' not in first_article:
-                news_articles = self.analyze_news_articles(news_articles)
+            if 'sentiment' not in first_article or first_article.get('sentiment') is None:
+                news_articles = self.analyze_news_articles(news_articles, provider, ticker)
 
         # Convert to DataFrame for easier manipulation
         if news_articles:
@@ -332,13 +396,16 @@ class SentimentService:
         end_date: datetime,
         provider: str = "fmp",
         enrich_content: bool = True,
-        limit: int = None  # None means no limit, fetch all
+        limit: int = None,  # None means no limit, fetch all
+        use_cache: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Fetch news articles for a ticker in date range using real news providers.
 
         For date ranges longer than 1 month, fetches month by month to avoid
         API rate limits and get complete coverage.
+
+        Checks cache first and only fetches articles not already cached.
 
         Args:
             ticker: Stock ticker symbol
@@ -347,6 +414,7 @@ class SentimentService:
             provider: News provider to use ('fmp', 'alphavantage', 'finnhub', 'alpaca')
             enrich_content: Whether to fetch full article content for short summaries
             limit: Maximum number of articles to fetch per month (None = unlimited)
+            use_cache: Whether to use cached articles (default: True)
 
         Returns:
             List of news articles with title, content, date, source
@@ -356,6 +424,21 @@ class SentimentService:
             Exception: If news fetching fails (no fallback to mock data)
         """
         logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider}")
+
+        # Check cache first
+        cached_articles = []
+        if use_cache and self.use_cache and self._cache_service:
+            cached_articles = self._cache_service.get_cached_articles_for_ticker(
+                ticker=ticker,
+                provider=provider,
+                start_date=start_date,
+                end_date=end_date
+            )
+            if cached_articles:
+                logger.info(f"Found {len(cached_articles)} cached articles for {ticker}")
+                # If we have cached articles covering the date range, use them
+                # For now, we'll still fetch to get any new articles
+                # but we'll dedupe using cached URLs
 
         # Get the news provider - fail if not available
         news_provider = self._get_news_provider(provider)
@@ -368,6 +451,12 @@ class SentimentService:
 
         all_raw_articles = []
         seen_urls = set()
+
+        # Add cached URLs to seen set to avoid re-fetching
+        for cached in cached_articles:
+            url = cached.get('url', '')
+            if url:
+                seen_urls.add(url)
 
         for chunk_start, chunk_end in monthly_chunks:
             try:
@@ -408,10 +497,11 @@ class SentimentService:
                 continue
 
         raw_articles = all_raw_articles
-        logger.info(f"Received {len(raw_articles)} unique raw articles from {provider} across {len(monthly_chunks)} months")
+        new_articles_count = len(raw_articles)
+        logger.info(f"Received {new_articles_count} new raw articles from {provider} (not in cache)")
 
         # Enrich articles with short summaries using trafilatura
-        if enrich_content and hasattr(news_provider, 'enrich_articles_with_content'):
+        if enrich_content and new_articles_count > 0 and hasattr(news_provider, 'enrich_articles_with_content'):
             logger.info("Enriching articles with URL content via trafilatura...")
             raw_articles = news_provider.enrich_articles_with_content(
                 raw_articles,
@@ -419,7 +509,7 @@ class SentimentService:
                 min_summary_length=100
             )
 
-        # Convert to standard format
+        # Convert to standard format and cache new articles
         articles = []
         for article in raw_articles:
             pub_date = article.get("published_at", "")
@@ -430,7 +520,7 @@ class SentimentService:
                 except ValueError:
                     pub_date = start_date
 
-            articles.append({
+            standard_article = {
                 'title': article.get('title', ''),
                 'content': article.get('summary', article.get('snippet', '')),
                 'date': pub_date,
@@ -440,10 +530,17 @@ class SentimentService:
                 # Preserve provider's built-in sentiment if available (e.g., from Alpha Vantage)
                 'sentiment': article.get('sentiment'),
                 'sentiment_score': article.get('sentiment_score')
-            })
+            }
+            articles.append(standard_article)
 
-        logger.info(f"Fetched {len(articles)} news articles for {ticker} from {provider}")
-        return articles
+            # Cache the article
+            if use_cache and self.use_cache and self._cache_service:
+                self._cache_service.cache_article(standard_article, provider, ticker)
+
+        # Combine cached articles with newly fetched articles
+        all_articles = cached_articles + articles
+        logger.info(f"Total: {len(all_articles)} articles for {ticker} ({len(cached_articles)} cached, {len(articles)} new)")
+        return all_articles
 
     def fetch_global_news(
         self,
