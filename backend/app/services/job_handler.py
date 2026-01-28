@@ -69,7 +69,7 @@ def update_job_training_state(
     error_count: int = None,
     success_count: int = None,
     current_model_params: Dict[str, Any] = None,
-    epoch_loss: float = None
+    epoch_metrics: Dict[str, float] = None
 ):
     """Update job training state for real-time progress tracking."""
     try:
@@ -98,14 +98,15 @@ def update_job_training_state(
                 job["successCount"] = success_count
             if current_model_params is not None:
                 job["currentModelParams"] = current_model_params
-            if epoch_loss is not None:
+            if epoch_metrics is not None:
                 # Append to epoch history for graphing
                 if "epochHistory" not in job:
                     job["epochHistory"] = []
-                job["epochHistory"].append({
+                epoch_entry = {
                     "epoch": current_epoch or len(job["epochHistory"]) + 1,
-                    "loss": epoch_loss
-                })
+                    **epoch_metrics  # Include all metrics (train_loss, val_loss, etc.)
+                }
+                job["epochHistory"].append(epoch_entry)
                 # Keep only last 100 epochs to prevent memory bloat
                 if len(job["epochHistory"]) > 100:
                     job["epochHistory"] = job["epochHistory"][-100:]
@@ -1102,13 +1103,13 @@ def train_unified_optimization(
                 current_model_params=model_params
             )
 
-            # Create epoch callback to update UI during training with loss
-            def epoch_callback(current_epoch: int, total_epochs: int, loss: float = None):
+            # Create epoch callback to update UI during training with metrics
+            def epoch_callback(current_epoch: int, total_epochs: int, metrics: Dict[str, float] = None):
                 update_job_training_state(
                     task_id,
                     current_epoch=current_epoch,
                     total_epochs=total_epochs,
-                    epoch_loss=loss
+                    epoch_metrics=metrics
                 )
 
             model = ml_service.create_model(model_type, model_params, epoch_callback=epoch_callback)

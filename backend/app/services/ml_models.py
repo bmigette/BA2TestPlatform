@@ -49,25 +49,44 @@ try:
     from pytorch_lightning.callbacks import Callback
 
     class EpochProgressCallback(Callback):
-        """Callback to report epoch progress during training with loss tracking."""
+        """Callback to report epoch progress during training with metrics tracking."""
 
         def __init__(self, on_epoch_end: callable = None):
             super().__init__()
             self.on_epoch_end_fn = on_epoch_end
 
+        def _tensor_to_float(self, value):
+            """Convert tensor or numpy value to Python float."""
+            if value is None:
+                return None
+            if hasattr(value, 'item'):
+                return float(value.item())
+            return float(value)
+
         def on_train_epoch_end(self, trainer, pl_module):
             if self.on_epoch_end_fn:
                 current_epoch = trainer.current_epoch + 1  # 0-indexed to 1-indexed
                 max_epochs = trainer.max_epochs
-                # Get the training loss from the logged metrics
-                loss = None
+
+                # Collect all available metrics
+                metrics = {}
                 if trainer.logged_metrics:
-                    loss = trainer.logged_metrics.get('train_loss')
-                    if loss is not None and hasattr(loss, 'item'):
-                        loss = float(loss.item())  # Convert tensor to float
-                    elif loss is not None:
-                        loss = float(loss)
-                self.on_epoch_end_fn(current_epoch, max_epochs, loss)
+                    for key, value in trainer.logged_metrics.items():
+                        try:
+                            metrics[key] = self._tensor_to_float(value)
+                        except (TypeError, ValueError):
+                            pass  # Skip non-numeric metrics
+
+                # Also check callback_metrics for validation metrics
+                if hasattr(trainer, 'callback_metrics') and trainer.callback_metrics:
+                    for key, value in trainer.callback_metrics.items():
+                        if key not in metrics:
+                            try:
+                                metrics[key] = self._tensor_to_float(value)
+                            except (TypeError, ValueError):
+                                pass
+
+                self.on_epoch_end_fn(current_epoch, max_epochs, metrics)
 
     LIGHTNING_CALLBACK_AVAILABLE = True
 except ImportError:

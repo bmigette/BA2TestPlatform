@@ -4,7 +4,7 @@ Optimization Jobs API endpoints
 Uses TaskQueueService for background job processing with real ML training.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -14,8 +14,9 @@ import uuid
 import asyncio
 import json
 
+from sqlalchemy.orm import Session
 from app.services.task_queue import get_task_queue
-from app.models.database import SessionLocal
+from app.models.database import SessionLocal, get_db
 from app.models.dataset import Dataset
 from app.models.task_queue import TaskQueue
 
