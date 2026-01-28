@@ -438,19 +438,31 @@ class TrainingService:
                 logger.debug(f"Historical forecasts: test_len={len(test_series)}, "
                            f"input_chunk={input_chunk}, output_chunk={output_chunk}, stride={stride}")
 
-                # Make historical forecasts
-                # forecast_horizon=1 means we predict 1 step ahead at each position
-                # This gives us one prediction per stride position
-                forecasts = model.historical_forecasts(
-                    series=test_series,
-                    past_covariates=covariates if covariates is not None else None,
-                    start=input_chunk,  # Start after input_chunk
-                    forecast_horizon=1,  # Predict 1 step at a time
-                    stride=stride,
-                    retrain=False,
-                    verbose=False,
-                    last_points_only=True  # Get single value per forecast
+                # Build kwargs for historical_forecasts
+                # Only pass past_covariates if model was trained with them
+                hf_kwargs = {
+                    'series': test_series,
+                    'start': input_chunk,  # Start after input_chunk
+                    'forecast_horizon': 1,  # Predict 1 step at a time
+                    'stride': stride,
+                    'retrain': False,
+                    'verbose': False,
+                    'show_warnings': False,
+                    'last_points_only': True  # Get single value per forecast
+                }
+
+                # Check if model was trained with past_covariates
+                # Only pass covariates if the model expects them
+                model_uses_covariates = (
+                    hasattr(model, 'past_covariate_series') and
+                    model.past_covariate_series is not None
                 )
+                if model_uses_covariates and covariates is not None:
+                    hf_kwargs['past_covariates'] = covariates
+                    logger.debug("Using past_covariates for historical forecasts")
+
+                # Make historical forecasts
+                forecasts = model.historical_forecasts(**hf_kwargs)
 
                 # Combine all forecasts into a single series for comparison
                 if isinstance(forecasts, list):
