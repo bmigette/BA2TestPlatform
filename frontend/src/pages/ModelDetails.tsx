@@ -412,7 +412,7 @@ const ModelDetails: React.FC = () => {
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">Fitness</p>
-                <p className="text-2xl font-bold text-teal-600">{(model.fitness || 0).toFixed(5)}</p>
+                <p className="text-2xl font-bold text-amber-500 dark:text-amber-400">{(model.fitness || 0).toFixed(5)}</p>
               </div>
             </div>
           </div>
@@ -578,18 +578,29 @@ const ModelDetails: React.FC = () => {
                 </div>
               )}
               <div className="space-y-3">
-                {model.predictionTargets?.map((target, index) => (
+                {model.predictionTargets?.map((target, index) => {
+                  // Infer type and category for legacy targets
+                  const inferredType = target?.type ||
+                    (('profitPct' in target || 'maxDd' in target) ? 'price_based' :
+                    ('indicator' in target) ? 'trend_reversal' :
+                    ('horizon' in target && 'direction' in target) ? 'directional' : 'legacy');
+                  const inferredCategory = target?.category ||
+                    (inferredType === 'price_based' || inferredType === 'directional' || inferredType === 'trend_reversal' ? 'binary_classification' :
+                    inferredType === 'triple_barrier' ? 'multiclass_classification' : 'binary_classification');
+
+                  return (
                   <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-medium text-sm capitalize">
-                        {(target?.type as string || 'unknown').replace(/_/g, ' ')}
+                        {(inferredType as string).replace(/_/g, ' ')}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded ${
-                        target?.category === 'binary_classification' ? 'bg-blue-100 text-blue-700' :
-                        target?.category === 'multiclass_classification' ? 'bg-purple-100 text-purple-700' :
-                        'bg-green-100 text-green-700'
+                        inferredCategory === 'binary_classification' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300' :
+                        inferredCategory === 'multiclass_classification' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300' :
+                        inferredCategory === 'regression' ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300' :
+                        'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-200'
                       }`}>
-                        {(target?.category as string || 'unknown').replace(/_/g, ' ')}
+                        {(inferredCategory as string).replace(/_/g, ' ')}
                       </span>
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 grid grid-cols-2 gap-2">
@@ -603,7 +614,8 @@ const ModelDetails: React.FC = () => {
                       ))}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
