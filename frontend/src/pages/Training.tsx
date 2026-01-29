@@ -159,7 +159,7 @@ const Training: React.FC = () => {
   useEffect(() => {
     const fetchProfiles = async () => {
       try {
-        const response = await fetch('http://localhost:8002/api/jobs/profiles');
+        const response = await fetch('http://localhost:8000/api/jobs/profiles');
         if (response.ok) {
           const data = await response.json();
           setProfiles(data.profiles || []);
@@ -173,7 +173,7 @@ const Training: React.FC = () => {
 
   const fetchDatasets = async () => {
     try {
-      const response = await fetch('http://localhost:8002/api/datasets');
+      const response = await fetch('http://localhost:8000/api/datasets');
       if (!response.ok) {
         throw new Error('Failed to fetch datasets');
       }
@@ -193,7 +193,7 @@ const Training: React.FC = () => {
 
   const fetchJobs = async () => {
     try {
-      const response = await fetch('http://localhost:8002/api/jobs');
+      const response = await fetch('http://localhost:8000/api/jobs');
       if (response.ok) {
         const data = await response.json();
         setJobs(data.jobs);
@@ -205,7 +205,7 @@ const Training: React.FC = () => {
 
   const fetchJobProgress = useCallback(async (jobId: string) => {
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/progress`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/progress`);
       if (response.ok) {
         const data: JobProgress = await response.json();
         setJobProgress(data);
@@ -219,7 +219,7 @@ const Training: React.FC = () => {
 
   const fetchIndividuals = useCallback(async (jobId: string) => {
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/individuals`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/individuals`);
       if (response.ok) {
         const data: IndividualsData = await response.json();
         setIndividualsData(data);
@@ -231,7 +231,7 @@ const Training: React.FC = () => {
 
   const fetchGenerations = useCallback(async (jobId: string) => {
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/generations`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/generations`);
       if (response.ok) {
         const data: GenerationsData = await response.json();
         setGenerationsData(data);
@@ -243,7 +243,7 @@ const Training: React.FC = () => {
 
   const handlePauseJob = async (jobId: string) => {
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/pause`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/pause`, {
         method: 'POST',
       });
       if (response.ok) {
@@ -256,7 +256,7 @@ const Training: React.FC = () => {
 
   const handleResumeJob = async (jobId: string) => {
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/resume`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/resume`, {
         method: 'POST',
       });
       if (response.ok) {
@@ -270,7 +270,7 @@ const Training: React.FC = () => {
   const handleCancelJob = async (jobId: string) => {
     if (!confirm('Are you sure you want to cancel this job?')) return;
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}/cancel`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/cancel`, {
         method: 'POST',
       });
       if (response.ok) {
@@ -285,7 +285,7 @@ const Training: React.FC = () => {
     e.stopPropagation(); // Prevent opening job monitor
     if (!confirm('Are you sure you want to delete this job? This cannot be undone.')) return;
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${jobId}`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}`, {
         method: 'DELETE',
       });
       if (response.ok) {
@@ -348,7 +348,7 @@ const Training: React.FC = () => {
 
   const deleteProfile = async (profileId: number) => {
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/profiles/${profileId}`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/profiles/${profileId}`, {
         method: 'DELETE',
       });
 
@@ -366,7 +366,7 @@ const Training: React.FC = () => {
   const handleSaveProfile = async (name: string, data: any) => {
     try {
       const profileData = { name, ...data };
-      const response = await fetch('http://localhost:8002/api/jobs/profiles', {
+      const response = await fetch('http://localhost:8000/api/jobs/profiles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(profileData),

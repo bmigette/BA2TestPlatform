@@ -47,7 +47,7 @@ interface WorkerFormData {
   capabilities: WorkerCapabilities;
 }
 
-const API_BASE = 'http://localhost:8002/api';
+const API_BASE = 'http://localhost:8000/api';
 
 const Settings: React.FC = () => {
   const [workers, setWorkers] = useState<Worker[]>([]);

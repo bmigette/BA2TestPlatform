@@ -51,7 +51,7 @@ interface DashboardData {
   systemResources: SystemResources;
 }
 
-const API_BASE = 'http://localhost:8002/api';
+const API_BASE = 'http://localhost:8000/api';
 
 const Dashboard: React.FC = () => {
   const [data, setData] = useState<DashboardData | null>(null);

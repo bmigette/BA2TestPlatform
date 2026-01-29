@@ -218,7 +218,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const fetchCollections = async () => {
     try {
-      const response = await fetch('http://localhost:8002/api/indicator-collections');
+      const response = await fetch('http://localhost:8000/api/indicator-collections');
       if (response.ok) {
         const data = await response.json();
         setCollections(data.collections);
@@ -324,7 +324,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
     }
 
     try {
-      const response = await fetch('http://localhost:8002/api/indicator-collections', {
+      const response = await fetch('http://localhost:8000/api/indicator-collections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -421,7 +421,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
       if (mode === 'duplicate' && initialData) {
         // Duplicate: POST to /{id}/duplicate
-        response = await fetch(`http://localhost:8002/api/datasets/${initialData.id}/duplicate`, {
+        response = await fetch(`http://localhost:8000/api/datasets/${initialData.id}/duplicate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -431,7 +431,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         });
       } else if (mode === 'edit' && initialData) {
         // Edit: PUT to /{id}
-        response = await fetch(`http://localhost:8002/api/datasets/${initialData.id}`, {
+        response = await fetch(`http://localhost:8000/api/datasets/${initialData.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -448,7 +448,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         });
       } else {
         // Create: POST to /
-        response = await fetch('http://localhost:8002/api/datasets', {
+        response = await fetch('http://localhost:8000/api/datasets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

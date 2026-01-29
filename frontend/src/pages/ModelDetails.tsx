@@ -90,7 +90,7 @@ interface ConfusionMatrix {
   };
 }
 
-const API_BASE = 'http://localhost:8002/api';
+const API_BASE = 'http://localhost:8000/api';
 
 const ModelDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();

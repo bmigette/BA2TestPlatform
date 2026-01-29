@@ -233,23 +233,35 @@ const TradingChart: React.FC<TradingChartProps> = ({
     }));
     candlestickSeries.setData(candlestickData);
 
+    // Create a Set of valid chart dates (as timestamps) for filtering target data
+    // This ensures markers only appear at dates that exist in the sampled chart data
+    const validChartDates = new Set(candlestickData.map(d => d.time as number));
+
     // Add markers for calculated targets - only at TRANSITION points (when value changes)
+    // and only for dates that exist in the chart data
     const markers: SeriesMarker<Time>[] = [];
     calculatedTargets.forEach((target) => {
       if (!target.visible || !target.data || target.data.length === 0) return;
 
       const config = target.config;
 
+      // Filter target data to only include points with dates in the chart
+      const filteredData = target.data.filter(point => {
+        const time = toTime(point.date);
+        return validChartDates.has(time as number);
+      });
+
       // For binary classification, only show markers at transitions (0→1)
       if (config.category === 'binary_classification') {
         const direction = (config as { direction?: string }).direction;
         const isUp = direction === 'up' || direction === 'bullish';
 
-        target.data.forEach((point, idx) => {
+        filteredData.forEach((point, idx) => {
           if (point.value === null || point.value === undefined) return;
 
           // Only show marker when transitioning FROM 0 to 1
-          const prevValue = idx > 0 ? target.data[idx - 1].value : 0;
+          // Note: Use filteredData for previous value to maintain transition detection
+          const prevValue = idx > 0 ? filteredData[idx - 1].value : 0;
           if (point.value === 1 && prevValue !== 1) {
             const time = toTime(point.date);
             markers.push({
@@ -263,10 +275,10 @@ const TradingChart: React.FC<TradingChartProps> = ({
         });
       } else if (config.category === 'multiclass_classification') {
         // Triple barrier: 0=stop, 1=profit, 2=timeout - show transitions
-        target.data.forEach((point, idx) => {
+        filteredData.forEach((point, idx) => {
           if (point.value === null || point.value === undefined) return;
 
-          const prevValue = idx > 0 ? target.data[idx - 1].value : null;
+          const prevValue = idx > 0 ? filteredData[idx - 1].value : null;
           if (prevValue === point.value) return; // Skip if same as previous
 
           const time = toTime(point.date);
@@ -301,10 +313,16 @@ const TradingChart: React.FC<TradingChartProps> = ({
     });
 
     // Add trend markers if showTrends is enabled
+    // Filter to only include dates that exist in the chart data
     if (indicators.showTrends && trendData.length > 0) {
-      trendData.forEach((point, index) => {
+      const filteredTrendData = trendData.filter(point => {
+        const time = toTime(point.date);
+        return validChartDates.has(time as number);
+      });
+
+      filteredTrendData.forEach((point, index) => {
         // Only show markers at trend changes
-        const prevTrend = index > 0 ? trendData[index - 1].trend : null;
+        const prevTrend = index > 0 ? filteredTrendData[index - 1].trend : null;
         if (point.trend !== prevTrend) {
           const time = toTime(point.date);
           if (point.trend === 'uptrend') {
@@ -524,6 +542,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
     }
 
     // SAR overlay (on price chart) - visible dots
+    // Filter to only include dates that exist in the chart data
     if (indicatorData?.sar && indicatorData.sar.length > 0) {
       const sarSeries = chart.addSeries(LineSeries, {
         color: '#F59E0B', // Yellow/amber color for SAR dots
@@ -535,7 +554,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
         priceLineVisible: false,
       });
       const sarData: LineData[] = indicatorData.sar
-        .filter(d => d.value !== null)
+        .filter(d => d.value !== null && validChartDates.has(toTime(d.date) as number))
         .map(d => ({
           time: toTime(d.date),
           value: d.value as number,
@@ -544,6 +563,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
     }
 
     // ZigZag overlay (on price chart) - connects pivot points
+    // Filter to only include dates that exist in the chart data
     if (indicatorData?.zigzag && indicatorData.zigzag.length > 0) {
       const zigzagSeries = chart.addSeries(LineSeries, {
         color: '#EC4899', // Pink/magenta for visibility
@@ -553,8 +573,9 @@ const TradingChart: React.FC<TradingChartProps> = ({
         crosshairMarkerVisible: false,
       });
       // ZigZag only has values at pivot points (nulls between), so filter to non-null values
+      // and to dates that exist in the chart data
       const zigzagData: LineData[] = indicatorData.zigzag
-        .filter(d => d.value !== null)
+        .filter(d => d.value !== null && validChartDates.has(toTime(d.date) as number))
         .map(d => ({
           time: toTime(d.date),
           value: d.value as number,

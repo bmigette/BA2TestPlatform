@@ -47,7 +47,7 @@ interface Model {
   };
 }
 
-const API_BASE = 'http://localhost:8002/api';
+const API_BASE = 'http://localhost:8000/api';
 
 type ViewMode = 'grid' | 'list';
 type SortField = 'date' | 'accuracy' | 'name' | 'fitness';

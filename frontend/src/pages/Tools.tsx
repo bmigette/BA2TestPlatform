@@ -147,7 +147,7 @@ const NewsProviderTester: React.FC = () => {
   useEffect(() => {
     const fetchProviders = async () => {
       try {
-        const response = await fetch('http://localhost:8002/api/tools/news/providers');
+        const response = await fetch('http://localhost:8000/api/tools/news/providers');
         if (response.ok) {
           const data = await response.json();
           setProviders(data.providers || []);
@@ -180,7 +180,7 @@ const NewsProviderTester: React.FC = () => {
         params.set('symbol', symbol);
       }
 
-      const response = await fetch(`http://localhost:8002/api/tools/news/fetch?${params}`);
+      const response = await fetch(`http://localhost:8000/api/tools/news/fetch?${params}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -208,7 +208,7 @@ const NewsProviderTester: React.FC = () => {
         content: article.summary || article.content || ''
       });
 
-      const response = await fetch(`http://localhost:8002/api/tools/news/analyze-single?${params}`, {
+      const response = await fetch(`http://localhost:8000/api/tools/news/analyze-single?${params}`, {
         method: 'POST'
       });
 
@@ -268,7 +268,7 @@ const NewsProviderTester: React.FC = () => {
       }
 
       setExportMessage('Fetching all articles...');
-      const fetchResponse = await fetch(`http://localhost:8002/api/tools/news/fetch?${fetchParams}`);
+      const fetchResponse = await fetch(`http://localhost:8000/api/tools/news/fetch?${fetchParams}`);
 
       if (!fetchResponse.ok) {
         const errorData = await fetchResponse.json();
@@ -296,7 +296,7 @@ const NewsProviderTester: React.FC = () => {
       }
 
       const response = await fetch(
-        `http://localhost:8002/api/tools/news/export?${exportParams}`,
+        `http://localhost:8000/api/tools/news/export?${exportParams}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -730,7 +730,7 @@ const FundamentalsTester: React.FC = () => {
         params.set('end_date', endDate);
       }
 
-      const response = await fetch(`http://localhost:8002/api/tools/fundamentals/fetch?${params}`);
+      const response = await fetch(`http://localhost:8000/api/tools/fundamentals/fetch?${params}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -1132,7 +1132,7 @@ const MacroTester: React.FC = () => {
         end_date: endDate,
       });
 
-      const response = await fetch(`http://localhost:8002/api/tools/macro/fetch?${params}`);
+      const response = await fetch(`http://localhost:8000/api/tools/macro/fetch?${params}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -1339,7 +1339,7 @@ const MaintenancePanel: React.FC = () => {
     setMessage(null);
 
     try {
-      const response = await fetch('http://localhost:8002/api/tools/maintenance/orphan-models');
+      const response = await fetch('http://localhost:8000/api/tools/maintenance/orphan-models');
       if (response.ok) {
         const data = await response.json();
         setOrphanModels(data.orphan_models || []);
@@ -1363,7 +1363,7 @@ const MaintenancePanel: React.FC = () => {
 
     try {
       const response = await fetch(
-        `http://localhost:8002/api/tools/maintenance/orphan-models?dry_run=${dryRun}`,
+        `http://localhost:8000/api/tools/maintenance/orphan-models?dry_run=${dryRun}`,
         { method: 'DELETE' }
       );
       if (response.ok) {

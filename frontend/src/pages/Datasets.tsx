@@ -39,7 +39,7 @@ const Datasets: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:8002/api/datasets');
+      const response = await fetch('http://localhost:8000/api/datasets');
       if (!response.ok) {
         throw new Error('Failed to fetch datasets');
       }
@@ -65,7 +65,7 @@ const Datasets: React.FC = () => {
     if (datasetToDelete === null) return;
 
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${datasetToDelete}`, {
+      const response = await fetch(`http://localhost:8000/api/datasets/${datasetToDelete}`, {
         method: 'DELETE',
       });
 
@@ -104,7 +104,7 @@ const Datasets: React.FC = () => {
   const handleEdit = async (dataset: Dataset) => {
     // Fetch fresh dataset data to ensure we have the latest dates
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${dataset.id}`);
+      const response = await fetch(`http://localhost:8000/api/datasets/${dataset.id}`);
       if (response.ok) {
         const freshDataset = await response.json();
         setSelectedDataset(freshDataset);

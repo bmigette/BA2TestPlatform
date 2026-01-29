@@ -198,7 +198,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
   const fetchTargetSets = useCallback(async () => {
     setTargetSetsLoading(true);
     try {
-      const response = await fetch('http://localhost:8002/api/target-sets');
+      const response = await fetch('http://localhost:8000/api/target-sets');
       if (response.ok) {
         const data = await response.json();
         setTargetSets(data.target_sets || []);
@@ -345,7 +345,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
     try {
       // Use the new calculate-targets endpoint with target configs
-      const response = await fetch(`http://localhost:8002/api/datasets/${state.selectedDatasetId}/calculate-targets`, {
+      const response = await fetch(`http://localhost:8000/api/datasets/${state.selectedDatasetId}/calculate-targets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -419,7 +419,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
     setIsSubmitting(true);
     try {
-      const response = await fetch('http://localhost:8002/api/jobs', {
+      const response = await fetch('http://localhost:8000/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

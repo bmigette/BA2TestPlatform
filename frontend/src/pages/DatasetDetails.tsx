@@ -192,7 +192,7 @@ const DatasetDetails: React.FC = () => {
   const fetchDatasetColumns = async (datasetId: number) => {
     setColumnsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/columns`);
+      const response = await fetch(`http://localhost:8000/api/datasets/${datasetId}/columns`);
       if (response.ok) {
         const data = await response.json();
         setDatasetColumns(data);
@@ -217,7 +217,7 @@ const DatasetDetails: React.FC = () => {
         fast_period: config.fast_period.toString(),
         slow_period: config.slow_period.toString(),
       });
-      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/trends?${params}`);
+      const response = await fetch(`http://localhost:8000/api/datasets/${datasetId}/trends?${params}`);
       if (response.ok) {
         const data = await response.json();
         setTrendData(data.trends || []);
@@ -272,7 +272,7 @@ const DatasetDetails: React.FC = () => {
     setError(null);
 
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/regenerate`, {
+      const response = await fetch(`http://localhost:8000/api/datasets/${dataset.id}/regenerate`, {
         method: 'POST',
       });
 
@@ -280,9 +280,9 @@ const DatasetDetails: React.FC = () => {
         const updatedDataset = await response.json();
         setDataset(updatedDataset);
 
-        // Refetch chart data if successful - limit to 500 rows for chart performance
+        // Refetch chart data if successful - load all rows (max_rows=0 means no limit)
         if (updatedDataset.status === 'ready') {
-          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/preview?max_rows=500`);
+          const csvResponse = await fetch(`http://localhost:8000/api/datasets/${dataset.id}/preview?max_rows=0`);
           if (csvResponse.ok) {
             const csvData = await csvResponse.json();
             console.log(`Preview refresh: ${csvData.returned_rows} rows of ${csvData.total_rows} total`);
@@ -295,7 +295,7 @@ const DatasetDetails: React.FC = () => {
         const errorData = await response.json();
         setError(errorData.detail || 'Failed to regenerate dataset');
         // Refetch dataset to get updated status
-        const refreshResponse = await fetch(`http://localhost:8002/api/datasets/${dataset.id}`);
+        const refreshResponse = await fetch(`http://localhost:8000/api/datasets/${dataset.id}`);
         if (refreshResponse.ok) {
           setDataset(await refreshResponse.json());
         }
@@ -333,7 +333,7 @@ const DatasetDetails: React.FC = () => {
       ]);
 
       const response = await fetch(
-        `http://localhost:8002/api/ml/datasets/${dataset.id}/preview-targets`,
+        `http://localhost:8000/api/ml/datasets/${dataset.id}/preview-targets`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -367,7 +367,7 @@ const DatasetDetails: React.FC = () => {
       ]);
 
       const response = await fetch(
-        `http://localhost:8002/api/ml/datasets/${dataset.id}/generate-training-data`,
+        `http://localhost:8000/api/ml/datasets/${dataset.id}/generate-training-data`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -432,7 +432,7 @@ const DatasetDetails: React.FC = () => {
         });
 
         if (indicatorsToFetch.length > 0) {
-          const response = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/calculate-indicators`, {
+          const response = await fetch(`http://localhost:8000/api/datasets/${dataset.id}/calculate-indicators`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ indicators: indicatorsToFetch }),
@@ -617,18 +617,18 @@ const DatasetDetails: React.FC = () => {
       setError(null);
       try {
         // Fetch dataset metadata
-        const response = await fetch(`http://localhost:8002/api/datasets/${id}`);
+        const response = await fetch(`http://localhost:8000/api/datasets/${id}`);
         if (!response.ok) {
           throw new Error('Failed to fetch dataset details');
         }
         const data = await response.json();
         setDataset(data);
 
-        // Fetch dataset CSV data for charting - limit to 500 rows for chart performance
+        // Fetch dataset CSV data for charting - load all rows (max_rows=0 means no limit)
         // Note: Preview endpoint requires backend restart to be available
         try {
           console.time('fetchPreview');
-          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${id}/preview?max_rows=500`);
+          const csvResponse = await fetch(`http://localhost:8000/api/datasets/${id}/preview?max_rows=0`);
           console.timeEnd('fetchPreview');
           if (csvResponse.ok) {
             console.time('parsePreview');
@@ -743,7 +743,7 @@ const DatasetDetails: React.FC = () => {
 
   const handleExport = async () => {
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${id}/export`);
+      const response = await fetch(`http://localhost:8000/api/datasets/${id}/export`);
       if (!response.ok) {
         throw new Error('Failed to export dataset');
       }
@@ -770,7 +770,7 @@ const DatasetDetails: React.FC = () => {
 
   const handleExportParquet = async () => {
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${id}/export/parquet`);
+      const response = await fetch(`http://localhost:8000/api/datasets/${id}/export/parquet`);
       if (!response.ok) {
         throw new Error('Failed to export dataset to Parquet');
       }

@@ -164,7 +164,7 @@ const JobDetails: React.FC = () => {
   const fetchJob = useCallback(async () => {
     if (!id) return;
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${id}/progress`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${id}/progress`);
       if (!response.ok) throw new Error('Failed to fetch job');
       const data = await response.json();
       setJob(data.job);
@@ -179,7 +179,7 @@ const JobDetails: React.FC = () => {
   const fetchGenerations = useCallback(async () => {
     if (!id) return;
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${id}/generations`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${id}/generations`);
       if (response.ok) {
         const data: GenerationsData = await response.json();
         setGenerationsData(data);
@@ -192,7 +192,7 @@ const JobDetails: React.FC = () => {
   const fetchIndividuals = useCallback(async () => {
     if (!id) return;
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${id}/individuals`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${id}/individuals`);
       if (response.ok) {
         const data: IndividualsData = await response.json();
         setIndividualsData(data);
@@ -204,7 +204,7 @@ const JobDetails: React.FC = () => {
 
   const fetchResources = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:8002/api/dashboard/stats');
+      const response = await fetch('http://localhost:8000/api/dashboard/stats');
       if (response.ok) {
         const data = await response.json();
         setResources(data.systemResources);
@@ -217,7 +217,7 @@ const JobDetails: React.FC = () => {
   const fetchEliteModels = useCallback(async () => {
     if (!id) return;
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${id}/elite-models`);
+      const response = await fetch(`http://localhost:8000/api/jobs/${id}/elite-models`);
       if (response.ok) {
         const data = await response.json();
         setEliteModels(data.elite_models || []);
@@ -231,7 +231,7 @@ const JobDetails: React.FC = () => {
     if (!id) return;
     setSavingModel(rank);
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${id}/elite-models/${rank}/save-to-inventory`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/${id}/elite-models/${rank}/save-to-inventory`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -255,7 +255,7 @@ const JobDetails: React.FC = () => {
     if (!id || !job) return;
     setSavingRetrainResult(true);
     try {
-      const response = await fetch(`http://localhost:8002/api/jobs/${id}/retrain-save`, {
+      const response = await fetch(`http://localhost:8000/api/jobs/${id}/retrain-save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -341,7 +341,7 @@ const JobDetails: React.FC = () => {
 
   const handlePause = async () => {
     try {
-      await fetch(`http://localhost:8002/api/jobs/${id}/pause`, { method: 'POST' });
+      await fetch(`http://localhost:8000/api/jobs/${id}/pause`, { method: 'POST' });
       fetchJob();
     } catch (err) {
       console.error('Failed to pause job:', err);
@@ -350,7 +350,7 @@ const JobDetails: React.FC = () => {
 
   const handleResume = async () => {
     try {
-      await fetch(`http://localhost:8002/api/jobs/${id}/resume`, { method: 'POST' });
+      await fetch(`http://localhost:8000/api/jobs/${id}/resume`, { method: 'POST' });
       fetchJob();
     } catch (err) {
       console.error('Failed to resume job:', err);
@@ -360,7 +360,7 @@ const JobDetails: React.FC = () => {
   const handleCancel = async () => {
     if (!confirm('Are you sure you want to cancel this job?')) return;
     try {
-      await fetch(`http://localhost:8002/api/jobs/${id}/cancel`, { method: 'POST' });
+      await fetch(`http://localhost:8000/api/jobs/${id}/cancel`, { method: 'POST' });
       fetchJob();
     } catch (err) {
       console.error('Failed to cancel job:', err);

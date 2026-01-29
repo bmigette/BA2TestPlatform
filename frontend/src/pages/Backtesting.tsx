@@ -129,7 +129,7 @@ interface SavedStrategy {
   updatedAt: string;
 }
 
-const API_BASE = 'http://localhost:8002/api';
+const API_BASE = 'http://localhost:8000/api';
 
 const defaultStrategyConfig: StrategyConfig = {
   entryThreshold: 0.6,
