@@ -439,8 +439,60 @@ const DatasetDetails: React.FC = () => {
           });
 
           if (response.ok) {
-            const data = await response.json();
-            setIndicatorData(data);
+            const rawData = await response.json();
+            // Transform flat data to structured format expected by TradingChart
+            // Backend returns keys with params: { data: [{date, rsi_14, sar_0.02_0.2, zigzag_5.0, macd_12_26_9, ...}, ...] }
+            // Frontend expects: { rsi: [{date, value}], sar: [{date, value}], macd: [{date, macd, signal, histogram}], zigzag: [{date, value}] }
+            const transformed: IndicatorData = {};
+
+            if (rawData.data && rawData.data.length > 0) {
+              const firstRow = rawData.data[0];
+              const keys = Object.keys(firstRow);
+
+              // Find keys by prefix (e.g., rsi_14 -> rsi)
+              const rsiKey = keys.find(k => k.startsWith('rsi_'));
+              const sarKey = keys.find(k => k.startsWith('sar_'));
+              const zigzagKey = keys.find(k => k.startsWith('zigzag_'));
+              const macdKey = keys.find(k => k.startsWith('macd_') && !k.includes('signal') && !k.includes('hist'));
+              const signalKey = keys.find(k => k.startsWith('macd_signal_'));
+              const histKey = keys.find(k => k.startsWith('macd_hist_'));
+
+              // RSI
+              if (rsiKey) {
+                transformed.rsi = rawData.data.map((d: Record<string, unknown>) => ({
+                  date: d.date as string,
+                  value: d[rsiKey] as number | null,
+                }));
+              }
+
+              // SAR
+              if (sarKey) {
+                transformed.sar = rawData.data.map((d: Record<string, unknown>) => ({
+                  date: d.date as string,
+                  value: d[sarKey] as number | null,
+                }));
+              }
+
+              // ZigZag
+              if (zigzagKey) {
+                transformed.zigzag = rawData.data.map((d: Record<string, unknown>) => ({
+                  date: d.date as string,
+                  value: d[zigzagKey] as number | null,
+                }));
+              }
+
+              // MACD (has 3 values)
+              if (macdKey || signalKey || histKey) {
+                transformed.macd = rawData.data.map((d: Record<string, unknown>) => ({
+                  date: d.date as string,
+                  macd: macdKey ? d[macdKey] as number | null : null,
+                  signal: signalKey ? d[signalKey] as number | null : null,
+                  histogram: histKey ? d[histKey] as number | null : null,
+                }));
+              }
+            }
+
+            setIndicatorData(transformed);
           }
         }
       } catch (error) {

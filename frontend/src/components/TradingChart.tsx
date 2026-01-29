@@ -233,23 +233,25 @@ const TradingChart: React.FC<TradingChartProps> = ({
     }));
     candlestickSeries.setData(candlestickData);
 
-    // Add markers for calculated targets
+    // Add markers for calculated targets - only at TRANSITION points (when value changes)
     const markers: SeriesMarker<Time>[] = [];
     calculatedTargets.forEach((target) => {
       if (!target.visible || !target.data || target.data.length === 0) return;
 
-      target.data.forEach((point) => {
-        if (point.value === null || point.value === undefined) return;
+      const config = target.config;
 
-        const time = toTime(point.date);
-        const config = target.config;
+      // For binary classification, only show markers at transitions (0→1)
+      if (config.category === 'binary_classification') {
+        const direction = (config as { direction?: string }).direction;
+        const isUp = direction === 'up' || direction === 'bullish';
 
-        // Determine marker based on target type and value
-        if (config.category === 'binary_classification') {
-          if (point.value === 1) {
-            // Positive hit - arrow above
-            const direction = (config as { direction?: string }).direction;
-            const isUp = direction === 'up' || direction === 'bullish';
+        target.data.forEach((point, idx) => {
+          if (point.value === null || point.value === undefined) return;
+
+          // Only show marker when transitioning FROM 0 to 1
+          const prevValue = idx > 0 ? target.data[idx - 1].value : 0;
+          if (point.value === 1 && prevValue !== 1) {
+            const time = toTime(point.date);
             markers.push({
               time,
               position: isUp ? 'aboveBar' : 'belowBar',
@@ -258,8 +260,16 @@ const TradingChart: React.FC<TradingChartProps> = ({
               text: '',
             });
           }
-        } else if (config.category === 'multiclass_classification') {
-          // Triple barrier: 0=stop, 1=profit, 2=timeout
+        });
+      } else if (config.category === 'multiclass_classification') {
+        // Triple barrier: 0=stop, 1=profit, 2=timeout - show transitions
+        target.data.forEach((point, idx) => {
+          if (point.value === null || point.value === undefined) return;
+
+          const prevValue = idx > 0 ? target.data[idx - 1].value : null;
+          if (prevValue === point.value) return; // Skip if same as previous
+
+          const time = toTime(point.date);
           if (point.value === 1) {
             markers.push({
               time,
@@ -285,9 +295,9 @@ const TradingChart: React.FC<TradingChartProps> = ({
               text: '',
             });
           }
-        }
-        // Regression targets don't show markers
-      });
+        });
+      }
+      // Regression targets don't show markers
     });
 
     // Add trend markers if showTrends is enabled
@@ -513,13 +523,14 @@ const TradingChart: React.FC<TradingChartProps> = ({
       bollingerLower.setData(bollinger.lower);
     }
 
-    // SAR overlay (on price chart) - use transparent line with visible markers
+    // SAR overlay (on price chart) - visible dots
     if (indicatorData?.sar && indicatorData.sar.length > 0) {
       const sarSeries = chart.addSeries(LineSeries, {
-        color: '#F59E0B00', // Transparent line
+        color: '#F59E0B', // Yellow/amber color for SAR dots
         lineWidth: 1,
+        lineVisible: false, // No line connecting dots
         pointMarkersVisible: true,
-        pointMarkersRadius: 3,
+        pointMarkersRadius: 4, // Larger dots for visibility
         lastValueVisible: false,
         priceLineVisible: false,
       });
@@ -532,21 +543,25 @@ const TradingChart: React.FC<TradingChartProps> = ({
       sarSeries.setData(sarData);
     }
 
-    // ZigZag overlay (on price chart)
+    // ZigZag overlay (on price chart) - connects pivot points
     if (indicatorData?.zigzag && indicatorData.zigzag.length > 0) {
       const zigzagSeries = chart.addSeries(LineSeries, {
-        color: '#EC4899',
+        color: '#EC4899', // Pink/magenta for visibility
         lineWidth: 2,
         lastValueVisible: false,
         priceLineVisible: false,
+        crosshairMarkerVisible: false,
       });
+      // ZigZag only has values at pivot points (nulls between), so filter to non-null values
       const zigzagData: LineData[] = indicatorData.zigzag
         .filter(d => d.value !== null)
         .map(d => ({
           time: toTime(d.date),
           value: d.value as number,
         }));
-      zigzagSeries.setData(zigzagData);
+      if (zigzagData.length > 0) {
+        zigzagSeries.setData(zigzagData);
+      }
     }
 
     // RSI pane (separate scale) - above MACD
