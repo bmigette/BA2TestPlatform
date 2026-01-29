@@ -482,12 +482,16 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
 
                 metrics = {}
                 params = {}
+                generation = None
+                individual = None
                 if meta_files:
                     try:
                         with open(meta_files[0], 'r') as f:
                             meta = json.load(f)
                             metrics = meta.get('metrics', {})
                             params = meta.get('params', {})
+                            generation = meta.get('generation')
+                            individual = meta.get('individual')
                     except Exception:
                         pass
 
@@ -498,7 +502,9 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                     'file_path': str(model_file),
                     'file_name': model_file.name,
                     'metrics': metrics,
-                    'params': params
+                    'params': params,
+                    'generation': generation,
+                    'individual': individual
                 })
 
         return sorted(elite_models, key=lambda x: x['rank'])

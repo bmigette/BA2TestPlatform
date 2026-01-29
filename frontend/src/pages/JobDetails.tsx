@@ -121,6 +121,8 @@ interface EliteModel {
   file_name: string;
   metrics: Record<string, number>;
   params: Record<string, number | string>;
+  generation?: number;
+  individual?: number;
 }
 
 const MODEL_COLORS: Record<string, string> = {
@@ -1065,6 +1067,11 @@ const JobDetails: React.FC = () => {
                       <span className="text-gray-500">Fitness:</span>{' '}
                       <span className="font-bold text-green-600">{model.fitness.toFixed(4)}</span>
                     </span>
+                    {model.generation !== undefined && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                        Gen {model.generation}
+                      </span>
+                    )}
                     {/* Key metrics */}
                     <div className="flex items-center space-x-2 text-xs text-gray-500">
                       {model.metrics.f1_score !== undefined && (

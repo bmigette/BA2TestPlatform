@@ -163,7 +163,7 @@ const ModelDetails: React.FC = () => {
       if (res.ok) {
         const job = await res.json();
         setShowRetrainDialog(false);
-        navigate(`/job/${job.id}`);
+        navigate(`/training/${job.id}`);
       } else {
         const error = await res.json();
         alert(`Retrain failed: ${error.detail || 'Unknown error'}`);
@@ -551,7 +551,7 @@ const ModelDetails: React.FC = () => {
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">Job ID</span>
                 <button
-                  onClick={() => navigate(`/job/${model.jobId}`)}
+                  onClick={() => navigate(`/training/${model.jobId}`)}
                   className="text-sm font-mono text-blue-600 hover:text-blue-800 hover:underline"
                 >
                   {model.jobId}

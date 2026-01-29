@@ -1475,7 +1475,7 @@ async def save_elite_to_inventory(
         "filePath": elite_model['file_path'],
         "fileSize": None,
         "generations": job.get('totalGenerations', 50),
-        "bestGeneration": job.get('currentGeneration', job.get('totalGenerations', 50)),
+        "bestGeneration": elite_model.get('generation', job.get('currentGeneration', job.get('totalGenerations', 50))),
         "fitness": elite_model['fitness'],
         # Additional fields for new requirements
         "confusionMatrix": metrics.get('confusion_matrix'),
