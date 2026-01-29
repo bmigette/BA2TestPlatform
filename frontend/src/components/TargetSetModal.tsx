@@ -41,7 +41,7 @@ const TargetSetModal: React.FC<TargetSetModalProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/target-sets');
+      const response = await fetch('http://localhost:8002/api/target-sets');
       if (!response.ok) throw new Error('Failed to fetch target sets');
       const data = await response.json();
       setTargetSets(data.target_sets || []);
@@ -61,7 +61,7 @@ const TargetSetModal: React.FC<TargetSetModalProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/target-sets', {
+      const response = await fetch('http://localhost:8002/api/target-sets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -93,7 +93,7 @@ const TargetSetModal: React.FC<TargetSetModalProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/target-sets/${id}`, {
+      const response = await fetch(`http://localhost:8002/api/target-sets/${id}`, {
         method: 'DELETE',
       });
 

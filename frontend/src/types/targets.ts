@@ -44,7 +44,7 @@ export interface TripleBarrierTarget extends BaseTargetConfig {
 export interface TrendReversalTarget extends BaseTargetConfig {
   type: 'trend_reversal';
   category: 'binary_classification';
-  indicator: 'rsi' | 'macd' | 'sar' | 'zigzag';
+  indicator: 'rsi' | 'macd' | 'sar' | 'zigzag' | 'donchian' | 'adx' | 'stochastic';
   indicatorParams: IndicatorParams;
   threshold: number;
   direction: 'bullish' | 'bearish';
@@ -86,11 +86,24 @@ export interface ZigZagParams {
   deviationPct: number;
 }
 
-export type IndicatorParams = RSIParams | MACDParams | SARParams | ZigZagParams;
+export interface DonchianParams {
+  period: number;
+}
+
+export interface ADXParams {
+  period: number;
+}
+
+export interface StochasticParams {
+  kPeriod: number;
+  dPeriod: number;
+}
+
+export type IndicatorParams = RSIParams | MACDParams | SARParams | ZigZagParams | DonchianParams | ADXParams | StochasticParams;
 
 // Indicator configuration for API
 export interface IndicatorConfig {
-  type: 'rsi' | 'macd' | 'sar' | 'zigzag';
+  type: 'rsi' | 'macd' | 'sar' | 'zigzag' | 'donchian' | 'adx' | 'stochastic' | 'atr' | 'pivot_points' | 'obv';
   period?: number;
   fast?: number;
   slow?: number;
@@ -98,6 +111,9 @@ export interface IndicatorConfig {
   af_start?: number;
   af_max?: number;
   deviation_pct?: number;
+  k_period?: number;
+  d_period?: number;
+  method?: string;
 }
 
 // Calculated target with data and stats
@@ -202,6 +218,9 @@ export const DEFAULT_INDICATOR_PARAMS = {
   macd: { fast: 12, slow: 26, signal: 9 },
   sar: { afStart: 0.02, afMax: 0.2 },
   zigzag: { deviationPct: 5.0 },
+  donchian: { period: 20 },
+  adx: { period: 14 },
+  stochastic: { kPeriod: 14, dPeriod: 3 },
 } as const;
 
 // Metric options by category

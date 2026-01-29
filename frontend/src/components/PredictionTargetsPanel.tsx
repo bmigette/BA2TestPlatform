@@ -217,7 +217,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
 
     setIsCalculating(true);
     try {
-      const response = await fetch(`/api/datasets/${datasetId}/calculate-targets`, {
+      const response = await fetch(`http://localhost:8002/api/datasets/${datasetId}/calculate-targets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -315,6 +315,309 @@ class IndicatorService:
 
         return pd.Series(zigzag_interp, index=df.index, name=f'zigzag_{deviation_pct}')
 
+    def calculate_donchian(
+        self,
+        df: pd.DataFrame,
+        period: int = 20
+    ) -> Dict[str, pd.Series]:
+        """
+        Calculate Donchian Channels.
+
+        Donchian channels show the highest high and lowest low over a period,
+        useful for breakout/trend reversal detection.
+
+        Args:
+            df: DataFrame with 'High' and 'Low' columns
+            period: Lookback period (default 20)
+
+        Returns:
+            Dict with 'upper', 'lower', 'middle' Series
+        """
+        if 'High' not in df.columns or 'Low' not in df.columns:
+            raise ValueError("DataFrame must have 'High' and 'Low' columns")
+
+        # Upper channel = highest high over period
+        upper = df['High'].rolling(window=period).max()
+
+        # Lower channel = lowest low over period
+        lower = df['Low'].rolling(window=period).min()
+
+        # Middle = average of upper and lower
+        middle = (upper + lower) / 2
+
+        return {
+            'upper': pd.Series(upper.values, index=df.index, name=f'donchian_upper_{period}'),
+            'lower': pd.Series(lower.values, index=df.index, name=f'donchian_lower_{period}'),
+            'middle': pd.Series(middle.values, index=df.index, name=f'donchian_middle_{period}')
+        }
+
+    def calculate_donchian_breakout(
+        self,
+        df: pd.DataFrame,
+        period: int = 20,
+        direction: str = 'both'
+    ) -> pd.Series:
+        """
+        Detect Donchian channel breakouts for trend reversal signals.
+
+        Args:
+            df: DataFrame with OHLC columns
+            period: Lookback period (default 20)
+            direction: 'up', 'down', or 'both'
+
+        Returns:
+            Series with values:
+                1 = bullish breakout (close above upper channel)
+               -1 = bearish breakout (close below lower channel)
+                0 = no breakout
+        """
+        if 'Close' not in df.columns:
+            raise ValueError("DataFrame must have 'Close' column")
+
+        donchian = self.calculate_donchian(df, period)
+
+        # Shift channels by 1 to compare current close to prior channel
+        upper_prev = donchian['upper'].shift(1)
+        lower_prev = donchian['lower'].shift(1)
+
+        result = pd.Series(0, index=df.index, name=f'donchian_breakout_{period}')
+
+        if direction in ('up', 'both'):
+            # Bullish breakout: close > previous upper channel
+            result = result.where(~(df['Close'] > upper_prev), 1)
+
+        if direction in ('down', 'both'):
+            # Bearish breakout: close < previous lower channel
+            result = result.where(~(df['Close'] < lower_prev), -1)
+
+        return result
+
+    def calculate_adx(
+        self,
+        df: pd.DataFrame,
+        period: int = 14
+    ) -> Dict[str, pd.Series]:
+        """
+        Calculate Average Directional Index (ADX).
+
+        ADX measures trend strength (not direction). Values > 25 indicate
+        a strong trend, < 20 indicates a weak trend or ranging market.
+
+        Args:
+            df: DataFrame with 'High', 'Low', 'Close' columns
+            period: ADX period (default 14)
+
+        Returns:
+            Dict with 'adx', 'plus_di', 'minus_di' Series
+        """
+        if not all(col in df.columns for col in ['High', 'Low', 'Close']):
+            raise ValueError("DataFrame must have 'High', 'Low', 'Close' columns")
+
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+
+        # True Range
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        # Directional Movement
+        plus_dm = high.diff()
+        minus_dm = -low.diff()
+
+        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+
+        # Smoothed averages (Wilder's smoothing)
+        atr = tr.ewm(alpha=1/period, adjust=False).mean()
+        plus_dm_smooth = plus_dm.ewm(alpha=1/period, adjust=False).mean()
+        minus_dm_smooth = minus_dm.ewm(alpha=1/period, adjust=False).mean()
+
+        # Directional Indicators
+        plus_di = 100 * plus_dm_smooth / atr
+        minus_di = 100 * minus_dm_smooth / atr
+
+        # DX and ADX
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.ewm(alpha=1/period, adjust=False).mean()
+
+        return {
+            'adx': pd.Series(adx.values, index=df.index, name=f'adx_{period}'),
+            'plus_di': pd.Series(plus_di.values, index=df.index, name=f'plus_di_{period}'),
+            'minus_di': pd.Series(minus_di.values, index=df.index, name=f'minus_di_{period}')
+        }
+
+    def calculate_atr(
+        self,
+        df: pd.DataFrame,
+        period: int = 14
+    ) -> pd.Series:
+        """
+        Calculate Average True Range (ATR).
+
+        ATR measures volatility, useful for setting stop-losses and
+        detecting volatility expansions/contractions.
+
+        Args:
+            df: DataFrame with 'High', 'Low', 'Close' columns
+            period: ATR period (default 14)
+
+        Returns:
+            Series with ATR values
+        """
+        if not all(col in df.columns for col in ['High', 'Low', 'Close']):
+            raise ValueError("DataFrame must have 'High', 'Low', 'Close' columns")
+
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        atr = tr.ewm(alpha=1/period, adjust=False).mean()
+
+        return pd.Series(atr.values, index=df.index, name=f'atr_{period}')
+
+    def calculate_pivot_points(
+        self,
+        df: pd.DataFrame,
+        method: str = 'standard'
+    ) -> Dict[str, pd.Series]:
+        """
+        Calculate Pivot Points for support/resistance levels.
+
+        Args:
+            df: DataFrame with 'High', 'Low', 'Close' columns
+            method: 'standard', 'fibonacci', 'camarilla', or 'woodie'
+
+        Returns:
+            Dict with 'pivot', 'r1', 'r2', 'r3', 's1', 's2', 's3' Series
+        """
+        if not all(col in df.columns for col in ['High', 'Low', 'Close']):
+            raise ValueError("DataFrame must have 'High', 'Low', 'Close' columns")
+
+        # Use previous day's values (shift by 1)
+        high = df['High'].shift(1)
+        low = df['Low'].shift(1)
+        close = df['Close'].shift(1)
+
+        if method == 'standard':
+            pivot = (high + low + close) / 3
+            r1 = 2 * pivot - low
+            s1 = 2 * pivot - high
+            r2 = pivot + (high - low)
+            s2 = pivot - (high - low)
+            r3 = high + 2 * (pivot - low)
+            s3 = low - 2 * (high - pivot)
+
+        elif method == 'fibonacci':
+            pivot = (high + low + close) / 3
+            diff = high - low
+            r1 = pivot + 0.382 * diff
+            r2 = pivot + 0.618 * diff
+            r3 = pivot + 1.0 * diff
+            s1 = pivot - 0.382 * diff
+            s2 = pivot - 0.618 * diff
+            s3 = pivot - 1.0 * diff
+
+        elif method == 'camarilla':
+            pivot = (high + low + close) / 3
+            diff = high - low
+            r1 = close + diff * 1.1 / 12
+            r2 = close + diff * 1.1 / 6
+            r3 = close + diff * 1.1 / 4
+            s1 = close - diff * 1.1 / 12
+            s2 = close - diff * 1.1 / 6
+            s3 = close - diff * 1.1 / 4
+
+        elif method == 'woodie':
+            pivot = (high + low + 2 * close) / 4
+            r1 = 2 * pivot - low
+            s1 = 2 * pivot - high
+            r2 = pivot + (high - low)
+            s2 = pivot - (high - low)
+            r3 = high + 2 * (pivot - low)
+            s3 = low - 2 * (high - pivot)
+
+        else:
+            raise ValueError(f"Unknown pivot method: {method}")
+
+        return {
+            'pivot': pd.Series(pivot.values, index=df.index, name=f'pivot_{method}'),
+            'r1': pd.Series(r1.values, index=df.index, name=f'r1_{method}'),
+            'r2': pd.Series(r2.values, index=df.index, name=f'r2_{method}'),
+            'r3': pd.Series(r3.values, index=df.index, name=f'r3_{method}'),
+            's1': pd.Series(s1.values, index=df.index, name=f's1_{method}'),
+            's2': pd.Series(s2.values, index=df.index, name=f's2_{method}'),
+            's3': pd.Series(s3.values, index=df.index, name=f's3_{method}')
+        }
+
+    def calculate_stochastic(
+        self,
+        df: pd.DataFrame,
+        k_period: int = 14,
+        d_period: int = 3
+    ) -> Dict[str, pd.Series]:
+        """
+        Calculate Stochastic Oscillator.
+
+        Shows where the close is relative to the high-low range.
+        Overbought > 80, Oversold < 20.
+
+        Args:
+            df: DataFrame with 'High', 'Low', 'Close' columns
+            k_period: %K period (default 14)
+            d_period: %D smoothing period (default 3)
+
+        Returns:
+            Dict with 'k', 'd' Series
+        """
+        if not all(col in df.columns for col in ['High', 'Low', 'Close']):
+            raise ValueError("DataFrame must have 'High', 'Low', 'Close' columns")
+
+        low_min = df['Low'].rolling(window=k_period).min()
+        high_max = df['High'].rolling(window=k_period).max()
+
+        k = 100 * (df['Close'] - low_min) / (high_max - low_min)
+        d = k.rolling(window=d_period).mean()
+
+        return {
+            'k': pd.Series(k.values, index=df.index, name=f'stoch_k_{k_period}'),
+            'd': pd.Series(d.values, index=df.index, name=f'stoch_d_{k_period}_{d_period}')
+        }
+
+    def calculate_obv(
+        self,
+        df: pd.DataFrame
+    ) -> pd.Series:
+        """
+        Calculate On-Balance Volume (OBV).
+
+        OBV uses volume flow to predict price changes.
+
+        Args:
+            df: DataFrame with 'Close', 'Volume' columns
+
+        Returns:
+            Series with OBV values
+        """
+        if 'Close' not in df.columns or 'Volume' not in df.columns:
+            raise ValueError("DataFrame must have 'Close' and 'Volume' columns")
+
+        close_diff = df['Close'].diff()
+        volume = df['Volume']
+
+        obv = pd.Series(0.0, index=df.index)
+        obv = obv.where(close_diff == 0, volume.where(close_diff > 0, -volume))
+        obv = obv.cumsum()
+
+        return pd.Series(obv.values, index=df.index, name='obv')
+
     def calculate_indicators(
         self,
         df: pd.DataFrame,
@@ -361,6 +664,45 @@ class IndicatorService:
                 elif ind_type == 'zigzag':
                     deviation_pct = ind.get('deviation_pct', 5.0)
                     results[f'zigzag_{deviation_pct}'] = self.calculate_zigzag(df, deviation_pct)
+
+                elif ind_type == 'donchian':
+                    period = ind.get('period', 20)
+                    donchian_data = self.calculate_donchian(df, period)
+                    results[f'donchian_upper_{period}'] = donchian_data['upper']
+                    results[f'donchian_lower_{period}'] = donchian_data['lower']
+                    results[f'donchian_middle_{period}'] = donchian_data['middle']
+
+                elif ind_type == 'donchian_breakout':
+                    period = ind.get('period', 20)
+                    direction = ind.get('direction', 'both')
+                    results[f'donchian_breakout_{period}'] = self.calculate_donchian_breakout(df, period, direction)
+
+                elif ind_type == 'adx':
+                    period = ind.get('period', 14)
+                    adx_data = self.calculate_adx(df, period)
+                    results[f'adx_{period}'] = adx_data['adx']
+                    results[f'plus_di_{period}'] = adx_data['plus_di']
+                    results[f'minus_di_{period}'] = adx_data['minus_di']
+
+                elif ind_type == 'atr':
+                    period = ind.get('period', 14)
+                    results[f'atr_{period}'] = self.calculate_atr(df, period)
+
+                elif ind_type == 'pivot_points':
+                    method = ind.get('method', 'standard')
+                    pivot_data = self.calculate_pivot_points(df, method)
+                    for key, series in pivot_data.items():
+                        results[f'{key}_{method}'] = series
+
+                elif ind_type == 'stochastic':
+                    k_period = ind.get('k_period', 14)
+                    d_period = ind.get('d_period', 3)
+                    stoch_data = self.calculate_stochastic(df, k_period, d_period)
+                    results[f'stoch_k_{k_period}'] = stoch_data['k']
+                    results[f'stoch_d_{k_period}_{d_period}'] = stoch_data['d']
+
+                elif ind_type == 'obv':
+                    results['obv'] = self.calculate_obv(df)
 
                 else:
                     logger.warning(f"Unknown indicator type: {ind_type}")

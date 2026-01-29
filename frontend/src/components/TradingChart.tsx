@@ -76,6 +76,8 @@ export interface TradingChartProps {
 const TradingChart: React.FC<TradingChartProps> = ({
   data,
   indicators,
+  newsFrequencyByDate = [],
+  trendData = [],
   calculatedTargets = [],
   indicatorData,
   height = 500,
@@ -186,6 +188,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
       borderDownColor: '#EF4444',
       wickUpColor: '#10B981',
       wickDownColor: '#EF4444',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     candlestickSeriesRef.current = candlestickSeries as unknown as ISeriesApi<'Candlestick'>;
 
@@ -256,10 +260,71 @@ const TradingChart: React.FC<TradingChartProps> = ({
       });
     });
 
+    // Add trend markers if showTrends is enabled
+    if (indicators.showTrends && trendData.length > 0) {
+      trendData.forEach((point, index) => {
+        // Only show markers at trend changes
+        const prevTrend = index > 0 ? trendData[index - 1].trend : null;
+        if (point.trend !== prevTrend) {
+          const time = toTime(point.date);
+          if (point.trend === 'uptrend') {
+            markers.push({
+              time,
+              position: 'belowBar',
+              color: '#22C55E',
+              shape: 'arrowUp',
+              text: 'Up',
+            });
+          } else if (point.trend === 'downtrend') {
+            markers.push({
+              time,
+              position: 'aboveBar',
+              color: '#EF4444',
+              shape: 'arrowDown',
+              text: 'Down',
+            });
+          } else if (point.trend === 'sideways') {
+            markers.push({
+              time,
+              position: 'inBar',
+              color: '#F59E0B',
+              shape: 'circle',
+              text: 'Side',
+            });
+          }
+        }
+      });
+    }
+
     // Sort markers by time and set them on the candlestick series
     if (markers.length > 0) {
       markers.sort((a, b) => (a.time as number) - (b.time as number));
       createSeriesMarkers(candlestickSeries, markers);
+    }
+
+    // News sentiment histogram
+    if (indicators.showSentiment && newsFrequencyByDate.length > 0) {
+      const sentimentSeries = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'sentiment',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      chart.priceScale('sentiment').applyOptions({
+        scaleMargins: { top: 0.9, bottom: 0 },
+      });
+
+      const sentimentData: HistogramData[] = newsFrequencyByDate.map((d) => {
+        const color = d.dominantSentiment === 'positive' ? '#22C55E80' :
+                      d.dominantSentiment === 'negative' ? '#EF444480' :
+                      '#6B728080';
+        return {
+          time: toTime(d.date),
+          value: d.count,
+          color,
+        };
+      });
+      sentimentSeries.setData(sentimentData);
     }
 
     // Volume series
@@ -268,6 +333,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
         color: '#6366F1',
         priceFormat: { type: 'volume' },
         priceScaleId: 'volume',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       chart.priceScale('volume').applyOptions({
         scaleMargins: { top: 0.8, bottom: 0 },
@@ -285,7 +352,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
       const sma20Series = chart.addSeries(LineSeries, {
         color: '#3B82F6',
         lineWidth: 1,
-        title: 'SMA 20',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       sma20Series.setData(calculateSMA(data, 20));
     }
@@ -295,7 +363,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
       const sma50Series = chart.addSeries(LineSeries, {
         color: '#F97316',
         lineWidth: 1,
-        title: 'SMA 50',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       sma50Series.setData(calculateSMA(data, 50));
     }
@@ -308,12 +377,16 @@ const TradingChart: React.FC<TradingChartProps> = ({
         color: '#8B5CF6',
         lineWidth: 1,
         lineStyle: 2,
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       bollingerUpper.setData(bollinger.upper);
 
       const bollingerMiddle = chart.addSeries(LineSeries, {
         color: '#8B5CF6',
         lineWidth: 1,
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       bollingerMiddle.setData(bollinger.middle);
 
@@ -321,6 +394,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
         color: '#8B5CF6',
         lineWidth: 1,
         lineStyle: 2,
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       bollingerLower.setData(bollinger.lower);
     }
@@ -332,7 +407,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 1,
         pointMarkersVisible: true,
         pointMarkersRadius: 3,
-        title: 'SAR',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       const sarData: LineData[] = indicatorData.sar
         .filter(d => d.value !== null)
@@ -348,7 +424,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
       const zigzagSeries = chart.addSeries(LineSeries, {
         color: '#EC4899',
         lineWidth: 2,
-        title: 'ZigZag',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       const zigzagData: LineData[] = indicatorData.zigzag
         .filter(d => d.value !== null)
@@ -364,8 +441,9 @@ const TradingChart: React.FC<TradingChartProps> = ({
       const rsiSeries = chart.addSeries(LineSeries, {
         color: '#8B5CF6',
         lineWidth: 1,
-        title: 'RSI',
         priceScaleId: 'rsi',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       chart.priceScale('rsi').applyOptions({
         scaleMargins: { top: 0.85, bottom: 0 },
@@ -385,12 +463,16 @@ const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 1,
         lineStyle: 2,
         priceScaleId: 'rsi',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       const rsiLowerSeries = chart.addSeries(LineSeries, {
         color: '#10B98180',
         lineWidth: 1,
         lineStyle: 2,
         priceScaleId: 'rsi',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       // Create constant lines at 70 and 30
       const rsiDates = indicatorData.rsi.filter(d => d.value !== null);
@@ -412,6 +494,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
       const macdHistSeries = chart.addSeries(HistogramSeries, {
         color: '#6366F1',
         priceScaleId: 'macd',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       chart.priceScale('macd').applyOptions({
         scaleMargins: { top: 0.92, bottom: 0 },
@@ -431,7 +515,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
         color: '#3B82F6',
         lineWidth: 1,
         priceScaleId: 'macd',
-        title: 'MACD',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       const macdLineData: LineData[] = indicatorData.macd
         .filter(d => d.macd !== null)
@@ -447,7 +532,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
         lineWidth: 1,
         lineStyle: 2,
         priceScaleId: 'macd',
-        title: 'Signal',
+        lastValueVisible: false,
+        priceLineVisible: false,
       });
       const signalLineData: LineData[] = indicatorData.macd
         .filter(d => d.signal !== null)
@@ -480,7 +566,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       console.error('TradingChart error:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [data, indicators, height, toTime, calculateSMA, calculateBollinger, calculatedTargets, indicatorData]);
+  }, [data, indicators, height, toTime, calculateSMA, calculateBollinger, newsFrequencyByDate, trendData, calculatedTargets, indicatorData]);
 
   if (error) {
     return (
