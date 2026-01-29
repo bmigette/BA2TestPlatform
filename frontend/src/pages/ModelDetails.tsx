@@ -20,7 +20,7 @@ import {
   X,
   Database
 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ScatterChart, Scatter, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 interface HyperParameters {
   layers: number;
@@ -79,13 +79,6 @@ interface Model {
   fitness: number;
 }
 
-interface Prediction {
-  index: number;
-  actual: number;
-  predicted: number;
-  error: number;
-}
-
 interface ConfusionMatrix {
   labels: string[];
   matrix: number[][];
@@ -104,11 +97,10 @@ const ModelDetails: React.FC = () => {
   const navigate = useNavigate();
 
   const [model, setModel] = useState<Model | null>(null);
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [confusionMatrix, setConfusionMatrix] = useState<ConfusionMatrix | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'training' | 'predictions' | 'confusion'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'training' | 'confusion'>('overview');
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showRetrainDialog, setShowRetrainDialog] = useState(false);
@@ -193,13 +185,6 @@ const ModelDetails: React.FC = () => {
       if (!modelRes.ok) throw new Error('Model not found');
       const modelData = await modelRes.json();
       setModel(modelData);
-
-      // Fetch predictions
-      const predRes = await fetch(`${API_BASE}/models/${id}/predictions?limit=50`);
-      if (predRes.ok) {
-        const predData = await predRes.json();
-        setPredictions(predData.predictions || []);
-      }
 
       // Fetch confusion matrix
       const cmRes = await fetch(`${API_BASE}/models/${id}/confusion-matrix`);
@@ -377,7 +362,6 @@ const ModelDetails: React.FC = () => {
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'training', label: 'Training History', icon: TrendingUp },
-            { id: 'predictions', label: 'Predictions', icon: Target },
             { id: 'confusion', label: 'Confusion Matrix', icon: BarChart3 }
           ].map(tab => (
             <button
@@ -644,38 +628,6 @@ const ModelDetails: React.FC = () => {
                 <Line yAxisId="accuracy" type="monotone" dataKey="valAccuracy" stroke="#3b82f6" name="Val Accuracy" strokeDasharray="5 5" />
               </LineChart>
             </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'predictions' && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <h3 className="text-lg font-semibold mb-4">Prediction Visualization</h3>
-          <div className="h-96">
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="actual" name="Actual" label={{ value: 'Actual Value', position: 'bottom' }} />
-                <YAxis dataKey="predicted" name="Predicted" label={{ value: 'Predicted Value', angle: -90, position: 'left' }} />
-                <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                <Scatter data={predictions} fill="#8884d8">
-                  {predictions.map((entry, index) => (
-                    <Cell key={index} fill={entry.error < 3 ? '#22c55e' : entry.error < 5 ? '#f97316' : '#ef4444'} />
-                  ))}
-                </Scatter>
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="mt-4 flex justify-center gap-6 text-sm">
-            <span className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-green-500" /> Low error (&lt;3)
-            </span>
-            <span className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-orange-500" /> Medium error (3-5)
-            </span>
-            <span className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-red-500" /> High error (&gt;5)
-            </span>
           </div>
         </div>
       )}
