@@ -938,22 +938,28 @@ class PredictionTargetService:
             deviation_pct = indicator_params.get('deviation_pct', 5.0)
             zigzag = indicator_service.calculate_zigzag(df, deviation_pct)
 
-            # Find pivot points (where zigzag changes direction)
+            # The zigzag is interpolated, so we detect direction changes
+            # by looking at where the slope changes sign
+            # Bullish reversal: zigzag was going DOWN and starts going UP (low pivot)
+            # Bearish reversal: zigzag was going UP and starts going DOWN (high pivot)
+
             for i in range(2, n - 1):
-                if pd.isna(zigzag.iloc[i]):
+                if pd.isna(zigzag.iloc[i]) or pd.isna(zigzag.iloc[i-1]) or pd.isna(zigzag.iloc[i+1]):
                     continue
 
-                prev_val = zigzag.iloc[i-1]
-                curr_val = zigzag.iloc[i]
-                next_val = zigzag.iloc[i+1] if i+1 < n else curr_val
+                # Calculate slopes before and after current point
+                prev_slope = zigzag.iloc[i] - zigzag.iloc[i-1]
+                next_slope = zigzag.iloc[i+1] - zigzag.iloc[i]
 
                 if direction == 'bullish':
-                    # Bullish: Local low (zigzag turning up)
-                    if curr_val < prev_val and curr_val < next_val:
+                    # Bullish: Was going DOWN (prev_slope < 0), now going UP (next_slope > 0)
+                    # This is a LOW pivot point
+                    if prev_slope < 0 and next_slope > 0:
                         targets[i] = 1
                 else:
-                    # Bearish: Local high (zigzag turning down)
-                    if curr_val > prev_val and curr_val > next_val:
+                    # Bearish: Was going UP (prev_slope > 0), now going DOWN (next_slope < 0)
+                    # This is a HIGH pivot point
+                    if prev_slope > 0 and next_slope < 0:
                         targets[i] = 1
 
         col_name = f"reversal_{indicator}_{direction}"
