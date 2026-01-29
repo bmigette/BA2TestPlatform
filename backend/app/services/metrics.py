@@ -78,6 +78,12 @@ class ClassificationMetrics:
         mcc_denom = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
         mcc = mcc_num / mcc_denom if mcc_denom > 0 else 0.0
 
+        # Confusion matrix: [[TN, FP], [FN, TP]]
+        confusion_matrix = [
+            [int(tn), int(fp)],
+            [int(fn), int(tp)]
+        ]
+
         metrics = {
             'accuracy': float(accuracy),
             'precision': float(precision),
@@ -92,7 +98,8 @@ class ClassificationMetrics:
             'false_negatives': int(fn),
             'total_positives': int(positives),
             'total_negatives': int(negatives),
-            'threshold': float(threshold)
+            'threshold': float(threshold),
+            'confusion_matrix': confusion_matrix
         }
 
         # Add AUC-ROC if sklearn available and we have both classes

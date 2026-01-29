@@ -705,6 +705,12 @@ class ModelEvaluator:
         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
         balanced_accuracy = (recall + specificity) / 2
 
+        # Confusion matrix: [[TN, FP], [FN, TP]]
+        confusion_matrix = [
+            [int(tn), int(fp)],
+            [int(fn), int(tp)]
+        ]
+
         return {
             'accuracy': accuracy,
             'precision': precision,
@@ -714,7 +720,8 @@ class ModelEvaluator:
             'true_positives': int(tp),
             'true_negatives': int(tn),
             'false_positives': int(fp),
-            'false_negatives': int(fn)
+            'false_negatives': int(fn),
+            'confusion_matrix': confusion_matrix
         }
 
     @staticmethod
