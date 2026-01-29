@@ -179,6 +179,7 @@ async def startup_event():
     # Import all models before init_db to ensure tables are created
     from app.models.database import init_db
     from app.models.optimization_profile import OptimizationProfile  # noqa: F401
+    from app.models.model import TrainedModel  # noqa: F401
     init_db()
 
     # Initialize default indicator collections

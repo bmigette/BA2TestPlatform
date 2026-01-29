@@ -2,40 +2,80 @@
 Model model for storing trained model metadata
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Float, Text
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Float
 from sqlalchemy.sql import func
 from .database import Base
 
 
-class Model(Base):
-    """Trained Model model"""
+class TrainedModel(Base):
+    """Trained Model stored in database for persistence"""
 
-    __tablename__ = "models"
+    __tablename__ = "trained_models"
 
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("optimization_jobs.id"), nullable=False)
-    model_type = Column(String(100), nullable=False)  # LSTM, N-BEATS, RNN, etc.
+    model_id = Column(String(50), unique=True, index=True, nullable=False)  # e.g., "mdl-abc123"
+    name = Column(String(200), nullable=False)
+    model_type = Column(String(100), nullable=False)  # LSTM, N-BEATS, GRU, etc.
+    dataset_id = Column(Integer, nullable=True)
+    job_id = Column(String(100), nullable=True)  # Job ID string
+    status = Column(String(50), default="trained")  # trained, failed, exported
 
-    # Architecture and hyperparameters
-    architecture = Column(JSON, nullable=False)
-    hyperparameters = Column(JSON, nullable=False)
+    # Hyperparameters (JSON)
+    hyperparameters = Column(JSON, nullable=True)
 
-    # Training metrics
-    training_metrics = Column(JSON, nullable=True)
-    accuracy = Column(Float, nullable=True)
-    loss = Column(Float, nullable=True)
-    val_accuracy = Column(Float, nullable=True)
-    val_loss = Column(Float, nullable=True)
+    # Training history (JSON array)
+    training_history = Column(JSON, nullable=True)
 
-    # Prediction targets configuration
-    # Stores the full target configs used during training (type, params, order)
+    # Performance metrics (JSON)
+    performance_metrics = Column(JSON, nullable=True)
+
+    # Additional metrics
+    confusion_matrix = Column(JSON, nullable=True)
+    all_metrics = Column(JSON, nullable=True)
+
+    # Training configuration
+    training_date_range = Column(JSON, nullable=True)
     prediction_targets = Column(JSON, nullable=True)
+    prediction_horizon = Column(Integer, default=3)
 
-    # Model storage
-    file_path = Column(String(500), nullable=False)
+    # Generation info
+    generations = Column(Integer, default=50)
+    best_generation = Column(Integer, default=0)
+    fitness = Column(Float, default=0.0)
+
+    # File info
+    file_path = Column(String(500), nullable=True)
+    file_size = Column(Integer, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    trained_at = Column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self):
-        return f"<Model(id={self.id}, type='{self.model_type}', accuracy={self.accuracy})>"
+        return f"<TrainedModel(id={self.model_id}, name='{self.name}', type='{self.model_type}')>"
+
+    def to_dict(self):
+        """Convert to dictionary for API response"""
+        return {
+            "id": self.model_id,
+            "name": self.name,
+            "modelType": self.model_type,
+            "datasetId": self.dataset_id,
+            "jobId": self.job_id,
+            "status": self.status,
+            "hyperparameters": self.hyperparameters or {},
+            "trainingHistory": self.training_history or [],
+            "performanceMetrics": self.performance_metrics or {},
+            "confusionMatrix": self.confusion_matrix,
+            "allMetrics": self.all_metrics,
+            "trainingDateRange": self.training_date_range,
+            "predictionTargets": self.prediction_targets,
+            "predictionHorizon": self.prediction_horizon,
+            "generations": self.generations,
+            "bestGeneration": self.best_generation,
+            "fitness": self.fitness,
+            "filePath": self.file_path,
+            "fileSize": self.file_size,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+            "trainedAt": self.trained_at.isoformat() if self.trained_at else None,
+        }

@@ -1488,7 +1488,16 @@ async def save_elite_to_inventory(
         "predictionHorizon": job.get('predictionHorizon', 3)
     }
 
-    # Save to models_store
+    # Save to database
+    from app.models.database import SessionLocal
+    from app.api.models import save_model_to_db
+    db = SessionLocal()
+    try:
+        save_model_to_db(model_entry, db)
+    finally:
+        db.close()
+
+    # Also keep in memory for backward compatibility
     models_store[model_id] = model_entry
 
     logger.info(f"Saved elite model rank {rank} from job {job_id} as {model_id}")
@@ -1789,6 +1798,11 @@ async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
                 "retrainMode": job.get('retrainMode')
             }
 
+            # Save to database
+            from app.api.models import save_model_to_db
+            save_model_to_db(model_entry, db)
+
+            # Also keep in memory for backward compatibility
             models_store[model_id] = model_entry
 
             logger.info(f"Saved retrain results as new model {model_id}")

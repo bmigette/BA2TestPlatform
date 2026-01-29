@@ -2,32 +2,41 @@
 Models API endpoints.
 
 Manages trained ML models from optimization jobs.
+Now with database persistence.
 """
 
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 import uuid
-import random
+
+from app.models.database import get_db
+from app.models.model import TrainedModel
+from app.models.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory model store (would be replaced with database in production)
+# Keep in-memory store for backward compatibility during transition
+# Will be phased out as database is populated
 models_store: Dict[str, dict] = {}
 
 
 class HyperParameters(BaseModel):
-    layers: int
-    layerSize: int
-    learningRate: float
-    activationFunction: str
-    dropout: float
-    batchSize: int
-    epochs: int
+    layers: Optional[int] = None
+    layerSize: Optional[int] = None
+    learningRate: Optional[float] = None
+    activationFunction: Optional[str] = None
+    dropout: Optional[float] = None
+    batchSize: Optional[int] = None
+    epochs: Optional[int] = None
+
+    class Config:
+        extra = "allow"  # Allow extra fields from database
 
 
 class TrainingHistory(BaseModel):
@@ -39,41 +48,47 @@ class TrainingHistory(BaseModel):
 
 
 class PerformanceMetrics(BaseModel):
-    accuracy: float
-    precision: float
-    recall: float
-    f1Score: float
-    auc: float
+    accuracy: Optional[float] = 0
+    precision: Optional[float] = 0
+    recall: Optional[float] = 0
+    f1Score: Optional[float] = 0
+    auc: Optional[float] = 0
     sharpeRatio: Optional[float] = None
     maxDrawdown: Optional[float] = None
+
+    class Config:
+        extra = "allow"  # Allow extra fields
 
 
 class ModelResponse(BaseModel):
     id: str
     name: str
-    modelType: str  # LSTM, GRU, N-BEATS, Transformer, TCN, RNN
-    datasetId: int
-    datasetName: Optional[str] = None  # Dataset name for display
-    symbol: Optional[str] = None  # Trading symbol (e.g., AAPL)
-    timeframe: Optional[str] = None  # Timeframe (e.g., 1d, 1h)
-    trainPeriod: Optional[str] = None  # Training period (e.g., 2020-01-01 to 2023-12-31)
-    jobId: str
-    status: str  # trained, failed, exported
-    hyperparameters: HyperParameters
-    trainingHistory: List[TrainingHistory]
-    performanceMetrics: PerformanceMetrics
-    confusionMatrix: Optional[List[List[int]]] = None  # Confusion matrix data
-    allMetrics: Optional[Dict[str, Any]] = None  # All metrics from training
-    trainingDateRange: Optional[Dict[str, str]] = None  # Training date range used
-    predictionTargets: Optional[List[Dict[str, Any]]] = None  # Target configs used during training
-    predictionHorizon: Optional[int] = 3  # Number of bars ahead the model predicts
-    createdAt: str
+    modelType: str
+    datasetId: Optional[int] = None
+    datasetName: Optional[str] = None
+    symbol: Optional[str] = None
+    timeframe: Optional[str] = None
+    trainPeriod: Optional[str] = None
+    jobId: Optional[str] = None
+    status: Optional[str] = "trained"
+    hyperparameters: Optional[HyperParameters] = None
+    trainingHistory: Optional[List[TrainingHistory]] = []
+    performanceMetrics: Optional[PerformanceMetrics] = None
+    confusionMatrix: Optional[List[List[int]]] = None
+    allMetrics: Optional[Dict[str, Any]] = None
+    trainingDateRange: Optional[Dict[str, str]] = None
+    predictionTargets: Optional[List[Dict[str, Any]]] = None
+    predictionHorizon: Optional[int] = 3
+    createdAt: Optional[str] = None
     trainedAt: Optional[str] = None
     filePath: Optional[str] = None
-    fileSize: Optional[int] = None  # bytes
-    generations: int
-    bestGeneration: int
-    fitness: float
+    fileSize: Optional[int] = None
+    generations: Optional[int] = 0
+    bestGeneration: Optional[int] = 0
+    fitness: Optional[float] = 0
+
+    class Config:
+        extra = "allow"
 
 
 class ModelListResponse(BaseModel):
@@ -81,135 +96,117 @@ class ModelListResponse(BaseModel):
     total: int
 
 
-# Initialize with some sample models for demonstration
-def init_sample_models():
-    """Create sample models for demo purposes."""
-    if models_store:
-        return
+def db_model_to_dict(db_model: TrainedModel, dataset_info: dict = None) -> dict:
+    """Convert database model to API response dict"""
+    result = db_model.to_dict()
 
-    sample_models = [
-        {
-            "id": "mdl-001",
-            "name": "LSTM_AAPL_Predictor",
-            "modelType": "LSTM",
-            "datasetId": 1,
-            "jobId": "job-001",
-            "status": "trained",
-            "hyperparameters": {
-                "layers": 3,
-                "layerSize": 128,
-                "learningRate": 0.001,
-                "activationFunction": "relu",
-                "dropout": 0.2,
-                "batchSize": 32,
-                "epochs": 100
-            },
-            "trainingHistory": [
-                {"epoch": i, "loss": 2.5 * (0.95 ** i), "accuracy": 0.5 + 0.4 * (1 - 0.95 ** i),
-                 "valLoss": 2.6 * (0.95 ** i), "valAccuracy": 0.48 + 0.38 * (1 - 0.95 ** i)}
-                for i in range(1, 21)
-            ],
-            "performanceMetrics": {
-                "accuracy": 0.87,
-                "precision": 0.85,
-                "recall": 0.89,
-                "f1Score": 0.87,
-                "auc": 0.92,
-                "sharpeRatio": 1.45,
-                "maxDrawdown": 0.12
-            },
-            "createdAt": "2026-01-24T10:30:00",
-            "trainedAt": "2026-01-24T11:45:00",
-            "filePath": "trained_models/mdl-001.pt",
-            "fileSize": 15234567,
-            "generations": 50,
-            "bestGeneration": 42,
-            "fitness": 87.5
-        },
-        {
-            "id": "mdl-002",
-            "name": "NBEATS_MSFT_Forecast",
-            "modelType": "N-BEATS",
-            "datasetId": 2,
-            "jobId": "job-002",
-            "status": "trained",
-            "hyperparameters": {
-                "layers": 4,
-                "layerSize": 256,
-                "learningRate": 0.0005,
-                "activationFunction": "relu",
-                "dropout": 0.15,
-                "batchSize": 64,
-                "epochs": 150
-            },
-            "trainingHistory": [
-                {"epoch": i, "loss": 2.2 * (0.94 ** i), "accuracy": 0.52 + 0.38 * (1 - 0.94 ** i),
-                 "valLoss": 2.3 * (0.94 ** i), "valAccuracy": 0.50 + 0.36 * (1 - 0.94 ** i)}
-                for i in range(1, 21)
-            ],
-            "performanceMetrics": {
-                "accuracy": 0.89,
-                "precision": 0.87,
-                "recall": 0.91,
-                "f1Score": 0.89,
-                "auc": 0.94,
-                "sharpeRatio": 1.62,
-                "maxDrawdown": 0.09
-            },
-            "createdAt": "2026-01-23T14:00:00",
-            "trainedAt": "2026-01-23T16:30:00",
-            "filePath": "trained_models/mdl-002.pt",
-            "fileSize": 28456789,
-            "generations": 60,
-            "bestGeneration": 55,
-            "fitness": 92.3
-        },
-        {
-            "id": "mdl-003",
-            "name": "RNN_GOOGL_Trend",
-            "modelType": "RNN",
-            "datasetId": 3,
-            "jobId": "job-003",
-            "status": "trained",
-            "hyperparameters": {
-                "layers": 2,
-                "layerSize": 64,
-                "learningRate": 0.002,
-                "activationFunction": "tanh",
-                "dropout": 0.25,
-                "batchSize": 32,
-                "epochs": 80
-            },
-            "trainingHistory": [
-                {"epoch": i, "loss": 2.8 * (0.93 ** i), "accuracy": 0.48 + 0.35 * (1 - 0.93 ** i),
-                 "valLoss": 2.9 * (0.93 ** i), "valAccuracy": 0.46 + 0.33 * (1 - 0.93 ** i)}
-                for i in range(1, 21)
-            ],
-            "performanceMetrics": {
-                "accuracy": 0.82,
-                "precision": 0.80,
-                "recall": 0.84,
-                "f1Score": 0.82,
-                "auc": 0.88,
-                "sharpeRatio": 1.21,
-                "maxDrawdown": 0.15
-            },
-            "createdAt": "2026-01-22T09:00:00",
-            "trainedAt": "2026-01-22T10:15:00",
-            "filePath": "trained_models/mdl-003.pt",
-            "fileSize": 8234567,
-            "generations": 40,
-            "bestGeneration": 35,
-            "fitness": 78.4
-        }
-    ]
+    # Add dataset info if available
+    if dataset_info:
+        result['datasetName'] = dataset_info.get('name')
+        result['symbol'] = dataset_info.get('symbol')
+        result['timeframe'] = dataset_info.get('timeframe')
+        if dataset_info.get('start') and dataset_info.get('end'):
+            result['trainPeriod'] = f"{dataset_info['start']} to {dataset_info['end']}"
 
-    for model in sample_models:
-        models_store[model["id"]] = model
+    return result
 
 
-# Initialize sample models on module load
-init_sample_models()
+def get_all_models(db: Session) -> List[dict]:
+    """Get all models from both database and in-memory store"""
+    models = []
+
+    # Get from database
+    db_models = db.query(TrainedModel).all()
+    for m in db_models:
+        models.append(db_model_to_dict(m))
+
+    # Also include in-memory models (for backward compatibility)
+    for model_id, model_data in models_store.items():
+        # Skip if already in database
+        if not any(m['id'] == model_id for m in models):
+            models.append(model_data.copy())
+
+    return models
+
+
+def get_model_by_id(model_id: str, db: Session) -> Optional[dict]:
+    """Get a model by ID from database or in-memory store"""
+    # Try database first
+    db_model = db.query(TrainedModel).filter(TrainedModel.model_id == model_id).first()
+    if db_model:
+        return db_model_to_dict(db_model)
+
+    # Fall back to in-memory store
+    if model_id in models_store:
+        return models_store[model_id].copy()
+
+    return None
+
+
+def save_model_to_db(model_data: dict, db: Session) -> TrainedModel:
+    """Save a model to the database"""
+    # Check if already exists
+    existing = db.query(TrainedModel).filter(TrainedModel.model_id == model_data['id']).first()
+
+    if existing:
+        # Update existing
+        existing.name = model_data.get('name', existing.name)
+        existing.model_type = model_data.get('modelType', existing.model_type)
+        existing.dataset_id = model_data.get('datasetId', existing.dataset_id)
+        existing.job_id = model_data.get('jobId', existing.job_id)
+        existing.status = model_data.get('status', existing.status)
+        existing.hyperparameters = model_data.get('hyperparameters', existing.hyperparameters)
+        existing.training_history = model_data.get('trainingHistory', existing.training_history)
+        existing.performance_metrics = model_data.get('performanceMetrics', existing.performance_metrics)
+        existing.confusion_matrix = model_data.get('confusionMatrix', existing.confusion_matrix)
+        existing.all_metrics = model_data.get('allMetrics', existing.all_metrics)
+        existing.training_date_range = model_data.get('trainingDateRange', existing.training_date_range)
+        existing.prediction_targets = model_data.get('predictionTargets', existing.prediction_targets)
+        existing.prediction_horizon = model_data.get('predictionHorizon', existing.prediction_horizon)
+        existing.generations = model_data.get('generations', existing.generations)
+        existing.best_generation = model_data.get('bestGeneration', existing.best_generation)
+        existing.fitness = model_data.get('fitness', existing.fitness)
+        existing.file_path = model_data.get('filePath', existing.file_path)
+        existing.file_size = model_data.get('fileSize', existing.file_size)
+        if model_data.get('trainedAt'):
+            try:
+                existing.trained_at = datetime.fromisoformat(model_data['trainedAt'].replace('Z', '+00:00'))
+            except:
+                pass
+        db.commit()
+        return existing
+    else:
+        # Create new
+        new_model = TrainedModel(
+            model_id=model_data['id'],
+            name=model_data.get('name', 'Unnamed Model'),
+            model_type=model_data.get('modelType', 'Unknown'),
+            dataset_id=model_data.get('datasetId'),
+            job_id=model_data.get('jobId'),
+            status=model_data.get('status', 'trained'),
+            hyperparameters=model_data.get('hyperparameters'),
+            training_history=model_data.get('trainingHistory'),
+            performance_metrics=model_data.get('performanceMetrics'),
+            confusion_matrix=model_data.get('confusionMatrix'),
+            all_metrics=model_data.get('allMetrics'),
+            training_date_range=model_data.get('trainingDateRange'),
+            prediction_targets=model_data.get('predictionTargets'),
+            prediction_horizon=model_data.get('predictionHorizon', 3),
+            generations=model_data.get('generations', 0),
+            best_generation=model_data.get('bestGeneration', 0),
+            fitness=model_data.get('fitness', 0),
+            file_path=model_data.get('filePath'),
+            file_size=model_data.get('fileSize'),
+        )
+        if model_data.get('trainedAt'):
+            try:
+                new_model.trained_at = datetime.fromisoformat(model_data['trainedAt'].replace('Z', '+00:00'))
+            except:
+                pass
+        db.add(new_model)
+        db.commit()
+        db.refresh(new_model)
+        return new_model
 
 
 @router.get("", response_model=ModelListResponse)
@@ -217,24 +214,13 @@ async def list_models(
     dataset_id: Optional[int] = None,
     model_type: Optional[str] = None,
     sort_by: Optional[str] = "createdAt",
-    sort_order: Optional[str] = "desc"
+    sort_order: Optional[str] = "desc",
+    db: Session = Depends(get_db)
 ):
     """
     List all trained models with filtering and sorting.
-
-    Args:
-        dataset_id: Filter by dataset ID
-        model_type: Filter by model type (LSTM, N-BEATS, RNN)
-        sort_by: Sort field (accuracy, fitness, createdAt, name)
-        sort_order: Sort order (asc, desc)
-
-    Returns:
-        List of models
     """
-    from app.models.database import SessionLocal
-    from app.models.dataset import Dataset
-
-    models = list(models_store.values())
+    models = get_all_models(db)
 
     # Filter by dataset_id if provided
     if dataset_id is not None:
@@ -245,90 +231,105 @@ async def list_models(
         models = [m for m in models if m.get("modelType", "").upper() == model_type.upper()]
 
     # Enrich models with dataset info
-    db = SessionLocal()
-    try:
-        dataset_cache = {}
-        for model in models:
-            ds_id = model.get("datasetId")
-            if ds_id and ds_id not in dataset_cache:
-                dataset = db.query(Dataset).filter(Dataset.id == ds_id).first()
-                if dataset:
-                    dataset_cache[ds_id] = {
-                        'name': dataset.name,
-                        'symbol': dataset.ticker,
-                        'timeframe': dataset.timeframe,
-                        'start': dataset.start_date.strftime('%Y-%m-%d') if dataset.start_date else None,
-                        'end': dataset.end_date.strftime('%Y-%m-%d') if dataset.end_date else None
-                    }
-                else:
-                    dataset_cache[ds_id] = None
+    dataset_cache = {}
+    for model in models:
+        ds_id = model.get("datasetId")
+        if ds_id and ds_id not in dataset_cache:
+            dataset = db.query(Dataset).filter(Dataset.id == ds_id).first()
+            if dataset:
+                dataset_cache[ds_id] = {
+                    'name': dataset.name,
+                    'symbol': dataset.ticker,
+                    'timeframe': dataset.timeframe,
+                    'start': dataset.start_date.strftime('%Y-%m-%d') if dataset.start_date else None,
+                    'end': dataset.end_date.strftime('%Y-%m-%d') if dataset.end_date else None
+                }
+            else:
+                dataset_cache[ds_id] = None
 
-            ds_info = dataset_cache.get(ds_id)
-            if ds_info:
-                model['datasetName'] = ds_info['name']
-                model['symbol'] = ds_info['symbol']
-                model['timeframe'] = ds_info['timeframe']
-                if ds_info['start'] and ds_info['end']:
-                    model['trainPeriod'] = f"{ds_info['start']} to {ds_info['end']}"
-    finally:
-        db.close()
+        ds_info = dataset_cache.get(ds_id)
+        if ds_info:
+            model['datasetName'] = ds_info['name']
+            model['symbol'] = ds_info['symbol']
+            model['timeframe'] = ds_info['timeframe']
+            if ds_info['start'] and ds_info['end']:
+                model['trainPeriod'] = f"{ds_info['start']} to {ds_info['end']}"
 
-    models = [ModelResponse(**m) for m in models]
+    # Convert to response models
+    response_models = []
+    for m in models:
+        try:
+            response_models.append(ModelResponse(**m))
+        except Exception as e:
+            logger.warning(f"Failed to parse model {m.get('id')}: {e}")
+            continue
 
     # Sort based on sort_by field
     reverse = sort_order.lower() == "desc"
 
     if sort_by == "accuracy":
-        models.sort(key=lambda x: x.performanceMetrics.accuracy if x.performanceMetrics else 0, reverse=reverse)
+        response_models.sort(key=lambda x: x.performanceMetrics.accuracy if x.performanceMetrics else 0, reverse=reverse)
     elif sort_by == "fitness":
-        models.sort(key=lambda x: x.fitness if x.fitness else 0, reverse=reverse)
+        response_models.sort(key=lambda x: x.fitness if x.fitness else 0, reverse=reverse)
     elif sort_by == "name":
-        models.sort(key=lambda x: x.name.lower(), reverse=reverse)
+        response_models.sort(key=lambda x: x.name.lower(), reverse=reverse)
     elif sort_by == "date" or sort_by == "createdAt":
-        models.sort(key=lambda x: x.createdAt, reverse=reverse)
+        response_models.sort(key=lambda x: x.createdAt or "", reverse=reverse)
     else:
-        models.sort(key=lambda x: x.createdAt, reverse=True)
+        response_models.sort(key=lambda x: x.createdAt or "", reverse=True)
 
     return ModelListResponse(
-        models=models,
-        total=len(models)
+        models=response_models,
+        total=len(response_models)
     )
 
 
 @router.get("/{model_id}", response_model=ModelResponse)
-async def get_model(model_id: str):
+async def get_model(model_id: str, db: Session = Depends(get_db)):
     """Get model details by ID."""
-    if model_id not in models_store:
+    model = get_model_by_id(model_id, db)
+    if not model:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
-    return ModelResponse(**models_store[model_id])
+    # Enrich with dataset info
+    ds_id = model.get("datasetId")
+    if ds_id:
+        dataset = db.query(Dataset).filter(Dataset.id == ds_id).first()
+        if dataset:
+            model['datasetName'] = dataset.name
+            model['symbol'] = dataset.ticker
+            model['timeframe'] = dataset.timeframe
+            if dataset.start_date and dataset.end_date:
+                model['trainPeriod'] = f"{dataset.start_date.strftime('%Y-%m-%d')} to {dataset.end_date.strftime('%Y-%m-%d')}"
+
+    return ModelResponse(**model)
 
 
 @router.delete("/{model_id}")
-async def delete_model(model_id: str):
+async def delete_model(model_id: str, db: Session = Depends(get_db)):
     """Delete a model."""
-    if model_id not in models_store:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    # Try database first
+    db_model = db.query(TrainedModel).filter(TrainedModel.model_id == model_id).first()
+    if db_model:
+        db.delete(db_model)
+        db.commit()
+        logger.info(f"Deleted model {model_id} from database")
+        return {"message": f"Model {model_id} deleted"}
 
-    del models_store[model_id]
-    logger.info(f"Deleted model {model_id}")
+    # Fall back to in-memory
+    if model_id in models_store:
+        del models_store[model_id]
+        logger.info(f"Deleted model {model_id} from memory")
+        return {"message": f"Model {model_id} deleted"}
 
-    return {"message": f"Model {model_id} deleted"}
+    raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
 
 @router.post("/{model_id}/export")
-async def export_model(model_id: str, format: str = "pytorch"):
-    """
-    Export a model in the specified format.
-
-    Args:
-        model_id: Model ID
-        format: Export format - "pytorch" (default) or "onnx"
-
-    Returns:
-        Export details including path
-    """
-    if model_id not in models_store:
+async def export_model(model_id: str, format: str = "pytorch", db: Session = Depends(get_db)):
+    """Export a model in the specified format."""
+    model = get_model_by_id(model_id, db)
+    if not model:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
     supported_formats = ["pytorch", "onnx", "pt", "pth"]
@@ -338,9 +339,6 @@ async def export_model(model_id: str, format: str = "pytorch"):
             detail=f"Unsupported format: {format}. Supported: {supported_formats}"
         )
 
-    model = models_store[model_id]
-
-    # Map format to extension
     extension_map = {
         "pytorch": "pt",
         "pt": "pt",
@@ -349,10 +347,8 @@ async def export_model(model_id: str, format: str = "pytorch"):
     }
     ext = extension_map.get(format.lower(), "pt")
 
-    # Simulate export (in production, would actually convert and save the model)
     export_path = f"exports/{model_id}.{ext}"
 
-    # For ONNX, add additional conversion info
     export_info = {
         "message": f"Model exported successfully to {format.upper()} format",
         "format": format,
@@ -372,40 +368,24 @@ async def export_model(model_id: str, format: str = "pytorch"):
 
 
 @router.post("/{model_id}/export/pytorch")
-async def export_model_pytorch(model_id: str):
-    """
-    Export model to PyTorch checkpoint format (.pt).
-
-    Args:
-        model_id: Model ID
-
-    Returns:
-        Export details
-    """
-    return await export_model(model_id, format="pytorch")
+async def export_model_pytorch(model_id: str, db: Session = Depends(get_db)):
+    """Export model to PyTorch checkpoint format (.pt)."""
+    return await export_model(model_id, format="pytorch", db=db)
 
 
 @router.post("/{model_id}/export/onnx")
-async def export_model_onnx(model_id: str):
-    """
-    Export model to ONNX format for cross-platform deployment.
-
-    Args:
-        model_id: Model ID
-
-    Returns:
-        Export details including ONNX configuration
-    """
-    return await export_model(model_id, format="onnx")
+async def export_model_onnx(model_id: str, db: Session = Depends(get_db)):
+    """Export model to ONNX format for cross-platform deployment."""
+    return await export_model(model_id, format="onnx", db=db)
 
 
 @router.post("/{model_id}/clone")
-async def clone_model(model_id: str):
+async def clone_model(model_id: str, db: Session = Depends(get_db)):
     """Clone a model with a new ID."""
-    if model_id not in models_store:
+    original = get_model_by_id(model_id, db)
+    if not original:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
-    original = models_store[model_id].copy()
     new_id = f"mdl-{uuid.uuid4().hex[:6]}"
 
     cloned = {
@@ -419,62 +399,61 @@ async def clone_model(model_id: str):
         "fileSize": None
     }
 
-    models_store[new_id] = cloned
+    # Save to database
+    save_model_to_db(cloned, db)
     logger.info(f"Cloned model {model_id} to {new_id}")
 
     return ModelResponse(**cloned)
 
 
 @router.get("/{model_id}/predictions")
-async def get_model_predictions(model_id: str, limit: int = 100):
+async def get_model_predictions(model_id: str, limit: int = 100, db: Session = Depends(get_db)):
     """Get prediction visualization data for a model."""
-    if model_id not in models_store:
+    model = get_model_by_id(model_id, db)
+    if not model:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
-    # Generate sample prediction data for visualization
-    predictions = []
-    for i in range(limit):
-        actual = 100 + random.gauss(0, 10) + i * 0.1
-        predicted = actual + random.gauss(0, 3)
-        predictions.append({
-            "index": i,
-            "actual": round(actual, 2),
-            "predicted": round(predicted, 2),
-            "error": round(abs(actual - predicted), 2)
-        })
-
-    return {
-        "modelId": model_id,
-        "predictions": predictions,
-        "mse": round(sum(p["error"] ** 2 for p in predictions) / len(predictions), 4),
-        "mae": round(sum(p["error"] for p in predictions) / len(predictions), 4)
-    }
+    # Return actual predictions if stored, otherwise 404
+    # TODO: Implement actual prediction data storage and retrieval
+    raise HTTPException(
+        status_code=404,
+        detail="Predictions not available for this model. Run inference to generate predictions."
+    )
 
 
 @router.get("/{model_id}/confusion-matrix")
-async def get_confusion_matrix(model_id: str):
+async def get_confusion_matrix(model_id: str, db: Session = Depends(get_db)):
     """Get confusion matrix data for a classification model."""
-    if model_id not in models_store:
+    model = get_model_by_id(model_id, db)
+    if not model:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
-    # Generate sample confusion matrix data
-    # For binary classification: up/down prediction
-    tp = random.randint(80, 100)  # True positive
-    tn = random.randint(75, 95)   # True negative
-    fp = random.randint(10, 25)   # False positive
-    fn = random.randint(12, 28)   # False negative
+    # Check if model has stored confusion matrix
+    cm = model.get('confusionMatrix')
+    if not cm:
+        # Try to get from allMetrics
+        all_metrics = model.get('allMetrics', {})
+        cm = all_metrics.get('confusion_matrix')
 
-    return {
-        "modelId": model_id,
-        "labels": ["Down", "Up"],
-        "matrix": [
-            [tn, fp],
-            [fn, tp]
-        ],
-        "metrics": {
-            "accuracy": round((tp + tn) / (tp + tn + fp + fn), 4),
-            "precision": round(tp / (tp + fp), 4),
-            "recall": round(tp / (tp + fn), 4),
-            "specificity": round(tn / (tn + fp), 4)
-        }
-    }
+    if cm and len(cm) >= 2:
+        total = sum(sum(row) for row in cm)
+        if len(cm) == 2:
+            tn, fp = cm[0]
+            fn, tp = cm[1]
+            return {
+                "modelId": model_id,
+                "labels": ["Down", "Up"],
+                "matrix": cm,
+                "metrics": {
+                    "accuracy": round((tp + tn) / total, 4) if total > 0 else 0,
+                    "precision": round(tp / (tp + fp), 4) if (tp + fp) > 0 else 0,
+                    "recall": round(tp / (tp + fn), 4) if (tp + fn) > 0 else 0,
+                    "specificity": round(tn / (tn + fp), 4) if (tn + fp) > 0 else 0
+                }
+            }
+
+    # No confusion matrix available
+    raise HTTPException(
+        status_code=404,
+        detail="Confusion matrix not available for this model"
+    )
