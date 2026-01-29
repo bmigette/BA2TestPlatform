@@ -50,9 +50,9 @@ start_backend() {
         source venv/bin/activate
     fi
 
-    log_success "Backend starting on http://localhost:8002"
-    log_info "API docs: http://localhost:8002/docs"
-    uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+    log_success "Backend starting on http://localhost:8000"
+    log_info "API docs: http://localhost:8000/docs"
+    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 }
 
 # Start frontend
@@ -85,7 +85,7 @@ start_all() {
     else
         source venv/bin/activate
     fi
-    uvicorn app.main:app --host 0.0.0.0 --port 8002 &
+    uvicorn app.main:app --host 0.0.0.0 --port 8000 &
     BACKEND_PID=$!
     log_success "Backend started (PID: $BACKEND_PID)"
 
@@ -101,9 +101,9 @@ start_all() {
 
     echo ""
     log_success "BA2ML Platform is running!"
-    echo -e "  Backend:  ${GREEN}http://localhost:8002${NC}"
+    echo -e "  Backend:  ${GREEN}http://localhost:8000${NC}"
     echo -e "  Frontend: ${GREEN}http://localhost:5173${NC}"
-    echo -e "  API Docs: ${GREEN}http://localhost:8002/docs${NC}"
+    echo -e "  API Docs: ${GREEN}http://localhost:8000/docs${NC}"
     echo ""
     log_info "Press Ctrl+C to stop all services"
 

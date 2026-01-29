@@ -42,9 +42,9 @@ if not exist "venv" (
     call venv\Scripts\activate.bat
 )
 
-echo [OK] Backend starting on http://localhost:8002
-echo [INFO] API docs: http://localhost:8002/docs
-uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+echo [OK] Backend starting on http://localhost:8000
+echo [INFO] API docs: http://localhost:8000/docs
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 goto :end
 
 :frontend
@@ -68,7 +68,7 @@ echo This will open two command windows for backend and frontend.
 echo.
 
 REM Start backend in new window
-start "BA2ML Backend" cmd /k "cd /d %SCRIPT_DIR%backend && (if not exist venv (python -m venv venv && call venv\Scripts\activate.bat && pip install -r requirements.txt) else (call venv\Scripts\activate.bat)) && uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload"
+start "BA2ML Backend" cmd /k "cd /d %SCRIPT_DIR%backend && (if not exist venv (python -m venv venv && call venv\Scripts\activate.bat && pip install -r requirements.txt) else (call venv\Scripts\activate.bat)) && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
 REM Wait a bit for backend to start
 timeout /t 3 /nobreak > nul
@@ -79,9 +79,9 @@ start "BA2ML Frontend" cmd /k "cd /d %SCRIPT_DIR%frontend && (if not exist node_
 echo.
 echo [OK] BA2ML Platform is starting!
 echo.
-echo   Backend:  http://localhost:8002
+echo   Backend:  http://localhost:8000
 echo   Frontend: http://localhost:5173
-echo   API Docs: http://localhost:8002/docs
+echo   API Docs: http://localhost:8000/docs
 echo.
 echo Close the command windows to stop the servers.
 goto :end
