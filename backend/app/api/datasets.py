@@ -758,11 +758,19 @@ async def calculate_indicators(
         results = indicator_service.calculate_indicators(df, indicators)
 
         # Convert to list of dicts for JSON response
+        # Use ISO format for dates to match preview endpoint (important for JS timestamp parsing)
         data = []
-        dates = df['Date'].tolist() if 'Date' in df.columns else list(range(len(df)))
+        if 'Date' in df.columns:
+            # Convert to datetime if not already, then use isoformat for consistency
+            df['Date'] = pd.to_datetime(df['Date'])
 
         for i in range(len(df)):
-            row = {"date": str(dates[i])}
+            if 'Date' in df.columns:
+                # Use isoformat to match the preview endpoint's date_format='iso'
+                date_val = df['Date'].iloc[i]
+                row = {"date": date_val.isoformat() if hasattr(date_val, 'isoformat') else str(date_val)}
+            else:
+                row = {"date": str(i)}
             for col_name, series in results.items():
                 val = series.iloc[i]
                 row[col_name] = None if pd.isna(val) else float(val)

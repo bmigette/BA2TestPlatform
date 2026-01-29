@@ -1134,11 +1134,18 @@ class PredictionTargetService:
                         stats["max"] = round(float(valid_values.max()), 4)
 
                 # Prepare data for frontend
-                dates = df['Date'].tolist() if 'Date' in df.columns else list(range(len(df)))
-                data = [
-                    {"date": str(dates[i]), "value": None if pd.isna(series.iloc[i]) else float(series.iloc[i])}
-                    for i in range(len(series))
-                ]
+                # Use ISO format for dates to match preview endpoint (important for JS timestamp parsing)
+                data = []
+                for i in range(len(series)):
+                    if 'Date' in df.columns:
+                        date_val = df['Date'].iloc[i]
+                        date_str = date_val.isoformat() if hasattr(date_val, 'isoformat') else str(date_val)
+                    else:
+                        date_str = str(i)
+                    data.append({
+                        "date": date_str,
+                        "value": None if pd.isna(series.iloc[i]) else float(series.iloc[i])
+                    })
 
                 results.append({
                     "config": config,
