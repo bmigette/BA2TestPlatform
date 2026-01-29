@@ -1,3 +1,23 @@
+# BA2MLTestPlatform Frontend
+
+React + TypeScript + Vite frontend for the ML Test Platform.
+
+## Setup
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+```
+
+---
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
