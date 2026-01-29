@@ -57,7 +57,8 @@ class GeneticOptimizer:
         n_generations: int = 10,
         crossover_prob: float = 0.7,
         mutation_prob: float = 0.2,
-        early_stopping_generations: int = 3
+        early_stopping_generations: int = 3,
+        elitism_percent: float = 10.0
     ):
         """
         Initialize GeneticOptimizer.
@@ -69,6 +70,7 @@ class GeneticOptimizer:
             crossover_prob: Probability of crossover
             mutation_prob: Probability of mutation
             early_stopping_generations: Stop if no improvement for this many generations
+            elitism_percent: Percentage of best individuals to preserve unchanged (default 10%)
         """
         if not DEAP_AVAILABLE:
             raise RuntimeError("DEAP library not available. Install with: pip install deap")
@@ -79,6 +81,7 @@ class GeneticOptimizer:
         self.crossover_prob = crossover_prob
         self.mutation_prob = mutation_prob
         self.early_stopping_generations = early_stopping_generations
+        self.elitism_percent = elitism_percent
 
         self.toolbox = None
         self.best_individual = None
@@ -415,8 +418,17 @@ class GeneticOptimizer:
                 else:
                     no_improvement_count = 0
 
-            # Selection and reproduction
-            offspring = self.toolbox.select(population, len(population))
+            # ELITISM: Preserve the best individuals unchanged
+            n_elite = max(1, int((self.elitism_percent / 100.0) * len(population)))
+            elites = tools.selBest(population, n_elite)
+            # Clone elites to preserve them unchanged
+            elites = [self.toolbox.clone(ind) for ind in elites]
+
+            logger.debug(f"Gen {gen}: Preserving {n_elite} elite individuals (best fitness: {elites[0].fitness.values[0]:.4f})")
+
+            # Selection and reproduction for the remaining slots
+            n_offspring = len(population) - n_elite
+            offspring = self.toolbox.select(population, n_offspring)
             offspring = list(map(self.toolbox.clone, offspring))
 
             # Crossover
@@ -432,7 +444,8 @@ class GeneticOptimizer:
                     self.toolbox.mutate(mutant)
                     del mutant.fitness.values
 
-            population[:] = offspring
+            # Combine elites (unchanged) with new offspring
+            population[:] = elites + offspring
 
         # Final best
         best_params = self.decode_individual(self.best_individual)

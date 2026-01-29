@@ -86,7 +86,8 @@ class GeneticOptimizerBase(ABC):
         n_generations: int = 10,
         crossover_prob: float = 0.7,
         mutation_prob: float = 0.2,
-        early_stopping_generations: int = 3
+        early_stopping_generations: int = 3,
+        elitism_percent: float = 10.0
     ):
         """
         Initialize the optimizer with configuration.
@@ -98,6 +99,7 @@ class GeneticOptimizerBase(ABC):
             crossover_prob: Probability of crossover
             mutation_prob: Probability of mutation
             early_stopping_generations: Stop if no improvement for this many generations
+            elitism_percent: Percentage of best individuals to preserve unchanged
         """
         self.param_ranges = param_ranges or self.DEFAULT_PARAM_RANGES
         self.population_size = population_size
@@ -105,6 +107,7 @@ class GeneticOptimizerBase(ABC):
         self.crossover_prob = crossover_prob
         self.mutation_prob = mutation_prob
         self.early_stopping_generations = early_stopping_generations
+        self.elitism_percent = elitism_percent
 
         self.best_individual = None
         self.best_fitness = None
@@ -320,7 +323,8 @@ def _register_deap_adapter():
                     n_generations=self.n_generations,
                     crossover_prob=self.crossover_prob,
                     mutation_prob=self.mutation_prob,
-                    early_stopping_generations=self.early_stopping_generations
+                    early_stopping_generations=self.early_stopping_generations,
+                    elitism_percent=self.elitism_percent
                 )
 
             def optimize(

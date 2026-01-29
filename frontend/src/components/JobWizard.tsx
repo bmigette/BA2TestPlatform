@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { X, Database, Cpu, Target, Trash2, Split, Save, FolderOpen, Play, AlertTriangle, ChevronRight, ChevronLeft, Loader2, Activity, Zap } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { X, Database, Cpu, Target, Trash2, Split, Save, FolderOpen, Play, AlertTriangle, ChevronRight, ChevronLeft, Loader2, Activity, Zap, Info } from 'lucide-react';
+import type { TargetConfig } from '../types/targets';
 
 interface Dataset {
   id: number;
@@ -44,11 +45,14 @@ interface MetricsConfig {
   regressionMetric?: string;
 }
 
-interface PredictionTarget {
-  id: string;
-  profitPercent: number;
-  maxDrawdownPercent: number;
-  timePeriodDays: number;
+// Target set from backend
+interface TargetSet {
+  id: number;
+  name: string;
+  description?: string;
+  targets: TargetConfig[];
+  created_at: string;
+  updated_at: string;
 }
 
 interface JobProfile {
@@ -58,10 +62,11 @@ interface JobProfile {
   updatedAt?: string;
   selectedModels: string[];
   parameterRanges: ParameterRanges;
-  predictionTargets: Omit<PredictionTarget, 'id'>[];
+  predictionTargets: Record<string, unknown>[];  // Can be old or new TargetConfig format
   trainTestSplit: number;
   geneticConfig?: GeneticConfig;
   metricsConfig?: MetricsConfig;
+  predictionHorizon?: number;
 }
 
 interface TargetPreview {
@@ -120,13 +125,6 @@ const REGRESSION_METRICS = [
   { id: 'mape', name: 'MAPE', description: 'Mean Absolute Percentage Error' },
 ];
 
-const PREDICTION_PRESETS = [
-  { label: '10% / 5% DD / 7d', profit: 10, drawdown: 5, days: 7 },
-  { label: '20% / 10% DD / 30d', profit: 20, drawdown: 10, days: 30 },
-  { label: '5% / 3% DD / 3d', profit: 5, drawdown: 3, days: 3 },
-  { label: '15% / 7% DD / 14d', profit: 15, drawdown: 7, days: 14 },
-];
-
 interface TrainingDateRange {
   startDate: string | null;
   endDate: string | null;
@@ -164,7 +162,9 @@ const getDefaultState = () => ({
     classificationMetric: 'f1_score',
     regressionMetric: 'rmse',
   } as MetricsConfig,
-  predictionTargets: [] as PredictionTarget[],
+  predictionTargets: [] as Record<string, unknown>[],
+  selectedTargetSetIds: [] as number[],
+  predictionHorizon: 3,
   trainTestSplit: 80,
   trainingDateRange: {
     startDate: null,
@@ -184,8 +184,6 @@ const JobWizard: React.FC<JobWizardProps> = ({
 }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [state, setState] = useState(getDefaultState());
-  const [showCustomTargetForm, setShowCustomTargetForm] = useState(false);
-  const [customTarget, setCustomTarget] = useState({ profitPercent: 15, maxDrawdownPercent: 7, timePeriodDays: 14 });
   const [showLoadProfileDialog, setShowLoadProfileDialog] = useState(false);
   const [showSaveProfileDialog, setShowSaveProfileDialog] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
@@ -193,6 +191,24 @@ const JobWizard: React.FC<JobWizardProps> = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [targetSets, setTargetSets] = useState<TargetSet[]>([]);
+  const [targetSetsLoading, setTargetSetsLoading] = useState(false);
+
+  // Fetch target sets when modal opens
+  const fetchTargetSets = useCallback(async () => {
+    setTargetSetsLoading(true);
+    try {
+      const response = await fetch('http://localhost:8002/api/target-sets');
+      if (response.ok) {
+        const data = await response.json();
+        setTargetSets(data.target_sets || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch target sets:', error);
+    } finally {
+      setTargetSetsLoading(false);
+    }
+  }, []);
 
   // Reset when opened
   useEffect(() => {
@@ -201,8 +217,9 @@ const JobWizard: React.FC<JobWizardProps> = ({
       setCurrentStep(1);
       setPreviewData(null);
       setPreviewError(null);
+      fetchTargetSets();
     }
-  }, [isOpen]);
+  }, [isOpen, fetchTargetSets]);
 
   if (!isOpen) return null;
 
@@ -223,7 +240,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
       state.selectedDatasetId !== null &&
       state.selectedModels.length > 0 &&
       isParameterValid() &&
-      state.predictionTargets.length > 0
+      state.selectedTargetSetIds.length > 0
     );
   };
 
@@ -256,49 +273,39 @@ const JobWizard: React.FC<JobWizardProps> = ({
     }));
   };
 
-  const addPresetTarget = (preset: typeof PREDICTION_PRESETS[0]) => {
-    const exists = state.predictionTargets.some(
-      t => t.profitPercent === preset.profit &&
-           t.maxDrawdownPercent === preset.drawdown &&
-           t.timePeriodDays === preset.days
-    );
-    if (!exists) {
-      setState(prev => ({
+  const toggleTargetSet = (targetSetId: number) => {
+    setState(prev => {
+      const isSelected = prev.selectedTargetSetIds.includes(targetSetId);
+      const newSelectedIds = isSelected
+        ? prev.selectedTargetSetIds.filter(id => id !== targetSetId)
+        : [...prev.selectedTargetSetIds, targetSetId];
+
+      // Aggregate all targets from selected sets
+      const allTargets = targetSets
+        .filter(ts => newSelectedIds.includes(ts.id))
+        .flatMap(ts => ts.targets as unknown as Record<string, unknown>[]);
+
+      return {
         ...prev,
-        predictionTargets: [...prev.predictionTargets, {
-          id: `target_${Date.now()}`,
-          profitPercent: preset.profit,
-          maxDrawdownPercent: preset.drawdown,
-          timePeriodDays: preset.days,
-        }]
-      }));
-    }
+        selectedTargetSetIds: newSelectedIds,
+        predictionTargets: allTargets,
+      };
+    });
   };
 
-  const removeTarget = (targetId: string) => {
-    setState(prev => ({
-      ...prev,
-      predictionTargets: prev.predictionTargets.filter(t => t.id !== targetId)
-    }));
-  };
+  const removeTargetSet = (targetSetId: number) => {
+    setState(prev => {
+      const newSelectedIds = prev.selectedTargetSetIds.filter(id => id !== targetSetId);
+      const allTargets = targetSets
+        .filter(ts => newSelectedIds.includes(ts.id))
+        .flatMap(ts => ts.targets as unknown as Record<string, unknown>[]);
 
-  const addCustomTarget = () => {
-    const exists = state.predictionTargets.some(
-      t => t.profitPercent === customTarget.profitPercent &&
-           t.maxDrawdownPercent === customTarget.maxDrawdownPercent &&
-           t.timePeriodDays === customTarget.timePeriodDays
-    );
-    if (!exists && customTarget.profitPercent > 0 && customTarget.maxDrawdownPercent > 0 && customTarget.timePeriodDays > 0) {
-      setState(prev => ({
+      return {
         ...prev,
-        predictionTargets: [...prev.predictionTargets, {
-          id: `target_${Date.now()}`,
-          ...customTarget
-        }]
-      }));
-      setShowCustomTargetForm(false);
-      setCustomTarget({ profitPercent: 15, maxDrawdownPercent: 7, timePeriodDays: 14 });
-    }
+        selectedTargetSetIds: newSelectedIds,
+        predictionTargets: allTargets,
+      };
+    });
   };
 
   const loadProfile = (profile: JobProfile) => {
@@ -306,13 +313,11 @@ const JobWizard: React.FC<JobWizardProps> = ({
       ...prev,
       selectedModels: profile.selectedModels || [],
       parameterRanges: profile.parameterRanges || prev.parameterRanges,
-      predictionTargets: (profile.predictionTargets || []).map((t, idx) => ({
-        ...t,
-        id: `target_${Date.now()}_${idx}`,
-      })),
+      predictionTargets: profile.predictionTargets || [],
       trainTestSplit: profile.trainTestSplit || 80,
       geneticConfig: profile.geneticConfig || prev.geneticConfig,
       metricsConfig: profile.metricsConfig || prev.metricsConfig,
+      predictionHorizon: profile.predictionHorizon || 3,
     }));
     setShowLoadProfileDialog(false);
   };
@@ -322,12 +327,11 @@ const JobWizard: React.FC<JobWizardProps> = ({
     await onSaveProfile(newProfileName.trim(), {
       selectedModels: state.selectedModels,
       parameterRanges: state.parameterRanges,
-      predictionTargets: state.predictionTargets.map(({ profitPercent, maxDrawdownPercent, timePeriodDays }) => ({
-        profitPercent, maxDrawdownPercent, timePeriodDays
-      })),
+      predictionTargets: state.predictionTargets,
       trainTestSplit: state.trainTestSplit,
       geneticConfig: state.geneticConfig,
       metricsConfig: state.metricsConfig,
+      predictionHorizon: state.predictionHorizon,
     });
     setNewProfileName('');
     setShowSaveProfileDialog(false);
@@ -340,16 +344,12 @@ const JobWizard: React.FC<JobWizardProps> = ({
     setPreviewError(null);
 
     try {
-      const response = await fetch(`http://localhost:8002/api/datasets/${state.selectedDatasetId}/preview-targets`, {
+      // Use the new calculate-targets endpoint with target configs
+      const response = await fetch(`http://localhost:8002/api/datasets/${state.selectedDatasetId}/calculate-targets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          targets: state.predictionTargets.map(t => ({
-            profitPercent: t.profitPercent,
-            maxDrawdownPercent: t.maxDrawdownPercent,
-            timePeriodDays: t.timePeriodDays,
-          })),
-          trainRatio: state.trainTestSplit / 100,
+          targets: state.predictionTargets,
         }),
       });
 
@@ -358,11 +358,46 @@ const JobWizard: React.FC<JobWizardProps> = ({
       }
 
       const data = await response.json();
-      setPreviewData(data);
+      // Convert to preview format
+      const previewResponse: PreviewResponse = {
+        dataset_id: state.selectedDatasetId,
+        dataset_rows: data.targets?.[0]?.stats?.totalRows || 0,
+        train_rows: Math.floor((data.targets?.[0]?.stats?.totalRows || 0) * state.trainTestSplit / 100),
+        test_rows: Math.floor((data.targets?.[0]?.stats?.totalRows || 0) * (100 - state.trainTestSplit) / 100),
+        targets: (data.targets || []).map((t: any) => ({
+          name: t.columnName,
+          label: getTargetLabel(t.config),
+          train_positive: t.stats?.positiveCount || 0,
+          train_negative: t.stats?.negativeCount || 0,
+          train_positive_pct: t.stats?.positivePct || 0,
+          test_positive: 0, // Not available from this endpoint
+          test_negative: 0,
+          test_positive_pct: 0,
+          warnings: [],
+        })),
+      };
+      setPreviewData(previewResponse);
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : 'Failed to load preview');
     } finally {
       setPreviewLoading(false);
+    }
+  };
+
+  const getTargetLabel = (config: Record<string, unknown>): string => {
+    switch (config.type) {
+      case 'price_based':
+        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct}% (${config.timeBars} bars)`;
+      case 'directional':
+        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon} bars)`;
+      case 'triple_barrier':
+        return `Triple Barrier TP:${config.profitPct}% SL:${config.stopPct}% (${config.maxBars} bars)`;
+      case 'trend_reversal':
+        return `${String(config.indicator).toUpperCase()} ${config.direction} reversal`;
+      case 'volatility':
+        return `Volatility (${config.method}, ${config.horizon} bars)`;
+      default:
+        return 'Unknown target';
     }
   };
 
@@ -391,9 +426,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
           datasetId: state.selectedDatasetId,
           selectedModels: state.selectedModels,
           parameterRanges: state.parameterRanges,
-          predictionTargets: state.predictionTargets.map(({ profitPercent, maxDrawdownPercent, timePeriodDays }) => ({
-            profitPercent, maxDrawdownPercent, timePeriodDays
-          })),
+          predictionTargets: state.predictionTargets,
+          predictionHorizon: state.predictionHorizon,
           trainTestSplit: state.trainTestSplit,
           geneticConfig: state.geneticConfig,
           metricsConfig: state.metricsConfig,
@@ -462,17 +496,14 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 setShowLoadProfileDialog={setShowLoadProfileDialog}
                 showSaveProfileDialog={showSaveProfileDialog}
                 setShowSaveProfileDialog={setShowSaveProfileDialog}
-                showCustomTargetForm={showCustomTargetForm}
-                setShowCustomTargetForm={setShowCustomTargetForm}
-                customTarget={customTarget}
-                setCustomTarget={setCustomTarget}
                 newProfileName={newProfileName}
                 setNewProfileName={setNewProfileName}
                 handleModelToggle={handleModelToggle}
                 handleAllModelsToggle={handleAllModelsToggle}
-                addPresetTarget={addPresetTarget}
-                removeTarget={removeTarget}
-                addCustomTarget={addCustomTarget}
+                targetSets={targetSets}
+                targetSetsLoading={targetSetsLoading}
+                toggleTargetSet={toggleTargetSet}
+                removeTargetSet={removeTargetSet}
                 loadProfile={loadProfile}
                 saveProfile={saveProfile}
                 onDeleteProfile={onDeleteProfile}
@@ -565,17 +596,14 @@ interface Step1Props {
   setShowLoadProfileDialog: (v: boolean) => void;
   showSaveProfileDialog: boolean;
   setShowSaveProfileDialog: (v: boolean) => void;
-  showCustomTargetForm: boolean;
-  setShowCustomTargetForm: (v: boolean) => void;
-  customTarget: { profitPercent: number; maxDrawdownPercent: number; timePeriodDays: number };
-  setCustomTarget: (v: { profitPercent: number; maxDrawdownPercent: number; timePeriodDays: number }) => void;
   newProfileName: string;
   setNewProfileName: (v: string) => void;
   handleModelToggle: (id: string) => void;
   handleAllModelsToggle: () => void;
-  addPresetTarget: (preset: typeof PREDICTION_PRESETS[0]) => void;
-  removeTarget: (id: string) => void;
-  addCustomTarget: () => void;
+  targetSets: TargetSet[];
+  targetSetsLoading: boolean;
+  toggleTargetSet: (id: number) => void;
+  removeTargetSet: (id: number) => void;
   loadProfile: (profile: JobProfile) => void;
   saveProfile: () => void;
   onDeleteProfile: (id: number) => Promise<void>;
@@ -592,17 +620,14 @@ const Step1Settings: React.FC<Step1Props> = ({
   setShowLoadProfileDialog,
   showSaveProfileDialog,
   setShowSaveProfileDialog,
-  showCustomTargetForm,
-  setShowCustomTargetForm,
-  customTarget,
-  setCustomTarget,
   newProfileName,
   setNewProfileName,
   handleModelToggle,
   handleAllModelsToggle,
-  addPresetTarget,
-  removeTarget,
-  addCustomTarget,
+  targetSets,
+  targetSetsLoading,
+  toggleTargetSet,
+  removeTargetSet,
   loadProfile,
   saveProfile,
   onDeleteProfile,
@@ -761,78 +786,121 @@ const Step1Settings: React.FC<Step1Props> = ({
 
       {/* Prediction Targets */}
       <div>
-        <div className="flex items-center space-x-2 mb-3">
-          <Target size={16} className="text-gray-400" />
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Prediction Targets</label>
-        </div>
-        <div className="flex flex-wrap gap-2 mb-3">
-          {PREDICTION_PRESETS.map((preset) => (
-            <button
-              key={preset.label}
-              onClick={() => addPresetTarget(preset)}
-              className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
-            >
-              {preset.label}
-            </button>
-          ))}
-          <button
-            onClick={() => setShowCustomTargetForm(true)}
-            className="px-3 py-1.5 text-sm bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-md hover:bg-green-200"
-          >
-            + Custom
-          </button>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center space-x-2">
+            <Target size={16} className="text-gray-400" />
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Prediction Targets</label>
+          </div>
         </div>
 
-        {showCustomTargetForm && (
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-3">
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Profit %</label>
-                <input
-                  type="number"
-                  value={customTarget.profitPercent}
-                  onChange={(e) => setCustomTarget({ ...customTarget, profitPercent: Number(e.target.value) })}
-                  className="w-full px-2 py-1 border rounded text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Max DD %</label>
-                <input
-                  type="number"
-                  value={customTarget.maxDrawdownPercent}
-                  onChange={(e) => setCustomTarget({ ...customTarget, maxDrawdownPercent: Number(e.target.value) })}
-                  className="w-full px-2 py-1 border rounded text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Days</label>
-                <input
-                  type="number"
-                  value={customTarget.timePeriodDays}
-                  onChange={(e) => setCustomTarget({ ...customTarget, timePeriodDays: Number(e.target.value) })}
-                  className="w-full px-2 py-1 border rounded text-sm"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end mt-3 space-x-2">
-              <button onClick={() => setShowCustomTargetForm(false)} className="px-3 py-1 text-sm text-gray-500">Cancel</button>
-              <button onClick={addCustomTarget} className="px-3 py-1 text-sm bg-green-600 text-white rounded">Add</button>
+        {/* Info message about creating targets */}
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4">
+          <div className="flex items-start space-x-2">
+            <Info size={16} className="text-blue-500 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-blue-700 dark:text-blue-300">
+              <p>To create new prediction target profiles, go to the <strong>Dataset Details</strong> page and use the Prediction Targets panel.</p>
             </div>
           </div>
-        )}
+        </div>
 
-        {state.predictionTargets.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {state.predictionTargets.map((target) => (
-              <div key={target.id} className="flex items-center space-x-2 px-3 py-1.5 bg-green-50 dark:bg-green-900/20 border border-green-500 rounded-full text-sm">
-                <span>{target.profitPercent}% / {target.maxDrawdownPercent}% DD / {target.timePeriodDays}d</span>
-                <button onClick={() => removeTarget(target.id)} className="text-red-500 hover:text-red-700">
-                  <X size={14} />
-                </button>
-              </div>
+        {/* Target Set Selection */}
+        {targetSetsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="animate-spin text-gray-400" size={24} />
+            <span className="ml-2 text-gray-500">Loading target profiles...</span>
+          </div>
+        ) : targetSets.length === 0 ? (
+          <div className="text-center py-8 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <Target size={32} className="mx-auto text-gray-400 mb-2" />
+            <p className="text-gray-500 dark:text-gray-400">No saved target profiles found</p>
+            <p className="text-sm text-gray-400 mt-1">Create target profiles in the Dataset Details page</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {targetSets.map((ts) => (
+              <label
+                key={ts.id}
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                  state.selectedTargetSetIds.includes(ts.id)
+                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={state.selectedTargetSetIds.includes(ts.id)}
+                  onChange={() => toggleTargetSet(ts.id)}
+                  className="mt-1 w-4 h-4 text-green-600 border-gray-300 rounded"
+                />
+                <div className="flex-1">
+                  <div className="font-medium text-sm">{ts.name}</div>
+                  {ts.description && (
+                    <p className="text-xs text-gray-500 mt-0.5">{ts.description}</p>
+                  )}
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {ts.targets.map((target, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-600 rounded"
+                      >
+                        {target.type.replace('_', ' ')}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </label>
             ))}
           </div>
         )}
+
+        {/* Selected targets summary */}
+        {state.selectedTargetSetIds.length > 0 && (
+          <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+            <div className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
+              Selected: {state.predictionTargets.length} target(s) from {state.selectedTargetSetIds.length} profile(s)
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {state.selectedTargetSetIds.map((id) => {
+                const ts = targetSets.find(t => t.id === id);
+                return ts ? (
+                  <div key={id} className="flex items-center space-x-1 px-2 py-1 bg-white dark:bg-gray-700 rounded text-sm border border-green-300">
+                    <span>{ts.name}</span>
+                    <button onClick={() => removeTargetSet(id)} className="text-red-500 hover:text-red-700">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : null;
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Prediction Horizon */}
+      <div>
+        <div className="flex items-center space-x-2 mb-3">
+          <ChevronRight size={16} className="text-gray-400" />
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Prediction Horizon</label>
+        </div>
+        <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
+          <div className="flex items-center space-x-4">
+            <div className="flex-1">
+              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Bars ahead to predict</label>
+              <input
+                type="number"
+                min={1}
+                max={30}
+                value={state.predictionHorizon}
+                onChange={(e) => setState(prev => ({ ...prev, predictionHorizon: Math.max(1, Math.min(30, Number(e.target.value))) }))}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+            <div className="text-sm flex-1">
+              <p className="text-gray-800 dark:text-white">Model will predict <span className="text-blue-500 dark:text-blue-400 font-medium">target values</span> for the next <strong className="text-blue-600 dark:text-blue-300">{state.predictionHorizon}</strong> bar(s).</p>
+              <p className="text-xs mt-1 text-gray-600 dark:text-gray-300">Higher values give more lead time but may reduce accuracy.</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Train/Test Split */}
@@ -1185,12 +1253,15 @@ const Step2Summary: React.FC<Step2Props> = ({
           <Activity size={16} />
           <span>Optimization Settings</span>
         </h4>
-        <div className="grid grid-cols-5 gap-4 text-sm">
+        <div className="grid grid-cols-3 gap-4 text-sm mb-2">
           <div><span className="text-gray-500">Population:</span> <span className="font-medium">{state.geneticConfig.populationSize}</span></div>
           <div><span className="text-gray-500">Generations:</span> <span className="font-medium">{state.geneticConfig.generations}</span></div>
           <div><span className="text-gray-500">Epochs:</span> <span className="font-medium">{state.geneticConfig.trainingEpochs}</span></div>
+        </div>
+        <div className="grid grid-cols-3 gap-4 text-sm">
           <div><span className="text-gray-500">Class. Metric:</span> <span className="font-medium">{state.metricsConfig.classificationMetric || 'f1_score'}</span></div>
           <div><span className="text-gray-500">Reg. Metric:</span> <span className="font-medium">{state.metricsConfig.regressionMetric || 'rmse'}</span></div>
+          <div><span className="text-gray-500">Prediction Horizon:</span> <span className="font-medium">{state.predictionHorizon} bars</span></div>
         </div>
       </div>
 

@@ -31,6 +31,9 @@ export interface OHLCData {
 export interface NewsFrequency {
   date: string;
   count: number;
+  positiveCount?: number;
+  negativeCount?: number;
+  neutralCount?: number;
   dominantSentiment: 'positive' | 'negative' | 'neutral';
 }
 
@@ -154,29 +157,56 @@ const TradingChart: React.FC<TradingChartProps> = ({
         chartRef.current = null;
       }
 
+      // Calculate dynamic pane layout based on which indicators are enabled
+      // Each pane gets a percentage of chart height
+      const VOLUME_HEIGHT = 0.08;  // 8% for volume
+      const RSI_HEIGHT = indicatorData?.rsi && indicatorData.rsi.length > 0 ? 0.12 : 0;
+      const MACD_HEIGHT = indicatorData?.macd && indicatorData.macd.length > 0 ? 0.12 : 0;
+      const volatilityTargets = calculatedTargets.filter(
+        t => t.visible && t.config.category === 'regression' && t.data && t.data.length > 0
+      );
+      const VOLATILITY_HEIGHT = volatilityTargets.length > 0 ? 0.12 : 0;
+
+      // Calculate positions from bottom up
+      const volumeBottom = 0;
+      const volumeTop = 1 - VOLUME_HEIGHT;
+
+      const volatilityBottom = VOLUME_HEIGHT;
+      const volatilityTop = 1 - VOLATILITY_HEIGHT - VOLUME_HEIGHT;
+
+      const macdBottom = VOLUME_HEIGHT + VOLATILITY_HEIGHT;
+      const macdTop = 1 - MACD_HEIGHT - VOLATILITY_HEIGHT - VOLUME_HEIGHT;
+
+      const rsiBottom = VOLUME_HEIGHT + VOLATILITY_HEIGHT + MACD_HEIGHT;
+      const rsiTop = 1 - RSI_HEIGHT - MACD_HEIGHT - VOLATILITY_HEIGHT - VOLUME_HEIGHT;
+
+      // Main chart gets the remaining space at top
+      const mainChartBottom = RSI_HEIGHT + MACD_HEIGHT + VOLATILITY_HEIGHT + VOLUME_HEIGHT;
+
       const chart = createChart(chartContainerRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: '#1F2937' },
-        textColor: '#9CA3AF',
-      },
-      grid: {
-        vertLines: { color: '#374151' },
-        horzLines: { color: '#374151' },
-      },
-      width: chartContainerRef.current.clientWidth,
-      height: height,
-      crosshair: {
-        mode: 1,
-      },
-      rightPriceScale: {
-        borderColor: '#374151',
-      },
-      timeScale: {
-        borderColor: '#374151',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-    });
+        layout: {
+          background: { type: ColorType.Solid, color: '#1F2937' },
+          textColor: '#9CA3AF',
+        },
+        grid: {
+          vertLines: { color: '#374151' },
+          horzLines: { color: '#374151' },
+        },
+        width: chartContainerRef.current.clientWidth,
+        height: height,
+        crosshair: {
+          mode: 1,
+        },
+        rightPriceScale: {
+          borderColor: '#374151',
+          scaleMargins: { top: 0.02, bottom: mainChartBottom + 0.02 },
+        },
+        timeScale: {
+          borderColor: '#374151',
+          timeVisible: true,
+          secondsVisible: false,
+        },
+      });
 
     chartRef.current = chart;
 
@@ -302,32 +332,114 @@ const TradingChart: React.FC<TradingChartProps> = ({
       createSeriesMarkers(candlestickSeries, markers);
     }
 
-    // News sentiment histogram
+    // News sentiment - render as circles above bars with size based on count
+    // Group news by sentiment and size bucket, create separate series for each
     if (indicators.showSentiment && newsFrequencyByDate.length > 0) {
-      const sentimentSeries = chart.addSeries(HistogramSeries, {
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'sentiment',
-        lastValueVisible: false,
-        priceLineVisible: false,
-      });
-      chart.priceScale('sentiment').applyOptions({
-        scaleMargins: { top: 0.9, bottom: 0 },
+      // Create a lookup map for OHLC data by date (try multiple date formats)
+      const ohlcByDate = new Map<string, OHLCData>();
+      data.forEach(d => {
+        // Store by full date string and also by date-only part
+        ohlcByDate.set(d.Date, d);
+        const dateOnly = d.Date.split('T')[0];
+        if (!ohlcByDate.has(dateOnly)) {
+          ohlcByDate.set(dateOnly, d);
+        }
       });
 
-      const sentimentData: HistogramData[] = newsFrequencyByDate.map((d) => {
-        const color = d.dominantSentiment === 'positive' ? '#22C55E80' :
-                      d.dominantSentiment === 'negative' ? '#EF444480' :
-                      '#6B728080';
-        return {
-          time: toTime(d.date),
-          value: d.count,
-          color,
-        };
+      // Find max count for normalization
+      const maxCount = Math.max(...newsFrequencyByDate.map(n => n.count), 1);
+
+      // Group by sentiment and size bucket
+      type SentimentBucket = { data: LineData[]; color: string; radius: number };
+      const sentimentBuckets: SentimentBucket[] = [];
+
+      // Define size buckets (small, medium, large, xlarge)
+      const getSizeBucket = (count: number): number => {
+        const ratio = count / maxCount;
+        if (ratio <= 0.25) return 0;  // small
+        if (ratio <= 0.5) return 1;   // medium
+        if (ratio <= 0.75) return 2;  // large
+        return 3;                      // xlarge
+      };
+
+      const radiusByBucket = [5, 8, 12, 16];
+      const colorBySentiment: Record<string, string> = {
+        positive: '#22C55E99',  // 60% opacity
+        negative: '#EF444499',
+        neutral: '#F59E0B99',
+      };
+
+      // Create 12 buckets (3 sentiments x 4 sizes)
+      const sentiments = ['positive', 'negative', 'neutral'] as const;
+      sentiments.forEach(sentiment => {
+        radiusByBucket.forEach((radius) => {
+          sentimentBuckets.push({
+            data: [],
+            color: colorBySentiment[sentiment],
+            radius,
+          });
+        });
       });
-      sentimentSeries.setData(sentimentData);
+
+      // Distribute news into buckets
+      newsFrequencyByDate.forEach((news) => {
+        // Try multiple date key formats
+        const dateKey = news.date.split('T')[0];
+        let ohlc = ohlcByDate.get(dateKey) || ohlcByDate.get(news.date);
+
+        if (!ohlc) {
+          // Try to find by converting to same format as OHLC dates
+          for (const [key, val] of ohlcByDate.entries()) {
+            if (key.startsWith(dateKey)) {
+              ohlc = val;
+              break;
+            }
+          }
+        }
+
+        if (!ohlc) return;
+
+        const time = toTime(ohlc.Date);  // Use OHLC date for consistency
+        const sizeBucket = getSizeBucket(news.count);
+        const sentimentIdx = sentiments.indexOf(news.dominantSentiment);
+        if (sentimentIdx === -1) return;
+
+        const bucketIdx = sentimentIdx * 4 + sizeBucket;
+        // Position circle above the high price with some offset
+        const offset = ohlc.High * 0.03;  // 3% above high
+        sentimentBuckets[bucketIdx].data.push({
+          time,
+          value: ohlc.High + offset,
+        });
+      });
+
+      // Create a line series for each non-empty bucket
+      sentimentBuckets.forEach((bucket) => {
+        if (bucket.data.length === 0) return;
+
+        // Sort data by time to avoid rendering issues
+        bucket.data.sort((a, b) => (a.time as number) - (b.time as number));
+
+        const series = chart.addSeries(LineSeries, {
+          color: 'transparent',
+          lineWidth: 1,
+          lineVisible: false,
+          pointMarkersVisible: true,
+          pointMarkersRadius: bucket.radius,
+          lastValueVisible: false,
+          priceLineVisible: false,
+        });
+
+        // Apply marker color via series options
+        series.applyOptions({
+          color: bucket.color,
+        });
+
+        series.setData(bucket.data);
+      });
     }
 
-    // Volume series
+    // Volume series - at the bottom
     if (indicators.showVolume) {
       const volumeSeries = chart.addSeries(HistogramSeries, {
         color: '#6366F1',
@@ -337,7 +449,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
         priceLineVisible: false,
       });
       chart.priceScale('volume').applyOptions({
-        scaleMargins: { top: 0.8, bottom: 0 },
+        scaleMargins: { top: volumeTop, bottom: volumeBottom },
+        borderVisible: false,
       });
       const volumeData: HistogramData[] = data.map((d) => ({
         time: toTime(d.Date),
@@ -436,17 +549,17 @@ const TradingChart: React.FC<TradingChartProps> = ({
       zigzagSeries.setData(zigzagData);
     }
 
-    // RSI pane (separate scale)
+    // RSI pane (separate scale) - above MACD
     if (indicatorData?.rsi && indicatorData.rsi.length > 0) {
       const rsiSeries = chart.addSeries(LineSeries, {
         color: '#8B5CF6',
-        lineWidth: 1,
+        lineWidth: 2,
         priceScaleId: 'rsi',
         lastValueVisible: false,
         priceLineVisible: false,
       });
       chart.priceScale('rsi').applyOptions({
-        scaleMargins: { top: 0.85, bottom: 0 },
+        scaleMargins: { top: rsiTop, bottom: rsiBottom },
         borderVisible: false,
       });
       const rsiData: LineData[] = indicatorData.rsi
@@ -488,7 +601,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       }
     }
 
-    // MACD pane (separate scale)
+    // MACD pane (separate scale) - above volatility
     if (indicatorData?.macd && indicatorData.macd.length > 0) {
       // MACD histogram
       const macdHistSeries = chart.addSeries(HistogramSeries, {
@@ -498,7 +611,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
         priceLineVisible: false,
       });
       chart.priceScale('macd').applyOptions({
-        scaleMargins: { top: 0.92, bottom: 0 },
+        scaleMargins: { top: macdTop, bottom: macdBottom },
         borderVisible: false,
       });
       const histData: HistogramData[] = indicatorData.macd
@@ -513,7 +626,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       // MACD line
       const macdLineSeries = chart.addSeries(LineSeries, {
         color: '#3B82F6',
-        lineWidth: 1,
+        lineWidth: 2,
         priceScaleId: 'macd',
         lastValueVisible: false,
         priceLineVisible: false,
@@ -529,8 +642,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       // Signal line
       const signalLineSeries = chart.addSeries(LineSeries, {
         color: '#F97316',
-        lineWidth: 1,
-        lineStyle: 2,
+        lineWidth: 2,
         priceScaleId: 'macd',
         lastValueVisible: false,
         priceLineVisible: false,
@@ -542,6 +654,33 @@ const TradingChart: React.FC<TradingChartProps> = ({
           value: d.signal as number,
         }));
       signalLineSeries.setData(signalLineData);
+    }
+
+    // Volatility targets (regression) - render as line series in separate pane above sentiment
+    if (volatilityTargets.length > 0) {
+      volatilityTargets.forEach((target, idx) => {
+        const volSeries = chart.addSeries(LineSeries, {
+          color: target.color || ['#F59E0B', '#8B5CF6', '#EC4899'][idx % 3],
+          lineWidth: 2,
+          priceScaleId: 'volatility',
+          lastValueVisible: false,
+          priceLineVisible: false,
+        });
+
+        const volData: LineData[] = target.data
+          .filter(d => d.value !== null && d.value !== undefined)
+          .map(d => ({
+            time: toTime(d.date),
+            value: d.value as number,
+          }));
+        volSeries.setData(volData);
+      });
+
+      // Configure volatility pane - above sentiment/volume
+      chart.priceScale('volatility').applyOptions({
+        scaleMargins: { top: volatilityTop, bottom: volatilityBottom },
+        borderVisible: false,
+      });
     }
 
     // Fit content

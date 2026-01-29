@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Clock, CheckCircle, AlertCircle, Loader2, Pause, Play,
   XCircle, Activity, Target, Zap, Timer, ChevronDown, ChevronRight,
-  Info, FileText, Cpu, MemoryStick, RefreshCw
+  Info, FileText, Cpu, MemoryStick, RefreshCw, Save, Trophy, Award
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -58,6 +58,10 @@ interface Job {
   testPositives?: number;
   trainPositivesPct?: number;
   testPositivesPct?: number;
+  // Retrain fields
+  isRetrain?: boolean;
+  sourceModelId?: string;
+  retrainMode?: string;
 }
 
 interface Individual {
@@ -109,6 +113,16 @@ interface SystemResources {
   gpuMemoryTotalMB: number | null;
 }
 
+interface EliteModel {
+  rank: number;
+  model_type: string;
+  fitness: number;
+  file_path: string;
+  file_name: string;
+  metrics: Record<string, number>;
+  params: Record<string, number | string>;
+}
+
 const MODEL_COLORS: Record<string, string> = {
   lstm: 'bg-blue-500',
   gru: 'bg-green-500',
@@ -142,6 +156,10 @@ const JobDetails: React.FC = () => {
   const [showLogs, setShowLogs] = useState(false);
   const [selectedIndividual, setSelectedIndividual] = useState<Individual | null>(null);
   const [elapsedTime, setElapsedTime] = useState<string>('');
+  const [eliteModels, setEliteModels] = useState<EliteModel[]>([]);
+  const [savingModel, setSavingModel] = useState<number | null>(null);
+  const [savingRetrainResult, setSavingRetrainResult] = useState(false);
+  const [newModelName, setNewModelName] = useState('');
 
   const fetchJob = useCallback(async () => {
     if (!id) return;
@@ -196,13 +214,83 @@ const JobDetails: React.FC = () => {
     }
   }, []);
 
+  const fetchEliteModels = useCallback(async () => {
+    if (!id) return;
+    try {
+      const response = await fetch(`http://localhost:8002/api/jobs/${id}/elite-models`);
+      if (response.ok) {
+        const data = await response.json();
+        setEliteModels(data.elite_models || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch elite models:', err);
+    }
+  }, [id]);
+
+  const handleSaveToInventory = async (rank: number, _modelType: string) => {
+    if (!id) return;
+    setSavingModel(rank);
+    try {
+      const response = await fetch(`http://localhost:8002/api/jobs/${id}/elite-models/${rank}/save-to-inventory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Model saved: ${data.modelName}`);
+      } else {
+        const error = await response.json();
+        alert(`Failed to save: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Failed to save model:', err);
+      alert('Failed to save model to inventory');
+    } finally {
+      setSavingModel(null);
+    }
+  };
+
+  const handleSaveRetrainResult = async (saveMode: 'update_original' | 'new') => {
+    if (!id || !job) return;
+    setSavingRetrainResult(true);
+    try {
+      const response = await fetch(`http://localhost:8002/api/jobs/${id}/retrain-save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          saveMode,
+          newModelName: saveMode === 'new' ? newModelName || undefined : undefined
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        alert(data.message);
+        if (saveMode === 'update_original' && job.sourceModelId) {
+          navigate(`/model/${job.sourceModelId}`);
+        } else if (data.modelId) {
+          navigate(`/model/${data.modelId}`);
+        }
+      } else {
+        const error = await response.json();
+        alert(`Failed to save: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Failed to save retrain result:', err);
+      alert('Failed to save retrain result');
+    } finally {
+      setSavingRetrainResult(false);
+    }
+  };
+
   // Initial load
   useEffect(() => {
     fetchJob();
     fetchGenerations();
     fetchIndividuals();
     fetchResources();
-  }, [fetchJob, fetchGenerations, fetchIndividuals, fetchResources]);
+    fetchEliteModels();
+  }, [fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
 
   // Auto-refresh for running jobs - fast refresh for resources and progress
   useEffect(() => {
@@ -848,6 +936,170 @@ const JobDetails: React.FC = () => {
               <span key={k} className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">
                 {k}={typeof v === 'number' ? v.toFixed(4) : v}
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Retrain Results Panel (for completed retrain jobs) */}
+      {job.status === 'completed' && job.isRetrain && eliteModels.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow border-2 border-green-500">
+          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center space-x-2">
+              <RefreshCw size={20} className="text-green-500" />
+              <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+                Retrain Results
+              </h3>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              Model retrained with mode: <span className="font-medium">{job.retrainMode === 'load_weights' ? 'Continue Training' : 'From Scratch'}</span>
+            </p>
+          </div>
+          <div className="p-4 space-y-4">
+            {/* Best result summary */}
+            <div className="p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium">{eliteModels[0]?.model_type?.toUpperCase()}</span>
+                  <span className="ml-3 text-green-600 font-bold">Fitness: {eliteModels[0]?.fitness?.toFixed(4)}</span>
+                </div>
+                <div className="flex items-center space-x-2 text-sm text-gray-500">
+                  {eliteModels[0]?.metrics?.f1_score !== undefined && (
+                    <span>F1: {eliteModels[0].metrics.f1_score.toFixed(4)}</span>
+                  )}
+                  {eliteModels[0]?.metrics?.accuracy !== undefined && (
+                    <span>Acc: {(eliteModels[0].metrics.accuracy * 100).toFixed(1)}%</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Save options */}
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Save Results</h4>
+              <div className="grid grid-cols-2 gap-4">
+                {/* Update Original */}
+                <div className="p-4 border border-gray-200 dark:border-gray-600 rounded-lg">
+                  <h5 className="font-medium mb-2">Update Original Model</h5>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Replace the original model's weights and metrics with these new results.
+                  </p>
+                  <button
+                    onClick={() => handleSaveRetrainResult('update_original')}
+                    disabled={savingRetrainResult}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                  >
+                    {savingRetrainResult ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Update Original
+                  </button>
+                </div>
+
+                {/* Save as New */}
+                <div className="p-4 border border-gray-200 dark:border-gray-600 rounded-lg">
+                  <h5 className="font-medium mb-2">Save as New Model</h5>
+                  <input
+                    type="text"
+                    placeholder="New model name (optional)"
+                    value={newModelName}
+                    onChange={(e) => setNewModelName(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 mb-2"
+                  />
+                  <button
+                    onClick={() => handleSaveRetrainResult('new')}
+                    disabled={savingRetrainResult}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50"
+                  >
+                    {savingRetrainResult ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Save as New
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Elite Models Panel (for completed non-retrain jobs) */}
+      {job.status === 'completed' && !job.isRetrain && eliteModels.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow border-2 border-yellow-500">
+          <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Trophy size={20} className="text-yellow-500" />
+              <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+                Best Trained Models ({eliteModels.length})
+              </h3>
+            </div>
+            <span className="text-xs text-gray-500">Save models to inventory for use in predictions</span>
+          </div>
+          <div className="p-4 space-y-3">
+            {eliteModels.map((model) => (
+              <div
+                key={model.rank}
+                className={`p-3 rounded-lg border ${
+                  model.rank === 1
+                    ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-900/20'
+                    : model.rank === 2
+                    ? 'border-gray-300 bg-gray-50 dark:bg-gray-700/30'
+                    : model.rank === 3
+                    ? 'border-orange-300 bg-orange-50 dark:bg-orange-900/20'
+                    : 'border-gray-200 dark:border-gray-700'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      {model.rank === 1 ? (
+                        <Award size={24} className="text-yellow-500" />
+                      ) : model.rank === 2 ? (
+                        <Award size={20} className="text-gray-400" />
+                      ) : model.rank === 3 ? (
+                        <Award size={20} className="text-orange-400" />
+                      ) : (
+                        <span className="w-6 text-center font-bold text-gray-500">#{model.rank}</span>
+                      )}
+                    </div>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${MODEL_TEXT_COLORS[model.model_type] || 'bg-gray-100'}`}>
+                      {model.model_type.toUpperCase()}
+                    </span>
+                    <span className="text-sm">
+                      <span className="text-gray-500">Fitness:</span>{' '}
+                      <span className="font-bold text-green-600">{model.fitness.toFixed(4)}</span>
+                    </span>
+                    {/* Key metrics */}
+                    <div className="flex items-center space-x-2 text-xs text-gray-500">
+                      {model.metrics.f1_score !== undefined && (
+                        <span>F1: {model.metrics.f1_score.toFixed(4)}</span>
+                      )}
+                      {model.metrics.accuracy !== undefined && (
+                        <span>Acc: {(model.metrics.accuracy * 100).toFixed(1)}%</span>
+                      )}
+                      {model.metrics.precision !== undefined && (
+                        <span>Prec: {model.metrics.precision.toFixed(4)}</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleSaveToInventory(model.rank, model.model_type)}
+                    disabled={savingModel === model.rank}
+                    className="flex items-center space-x-1 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    {savingModel === model.rank ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Save size={14} />
+                    )}
+                    <span>Save to Inventory</span>
+                  </button>
+                </div>
+                {/* Parameters */}
+                <div className="mt-2 flex flex-wrap gap-1 text-xs">
+                  {Object.entries(model.params).slice(0, 6).map(([k, v]) => (
+                    <span key={k} className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">
+                      {k}={typeof v === 'number' ? v.toFixed(4) : v}
+                    </span>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </div>

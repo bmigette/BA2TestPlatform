@@ -35,9 +35,15 @@ job_progress_data: Dict[str, Dict[str, Any]] = {}
 
 
 class PredictionTarget(BaseModel):
-    profitPercent: float
-    maxDrawdownPercent: float
-    timePeriodDays: int
+    """Legacy prediction target format (kept for backwards compatibility)"""
+    profitPercent: Optional[float] = None
+    maxDrawdownPercent: Optional[float] = None
+    timePeriodDays: Optional[int] = None
+    # New target format fields
+    type: Optional[str] = None  # price_based, directional, triple_barrier, trend_reversal, volatility
+    category: Optional[str] = None  # binary_classification, multiclass_classification, regression
+    # Type-specific fields passed through as dict
+    config: Optional[Dict[str, Any]] = None
 
 
 class ParameterRanges(BaseModel):
@@ -89,8 +95,9 @@ class JobCreate(BaseModel):
     datasetIds: Optional[List[int]] = None  # Multiple datasets
     selectedModels: List[str]
     parameterRanges: ParameterRanges
-    predictionTargets: List[PredictionTarget]
+    predictionTargets: List[Any]  # Can be PredictionTarget or TargetConfig
     trainTestSplit: int
+    predictionHorizon: int = 3  # Number of bars to predict ahead
     crossValidation: Optional[CrossValidationConfig] = None
     geneticConfig: Optional[GeneticConfig] = None
     metricsConfig: Optional[MetricsConfig] = None
@@ -114,8 +121,9 @@ class JobResponse(BaseModel):
     datasetNames: Optional[List[str]] = None  # Dataset names for display
     selectedModels: List[str]
     parameterRanges: ParameterRanges
-    predictionTargets: List[PredictionTarget]
+    predictionTargets: List[Any]  # Can be PredictionTarget or TargetConfig
     trainTestSplit: int
+    predictionHorizon: int = 3  # Number of bars to predict ahead
     crossValidation: Optional[CrossValidationConfig] = None
     geneticConfig: Optional[GeneticConfig] = None
     metricsConfig: Optional[MetricsConfig] = None
@@ -235,6 +243,7 @@ def load_jobs_from_database():
                     'parameterRanges': param_ranges,
                     'predictionTargets': payload.get('prediction_targets', []),
                     'trainTestSplit': payload.get('train_test_split', 80),
+                    'predictionHorizon': payload.get('prediction_horizon', 3),
                     'crossValidation': payload.get('cross_validation'),
                     'geneticConfig': genetic_config,
                     'metricsConfig': metrics_config,
@@ -439,11 +448,22 @@ async def create_job(job_create: JobCreate):
         metrics_config = job_create.metricsConfig or MetricsConfig()
 
         # Build payload for background task
+        # Handle prediction targets - can be Pydantic models or plain dicts
+        prediction_targets = []
+        for pt in job_create.predictionTargets:
+            if hasattr(pt, 'dict'):
+                prediction_targets.append(pt.dict())
+            elif isinstance(pt, dict):
+                prediction_targets.append(pt)
+            else:
+                prediction_targets.append(pt)
+
         task_payload = {
             'dataset_ids': dataset_ids,
             'selected_models': job_create.selectedModels,
             'parameter_ranges': params.dict(),
-            'prediction_targets': [pt.dict() for pt in job_create.predictionTargets],
+            'prediction_targets': prediction_targets,
+            'prediction_horizon': job_create.predictionHorizon,
             'train_test_split': job_create.trainTestSplit,
             'cross_validation': job_create.crossValidation.dict() if job_create.crossValidation else None,
             'genetic_config': genetic_config.dict(),
@@ -472,6 +492,7 @@ async def create_job(job_create: JobCreate):
             parameterRanges=job_create.parameterRanges,
             predictionTargets=job_create.predictionTargets,
             trainTestSplit=job_create.trainTestSplit,
+            predictionHorizon=job_create.predictionHorizon,
             crossValidation=job_create.crossValidation,
             geneticConfig=genetic_config,
             metricsConfig=metrics_config,
@@ -1462,8 +1483,9 @@ async def save_elite_to_inventory(
         "allParams": params,
         # Training date range
         "trainingDateRange": job.get('trainingDateRange'),
-        # Prediction targets - critical for model inference
-        "predictionTargets": job.get('predictionTargets', [])
+        # Prediction targets and horizon - critical for model inference
+        "predictionTargets": job.get('predictionTargets', []),
+        "predictionHorizon": job.get('predictionHorizon', 3)
     }
 
     # Save to models_store

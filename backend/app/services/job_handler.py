@@ -439,8 +439,91 @@ def save_elite_models(
         return []
 
 
-def load_dataset(dataset_id: int) -> Optional[pd.DataFrame]:
-    """Load dataset from file."""
+def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
+    """
+    Get list of elite models saved for a job.
+
+    Args:
+        task_id: Job ID
+
+    Returns:
+        List of elite model info dicts with rank, model_type, fitness, file_path, metrics
+    """
+    import json
+
+    try:
+        models_dir = get_job_models_dir(task_id)
+        if not models_dir.exists():
+            return []
+
+        elite_models = []
+
+        # Find elite model files (not metadata)
+        for model_file in sorted(models_dir.glob("elite_*")):
+            if model_file.suffix == '.json':
+                continue  # Skip metadata files
+
+            # Parse filename: elite_{rank}_{model_type}_f{fitness}.pkl or .pt
+            name_parts = model_file.stem.split('_')
+            if len(name_parts) >= 4:
+                rank = int(name_parts[1])
+                model_type = name_parts[2]
+                fitness_str = name_parts[3]
+                if fitness_str.startswith('f'):
+                    fitness = float(fitness_str[1:])
+                else:
+                    fitness = 0.0
+
+                # Try to load metadata file
+                meta_file = model_file.parent / f"{model_file.stem}_meta.json"
+                # Also try the pattern: elite_01_lstm_f0.9091_meta.json
+                meta_pattern = f"elite_{name_parts[1]}_{model_type}_f*_meta.json"
+                meta_files = list(model_file.parent.glob(meta_pattern))
+
+                metrics = {}
+                params = {}
+                if meta_files:
+                    try:
+                        with open(meta_files[0], 'r') as f:
+                            meta = json.load(f)
+                            metrics = meta.get('metrics', {})
+                            params = meta.get('params', {})
+                    except Exception:
+                        pass
+
+                elite_models.append({
+                    'rank': rank,
+                    'model_type': model_type,
+                    'fitness': fitness,
+                    'file_path': str(model_file),
+                    'file_name': model_file.name,
+                    'metrics': metrics,
+                    'params': params
+                })
+
+        return sorted(elite_models, key=lambda x: x['rank'])
+
+    except Exception as e:
+        logger.error(f"Failed to get elite models: {e}", exc_info=True)
+        return []
+
+
+def load_dataset(
+    dataset_id: int,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> Optional[pd.DataFrame]:
+    """
+    Load dataset from file, optionally filtered by date range.
+
+    Args:
+        dataset_id: Dataset ID to load
+        start_date: Optional start date filter (YYYY-MM-DD)
+        end_date: Optional end date filter (YYYY-MM-DD)
+
+    Returns:
+        DataFrame with dataset data, optionally filtered by date
+    """
     db = SessionLocal()
     try:
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
@@ -458,7 +541,36 @@ def load_dataset(dataset_id: int) -> Optional[pd.DataFrame]:
             return None
 
         df = pd.read_csv(file_path)
-        logger.info(f"Loaded dataset {dataset_id}: {len(df)} rows, {len(df.columns)} columns")
+        original_rows = len(df)
+        logger.info(f"Loaded dataset {dataset_id}: {original_rows} rows, {len(df.columns)} columns")
+
+        # Apply date range filter if specified
+        if start_date or end_date:
+            # Find date column
+            date_col = None
+            for col in ['Date', 'date', 'datetime', 'Datetime', 'timestamp', 'Timestamp']:
+                if col in df.columns:
+                    date_col = col
+                    break
+
+            if date_col:
+                # Parse dates
+                df[date_col] = pd.to_datetime(df[date_col])
+
+                if start_date:
+                    start_dt = pd.to_datetime(start_date)
+                    df = df[df[date_col] >= start_dt]
+                    logger.info(f"Applied start date filter: {start_date}")
+
+                if end_date:
+                    end_dt = pd.to_datetime(end_date)
+                    df = df[df[date_col] <= end_dt]
+                    logger.info(f"Applied end date filter: {end_date}")
+
+                logger.info(f"Date range filter: {original_rows} -> {len(df)} rows")
+            else:
+                logger.warning(f"No date column found in dataset {dataset_id}, cannot filter by date")
+
         return df
 
     finally:
@@ -523,8 +635,14 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         parameter_ranges = payload.get('parameter_ranges', {})
         prediction_targets = payload.get('prediction_targets', [])
         train_test_split = payload.get('train_test_split', 80)
+        prediction_horizon = payload.get('prediction_horizon', 3)  # Bars to predict ahead
         genetic_config = payload.get('genetic_config', {})
         metrics_config = payload.get('metrics_config', {})
+        training_date_range = payload.get('training_date_range', {})
+
+        # Extract date range for subset training
+        train_start_date = training_date_range.get('startDate') if training_date_range else None
+        train_end_date = training_date_range.get('endDate') if training_date_range else None
 
         # Load and combine datasets
         update_job_progress(task_id, 5, "Loading datasets...")
@@ -532,7 +650,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         dataset_infos = []
 
         for ds_id in dataset_ids:
-            df = load_dataset(ds_id)
+            df = load_dataset(ds_id, start_date=train_start_date, end_date=train_end_date)
             if df is None:
                 return {'status': 'failed', 'error': f'Failed to load dataset {ds_id}'}
 
@@ -635,6 +753,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 parameter_ranges=parameter_ranges,
                 genetic_config=genetic_config,
                 metrics_config=metrics_config,
+                prediction_horizon=prediction_horizon,
                 progress_base=25,
                 progress_range=65,
                 timeframe=timeframe
@@ -827,6 +946,7 @@ def train_single_model(
     crossover_prob = genetic_config.get('crossoverProb', 0.7)
     mutation_prob = genetic_config.get('mutationProb', 0.2)
     early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
+    elitism_percent = genetic_config.get('elitismPercent', 10.0)
 
     # Optimize metric
     optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
@@ -1008,7 +1128,8 @@ def train_single_model(
         n_generations=generations,
         crossover_prob=crossover_prob,
         mutation_prob=mutation_prob,
-        early_stopping_generations=early_stopping
+        early_stopping_generations=early_stopping,
+        elitism_percent=elitism_percent
     )
 
     try:
@@ -1082,6 +1203,7 @@ def train_unified_optimization(
     parameter_ranges: Dict[str, Any],
     genetic_config: Dict[str, Any],
     metrics_config: Dict[str, Any],
+    prediction_horizon: int,
     progress_base: float,
     progress_range: float,
     timeframe: str = 'daily'
@@ -1143,6 +1265,7 @@ def train_unified_optimization(
     crossover_prob = genetic_config.get('crossoverProb', 0.7)
     mutation_prob = genetic_config.get('mutationProb', 0.2)
     early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
+    elitism_percent = genetic_config.get('elitismPercent', 10.0)
     training_epochs = genetic_config.get('trainingEpochs', 10)
     optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
 
@@ -1212,7 +1335,7 @@ def train_unified_optimization(
 
         try:
             # Get model-specific params
-            model_params = get_model_params(model_type, params, training_epochs)
+            model_params = get_model_params(model_type, params, training_epochs, prediction_horizon)
             n_epochs = model_params.get('n_epochs', 10)
 
             # Update epoch info and current model params before training
@@ -1408,7 +1531,8 @@ def train_unified_optimization(
         n_generations=generations,
         crossover_prob=crossover_prob,
         mutation_prob=mutation_prob,
-        early_stopping_generations=early_stopping
+        early_stopping_generations=early_stopping,
+        elitism_percent=elitism_percent
     )
 
     # Restore optimizer state if resuming
@@ -1476,17 +1600,18 @@ def train_unified_optimization(
     }
 
 
-def get_model_params(model_type: str, params: Dict, training_epochs: int = 10) -> Dict:
+def get_model_params(model_type: str, params: Dict, training_epochs: int = 10, prediction_horizon: int = 3) -> Dict:
     """Extract model-specific parameters from unified params.
 
     Args:
         model_type: Type of model (lstm, nbeats, etc.)
         params: Unified parameters from genetic optimization
         training_epochs: Number of epochs for training (from geneticConfig)
+        prediction_horizon: Number of bars to predict ahead (output_chunk_length)
     """
     model_params = {
         'input_chunk_length': int(params.get('input_chunk_length', 24)),
-        'output_chunk_length': 7,
+        'output_chunk_length': prediction_horizon,
         'n_epochs': training_epochs,
         'batch_size': int(params.get('batch_size', 32)),
         'learning_rate': params.get('learning_rate', 0.001),

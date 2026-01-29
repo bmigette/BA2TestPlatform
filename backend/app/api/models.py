@@ -66,6 +66,7 @@ class ModelResponse(BaseModel):
     allMetrics: Optional[Dict[str, Any]] = None  # All metrics from training
     trainingDateRange: Optional[Dict[str, str]] = None  # Training date range used
     predictionTargets: Optional[List[Dict[str, Any]]] = None  # Target configs used during training
+    predictionHorizon: Optional[int] = 3  # Number of bars ahead the model predicts
     createdAt: str
     trainedAt: Optional[str] = None
     filePath: Optional[str] = None
@@ -256,8 +257,8 @@ async def list_models(
                         'name': dataset.name,
                         'symbol': dataset.ticker,
                         'timeframe': dataset.timeframe,
-                        'start': dataset.data_range_start.strftime('%Y-%m-%d') if dataset.data_range_start else None,
-                        'end': dataset.data_range_end.strftime('%Y-%m-%d') if dataset.data_range_end else None
+                        'start': dataset.start_date.strftime('%Y-%m-%d') if dataset.start_date else None,
+                        'end': dataset.end_date.strftime('%Y-%m-%d') if dataset.end_date else None
                     }
                 else:
                     dataset_cache[ds_id] = None

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp } from 'lucide-react';
+import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp, Trash2, HardDrive } from 'lucide-react';
 
 interface NewsArticle {
   title: string;
@@ -29,7 +29,7 @@ interface NewsProvider {
 }
 
 const Tools: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro'>('news');
+  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro' | 'maintenance'>('news');
 
   return (
     <div className="p-6">
@@ -85,6 +85,19 @@ const Tools: React.FC = () => {
               Macro Indicators
             </div>
           </button>
+          <button
+            onClick={() => setActiveTab('maintenance')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'maintenance'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <HardDrive size={16} />
+              Maintenance
+            </div>
+          </button>
         </nav>
       </div>
 
@@ -92,6 +105,7 @@ const Tools: React.FC = () => {
       {activeTab === 'news' && <NewsProviderTester />}
       {activeTab === 'fundamentals' && <FundamentalsTester />}
       {activeTab === 'macro' && <MacroTester />}
+      {activeTab === 'maintenance' && <MaintenancePanel />}
     </div>
   );
 };
@@ -1297,6 +1311,206 @@ const MacroTester: React.FC = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// Maintenance Panel Component
+interface OrphanModel {
+  file_path: string;
+  file_name: string;
+  job_id: string;
+  size_mb: number;
+  job_exists: boolean;
+  in_inventory: boolean;
+}
+
+const MaintenancePanel: React.FC = () => {
+  const [scanning, setScanning] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [orphanModels, setOrphanModels] = useState<OrphanModel[]>([]);
+  const [totalSizeMB, setTotalSizeMB] = useState(0);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const scanOrphanModels = async () => {
+    setScanning(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const response = await fetch('http://localhost:8002/api/tools/maintenance/orphan-models');
+      if (response.ok) {
+        const data = await response.json();
+        setOrphanModels(data.orphan_models || []);
+        setTotalSizeMB(data.total_size_mb || 0);
+        setMessage(`Found ${data.total} orphan model files (${data.total_size_mb} MB)`);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.detail || 'Failed to scan orphan models');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const cleanupOrphanModels = async (dryRun: boolean) => {
+    setCleaning(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const response = await fetch(
+        `http://localhost:8002/api/tools/maintenance/orphan-models?dry_run=${dryRun}`,
+        { method: 'DELETE' }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setMessage(data.message || `Cleaned up ${data.total} items`);
+        if (!dryRun) {
+          // Refresh the scan
+          await scanOrphanModels();
+        }
+      } else {
+        const errorData = await response.json();
+        setError(errorData.detail || 'Failed to cleanup orphan models');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center gap-2">
+          <Trash2 size={24} className="text-red-500" />
+          Orphan Model Cleanup
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Find and remove trained model files that are no longer associated with any job or saved in the model inventory.
+          These are models whose training jobs have been deleted but the files remain on disk.
+        </p>
+
+        <div className="flex items-center gap-4 mb-4">
+          <button
+            onClick={scanOrphanModels}
+            disabled={scanning}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            {scanning ? (
+              <>
+                <Loader size={16} className="animate-spin" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <Search size={16} />
+                Scan for Orphan Models
+              </>
+            )}
+          </button>
+
+          {orphanModels.length > 0 && (
+            <>
+              <button
+                onClick={() => cleanupOrphanModels(true)}
+                disabled={cleaning}
+                className="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {cleaning ? (
+                  <>
+                    <Loader size={16} className="animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle size={16} />
+                    Dry Run (Preview)
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (confirm(`Are you sure you want to delete ${orphanModels.length} orphan model folders (${totalSizeMB} MB)? This cannot be undone.`)) {
+                    cleanupOrphanModels(false);
+                  }
+                }}
+                disabled={cleaning}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                <Trash2 size={16} />
+                Delete Orphan Models
+              </button>
+            </>
+          )}
+        </div>
+
+        {message && (
+          <div className="p-4 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-md flex items-center gap-2 mb-4">
+            <CheckCircle size={16} />
+            {message}
+          </div>
+        )}
+
+        {error && (
+          <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center gap-2 mb-4">
+            <XCircle size={16} />
+            {error}
+          </div>
+        )}
+
+        {orphanModels.length > 0 && (
+          <div className="border border-gray-200 dark:border-gray-700 rounded-lg">
+            <div className="p-3 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600 flex justify-between items-center">
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                Orphan Models ({orphanModels.length})
+              </span>
+              <span className="text-sm text-gray-500 dark:text-gray-400">
+                Total Size: {totalSizeMB} MB
+              </span>
+            </div>
+            <div className="max-h-64 overflow-y-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">File</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Job ID</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Size (MB)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {orphanModels.map((model, idx) => (
+                    <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-mono text-xs truncate max-w-xs">
+                        {model.file_name}
+                      </td>
+                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
+                        {model.job_id}
+                      </td>
+                      <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">
+                        {model.size_mb}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {!scanning && orphanModels.length === 0 && message && (
+          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+            <CheckCircle size={48} className="mx-auto mb-2 text-green-500" />
+            <p>No orphan models found. Your storage is clean!</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

@@ -27,6 +27,10 @@ interface Model {
   name: string;
   modelType: string;
   datasetId: number;
+  datasetName?: string;
+  symbol?: string;
+  timeframe?: string;
+  trainPeriod?: string;
   jobId: string;
   status: string;
   createdAt: string;
@@ -40,8 +44,6 @@ interface Model {
     recall: number;
     f1Score: number;
     auc: number;
-    sharpeRatio: number | null;
-    maxDrawdown: number | null;
   };
 }
 
@@ -150,13 +152,13 @@ const Models: React.FC = () => {
           cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
           break;
         case 'accuracy':
-          cmp = a.performanceMetrics.accuracy - b.performanceMetrics.accuracy;
+          cmp = (a.performanceMetrics?.accuracy || 0) - (b.performanceMetrics?.accuracy || 0);
           break;
         case 'name':
           cmp = a.name.localeCompare(b.name);
           break;
         case 'fitness':
-          cmp = a.fitness - b.fitness;
+          cmp = (a.fitness || 0) - (b.fitness || 0);
           break;
       }
       return sortDirection === 'asc' ? cmp : -cmp;
@@ -327,7 +329,14 @@ const Models: React.FC = () => {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate text-gray-900 dark:text-gray-100 group-hover:text-blue-600">{model.name}</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 truncate">Dataset #{model.datasetId}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                      {model.datasetName || `Dataset #${model.datasetId}`}
+                    </p>
+                    {model.symbol && (
+                      <p className="text-xs text-gray-400 dark:text-gray-500">
+                        {model.symbol} {model.timeframe && `• ${model.timeframe}`}
+                      </p>
+                    )}
                   </div>
                   <span className={`px-2 py-1 text-xs font-medium rounded-full ${getModelTypeColor(model.modelType)}`}>
                     {model.modelType}
@@ -342,12 +351,12 @@ const Models: React.FC = () => {
                   <div className="flex items-center gap-2 text-sm">
                     <Target className="w-4 h-4 text-green-500" />
                     <span className="text-gray-500 dark:text-gray-400">Accuracy:</span>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">{(model.performanceMetrics.accuracy * 100).toFixed(1)}%</span>
+                    <span className="font-medium text-gray-900 dark:text-gray-100">{((model.performanceMetrics?.accuracy || 0) * 100).toFixed(1)}%</span>
                   </div>
                   <div className="flex items-center gap-2 text-sm">
                     <TrendingUp className="w-4 h-4 text-blue-500" />
                     <span className="text-gray-500 dark:text-gray-400">Fitness:</span>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">{model.fitness.toFixed(1)}</span>
+                    <span className="font-medium text-gray-900 dark:text-gray-100">{(model.fitness || 0).toFixed(1)}</span>
                   </div>
                 </div>
 
@@ -432,16 +441,19 @@ const Models: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                    #{model.datasetId}
+                    <div>{model.datasetName || `#${model.datasetId}`}</div>
+                    {model.symbol && (
+                      <div className="text-xs text-gray-400">{model.symbol} {model.timeframe && `• ${model.timeframe}`}</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <span className="text-sm font-medium text-green-600">
-                      {(model.performanceMetrics.accuracy * 100).toFixed(1)}%
+                      {((model.performanceMetrics?.accuracy || 0) * 100).toFixed(1)}%
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <span className="text-sm font-medium text-blue-600">
-                      {model.fitness.toFixed(1)}
+                      {(model.fitness || 0).toFixed(1)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center">

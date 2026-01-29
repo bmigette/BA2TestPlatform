@@ -820,3 +820,169 @@ async def fetch_macro(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch macro data: {str(e)}"
         )
+
+
+@router.get("/maintenance/orphan-models")
+async def scan_orphan_models():
+    """
+    Scan for orphan models - models in trained_models folder that:
+    1. Are not saved in the model inventory
+    2. Their original job has been deleted
+
+    Returns:
+        List of orphan model files with details
+    """
+    from app.services.job_handler import get_job_models_dir
+    from app.api.models import models_store
+    from app.api.jobs import jobs_store, load_jobs_from_database
+
+    try:
+        # Load jobs from database
+        load_jobs_from_database()
+
+        # Get the base trained_models directory
+        base_models_dir = Path("trained_models")
+        if not base_models_dir.exists():
+            return {"orphan_models": [], "total": 0, "total_size_mb": 0}
+
+        orphan_models = []
+        total_size = 0
+
+        # Get all model file paths from the inventory
+        inventory_paths = set()
+        for model in models_store.values():
+            if model.get('filePath'):
+                inventory_paths.add(Path(model['filePath']).resolve())
+
+        # Scan all job folders
+        for job_dir in base_models_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+
+            job_id = job_dir.name
+
+            # Check if job exists
+            job_exists = job_id in jobs_store
+
+            # Scan model files in this job folder
+            for model_file in job_dir.glob("*"):
+                if model_file.suffix in ['.pkl', '.pt', '.pth']:
+                    # Check if this model is in the inventory
+                    in_inventory = model_file.resolve() in inventory_paths
+
+                    if not job_exists and not in_inventory:
+                        # This is an orphan model
+                        file_size = model_file.stat().st_size
+                        total_size += file_size
+                        orphan_models.append({
+                            "file_path": str(model_file),
+                            "file_name": model_file.name,
+                            "job_id": job_id,
+                            "size_bytes": file_size,
+                            "size_mb": round(file_size / (1024 * 1024), 2),
+                            "job_exists": job_exists,
+                            "in_inventory": in_inventory
+                        })
+
+        return {
+            "orphan_models": orphan_models,
+            "total": len(orphan_models),
+            "total_size_mb": round(total_size / (1024 * 1024), 2)
+        }
+
+    except Exception as e:
+        logger.error(f"Error scanning orphan models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to scan orphan models: {str(e)}"
+        )
+
+
+@router.delete("/maintenance/orphan-models")
+async def cleanup_orphan_models(dry_run: bool = Query(True, description="If True, only report what would be deleted")):
+    """
+    Clean up orphan models - delete model files that:
+    1. Are not saved in the model inventory
+    2. Their original job has been deleted
+
+    Args:
+        dry_run: If True, only report what would be deleted without actually deleting
+
+    Returns:
+        Summary of deleted (or would-be-deleted) files
+    """
+    from app.services.job_handler import get_job_models_dir
+    from app.api.models import models_store
+    from app.api.jobs import jobs_store, load_jobs_from_database
+    import shutil
+
+    try:
+        # Load jobs from database
+        load_jobs_from_database()
+
+        # Get the base trained_models directory
+        base_models_dir = Path("trained_models")
+        if not base_models_dir.exists():
+            return {"deleted": [], "total": 0, "total_size_mb": 0, "dry_run": dry_run}
+
+        deleted_items = []
+        total_size = 0
+
+        # Get all model file paths from the inventory
+        inventory_paths = set()
+        for model in models_store.values():
+            if model.get('filePath'):
+                inventory_paths.add(Path(model['filePath']).resolve())
+
+        # Scan all job folders
+        folders_to_remove = []
+        for job_dir in base_models_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+
+            job_id = job_dir.name
+            job_exists = job_id in jobs_store
+
+            # If job doesn't exist, check if any model in this folder is in inventory
+            if not job_exists:
+                has_inventory_model = False
+                for model_file in job_dir.glob("*"):
+                    if model_file.resolve() in inventory_paths:
+                        has_inventory_model = True
+                        break
+
+                if not has_inventory_model:
+                    # All files in this folder are orphans
+                    folder_size = sum(f.stat().st_size for f in job_dir.rglob("*") if f.is_file())
+                    total_size += folder_size
+                    deleted_items.append({
+                        "path": str(job_dir),
+                        "type": "folder",
+                        "job_id": job_id,
+                        "size_mb": round(folder_size / (1024 * 1024), 2)
+                    })
+                    folders_to_remove.append(job_dir)
+
+        # Actually delete if not dry run
+        if not dry_run:
+            for folder in folders_to_remove:
+                try:
+                    shutil.rmtree(folder)
+                    logger.info(f"Deleted orphan model folder: {folder}")
+                except Exception as e:
+                    logger.error(f"Failed to delete folder {folder}: {e}")
+
+        return {
+            "deleted": deleted_items,
+            "total": len(deleted_items),
+            "total_size_mb": round(total_size / (1024 * 1024), 2),
+            "dry_run": dry_run,
+            "message": "Dry run - no files deleted" if dry_run else f"Deleted {len(deleted_items)} orphan model folders"
+        }
+
+    except Exception as e:
+        logger.error(f"Error cleaning orphan models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clean orphan models: {str(e)}"
+        )

@@ -47,13 +47,6 @@ interface MetricsConfig {
   regressionMetric?: string;
 }
 
-interface PredictionTarget {
-  id: string;
-  profitPercent: number;
-  maxDrawdownPercent: number;
-  timePeriodDays: number;
-}
-
 interface JobProfile {
   id: number;
   name: string;
@@ -61,10 +54,11 @@ interface JobProfile {
   updatedAt?: string;
   selectedModels: string[];
   parameterRanges: ParameterRanges;
-  predictionTargets: Omit<PredictionTarget, 'id'>[];
+  predictionTargets: Record<string, unknown>[];  // Can be old or new format
   trainTestSplit: number;
   geneticConfig?: GeneticConfig;
   metricsConfig?: MetricsConfig;
+  predictionHorizon?: number;
 }
 
 

@@ -24,7 +24,6 @@ import type {
   CalculatedTarget,
   IndicatorParams,
 } from '../types/targets';
-import { TARGET_COLORS } from '../types/targets';
 
 type TabType = 'price_based' | 'directional' | 'triple_barrier' | 'trend_reversal' | 'volatility';
 
@@ -94,21 +93,30 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
     method: 'std' as 'std' | 'range' | 'atr',
   });
 
-  // Color assignment for targets
-  const getNextColor = useCallback((type: string, direction?: string): string => {
-    const colorMap: Record<string, string> = {
-      'price_based_up': TARGET_COLORS.priceBased.up,
-      'price_based_down': TARGET_COLORS.priceBased.down,
-      'directional_up': TARGET_COLORS.directional.up,
-      'directional_down': TARGET_COLORS.directional.down,
-      'triple_barrier': TARGET_COLORS.tripleBarrier.profit,
-      'trend_reversal_bullish': TARGET_COLORS.trendReversal.bullish,
-      'trend_reversal_bearish': TARGET_COLORS.trendReversal.bearish,
-      'volatility': TARGET_COLORS.volatility,
-    };
-    const key = direction ? `${type}_${direction}` : type;
-    return colorMap[key] || '#6B7280';
-  }, []);
+  // Unique color palette for targets - each target gets a distinct color
+  const UNIQUE_COLORS = [
+    '#10B981', // emerald
+    '#3B82F6', // blue
+    '#F59E0B', // amber
+    '#EF4444', // red
+    '#8B5CF6', // violet
+    '#EC4899', // pink
+    '#06B6D4', // cyan
+    '#84CC16', // lime
+    '#F97316', // orange
+    '#6366F1', // indigo
+    '#14B8A6', // teal
+    '#A855F7', // purple
+    '#FBBF24', // yellow
+    '#22C55E', // green
+    '#0EA5E9', // sky
+    '#D946EF', // fuchsia
+  ];
+
+  // Get next unique color based on current target count
+  const getNextColor = useCallback((): string => {
+    return UNIQUE_COLORS[targets.length % UNIQUE_COLORS.length];
+  }, [targets.length]);
 
   // Add target from form
   const addTarget = useCallback(() => {
@@ -125,7 +133,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           maxDrawdownPct: priceBasedForm.maxDrawdownPct,
           timeBars: priceBasedForm.timeBars,
         } as PriceBasedTarget;
-        color = getNextColor('price_based', priceBasedForm.direction);
+        color = getNextColor();
         break;
 
       case 'directional':
@@ -135,7 +143,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           direction: directionalForm.direction,
           horizon: directionalForm.horizon,
         } as DirectionalTarget;
-        color = getNextColor('directional', directionalForm.direction);
+        color = getNextColor();
         break;
 
       case 'triple_barrier':
@@ -146,7 +154,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           stopPct: tripleBarrierForm.stopPct,
           maxBars: tripleBarrierForm.maxBars,
         } as TripleBarrierTarget;
-        color = getNextColor('triple_barrier');
+        color = getNextColor();
         break;
 
       case 'trend_reversal':
@@ -186,7 +194,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           threshold: trendReversalForm.threshold,
           direction: trendReversalForm.direction,
         } as TrendReversalTarget;
-        color = getNextColor('trend_reversal', trendReversalForm.direction);
+        color = getNextColor();
         break;
 
       case 'volatility':
@@ -196,7 +204,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           horizon: volatilityForm.horizon,
           method: volatilityForm.method,
         } as VolatilityTarget;
-        color = getNextColor('volatility');
+        color = getNextColor();
         break;
 
       default:

@@ -69,6 +69,7 @@ interface Model {
     category: string;
     [key: string]: unknown;
   }>;
+  predictionHorizon?: number;
   createdAt: string;
   trainedAt: string | null;
   filePath: string | null;
@@ -582,6 +583,16 @@ const ModelDetails: React.FC = () => {
                 <Target className="w-5 h-5 text-purple-500" />
                 Prediction Targets
               </h3>
+              {model.predictionHorizon && (
+                <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                  <div className="text-sm">
+                    <span className="text-gray-600 dark:text-gray-400">Prediction Horizon: </span>
+                    <span className="font-medium text-blue-700 dark:text-blue-300">
+                      {model.predictionHorizon} bar(s) ahead
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="space-y-3">
                 {model.predictionTargets.map((target, index) => (
                   <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">

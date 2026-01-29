@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, TrendingUp, Database, Download, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader, Settings, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Calendar, TrendingUp, Database, Download, MessageSquare, Target, X, RefreshCw, AlertCircle, CheckCircle, Loader, Settings, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
 import TradingChart from '../components/TradingChart';
-import type { IndicatorData } from '../components/TradingChart';
+import type { IndicatorData, NewsFrequency } from '../components/TradingChart';
 import PredictionTargetsPanel from '../components/PredictionTargetsPanel';
 import TargetSetModal from '../components/TargetSetModal';
 import type { CalculatedTarget, TargetConfig, TrendReversalTarget } from '../types/targets';
@@ -44,14 +44,7 @@ interface OHLCData {
   BB_middle?: number;
 }
 
-interface NewsFrequency {
-  date: string;
-  count: number;
-  positiveCount: number;
-  negativeCount: number;
-  neutralCount: number;
-  dominantSentiment: 'positive' | 'neutral' | 'negative';
-}
+// NewsFrequency is imported from TradingChart
 
 interface PredictionTarget {
   profitPct: number;
@@ -144,13 +137,15 @@ const DatasetDetails: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
 
-  // Prediction targets state (legacy)
+  // Prediction targets state (legacy - kept for backwards compatibility)
   const [predictionTargets, setPredictionTargets] = useState<PredictionTarget[]>([]);
   const [newTarget, setNewTarget] = useState<PredictionTarget>({ profitPct: 10, maxDd: 5, days: 14 });
   const [predictionPreview, setPredictionPreview] = useState<PredictionPreview | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [generateLoading, setGenerateLoading] = useState(false);
-  const [generatedFiles, setGeneratedFiles] = useState<{ training: string; normalization: string } | null>(null);
+  const [_previewLoading, setPreviewLoading] = useState(false);
+  const [_generateLoading, setGenerateLoading] = useState(false);
+  const [_generatedFiles, setGeneratedFiles] = useState<{ training: string; normalization: string } | null>(null);
+  // Suppress unused variable warnings
+  void _previewLoading; void _generateLoading; void _generatedFiles;
 
   // New prediction targets system
   const [calculatedTargets, setCalculatedTargets] = useState<CalculatedTarget[]>([]);
@@ -312,19 +307,19 @@ const DatasetDetails: React.FC = () => {
     }
   };
 
-  // Prediction target functions
-  const addPredictionTarget = () => {
+  // Prediction target functions (legacy - kept for backwards compatibility)
+  const _addPredictionTarget = () => {
     if (newTarget.profitPct > 0 && newTarget.maxDd > 0 && newTarget.days > 0) {
       setPredictionTargets([...predictionTargets, { ...newTarget }]);
       setNewTarget({ profitPct: 10, maxDd: 5, days: 14 });
     }
   };
 
-  const removePredictionTarget = (index: number) => {
+  const _removePredictionTarget = (index: number) => {
     setPredictionTargets(predictionTargets.filter((_, i) => i !== index));
   };
 
-  const previewPredictionTargets = async () => {
+  const _previewPredictionTargets = async () => {
     if (!dataset || predictionTargets.length === 0) return;
 
     setPreviewLoading(true);
@@ -359,7 +354,7 @@ const DatasetDetails: React.FC = () => {
     }
   };
 
-  const generateTrainingData = async () => {
+  const _generateTrainingData = async () => {
     if (!dataset || predictionTargets.length === 0) return;
 
     setGenerateLoading(true);
@@ -395,6 +390,8 @@ const DatasetDetails: React.FC = () => {
       setGenerateLoading(false);
     }
   };
+  // Suppress unused function warnings
+  void _addPredictionTarget; void _removePredictionTarget; void _previewPredictionTargets; void _generateTrainingData;
 
   // New prediction targets panel callbacks
   const handleTargetsCalculated = useCallback(async (targets: CalculatedTarget[]) => {
@@ -1092,6 +1089,27 @@ const DatasetDetails: React.FC = () => {
               </button>
             </div>
           )}
+          {/* Volatility/Regression Targets Legend */}
+          {calculatedTargets.filter(t => t.visible && t.config.category === 'regression').length > 0 && (
+            <div className="flex items-center gap-3 ml-3 text-xs">
+              <span className="text-gray-400 dark:text-gray-500">Volatility:</span>
+              {calculatedTargets
+                .filter(t => t.visible && t.config.category === 'regression')
+                .map((target, idx) => {
+                  const config = target.config as { method?: string; horizon?: number };
+                  const label = `${config.method?.toUpperCase() || 'Vol'} ${config.horizon || ''}b`;
+                  return (
+                    <div key={idx} className="flex items-center gap-1">
+                      <div
+                        className="w-4 h-0.5 rounded"
+                        style={{ backgroundColor: target.color }}
+                      />
+                      <span className="text-gray-600 dark:text-gray-300">{label}</span>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </div>
         {chartData.length > 0 ? (
           <TradingChart
@@ -1123,7 +1141,7 @@ const DatasetDetails: React.FC = () => {
 
       {/* New Prediction Targets Panel - below chart */}
       {dataset && chartData.length > 0 && (
-        <div className="mt-6">
+        <div className="mt-6 mb-6">
           <PredictionTargetsPanel
             datasetId={dataset.id}
             onTargetsCalculated={handleTargetsCalculated}
