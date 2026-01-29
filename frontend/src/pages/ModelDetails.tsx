@@ -392,27 +392,27 @@ const ModelDetails: React.FC = () => {
             <div className="grid grid-cols-2 gap-4">
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">Accuracy</p>
-                <p className="text-2xl font-bold text-green-600">{(model.performanceMetrics.accuracy * 100).toFixed(1)}%</p>
+                <p className="text-2xl font-bold text-green-600">{((model.performanceMetrics?.accuracy || 0) * 100).toFixed(1)}%</p>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">Precision</p>
-                <p className="text-2xl font-bold text-blue-600">{(model.performanceMetrics.precision * 100).toFixed(1)}%</p>
+                <p className="text-2xl font-bold text-blue-600">{((model.performanceMetrics?.precision || 0) * 100).toFixed(1)}%</p>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">Recall</p>
-                <p className="text-2xl font-bold text-purple-600">{(model.performanceMetrics.recall * 100).toFixed(1)}%</p>
+                <p className="text-2xl font-bold text-purple-600">{((model.performanceMetrics?.recall || 0) * 100).toFixed(1)}%</p>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">F1 Score</p>
-                <p className="text-2xl font-bold text-orange-600">{(model.performanceMetrics.f1Score * 100).toFixed(1)}%</p>
+                <p className="text-2xl font-bold text-orange-600">{((model.performanceMetrics?.f1Score || 0) * 100).toFixed(1)}%</p>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">AUC</p>
-                <p className="text-2xl font-bold text-indigo-600">{(model.performanceMetrics.auc * 100).toFixed(1)}%</p>
+                <p className="text-2xl font-bold text-indigo-600">{((model.performanceMetrics?.auc || 0) * 100).toFixed(1)}%</p>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                 <p className="text-sm text-gray-500">Fitness</p>
-                <p className="text-2xl font-bold text-teal-600">{model.fitness.toFixed(1)}</p>
+                <p className="text-2xl font-bold text-teal-600">{(model.fitness || 0).toFixed(5)}</p>
               </div>
             </div>
           </div>
@@ -427,31 +427,31 @@ const ModelDetails: React.FC = () => {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Layers</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters.layers}</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.layers ?? 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Layer Size</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters.layerSize} neurons</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.layerSize ? `${model.hyperparameters.layerSize} neurons` : 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Learning Rate</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters.learningRate}</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.learningRate ?? 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Activation</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters.activationFunction}</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.activationFunction ?? 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Dropout</td>
-                  <td className="py-2 text-sm font-medium text-right">{(model.hyperparameters.dropout * 100).toFixed(0)}%</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.dropout != null ? `${(model.hyperparameters.dropout * 100).toFixed(0)}%` : 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Batch Size</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters.batchSize}</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.batchSize ?? 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Epochs</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters.epochs}</td>
+                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.epochs ?? 'N/A'}</td>
                 </tr>
               </tbody>
             </table>
@@ -475,12 +475,12 @@ const ModelDetails: React.FC = () => {
               <div className="text-gray-400">→</div>
 
               {/* Hidden Layers */}
-              {Array.from({ length: model.hyperparameters.layers }).map((_, i) => (
+              {Array.from({ length: model.hyperparameters?.layers || 2 }).map((_, i) => (
                 <React.Fragment key={i}>
                   <div className="flex flex-col items-center">
                     <div className="w-16 h-24 bg-purple-100 dark:bg-purple-900 border-2 border-purple-500 rounded-lg flex flex-col items-center justify-center">
                       <span className="text-xs font-medium text-purple-700 dark:text-purple-300">{model.modelType}</span>
-                      <span className="text-xs text-purple-600 dark:text-purple-400">{model.hyperparameters.layerSize}</span>
+                      <span className="text-xs text-purple-600 dark:text-purple-400">{model.hyperparameters?.layerSize ?? '?'}</span>
                     </div>
                     <span className="text-xs mt-1 text-gray-500">Layer {i + 1}</span>
                   </div>
@@ -542,7 +542,7 @@ const ModelDetails: React.FC = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">Generations</span>
-                <span className="text-sm font-medium">{model.generations} (best: #{model.bestGeneration})</span>
+                <span className="text-sm font-medium">{model.generations ?? 'N/A'} (best: #{model.bestGeneration ?? 'N/A'})</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">File Size</span>
