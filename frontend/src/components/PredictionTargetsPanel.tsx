@@ -66,7 +66,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
   });
 
   const [trendReversalForm, setTrendReversalForm] = useState({
-    indicator: 'rsi' as 'rsi' | 'macd' | 'sar' | 'zigzag',
+    indicator: 'rsi' as 'rsi' | 'macd' | 'sar' | 'zigzag' | 'donchian' | 'adx' | 'stochastic',
     direction: 'bullish' as 'bullish' | 'bearish',
     threshold: 30,
     // RSI params
@@ -80,6 +80,13 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
     sarAfMax: 0.2,
     // ZigZag params
     zigzagDeviation: 5.0,
+    // Donchian params
+    donchianPeriod: 20,
+    // ADX params
+    adxPeriod: 14,
+    // Stochastic params
+    stochKPeriod: 14,
+    stochDPeriod: 3,
   });
 
   const [volatilityForm, setVolatilityForm] = useState({
@@ -157,8 +164,19 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
             afStart: trendReversalForm.sarAfStart,
             afMax: trendReversalForm.sarAfMax,
           };
-        } else {
+        } else if (trendReversalForm.indicator === 'zigzag') {
           indicatorParams = { deviationPct: trendReversalForm.zigzagDeviation };
+        } else if (trendReversalForm.indicator === 'donchian') {
+          indicatorParams = { period: trendReversalForm.donchianPeriod };
+        } else if (trendReversalForm.indicator === 'adx') {
+          indicatorParams = { period: trendReversalForm.adxPeriod };
+        } else if (trendReversalForm.indicator === 'stochastic') {
+          indicatorParams = {
+            kPeriod: trendReversalForm.stochKPeriod,
+            dPeriod: trendReversalForm.stochDPeriod,
+          };
+        } else {
+          indicatorParams = { period: 14 }; // Default fallback
         }
         config = {
           type: 'trend_reversal',
@@ -200,16 +218,22 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
 
   // Remove target with confirmation
   const removeTarget = useCallback((index: number) => {
-    setTargets(targets.filter((_, i) => i !== index));
+    const updatedTargets = targets.filter((_, i) => i !== index);
+    setTargets(updatedTargets);
     setShowRemoveConfirm(null);
-  }, [targets]);
+    // Notify parent to update chart
+    onTargetsCalculated(updatedTargets);
+  }, [targets, onTargetsCalculated]);
 
   // Toggle target visibility
   const toggleVisibility = useCallback((index: number) => {
-    setTargets(targets.map((t, i) =>
+    const updatedTargets = targets.map((t, i) =>
       i === index ? { ...t, visible: !t.visible } : t
-    ));
-  }, [targets]);
+    );
+    setTargets(updatedTargets);
+    // Notify parent to update chart
+    onTargetsCalculated(updatedTargets);
+  }, [targets, onTargetsCalculated]);
 
   // Calculate all targets
   const calculateTargets = useCallback(async () => {
@@ -476,13 +500,16 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Indicator</label>
                 <select
                   value={trendReversalForm.indicator}
-                  onChange={(e) => setTrendReversalForm({ ...trendReversalForm, indicator: e.target.value as 'rsi' | 'macd' | 'sar' | 'zigzag' })}
+                  onChange={(e) => setTrendReversalForm({ ...trendReversalForm, indicator: e.target.value as 'rsi' | 'macd' | 'sar' | 'zigzag' | 'donchian' | 'adx' | 'stochastic' })}
                   className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
                 >
                   <option value="rsi">RSI</option>
                   <option value="macd">MACD</option>
                   <option value="sar">Parabolic SAR</option>
                   <option value="zigzag">ZigZag</option>
+                  <option value="donchian">Donchian Channel</option>
+                  <option value="adx">ADX</option>
+                  <option value="stochastic">Stochastic</option>
                 </select>
               </div>
               <div>
@@ -593,6 +620,91 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
                     className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
                   />
                 </div>
+              )}
+              {trendReversalForm.indicator === 'donchian' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Threshold</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="99"
+                      value={trendReversalForm.threshold}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, threshold: parseInt(e.target.value) || 0 })}
+                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Period</label>
+                    <input
+                      type="number"
+                      min="2"
+                      value={trendReversalForm.donchianPeriod}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, donchianPeriod: parseInt(e.target.value) || 20 })}
+                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                </>
+              )}
+              {trendReversalForm.indicator === 'adx' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Threshold</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="99"
+                      value={trendReversalForm.threshold}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, threshold: parseInt(e.target.value) || 25 })}
+                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Period</label>
+                    <input
+                      type="number"
+                      min="2"
+                      value={trendReversalForm.adxPeriod}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, adxPeriod: parseInt(e.target.value) || 14 })}
+                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                </>
+              )}
+              {trendReversalForm.indicator === 'stochastic' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Threshold</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="99"
+                      value={trendReversalForm.threshold}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, threshold: parseInt(e.target.value) || 20 })}
+                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">%K Period</label>
+                    <input
+                      type="number"
+                      min="2"
+                      value={trendReversalForm.stochKPeriod}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, stochKPeriod: parseInt(e.target.value) || 14 })}
+                      className="w-16 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">%D Period</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={trendReversalForm.stochDPeriod}
+                      onChange={(e) => setTrendReversalForm({ ...trendReversalForm, stochDPeriod: parseInt(e.target.value) || 3 })}
+                      className="w-16 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                    />
+                  </div>
+                </>
               )}
             </div>
           </div>

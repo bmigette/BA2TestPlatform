@@ -53,11 +53,19 @@ class ModelResponse(BaseModel):
     name: str
     modelType: str  # LSTM, GRU, N-BEATS, Transformer, TCN, RNN
     datasetId: int
+    datasetName: Optional[str] = None  # Dataset name for display
+    symbol: Optional[str] = None  # Trading symbol (e.g., AAPL)
+    timeframe: Optional[str] = None  # Timeframe (e.g., 1d, 1h)
+    trainPeriod: Optional[str] = None  # Training period (e.g., 2020-01-01 to 2023-12-31)
     jobId: str
     status: str  # trained, failed, exported
     hyperparameters: HyperParameters
     trainingHistory: List[TrainingHistory]
     performanceMetrics: PerformanceMetrics
+    confusionMatrix: Optional[List[List[int]]] = None  # Confusion matrix data
+    allMetrics: Optional[Dict[str, Any]] = None  # All metrics from training
+    trainingDateRange: Optional[Dict[str, str]] = None  # Training date range used
+    predictionTargets: Optional[List[Dict[str, Any]]] = None  # Target configs used during training
     createdAt: str
     trainedAt: Optional[str] = None
     filePath: Optional[str] = None
@@ -222,6 +230,9 @@ async def list_models(
     Returns:
         List of models
     """
+    from app.models.database import SessionLocal
+    from app.models.dataset import Dataset
+
     models = list(models_store.values())
 
     # Filter by dataset_id if provided
@@ -231,6 +242,35 @@ async def list_models(
     # Filter by model_type if provided
     if model_type is not None:
         models = [m for m in models if m.get("modelType", "").upper() == model_type.upper()]
+
+    # Enrich models with dataset info
+    db = SessionLocal()
+    try:
+        dataset_cache = {}
+        for model in models:
+            ds_id = model.get("datasetId")
+            if ds_id and ds_id not in dataset_cache:
+                dataset = db.query(Dataset).filter(Dataset.id == ds_id).first()
+                if dataset:
+                    dataset_cache[ds_id] = {
+                        'name': dataset.name,
+                        'symbol': dataset.ticker,
+                        'timeframe': dataset.timeframe,
+                        'start': dataset.data_range_start.strftime('%Y-%m-%d') if dataset.data_range_start else None,
+                        'end': dataset.data_range_end.strftime('%Y-%m-%d') if dataset.data_range_end else None
+                    }
+                else:
+                    dataset_cache[ds_id] = None
+
+            ds_info = dataset_cache.get(ds_id)
+            if ds_info:
+                model['datasetName'] = ds_info['name']
+                model['symbol'] = ds_info['symbol']
+                model['timeframe'] = ds_info['timeframe']
+                if ds_info['start'] and ds_info['end']:
+                    model['trainPeriod'] = f"{ds_info['start']} to {ds_info['end']}"
+    finally:
+        db.close()
 
     models = [ModelResponse(**m) for m in models]
 

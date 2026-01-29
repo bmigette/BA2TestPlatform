@@ -78,6 +78,12 @@ class CrossValidationConfig(BaseModel):
     useDatasetAsFold: bool = True  # Use each dataset as a fold
 
 
+class TrainingDateRange(BaseModel):
+    """Training date range for subset training"""
+    startDate: Optional[str] = None  # YYYY-MM-DD format
+    endDate: Optional[str] = None  # YYYY-MM-DD format
+
+
 class JobCreate(BaseModel):
     datasetId: Optional[int] = None  # Single dataset (backwards compatible)
     datasetIds: Optional[List[int]] = None  # Multiple datasets
@@ -88,6 +94,7 @@ class JobCreate(BaseModel):
     crossValidation: Optional[CrossValidationConfig] = None
     geneticConfig: Optional[GeneticConfig] = None
     metricsConfig: Optional[MetricsConfig] = None
+    trainingDateRange: Optional[TrainingDateRange] = None  # Subset of dataset dates to use for training
 
 
 class DatasetProgress(BaseModel):
@@ -152,6 +159,12 @@ class JobResponse(BaseModel):
     testPositives: Optional[int] = None
     trainPositivesPct: Optional[float] = None
     testPositivesPct: Optional[float] = None
+    # Training date range
+    trainingDateRange: Optional[TrainingDateRange] = None
+    # Retrain metadata
+    isRetrain: Optional[bool] = None
+    sourceModelId: Optional[str] = None
+    retrainMode: Optional[str] = None
 
 
 class TrainingMetrics(BaseModel):
@@ -434,7 +447,8 @@ async def create_job(job_create: JobCreate):
             'train_test_split': job_create.trainTestSplit,
             'cross_validation': job_create.crossValidation.dict() if job_create.crossValidation else None,
             'genetic_config': genetic_config.dict(),
-            'metrics_config': metrics_config.dict()
+            'metrics_config': metrics_config.dict(),
+            'training_date_range': job_create.trainingDateRange.dict() if job_create.trainingDateRange else None
         }
 
         # Queue background training task
@@ -468,6 +482,7 @@ async def create_job(job_create: JobCreate):
             optimizeMetric=metrics_config.optimizeMetric,
             totalCombinations=total_combinations,
             datasetProgress=dataset_progress if len(dataset_ids) > 1 else None,
+            trainingDateRange=job_create.trainingDateRange,
         )
 
         # Store in memory for quick access
@@ -1316,3 +1331,458 @@ async def get_job_generations(job_id: str):
         "total_generations": len(generations),
         "generations": generations
     }
+
+
+class EliteModelResponse(BaseModel):
+    rank: int
+    model_type: str
+    fitness: float
+    file_path: str
+    file_name: str
+    metrics: Dict[str, Any]
+    params: Dict[str, Any]
+
+
+class SaveToInventoryRequest(BaseModel):
+    name: Optional[str] = None
+
+
+@router.get("/{job_id}/elite-models")
+async def get_job_elite_models(job_id: str):
+    """
+    Get elite models saved for a completed job.
+
+    Returns:
+        List of elite model info with rank, model_type, fitness, metrics, etc.
+    """
+    from app.services.job_handler import get_elite_models
+
+    elite_models = get_elite_models(job_id)
+
+    return {
+        "job_id": job_id,
+        "elite_models": elite_models,
+        "total": len(elite_models)
+    }
+
+
+@router.post("/{job_id}/elite-models/{rank}/save-to-inventory")
+async def save_elite_to_inventory(
+    job_id: str,
+    rank: int,
+    request: SaveToInventoryRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Save an elite model from a job to the model inventory.
+
+    Args:
+        job_id: Job ID
+        rank: Elite model rank (1-based)
+        request: Optional custom name
+
+    Returns:
+        Saved model info
+    """
+    from app.services.job_handler import get_elite_models, get_job_models_dir
+    from app.api.models import models_store
+    import uuid
+    import json
+
+    # Get elite models
+    elite_models = get_elite_models(job_id)
+    elite_model = next((m for m in elite_models if m['rank'] == rank), None)
+
+    if not elite_model:
+        raise HTTPException(status_code=404, detail=f"Elite model rank {rank} not found")
+
+    # Get job info for dataset details
+    load_jobs_from_database()
+    job = jobs_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    # Get dataset info
+    dataset_id = job.get('datasetId')
+    dataset_ids = job.get('datasetIds', [])
+    if not dataset_id and dataset_ids:
+        dataset_id = dataset_ids[0]
+
+    # Generate model ID
+    model_id = f"mdl-{uuid.uuid4().hex[:8]}"
+
+    # Create model name
+    model_type = elite_model['model_type'].upper()
+    if request.name:
+        model_name = request.name
+    else:
+        model_name = f"{model_type}_Job{job_id}_Rank{rank}"
+
+    # Extract metrics
+    metrics = elite_model.get('metrics', {})
+    params = elite_model.get('params', {})
+
+    # Create model entry
+    model_entry = {
+        "id": model_id,
+        "name": model_name,
+        "modelType": model_type,
+        "datasetId": dataset_id,
+        "jobId": job_id,
+        "status": "trained",
+        "hyperparameters": {
+            "layers": params.get('n_rnn_layers', 2),
+            "layerSize": params.get('hidden_dim', 64) if isinstance(params.get('hidden_dim'), int) else 64,
+            "learningRate": params.get('learning_rate', 0.001),
+            "activationFunction": "relu",
+            "dropout": params.get('dropout', 0.1),
+            "batchSize": params.get('batch_size', 32),
+            "epochs": job.get('geneticConfig', {}).get('trainingEpochs', 10)
+        },
+        "trainingHistory": [],  # Could be populated from training logs
+        "performanceMetrics": {
+            "accuracy": metrics.get('accuracy', 0),
+            "precision": metrics.get('precision', 0),
+            "recall": metrics.get('recall', 0),
+            "f1Score": metrics.get('f1_score', 0),
+            "auc": metrics.get('auc_roc', 0),
+            "sharpeRatio": None,
+            "maxDrawdown": None
+        },
+        "createdAt": datetime.now().isoformat(),
+        "trainedAt": job.get('completedAt'),
+        "filePath": elite_model['file_path'],
+        "fileSize": None,
+        "generations": job.get('totalGenerations', 50),
+        "bestGeneration": 0,  # Could be extracted from individual info
+        "fitness": elite_model['fitness'],
+        # Additional fields for new requirements
+        "confusionMatrix": metrics.get('confusion_matrix'),
+        "allMetrics": metrics,
+        "allParams": params,
+        # Training date range
+        "trainingDateRange": job.get('trainingDateRange'),
+        # Prediction targets - critical for model inference
+        "predictionTargets": job.get('predictionTargets', [])
+    }
+
+    # Save to models_store
+    models_store[model_id] = model_entry
+
+    logger.info(f"Saved elite model rank {rank} from job {job_id} as {model_id}")
+
+    return {
+        "success": True,
+        "modelId": model_id,
+        "modelName": model_name,
+        "message": f"Model saved to inventory as {model_name}"
+    }
+
+
+class RetrainJobCreate(BaseModel):
+    """Request to create a retrain job for an existing model"""
+    sourceModelId: str  # ID of the model to retrain
+    datasetId: Optional[int] = None  # Optional different dataset
+    trainingDateRange: Optional[TrainingDateRange] = None  # Subset of dataset
+    retrainMode: str = "from_scratch"  # "load_weights" (continue training) or "from_scratch"
+    epochs: int = 10  # Number of epochs for retraining
+
+
+@router.post("/retrain", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
+async def create_retrain_job(retrain_request: RetrainJobCreate):
+    """
+    Create a retrain job for an existing model.
+
+    Args:
+        retrain_request: Retrain configuration containing:
+            - sourceModelId: ID of the model to retrain
+            - datasetId: Optional different dataset (uses model's dataset if not specified)
+            - trainingDateRange: Optional date range subset
+            - retrainMode: 'load_weights' or 'from_scratch'
+            - epochs: Number of training epochs
+
+    Returns:
+        Created retrain job with ID
+    """
+    from app.api.models import models_store
+
+    try:
+        # Get source model
+        source_model = models_store.get(retrain_request.sourceModelId)
+        if not source_model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Source model {retrain_request.sourceModelId} not found"
+            )
+
+        # Determine dataset to use
+        dataset_id = retrain_request.datasetId or source_model.get('datasetId')
+        if not dataset_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No dataset specified and source model has no associated dataset"
+            )
+
+        # Get dataset info
+        ds_info = get_dataset_info(dataset_id)
+
+        # Build job configuration based on source model
+        model_type = source_model.get('modelType', 'lstm').lower()
+        hyperparams = source_model.get('hyperparameters', {})
+        all_params = source_model.get('allParams', {})
+
+        # Create genetic config with single generation (just train the model)
+        genetic_config = GeneticConfig(
+            populationSize=1,
+            generations=1,
+            elitismPercent=100,
+            crossoverProb=0,
+            mutationProb=0,
+            earlyStoppingGenerations=1,
+            trainingEpochs=retrain_request.epochs
+        )
+
+        # Build parameter ranges from model params (fixed values)
+        params = all_params if all_params else hyperparams
+        parameter_ranges = ParameterRanges(
+            layersMin=params.get('n_rnn_layers', params.get('layers', 2)),
+            layersMax=params.get('n_rnn_layers', params.get('layers', 2)),
+            layersStep=1,
+            layerSizeMin=params.get('hidden_dim', params.get('layerSize', 64)),
+            layerSizeMax=params.get('hidden_dim', params.get('layerSize', 64)),
+            layerSizeStep=1,
+            learningRateMin=params.get('learning_rate', params.get('learningRate', 0.001)),
+            learningRateMax=params.get('learning_rate', params.get('learningRate', 0.001)),
+            learningRateStep=0.001,
+            dropoutMin=params.get('dropout', 0.1),
+            dropoutMax=params.get('dropout', 0.1),
+            dropoutStep=0.1,
+            activationFunctions=[params.get('activationFunction', 'relu')]
+        )
+
+        # Get prediction targets from original job if available
+        original_job_id = source_model.get('jobId')
+        prediction_targets = []
+        if original_job_id and original_job_id in jobs_store:
+            original_job = jobs_store[original_job_id]
+            prediction_targets = original_job.get('predictionTargets', [])
+
+        # Build payload for background task
+        task_payload = {
+            'dataset_ids': [dataset_id],
+            'selected_models': [model_type],
+            'parameter_ranges': parameter_ranges.dict(),
+            'prediction_targets': prediction_targets if isinstance(prediction_targets, list) else [prediction_targets],
+            'train_test_split': 80,
+            'cross_validation': None,
+            'genetic_config': genetic_config.dict(),
+            'metrics_config': {'optimizeMetric': 'f1_score'},
+            'training_date_range': retrain_request.trainingDateRange.dict() if retrain_request.trainingDateRange else None,
+            # Retrain-specific fields
+            'is_retrain': True,
+            'source_model_id': retrain_request.sourceModelId,
+            'source_model_path': source_model.get('filePath'),
+            'retrain_mode': retrain_request.retrainMode  # load_weights or from_scratch
+        }
+
+        # Queue background training task
+        task_queue = get_task_queue()
+        task_id = task_queue.queue_task(
+            task_type='training_job',
+            name=f'Retrain {model_type.upper()} model on dataset {ds_info.get("name", dataset_id)}',
+            payload=task_payload,
+            description=f'Retrain model ({retrain_request.retrainMode}) for {retrain_request.epochs} epochs'
+        )
+
+        job = JobResponse(
+            id=task_id,
+            datasetId=dataset_id,
+            selectedModels=[model_type],
+            parameterRanges=parameter_ranges,
+            predictionTargets=[PredictionTarget(**pt) if isinstance(pt, dict) else pt for pt in prediction_targets] if prediction_targets else [],
+            trainTestSplit=80,
+            geneticConfig=genetic_config,
+            metricsConfig=MetricsConfig(optimizeMetric='f1_score'),
+            status="queued",
+            progress=0.0,
+            createdAt=datetime.now().isoformat(),
+            totalGenerations=1,
+            optimizeMetric='f1_score',
+            trainingDateRange=retrain_request.trainingDateRange,
+        )
+
+        # Store in memory with retrain metadata
+        job_dict = job.dict()
+        job_dict['isRetrain'] = True
+        job_dict['sourceModelId'] = retrain_request.sourceModelId
+        job_dict['retrainMode'] = retrain_request.retrainMode
+        jobs_store[task_id] = job_dict
+
+        # Initialize progress data
+        job_progress_data[task_id] = {
+            "metrics": [],
+            "logs": [f"[{datetime.now().isoformat()}] Retrain job queued for processing"]
+        }
+
+        logger.info(f"Created retrain job {task_id} for model {retrain_request.sourceModelId}")
+
+        return job
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create retrain job: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+class RetrainSaveRequest(BaseModel):
+    """Request to save retrain results"""
+    saveMode: str = "new"  # "update_original" or "new"
+    newModelName: Optional[str] = None  # Only used when saveMode is "new"
+
+
+@router.post("/{job_id}/retrain-save")
+async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
+    """
+    Save retrain job results - either update the original model or save as new.
+
+    Args:
+        job_id: Retrain job ID
+        request: Save mode and optional new model name
+
+    Returns:
+        Updated/created model info
+    """
+    from app.api.models import models_store
+    from app.services.job_handler import get_elite_models
+
+    try:
+        # Load jobs
+        load_jobs_from_database()
+        job = jobs_store.get(job_id)
+
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        if not job.get('isRetrain'):
+            raise HTTPException(status_code=400, detail="This is not a retrain job")
+
+        if job.get('status') != 'completed':
+            raise HTTPException(status_code=400, detail="Job is not completed yet")
+
+        # Get elite models from the retrain job
+        elite_models = get_elite_models(job_id)
+        if not elite_models:
+            raise HTTPException(status_code=404, detail="No trained models found for this job")
+
+        best_model = elite_models[0]
+        source_model_id = job.get('sourceModelId')
+
+        if request.saveMode == "update_original":
+            # Update the original model with new training results
+            if not source_model_id or source_model_id not in models_store:
+                raise HTTPException(status_code=404, detail=f"Original model {source_model_id} not found")
+
+            original_model = models_store[source_model_id]
+
+            # Update model with new metrics and path
+            original_model['filePath'] = best_model['file_path']
+            original_model['fitness'] = best_model['fitness']
+            original_model['performanceMetrics'] = {
+                "accuracy": best_model['metrics'].get('accuracy', 0),
+                "precision": best_model['metrics'].get('precision', 0),
+                "recall": best_model['metrics'].get('recall', 0),
+                "f1Score": best_model['metrics'].get('f1_score', 0),
+                "auc": best_model['metrics'].get('auc_roc', 0),
+            }
+            original_model['allMetrics'] = best_model['metrics']
+            original_model['allParams'] = best_model['params']
+            original_model['confusionMatrix'] = best_model['metrics'].get('confusion_matrix')
+            original_model['trainedAt'] = datetime.now().isoformat()
+            original_model['trainingDateRange'] = job.get('trainingDateRange')
+
+            # Add retrain history
+            retrain_history = original_model.get('retrainHistory', [])
+            retrain_history.append({
+                'jobId': job_id,
+                'date': datetime.now().isoformat(),
+                'mode': job.get('retrainMode'),
+                'epochs': job.get('geneticConfig', {}).get('trainingEpochs', 10)
+            })
+            original_model['retrainHistory'] = retrain_history
+
+            logger.info(f"Updated original model {source_model_id} with retrain results from job {job_id}")
+
+            return {
+                "success": True,
+                "modelId": source_model_id,
+                "message": f"Updated original model with new training results"
+            }
+
+        else:
+            # Save as new model
+            import uuid
+            model_id = f"mdl-{uuid.uuid4().hex[:8]}"
+            model_type = best_model['model_type'].upper()
+
+            if request.newModelName:
+                model_name = request.newModelName
+            else:
+                model_name = f"{model_type}_Retrain_{job_id[:8]}"
+
+            # Get dataset info
+            dataset_id = job.get('datasetId')
+
+            model_entry = {
+                "id": model_id,
+                "name": model_name,
+                "modelType": model_type,
+                "datasetId": dataset_id,
+                "jobId": job_id,
+                "status": "trained",
+                "hyperparameters": best_model['params'],
+                "trainingHistory": [],
+                "performanceMetrics": {
+                    "accuracy": best_model['metrics'].get('accuracy', 0),
+                    "precision": best_model['metrics'].get('precision', 0),
+                    "recall": best_model['metrics'].get('recall', 0),
+                    "f1Score": best_model['metrics'].get('f1_score', 0),
+                    "auc": best_model['metrics'].get('auc_roc', 0),
+                },
+                "createdAt": datetime.now().isoformat(),
+                "trainedAt": datetime.now().isoformat(),
+                "filePath": best_model['file_path'],
+                "generations": 1,
+                "bestGeneration": 0,
+                "fitness": best_model['fitness'],
+                "confusionMatrix": best_model['metrics'].get('confusion_matrix'),
+                "allMetrics": best_model['metrics'],
+                "allParams": best_model['params'],
+                "trainingDateRange": job.get('trainingDateRange'),
+                # Source model reference
+                "sourceModelId": source_model_id,
+                "retrainMode": job.get('retrainMode')
+            }
+
+            models_store[model_id] = model_entry
+
+            logger.info(f"Saved retrain results as new model {model_id}")
+
+            return {
+                "success": True,
+                "modelId": model_id,
+                "modelName": model_name,
+                "message": f"Saved as new model: {model_name}"
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save retrain results: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

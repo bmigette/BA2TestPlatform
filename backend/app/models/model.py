@@ -27,6 +27,10 @@ class Model(Base):
     val_accuracy = Column(Float, nullable=True)
     val_loss = Column(Float, nullable=True)
 
+    # Prediction targets configuration
+    # Stores the full target configs used during training (type, params, order)
+    prediction_targets = Column(JSON, nullable=True)
+
     # Model storage
     file_path = Column(String(500), nullable=False)
 

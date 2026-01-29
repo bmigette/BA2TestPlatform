@@ -15,7 +15,10 @@ import {
   Activity,
   BarChart3,
   Layers,
-  Zap
+  Zap,
+  RefreshCw,
+  X,
+  Database
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ScatterChart, Scatter, Cell } from 'recharts';
 
@@ -43,8 +46,6 @@ interface PerformanceMetrics {
   recall: number;
   f1Score: number;
   auc: number;
-  sharpeRatio: number | null;
-  maxDrawdown: number | null;
 }
 
 interface Model {
@@ -52,11 +53,22 @@ interface Model {
   name: string;
   modelType: string;
   datasetId: number;
+  datasetName?: string;
+  symbol?: string;
+  timeframe?: string;
+  trainPeriod?: string;
   jobId: string;
   status: string;
   hyperparameters: HyperParameters;
   trainingHistory: TrainingHistory[];
   performanceMetrics: PerformanceMetrics;
+  confusionMatrix?: number[][];
+  allMetrics?: Record<string, number>;
+  predictionTargets?: Array<{
+    type: string;
+    category: string;
+    [key: string]: unknown;
+  }>;
   createdAt: string;
   trainedAt: string | null;
   filePath: string | null;
@@ -98,10 +110,78 @@ const ModelDetails: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'training' | 'predictions' | 'confusion'>('overview');
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showRetrainDialog, setShowRetrainDialog] = useState(false);
+  const [retrainConfig, setRetrainConfig] = useState({
+    datasetId: null as number | null,
+    retrainMode: 'from_scratch' as 'load_weights' | 'from_scratch',
+    epochs: 10,
+    useCustomDateRange: false,
+    startDate: '',
+    endDate: ''
+  });
+  const [datasets, setDatasets] = useState<Array<{id: number, name: string, ticker: string, start_date: string, end_date: string}>>([]);
+  const [submittingRetrain, setSubmittingRetrain] = useState(false);
 
   useEffect(() => {
     fetchModelDetails();
+    fetchDatasets();
   }, [id]);
+
+  const fetchDatasets = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/datasets`);
+      if (res.ok) {
+        const data = await res.json();
+        setDatasets(data.datasets || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch datasets:', err);
+    }
+  };
+
+  const handleRetrain = async () => {
+    if (!model) return;
+
+    setSubmittingRetrain(true);
+    try {
+      const retrainPayload: any = {
+        sourceModelId: model.id,
+        retrainMode: retrainConfig.retrainMode,
+        epochs: retrainConfig.epochs
+      };
+
+      if (retrainConfig.datasetId) {
+        retrainPayload.datasetId = retrainConfig.datasetId;
+      }
+
+      if (retrainConfig.useCustomDateRange && retrainConfig.startDate && retrainConfig.endDate) {
+        retrainPayload.trainingDateRange = {
+          startDate: retrainConfig.startDate,
+          endDate: retrainConfig.endDate
+        };
+      }
+
+      const res = await fetch(`${API_BASE}/jobs/retrain`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(retrainPayload)
+      });
+
+      if (res.ok) {
+        const job = await res.json();
+        setShowRetrainDialog(false);
+        navigate(`/job/${job.id}`);
+      } else {
+        const error = await res.json();
+        alert(`Retrain failed: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Retrain error:', err);
+      alert('Failed to create retrain job');
+    } finally {
+      setSubmittingRetrain(false);
+    }
+  };
 
   const fetchModelDetails = async () => {
     try {
@@ -219,12 +299,30 @@ const ModelDetails: React.FC = () => {
               {model.name}
             </h1>
             <p className="text-sm text-gray-500">
-              {model.modelType} Model - Dataset #{model.datasetId}
+              {model.modelType} Model - {model.datasetName || `Dataset #${model.datasetId}`}
+              {model.symbol && (
+                <span className="ml-2 text-blue-500">
+                  {model.symbol} {model.timeframe && `• ${model.timeframe}`}
+                </span>
+              )}
             </p>
+            {model.trainPeriod && (
+              <p className="text-xs text-gray-400">{model.trainPeriod}</p>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setRetrainConfig(prev => ({ ...prev, datasetId: model?.datasetId || null }));
+              setShowRetrainDialog(true);
+            }}
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-green-500 text-white hover:bg-green-600 rounded-lg"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retrain
+          </button>
           <button
             onClick={handleClone}
             className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
@@ -331,18 +429,6 @@ const ModelDetails: React.FC = () => {
                 <p className="text-sm text-gray-500">Fitness</p>
                 <p className="text-2xl font-bold text-teal-600">{model.fitness.toFixed(1)}</p>
               </div>
-              {model.performanceMetrics.sharpeRatio && (
-                <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                  <p className="text-sm text-gray-500">Sharpe Ratio</p>
-                  <p className="text-2xl font-bold text-cyan-600">{model.performanceMetrics.sharpeRatio.toFixed(2)}</p>
-                </div>
-              )}
-              {model.performanceMetrics.maxDrawdown && (
-                <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                  <p className="text-sm text-gray-500">Max Drawdown</p>
-                  <p className="text-2xl font-bold text-red-600">{(model.performanceMetrics.maxDrawdown * 100).toFixed(1)}%</p>
-                </div>
-              )}
             </div>
           </div>
 
@@ -443,6 +529,24 @@ const ModelDetails: React.FC = () => {
                   {model.status}
                 </span>
               </div>
+              {model.symbol && (
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Symbol</span>
+                  <span className="text-sm font-medium">{model.symbol}</span>
+                </div>
+              )}
+              {model.timeframe && (
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Timeframe</span>
+                  <span className="text-sm font-medium">{model.timeframe}</span>
+                </div>
+              )}
+              {model.trainPeriod && (
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Training Period</span>
+                  <span className="text-sm font-medium">{model.trainPeriod}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">Created</span>
                 <span className="text-sm font-medium">{new Date(model.createdAt).toLocaleString()}</span>
@@ -461,10 +565,53 @@ const ModelDetails: React.FC = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">Job ID</span>
-                <span className="text-sm font-mono text-blue-600">{model.jobId}</span>
+                <button
+                  onClick={() => navigate(`/job/${model.jobId}`)}
+                  className="text-sm font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                >
+                  {model.jobId}
+                </button>
               </div>
             </div>
           </div>
+
+          {/* Prediction Targets */}
+          {model.predictionTargets && model.predictionTargets.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <Target className="w-5 h-5 text-purple-500" />
+                Prediction Targets
+              </h3>
+              <div className="space-y-3">
+                {model.predictionTargets.map((target, index) => (
+                  <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm capitalize">
+                        {(target.type as string).replace(/_/g, ' ')}
+                      </span>
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        target.category === 'binary_classification' ? 'bg-blue-100 text-blue-700' :
+                        target.category === 'multiclass_classification' ? 'bg-purple-100 text-purple-700' :
+                        'bg-green-100 text-green-700'
+                      }`}>
+                        {(target.category as string).replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 grid grid-cols-2 gap-2">
+                      {Object.entries(target).filter(([k]) => !['type', 'category', 'enabled', 'color'].includes(k)).map(([key, value]) => (
+                        <div key={key}>
+                          <span className="capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}: </span>
+                          <span className="font-medium">
+                            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -590,6 +737,167 @@ const ModelDetails: React.FC = () => {
                 <p className="text-sm text-gray-500">Specificity</p>
                 <p className="text-xl font-bold">{(confusionMatrix.metrics.specificity * 100).toFixed(1)}%</p>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Retrain Dialog */}
+      {showRetrainDialog && model && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full mx-4">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-green-500" />
+                Retrain Model
+              </h3>
+              <button onClick={() => setShowRetrainDialog(false)} className="text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              {/* Retrain Mode */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Retrain Mode
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`flex items-center p-3 rounded-lg border cursor-pointer ${
+                    retrainConfig.retrainMode === 'from_scratch'
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                      : 'border-gray-200 dark:border-gray-600'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="retrainMode"
+                      value="from_scratch"
+                      checked={retrainConfig.retrainMode === 'from_scratch'}
+                      onChange={() => setRetrainConfig(prev => ({ ...prev, retrainMode: 'from_scratch' }))}
+                      className="w-4 h-4 text-green-600"
+                    />
+                    <div className="ml-3">
+                      <div className="font-medium text-sm">From Scratch</div>
+                      <div className="text-xs text-gray-500">Same parameters, new weights</div>
+                    </div>
+                  </label>
+                  <label className={`flex items-center p-3 rounded-lg border cursor-pointer ${
+                    retrainConfig.retrainMode === 'load_weights'
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                      : 'border-gray-200 dark:border-gray-600'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="retrainMode"
+                      value="load_weights"
+                      checked={retrainConfig.retrainMode === 'load_weights'}
+                      onChange={() => setRetrainConfig(prev => ({ ...prev, retrainMode: 'load_weights' }))}
+                      className="w-4 h-4 text-green-600"
+                    />
+                    <div className="ml-3">
+                      <div className="font-medium text-sm">Continue Training</div>
+                      <div className="text-xs text-gray-500">Load weights, additional epochs</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Dataset Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <Database className="w-4 h-4 inline mr-1" />
+                  Dataset
+                </label>
+                <select
+                  value={retrainConfig.datasetId || model.datasetId}
+                  onChange={(e) => {
+                    const dsId = e.target.value ? Number(e.target.value) : null;
+                    const ds = datasets.find(d => d.id === dsId);
+                    setRetrainConfig(prev => ({
+                      ...prev,
+                      datasetId: dsId,
+                      startDate: ds?.start_date?.split('T')[0] || '',
+                      endDate: ds?.end_date?.split('T')[0] || ''
+                    }));
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700"
+                >
+                  {datasets.map(ds => (
+                    <option key={ds.id} value={ds.id}>
+                      {ds.name} ({ds.ticker})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Epochs */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Training Epochs
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={retrainConfig.epochs}
+                  onChange={(e) => setRetrainConfig(prev => ({ ...prev, epochs: parseInt(e.target.value) || 10 }))}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700"
+                />
+              </div>
+
+              {/* Date Range */}
+              <div>
+                <label className="flex items-center space-x-2 cursor-pointer mb-2">
+                  <input
+                    type="checkbox"
+                    checked={retrainConfig.useCustomDateRange}
+                    onChange={(e) => setRetrainConfig(prev => ({ ...prev, useCustomDateRange: e.target.checked }))}
+                    className="w-4 h-4 text-green-600 rounded"
+                  />
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Use custom date range
+                  </span>
+                </label>
+                {retrainConfig.useCustomDateRange && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Start Date</label>
+                      <input
+                        type="date"
+                        value={retrainConfig.startDate}
+                        onChange={(e) => setRetrainConfig(prev => ({ ...prev, startDate: e.target.value }))}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">End Date</label>
+                      <input
+                        type="date"
+                        value={retrainConfig.endDate}
+                        onChange={(e) => setRetrainConfig(prev => ({ ...prev, endDate: e.target.value }))}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 dark:border-gray-700">
+              <button
+                onClick={() => setShowRetrainDialog(false)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRetrain}
+                disabled={submittingRetrain}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50"
+              >
+                {submittingRetrain ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Start Retrain
+              </button>
             </div>
           </div>
         </div>
