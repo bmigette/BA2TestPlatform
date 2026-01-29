@@ -8,6 +8,7 @@ from .dataset import Dataset
 from .normalization_config import NormalizationConfig
 from .training_checkpoint import TrainingCheckpoint
 from .news_cache import NewsCache
+from .target_set import TargetSet
 
 __all__ = [
     "Base", "engine", "SessionLocal", "get_db",
@@ -17,5 +18,6 @@ __all__ = [
     "Dataset",
     "NormalizationConfig",
     "TrainingCheckpoint",
-    "NewsCache"
+    "NewsCache",
+    "TargetSet"
 ]

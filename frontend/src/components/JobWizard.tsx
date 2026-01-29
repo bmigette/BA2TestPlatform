@@ -40,6 +40,8 @@ interface GeneticConfig {
 
 interface MetricsConfig {
   optimizeMetric: string;
+  classificationMetric?: string;
+  regressionMetric?: string;
 }
 
 interface PredictionTarget {
@@ -110,12 +112,25 @@ const CLASSIFICATION_METRICS = [
   { id: 'mcc', name: 'MCC', description: 'Matthews Correlation Coefficient' },
 ];
 
+const REGRESSION_METRICS = [
+  { id: 'mse', name: 'MSE', description: 'Mean Squared Error' },
+  { id: 'rmse', name: 'RMSE', description: 'Root Mean Squared Error' },
+  { id: 'mae', name: 'MAE', description: 'Mean Absolute Error' },
+  { id: 'r2', name: 'R²', description: 'Coefficient of Determination' },
+  { id: 'mape', name: 'MAPE', description: 'Mean Absolute Percentage Error' },
+];
+
 const PREDICTION_PRESETS = [
   { label: '10% / 5% DD / 7d', profit: 10, drawdown: 5, days: 7 },
   { label: '20% / 10% DD / 30d', profit: 20, drawdown: 10, days: 30 },
   { label: '5% / 3% DD / 3d', profit: 5, drawdown: 3, days: 3 },
   { label: '15% / 7% DD / 14d', profit: 15, drawdown: 7, days: 14 },
 ];
+
+interface TrainingDateRange {
+  startDate: string | null;
+  endDate: string | null;
+}
 
 const getDefaultState = () => ({
   selectedDatasetId: null as number | null,
@@ -146,9 +161,16 @@ const getDefaultState = () => ({
   } as GeneticConfig,
   metricsConfig: {
     optimizeMetric: 'f1_score',
+    classificationMetric: 'f1_score',
+    regressionMetric: 'rmse',
   } as MetricsConfig,
   predictionTargets: [] as PredictionTarget[],
   trainTestSplit: 80,
+  trainingDateRange: {
+    startDate: null,
+    endDate: null,
+  } as TrainingDateRange,
+  useSubsetDateRange: false,
 });
 
 const JobWizard: React.FC<JobWizardProps> = ({
@@ -375,6 +397,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
           trainTestSplit: state.trainTestSplit,
           geneticConfig: state.geneticConfig,
           metricsConfig: state.metricsConfig,
+          trainingDateRange: state.useSubsetDateRange ? state.trainingDateRange : null,
         }),
       });
 
@@ -629,12 +652,70 @@ const Step1Settings: React.FC<Step1Props> = ({
 
       {/* Dataset Details */}
       {selectedDataset && (
-        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
           <div className="grid grid-cols-4 gap-4 text-sm">
             <div><span className="text-gray-500">Ticker:</span> <span className="font-medium">{selectedDataset.ticker}</span></div>
             <div><span className="text-gray-500">Timeframe:</span> <span className="font-medium">{selectedDataset.timeframe}</span></div>
             <div><span className="text-gray-500">Rows:</span> <span className="font-medium">{selectedDataset.rows_count.toLocaleString()}</span></div>
             <div><span className="text-gray-500">Range:</span> <span className="font-medium">{formatDate(selectedDataset.start_date)} - {formatDate(selectedDataset.end_date)}</span></div>
+          </div>
+
+          {/* Training Date Range Subset */}
+          <div className="border-t border-gray-200 dark:border-gray-600 pt-4">
+            <label className="flex items-center space-x-2 cursor-pointer mb-3">
+              <input
+                type="checkbox"
+                checked={state.useSubsetDateRange}
+                onChange={(e) => {
+                  const useSubset = e.target.checked;
+                  setState(prev => ({
+                    ...prev,
+                    useSubsetDateRange: useSubset,
+                    trainingDateRange: useSubset ? {
+                      startDate: selectedDataset.start_date.split('T')[0],
+                      endDate: selectedDataset.end_date.split('T')[0]
+                    } : { startDate: null, endDate: null }
+                  }));
+                }}
+                className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+              />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Use subset of dataset time range
+              </span>
+            </label>
+
+            {state.useSubsetDateRange && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Training Start Date</label>
+                  <input
+                    type="date"
+                    value={state.trainingDateRange.startDate || ''}
+                    min={selectedDataset.start_date.split('T')[0]}
+                    max={state.trainingDateRange.endDate || selectedDataset.end_date.split('T')[0]}
+                    onChange={(e) => setState(prev => ({
+                      ...prev,
+                      trainingDateRange: { ...prev.trainingDateRange, startDate: e.target.value }
+                    }))}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Training End Date</label>
+                  <input
+                    type="date"
+                    value={state.trainingDateRange.endDate || ''}
+                    min={state.trainingDateRange.startDate || selectedDataset.start_date.split('T')[0]}
+                    max={selectedDataset.end_date.split('T')[0]}
+                    onChange={(e) => setState(prev => ({
+                      ...prev,
+                      trainingDateRange: { ...prev.trainingDateRange, endDate: e.target.value }
+                    }))}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -827,32 +908,78 @@ const Step1Settings: React.FC<Step1Props> = ({
         </div>
       </div>
 
-      {/* Optimization Metric */}
+      {/* Optimization Metrics */}
       <div>
         <div className="flex items-center space-x-2 mb-3">
           <Zap size={16} className="text-gray-400" />
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Optimization Metric</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Optimization Metrics</label>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {CLASSIFICATION_METRICS.map((metric) => (
-            <label
-              key={metric.id}
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                state.metricsConfig.optimizeMetric === metric.id
-                  ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
-                  : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-              }`}
-            >
-              <input
-                type="radio"
-                name="metric"
-                checked={state.metricsConfig.optimizeMetric === metric.id}
-                onChange={() => setState(prev => ({ ...prev, metricsConfig: { optimizeMetric: metric.id } }))}
-                className="sr-only"
-              />
-              <span>{metric.name}</span>
-            </label>
-          ))}
+
+        {/* Classification Metric */}
+        <div className="mb-4">
+          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Classification Targets</label>
+          <div className="flex flex-wrap gap-2">
+            {CLASSIFICATION_METRICS.map((metric) => (
+              <label
+                key={metric.id}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                  state.metricsConfig.classificationMetric === metric.id
+                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                }`}
+                title={metric.description}
+              >
+                <input
+                  type="radio"
+                  name="classificationMetric"
+                  checked={state.metricsConfig.classificationMetric === metric.id}
+                  onChange={() => setState(prev => ({
+                    ...prev,
+                    metricsConfig: {
+                      ...prev.metricsConfig,
+                      classificationMetric: metric.id,
+                      optimizeMetric: metric.id // Keep optimizeMetric for backward compatibility
+                    }
+                  }))}
+                  className="sr-only"
+                />
+                <span>{metric.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Regression Metric */}
+        <div>
+          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Regression Targets</label>
+          <div className="flex flex-wrap gap-2">
+            {REGRESSION_METRICS.map((metric) => (
+              <label
+                key={metric.id}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                  state.metricsConfig.regressionMetric === metric.id
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                }`}
+                title={metric.description}
+              >
+                <input
+                  type="radio"
+                  name="regressionMetric"
+                  checked={state.metricsConfig.regressionMetric === metric.id}
+                  onChange={() => setState(prev => ({
+                    ...prev,
+                    metricsConfig: {
+                      ...prev.metricsConfig,
+                      regressionMetric: metric.id
+                    }
+                  }))}
+                  className="sr-only"
+                />
+                <span>{metric.name}</span>
+              </label>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1058,11 +1185,12 @@ const Step2Summary: React.FC<Step2Props> = ({
           <Activity size={16} />
           <span>Optimization Settings</span>
         </h4>
-        <div className="grid grid-cols-4 gap-4 text-sm">
+        <div className="grid grid-cols-5 gap-4 text-sm">
           <div><span className="text-gray-500">Population:</span> <span className="font-medium">{state.geneticConfig.populationSize}</span></div>
           <div><span className="text-gray-500">Generations:</span> <span className="font-medium">{state.geneticConfig.generations}</span></div>
           <div><span className="text-gray-500">Epochs:</span> <span className="font-medium">{state.geneticConfig.trainingEpochs}</span></div>
-          <div><span className="text-gray-500">Metric:</span> <span className="font-medium">{state.metricsConfig.optimizeMetric}</span></div>
+          <div><span className="text-gray-500">Class. Metric:</span> <span className="font-medium">{state.metricsConfig.classificationMetric || 'f1_score'}</span></div>
+          <div><span className="text-gray-500">Reg. Metric:</span> <span className="font-medium">{state.metricsConfig.regressionMetric || 'rmse'}</span></div>
         </div>
       </div>
 

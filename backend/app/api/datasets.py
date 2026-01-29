@@ -689,6 +689,169 @@ async def preview_prediction_targets(
         )
 
 
+@router.post("/{dataset_id}/calculate-indicators")
+async def calculate_indicators(
+    dataset_id: int,
+    request_body: Dict[str, Any],
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate technical indicators for a dataset.
+
+    Used for live visualization and prediction target experimentation.
+    Returns calculated indicator values without modifying the dataset.
+
+    Args:
+        dataset_id: Dataset ID
+        request_body: {
+            indicators: [
+                {"type": "rsi", "period": 14},
+                {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
+                {"type": "sar", "af_start": 0.02, "af_max": 0.2},
+                {"type": "zigzag", "deviation_pct": 5.0}
+            ]
+        }
+        db: Database session
+
+    Returns:
+        Calculated indicator data series
+    """
+    try:
+        from app.services.indicators import IndicatorService
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+
+        # Parse request
+        indicators = request_body.get('indicators', [])
+
+        if not indicators:
+            return {
+                "dataset_id": dataset_id,
+                "data": []
+            }
+
+        # Calculate indicators
+        indicator_service = IndicatorService()
+        results = indicator_service.calculate_indicators(df, indicators)
+
+        # Convert to list of dicts for JSON response
+        data = []
+        dates = df['Date'].tolist() if 'Date' in df.columns else list(range(len(df)))
+
+        for i in range(len(df)):
+            row = {"date": str(dates[i])}
+            for col_name, series in results.items():
+                val = series.iloc[i]
+                row[col_name] = None if pd.isna(val) else float(val)
+            data.append(row)
+
+        return {
+            "dataset_id": dataset_id,
+            "indicators": list(results.keys()),
+            "data": data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating indicators: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate indicators: {str(e)}"
+        )
+
+
+@router.post("/{dataset_id}/calculate-targets")
+async def calculate_prediction_targets_v2(
+    dataset_id: int,
+    request_body: Dict[str, Any],
+    db: Session = Depends(get_db)
+):
+    """
+    Calculate prediction targets for a dataset (V2 - all target types).
+
+    Supports: price_based, directional, triple_barrier, trend_reversal, volatility
+
+    Args:
+        dataset_id: Dataset ID
+        request_body: {
+            targets: [
+                {"type": "directional", "direction": "up", "horizon": 5},
+                {"type": "triple_barrier", "profit_pct": 3, "stop_pct": 2, "max_bars": 10},
+                {"type": "trend_reversal", "indicator": "rsi", "params": {"period": 14},
+                 "threshold": 30, "direction": "bullish"},
+                {"type": "volatility", "horizon": 5, "method": "std"}
+            ]
+        }
+        db: Database session
+
+    Returns:
+        Calculated target data with statistics
+    """
+    try:
+        from app.services.ml_models import PredictionTargetService
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset with ID {dataset_id} not found"
+            )
+
+        # Load dataset
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dataset file not found: {file_path}"
+            )
+
+        df = pd.read_csv(file_path)
+
+        # Parse request
+        targets = request_body.get('targets', [])
+
+        if not targets:
+            return {
+                "dataset_id": dataset_id,
+                "targets": []
+            }
+
+        # Calculate targets
+        target_service = PredictionTargetService()
+        results = target_service.calculate_all_targets(df, targets)
+
+        return {
+            "dataset_id": dataset_id,
+            "total_rows": len(df),
+            "targets": results
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating prediction targets: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to calculate prediction targets: {str(e)}"
+        )
+
+
 @router.get("/{dataset_id}/stats")
 async def get_dataset_stats(dataset_id: int, db: Session = Depends(get_db)):
     """

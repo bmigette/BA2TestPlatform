@@ -1,19 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, TrendingUp, Database, ZoomIn, ZoomOut, Maximize2, Download, Eye, EyeOff, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader, Settings, ChevronDown, ChevronUp } from 'lucide-react';
-import {
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ComposedChart,
-  Bar,
-  Brush,
-  Line,
-  ReferenceDot,
-} from 'recharts';
+import { ArrowLeft, Calendar, TrendingUp, Database, Download, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader, Settings, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
+import TradingChart from '../components/TradingChart';
+import PredictionTargetsPanel from '../components/PredictionTargetsPanel';
+import TargetSetModal from '../components/TargetSetModal';
+import type { CalculatedTarget, TargetConfig } from '../types/targets';
 
 interface Dataset {
   id: number;
@@ -101,20 +92,6 @@ interface TrendConfig {
   slow_period: number;
 }
 
-// Custom diamond shape for prediction target markers
-const DiamondShape = (props: any) => {
-  const { cx, cy, fill, stroke, strokeWidth } = props;
-  const size = 6;
-  return (
-    <polygon
-      points={`${cx},${cy - size} ${cx + size},${cy} ${cx},${cy + size} ${cx - size},${cy}`}
-      fill={fill}
-      stroke={stroke}
-      strokeWidth={strokeWidth}
-    />
-  );
-};
-
 interface IndicatorVisibility {
   sma20: boolean;
   sma50: boolean;
@@ -157,36 +134,6 @@ const INDICATOR_COLORS = [
   '#EF4444', // red
 ];
 
-// Custom Candlestick component for Recharts
-const Candlestick = (props: any) => {
-  const { x, y, width, height, low: _low, high: _high, openClose } = props;
-  void _low; void _high; // Available for wick calculations if needed
-  const isGrowing = openClose[1] > openClose[0];
-  const color = isGrowing ? '#10B981' : '#EF4444'; // Green for bullish, red for bearish
-  const ratio = Math.abs(height / (openClose[0] - openClose[1]));
-
-  return (
-    <g stroke={color} fill="none" strokeWidth="2">
-      {/* High-Low wick line */}
-      <path
-        d={`
-          M ${x + width / 2}, ${y}
-          L ${x + width / 2}, ${y + height}
-        `}
-      />
-      {/* Open-Close body rectangle */}
-      <rect
-        x={x + 1}
-        y={isGrowing ? y + height - ratio * (openClose[1] - openClose[0]) : y}
-        width={Math.max(width - 2, 1)}
-        height={Math.abs(ratio * (openClose[1] - openClose[0]))}
-        fill={color}
-        fillOpacity={0.8}
-      />
-    </g>
-  );
-};
-
 const DatasetDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -194,17 +141,21 @@ const DatasetDetails: React.FC = () => {
   const [chartData, setChartData] = useState<OHLCData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [initialZoomSet, setInitialZoomSet] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
 
-  // Prediction targets state
+  // Prediction targets state (legacy)
   const [predictionTargets, setPredictionTargets] = useState<PredictionTarget[]>([]);
   const [newTarget, setNewTarget] = useState<PredictionTarget>({ profitPct: 10, maxDd: 5, days: 14 });
   const [predictionPreview, setPredictionPreview] = useState<PredictionPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [generateLoading, setGenerateLoading] = useState(false);
   const [generatedFiles, setGeneratedFiles] = useState<{ training: string; normalization: string } | null>(null);
-  const [zoomDomain, setZoomDomain] = useState<{ startIndex: number; endIndex: number } | null>(null);
+
+  // New prediction targets system
+  const [calculatedTargets, setCalculatedTargets] = useState<CalculatedTarget[]>([]);
+  const [targetSetModalOpen, setTargetSetModalOpen] = useState(false);
+  const [targetSetModalMode, setTargetSetModalMode] = useState<'save' | 'load'>('save');
+  const [currentTargetConfigs, setCurrentTargetConfigs] = useState<TargetConfig[]>([]);
   const [indicators, setIndicators] = useState<IndicatorVisibility>({
     sma20: true,
     sma50: false,
@@ -332,11 +283,12 @@ const DatasetDetails: React.FC = () => {
         const updatedDataset = await response.json();
         setDataset(updatedDataset);
 
-        // Refetch chart data if successful
+        // Refetch chart data if successful - limit to 500 rows for chart performance
         if (updatedDataset.status === 'ready') {
-          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/preview`);
+          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/preview?max_rows=500`);
           if (csvResponse.ok) {
             const csvData = await csvResponse.json();
+            console.log(`Preview refresh: ${csvData.returned_rows} rows of ${csvData.total_rows} total`);
             const rawData = csvData.data || [];
             const enrichedData = addIndicatorsToData(rawData);
             setChartData(enrichedData);
@@ -442,6 +394,33 @@ const DatasetDetails: React.FC = () => {
     }
   };
 
+  // New prediction targets panel callbacks
+  const handleTargetsCalculated = useCallback((targets: CalculatedTarget[]) => {
+    setCalculatedTargets(targets);
+  }, []);
+
+  const handleSaveTargetSet = useCallback((targets: TargetConfig[]) => {
+    setCurrentTargetConfigs(targets);
+    setTargetSetModalMode('save');
+    setTargetSetModalOpen(true);
+  }, []);
+
+  const handleLoadTargetSet = useCallback(() => {
+    setTargetSetModalMode('load');
+    setTargetSetModalOpen(true);
+  }, []);
+
+  const handleTargetSetSaved = useCallback(() => {
+    // Could show a toast notification here
+    console.log('Target set saved');
+  }, []);
+
+  const handleTargetSetLoaded = useCallback((targets: TargetConfig[]) => {
+    // The PredictionTargetsPanel will need to be updated to accept loaded targets
+    // For now, we just close the modal
+    console.log('Loaded targets:', targets);
+  }, []);
+
   // Calculate simple moving average (utility function for future use)
   const calculateSMA = (data: OHLCData[], period: number): OHLCData[] => {
     return data.map((d, i) => {
@@ -455,40 +434,70 @@ const DatasetDetails: React.FC = () => {
   };
   void calculateSMA; // Reserved for dynamic period calculations
 
-  // Add indicators to chart data
+  // Add indicators to chart data - only calculate if not already present
   const addIndicatorsToData = (data: OHLCData[]): OHLCData[] => {
     if (data.length === 0) return data;
 
-    let enrichedData = [...data];
+    // Check if indicators already exist in the data (from backend)
+    const firstRow = data[0] as unknown as Record<string, unknown>;
+    const hasSMA20 = 'SMA_20' in firstRow || 'sma_20' in firstRow;
+    const hasSMA50 = 'SMA_50' in firstRow || 'sma_50' in firstRow;
+    const hasBB = 'BB_upper' in firstRow || 'bb_upper' in firstRow;
 
-    // Calculate SMA 20
-    enrichedData = enrichedData.map((d, i) => {
-      if (i < 19) return d;
-      const sum = enrichedData.slice(i - 19, i + 1).reduce((acc, curr) => acc + curr.Close, 0);
-      return { ...d, SMA_20: sum / 20 };
-    });
+    // If all indicators exist, just return data as-is (already calculated on backend)
+    if (hasSMA20 && hasSMA50 && hasBB) {
+      console.log('Indicators already present in data, skipping frontend calculation');
+      return data;
+    }
 
-    // Calculate SMA 50
-    enrichedData = enrichedData.map((d, i) => {
-      if (i < 49) return { ...d };
-      const sum = enrichedData.slice(i - 49, i + 1).reduce((acc, curr) => acc + curr.Close, 0);
-      return { ...d, SMA_50: sum / 50 };
-    });
+    console.log('Calculating indicators on frontend (consider adding them to dataset)');
 
-    // Calculate Bollinger Bands (20-period, 2 std dev)
-    enrichedData = enrichedData.map((d, i) => {
-      if (i < 19) return { ...d };
-      const slice = enrichedData.slice(i - 19, i + 1);
-      const mean = slice.reduce((acc, curr) => acc + curr.Close, 0) / 20;
-      const variance = slice.reduce((acc, curr) => acc + Math.pow(curr.Close - mean, 2), 0) / 20;
-      const stdDev = Math.sqrt(variance);
-      return {
-        ...d,
-        BB_middle: mean,
-        BB_upper: mean + 2 * stdDev,
-        BB_lower: mean - 2 * stdDev,
-      };
-    });
+    // Only calculate missing indicators in a single pass for performance
+    const n = data.length;
+    const enrichedData: OHLCData[] = new Array(n);
+
+    // Pre-compute cumulative sums for O(n) calculation instead of O(n^2)
+    let sumSMA20 = 0;
+    let sumSMA50 = 0;
+
+    for (let i = 0; i < n; i++) {
+      const d = data[i];
+      const closePrice = d.Close;
+
+      // Update running sums
+      sumSMA20 += closePrice;
+      sumSMA50 += closePrice;
+
+      // Subtract values falling out of window
+      if (i >= 20) sumSMA20 -= data[i - 20].Close;
+      if (i >= 50) sumSMA50 -= data[i - 50].Close;
+
+      enrichedData[i] = { ...d };
+
+      // Calculate SMA 20 (need at least 20 data points)
+      if (!hasSMA20 && i >= 19) {
+        enrichedData[i].SMA_20 = sumSMA20 / 20;
+      }
+
+      // Calculate SMA 50 (need at least 50 data points)
+      if (!hasSMA50 && i >= 49) {
+        enrichedData[i].SMA_50 = sumSMA50 / 50;
+      }
+
+      // Calculate Bollinger Bands (20-period, 2 std dev)
+      if (!hasBB && i >= 19) {
+        const mean = sumSMA20 / 20;
+        let variance = 0;
+        for (let j = i - 19; j <= i; j++) {
+          variance += Math.pow(data[j].Close - mean, 2);
+        }
+        variance /= 20;
+        const stdDev = Math.sqrt(variance);
+        enrichedData[i].BB_middle = mean;
+        enrichedData[i].BB_upper = mean + 2 * stdDev;
+        enrichedData[i].BB_lower = mean - 2 * stdDev;
+      }
+    }
 
     return enrichedData;
   };
@@ -510,18 +519,25 @@ const DatasetDetails: React.FC = () => {
         const data = await response.json();
         setDataset(data);
 
-        // Fetch dataset CSV data for charting
+        // Fetch dataset CSV data for charting - limit to 500 rows for chart performance
         // Note: Preview endpoint requires backend restart to be available
         try {
-          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${id}/preview`);
+          console.time('fetchPreview');
+          const csvResponse = await fetch(`http://localhost:8002/api/datasets/${id}/preview?max_rows=500`);
+          console.timeEnd('fetchPreview');
           if (csvResponse.ok) {
+            console.time('parsePreview');
             const csvData = await csvResponse.json();
+            console.timeEnd('parsePreview');
+            console.log(`Preview data: ${csvData.returned_rows} rows of ${csvData.total_rows} total, ${csvData.columns?.length} columns`);
             const rawData = csvData.data || [];
+            console.time('enrichData');
             const enrichedData = addIndicatorsToData(rawData);
+            console.timeEnd('enrichData');
             setChartData(enrichedData);
           }
         } catch (err) {
-          console.log('Preview endpoint not available yet');
+          console.log('Preview endpoint not available yet:', err);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred');
@@ -552,23 +568,6 @@ const DatasetDetails: React.FC = () => {
     }
   }, [dataset?.id, indicators.showTrends]);
 
-  // Set initial zoom based on data length (show last 100 bars by default)
-  useEffect(() => {
-    if (chartData.length > 0 && !initialZoomSet) {
-      const dataLength = chartData.length;
-      const maxInitialBars = 100;
-
-      if (dataLength > maxInitialBars) {
-        // Start from the end (most recent data)
-        setZoomDomain({
-          startIndex: dataLength - maxInitialBars,
-          endIndex: dataLength - 1
-        });
-      }
-      setInitialZoomSet(true);
-    }
-  }, [chartData.length, initialZoomSet]);
-
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString();
   };
@@ -576,17 +575,6 @@ const DatasetDetails: React.FC = () => {
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat('en-US').format(num);
   };
-
-  // Prepare data for candlestick chart
-  const prepareChartData = () => {
-    return chartData.map((d) => ({
-      ...d,
-      openClose: [d.Open, d.Close],
-      highLow: [d.High, d.Low],
-    }));
-  };
-
-  const candlestickData = prepareChartData();
 
   // Aggregate news by date for frequency-based visualization
   // Uses existing dataset columns (news_1d_positive, news_1d_neutral, news_1d_negative) instead of API
@@ -633,17 +621,6 @@ const DatasetDetails: React.FC = () => {
     return frequencies;
   }, [chartData]);
 
-  // Calculate circle size based on news count
-  const getNewsCircleRadius = (count: number): number => {
-    const minRadius = 4;
-    const maxRadius = 16;
-    // Use log scale for better visualization
-    const maxCount = Math.max(...newsFrequencyByDate.map(n => n.count), 1);
-    if (maxCount <= 1) return minRadius;
-    const scale = (Math.log(count + 1) / Math.log(maxCount + 1));
-    return minRadius + (maxRadius - minRadius) * scale;
-  };
-
   // Get color for trend type
   const getTrendColor = (trend: string): string => {
     switch (trend) {
@@ -658,59 +635,6 @@ const DatasetDetails: React.FC = () => {
         return '#F59E0B'; // amber
     }
   };
-
-  // Zoom control functions
-  const handleZoomIn = () => {
-    const currentStart = zoomDomain?.startIndex ?? 0;
-    const currentEnd = zoomDomain?.endIndex ?? candlestickData.length - 1;
-    const range = currentEnd - currentStart;
-    const newRange = Math.max(Math.floor(range * 0.7), 10); // Zoom in by 30%, min 10 points
-    const center = Math.floor((currentStart + currentEnd) / 2);
-    const newStart = Math.max(0, center - Math.floor(newRange / 2));
-    const newEnd = Math.min(candlestickData.length - 1, newStart + newRange);
-    setZoomDomain({ startIndex: newStart, endIndex: newEnd });
-    setBrushKey(prev => prev + 1);
-  };
-
-  const handleZoomOut = () => {
-    const currentStart = zoomDomain?.startIndex ?? 0;
-    const currentEnd = zoomDomain?.endIndex ?? candlestickData.length - 1;
-    const range = currentEnd - currentStart;
-    const newRange = Math.min(Math.floor(range * 1.5), candlestickData.length);
-    const center = Math.floor((currentStart + currentEnd) / 2);
-    const newStart = Math.max(0, center - Math.floor(newRange / 2));
-    const newEnd = Math.min(candlestickData.length - 1, newStart + newRange);
-
-    if (newStart === 0 && newEnd === candlestickData.length - 1) {
-      setZoomDomain(null);
-    } else {
-      setZoomDomain({ startIndex: newStart, endIndex: newEnd });
-    }
-    setBrushKey(prev => prev + 1);
-  };
-
-  const handleResetZoom = () => {
-    setZoomDomain(null);
-    setBrushKey(prev => prev + 1); // Force brush to reset
-  };
-
-  // Brush key to force re-creation when zoom buttons are used
-  const [brushKey, setBrushKey] = useState(0);
-
-  // Debounce timer ref
-  const brushDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleBrushChange = useCallback((domain: any) => {
-    if (domain && domain.startIndex !== undefined && domain.endIndex !== undefined) {
-      // Debounce the state update to prevent rapid re-renders
-      if (brushDebounceRef.current) {
-        clearTimeout(brushDebounceRef.current);
-      }
-      brushDebounceRef.current = setTimeout(() => {
-        setZoomDomain({ startIndex: domain.startIndex, endIndex: domain.endIndex });
-      }, 50);
-    }
-  }, []);
 
   const handleExport = async () => {
     try {
@@ -940,29 +864,7 @@ const DatasetDetails: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold">Price Chart (Candlestick)</h2>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleZoomIn}
-              className="p-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md transition-colors"
-              title="Zoom In"
-            >
-              <ZoomIn size={18} className="text-gray-700 dark:text-gray-300" />
-            </button>
-            <button
-              onClick={handleZoomOut}
-              className="p-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md transition-colors"
-              title="Zoom Out"
-            >
-              <ZoomOut size={18} className="text-gray-700 dark:text-gray-300" />
-            </button>
-            <button
-              onClick={handleResetZoom}
-              className="p-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md transition-colors"
-              title="Reset Zoom"
-            >
-              <Maximize2 size={18} className="text-gray-700 dark:text-gray-300" />
-            </button>
-          </div>
+          <span className="text-sm text-gray-500 dark:text-gray-400">Scroll to zoom, drag to pan</span>
         </div>
 
         {/* Indicator Toggle Controls */}
@@ -1136,271 +1038,23 @@ const DatasetDetails: React.FC = () => {
           )}
         </div>
         {chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={500}>
-            <ComposedChart data={candlestickData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis
-                dataKey="Date"
-                stroke="#9CA3AF"
-                tick={{ fill: '#9CA3AF', fontSize: 12 }}
-                tickFormatter={(value) => {
-                  const date = new Date(value);
-                  return date.toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                  });
-                }}
-                interval="preserveStartEnd"
-                minTickGap={50}
-              />
-              <YAxis
-                yAxisId="price"
-                stroke="#9CA3AF"
-                tick={{ fill: '#9CA3AF' }}
-                domain={['auto', 'auto']}
-                label={{ value: 'Price ($)', angle: -90, position: 'insideLeft', fill: '#9CA3AF' }}
-              />
-              <YAxis
-                yAxisId="volume"
-                orientation="right"
-                stroke="#9CA3AF"
-                tick={{ fill: '#9CA3AF' }}
-                domain={[0, 'auto']}
-                label={{ value: 'Volume', angle: 90, position: 'insideRight', fill: '#9CA3AF' }}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1F2937',
-                  border: '1px solid #374151',
-                  borderRadius: '8px',
-                  color: '#F3F4F6',
-                }}
-                labelStyle={{ color: '#F3F4F6' }}
-                content={({ active, payload }) => {
-                  if (active && payload && payload.length) {
-                    const data = payload[0].payload;
-                    const isGrowing = data.Close > data.Open;
-                    return (
-                      <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
-                        <p className="text-gray-300 mb-2">{new Date(data.Date).toLocaleDateString()}</p>
-                        <p className="text-sm text-gray-300">Open: <span className="font-semibold">${data.Open.toFixed(2)}</span></p>
-                        <p className="text-sm text-gray-300">High: <span className="font-semibold text-green-400">${data.High.toFixed(2)}</span></p>
-                        <p className="text-sm text-gray-300">Low: <span className="font-semibold text-red-400">${data.Low.toFixed(2)}</span></p>
-                        <p className="text-sm text-gray-300">Close: <span className={`font-semibold ${isGrowing ? 'text-green-400' : 'text-red-400'}`}>${data.Close.toFixed(2)}</span></p>
-                        <p className="text-sm text-gray-300 mt-1">Volume: <span className="font-semibold">{formatNumber(data.Volume)}</span></p>
-                        <p className={`text-sm mt-1 ${isGrowing ? 'text-green-400' : 'text-red-400'}`}>
-                          {isGrowing ? '↑' : '↓'} {Math.abs(((data.Close - data.Open) / data.Open) * 100).toFixed(2)}%
-                        </p>
-                      </div>
-                    );
-                  }
-                  return null;
-                }}
-              />
-              <Legend wrapperStyle={{ color: '#9CA3AF' }} />
-              <Bar
-                yAxisId="price"
-                dataKey="highLow"
-                fill="#8884d8"
-                shape={<Candlestick />}
-                label={false}
-                name="OHLC"
-              />
-              {indicators.volume && (
-                <Bar
-                  yAxisId="volume"
-                  dataKey="Volume"
-                  fill="#8B5CF6"
-                  opacity={0.3}
-                  name="Volume"
-                />
-              )}
-              {/* Technical Indicator Overlays */}
-              {indicators.sma20 && (
-                <Line
-                  yAxisId="price"
-                  type="monotone"
-                  dataKey="SMA_20"
-                  stroke="#3B82F6"
-                  strokeWidth={2}
-                  dot={false}
-                  name="SMA 20"
-                />
-              )}
-              {indicators.sma50 && (
-                <Line
-                  yAxisId="price"
-                  type="monotone"
-                  dataKey="SMA_50"
-                  stroke="#F97316"
-                  strokeWidth={2}
-                  dot={false}
-                  name="SMA 50"
-                />
-              )}
-              {indicators.bollingerBands && (
-                <>
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="BB_upper"
-                    stroke="#A855F7"
-                    strokeWidth={1}
-                    strokeDasharray="5 5"
-                    dot={false}
-                    name="BB Upper"
-                  />
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="BB_middle"
-                    stroke="#A855F7"
-                    strokeWidth={1}
-                    dot={false}
-                    name="BB Middle"
-                  />
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="BB_lower"
-                    stroke="#A855F7"
-                    strokeWidth={1}
-                    strokeDasharray="5 5"
-                    dot={false}
-                    name="BB Lower"
-                  />
-                </>
-              )}
-              {/* Dynamic Indicators from Dataset */}
-              {Array.from(enabledIndicators).map((columnName) => (
-                <Line
-                  key={`dynamic-${columnName}`}
-                  yAxisId="price"
-                  type="monotone"
-                  dataKey={columnName}
-                  stroke={getIndicatorColor(columnName)}
-                  strokeWidth={1.5}
-                  dot={false}
-                  name={columnName}
-                  connectNulls
-                />
-              ))}
-              {/* News Frequency Circles - size based on article count */}
-              {indicators.showSentiment && newsFrequencyByDate.map((newsFreq, idx) => {
-                const dataPoint = candlestickData.find(d => d.Date === newsFreq.date);
-                if (!dataPoint) return null;
-
-                const color = newsFreq.dominantSentiment === 'positive' ? '#10B981' :
-                              newsFreq.dominantSentiment === 'negative' ? '#EF4444' : '#F59E0B';
-                const radius = getNewsCircleRadius(newsFreq.count);
-
-                return (
-                  <ReferenceDot
-                    key={`news-freq-${idx}`}
-                    x={newsFreq.date}
-                    y={dataPoint.High * 1.02}
-                    yAxisId="price"
-                    r={radius}
-                    fill={color}
-                    fillOpacity={0.6}
-                    stroke={color}
-                    strokeWidth={2}
-                  />
-                );
-              })}
-              {/* Prediction Target Markers */}
-              {indicators.showTargets && predictionPreview && predictionPreview.target_data &&
-                predictionPreview.target_data.map((sample, idx) => {
-                  const dataPoint = candlestickData.find(d => d.Date === sample.Date);
-                  if (!dataPoint) return null;
-
-                  // Check for up targets (green) - price_up_* columns with value 1
-                  const upTargetCols = predictionPreview.target_columns.filter(col => col.includes('_up_'));
-                  const hasUpTarget = upTargetCols.some(col => sample[col] === 1);
-
-                  // Check for down targets (red) - price_down_* columns with value 1
-                  const downTargetCols = predictionPreview.target_columns.filter(col => col.includes('_down_'));
-                  const hasDownTarget = downTargetCols.some(col => sample[col] === 1);
-
-                  const markers = [];
-                  if (hasUpTarget) {
-                    markers.push(
-                      <ReferenceDot
-                        key={`target-up-${idx}`}
-                        x={sample.Date}
-                        y={dataPoint.Low * 0.98}
-                        yAxisId="price"
-                        r={6}
-                        fill="#10B981"
-                        stroke="#065F46"
-                        strokeWidth={1.5}
-                        shape={(props) => <DiamondShape {...props} fill="#10B981" stroke="#065F46" strokeWidth={1.5} />}
-                      />
-                    );
-                  }
-                  if (hasDownTarget) {
-                    markers.push(
-                      <ReferenceDot
-                        key={`target-down-${idx}`}
-                        x={sample.Date}
-                        y={dataPoint.High * 1.02}
-                        yAxisId="price"
-                        r={6}
-                        fill="#EF4444"
-                        stroke="#991B1B"
-                        strokeWidth={1.5}
-                        shape={(props) => <DiamondShape {...props} fill="#EF4444" stroke="#991B1B" strokeWidth={1.5} />}
-                      />
-                    );
-                  }
-                  return markers;
-                }).flat().filter(Boolean)
-              }
-              {/* Trend Analysis Markers - colored background bands */}
-              {indicators.showTrends && trendData.map((trendPoint, idx) => {
-                // Normalize dates for comparison (handle timezone differences)
-                const trendDate = new Date(trendPoint.date).toISOString().split('T')[0];
-                const dataPoint = candlestickData.find(d => {
-                  const candleDate = new Date(d.Date).toISOString().split('T')[0];
-                  return candleDate === trendDate;
-                });
-                if (!dataPoint) return null;
-
-                const color = getTrendColor(trendPoint.trend);
-                // Use larger, more visible markers
-                return (
-                  <ReferenceDot
-                    key={`trend-${idx}`}
-                    x={dataPoint.Date}
-                    y={dataPoint.Low * 0.99}
-                    yAxisId="price"
-                    r={5}
-                    fill={color}
-                    fillOpacity={0.9}
-                    stroke={color}
-                    strokeWidth={2}
-                  />
-                );
-              })}
-              <Brush
-                key={brushKey}
-                dataKey="Date"
-                height={30}
-                stroke="#8B5CF6"
-                fill="#1F2937"
-                tickFormatter={(value) => {
-                  const date = new Date(value);
-                  return date.toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                  });
-                }}
-                onChange={handleBrushChange}
-                startIndex={zoomDomain?.startIndex}
-                endIndex={zoomDomain?.endIndex}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+          <TradingChart
+            data={chartData}
+            indicators={{
+              showSMA20: indicators.sma20,
+              showSMA50: indicators.sma50,
+              showBollinger: indicators.bollingerBands,
+              showVolume: indicators.volume,
+              showSentiment: indicators.showSentiment,
+              showTargets: indicators.showTargets,
+              showTrends: indicators.showTrends,
+            }}
+            newsFrequencyByDate={newsFrequencyByDate}
+            trendData={trendData}
+            predictionPreview={predictionPreview}
+            calculatedTargets={calculatedTargets}
+            height={500}
+          />
         ) : (
           <div className="text-center py-12">
             <p className="text-gray-600 dark:text-gray-400">
@@ -1409,6 +1063,16 @@ const DatasetDetails: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* New Prediction Targets Panel - below chart */}
+      {dataset && chartData.length > 0 && (
+        <PredictionTargetsPanel
+          datasetId={dataset.id}
+          onTargetsCalculated={handleTargetsCalculated}
+          onSaveSet={handleSaveTargetSet}
+          onLoadSet={handleLoadTargetSet}
+        />
+      )}
 
       {/* Non-Chart Data Table (Fundamental, Sentiment, Macro, and other non-chart columns) */}
       {datasetColumns && chartData.length > 0 && (
@@ -1420,13 +1084,8 @@ const DatasetDetails: React.FC = () => {
             .flatMap(([_, cols]) => cols.map(c => c.name))
             .filter(col => chartData[0] && col in chartData[0]);
 
-          // Get visible data based on zoom
-          const startIdx = zoomDomain?.startIndex ?? 0;
-          const endIdx = zoomDomain?.endIndex ?? chartData.length - 1;
-          const visibleData = chartData.slice(startIdx, endIdx + 1);
-
-          // Limit displayed rows
-          const displayData = visibleData.slice(-50); // Last 50 rows
+          // Limit displayed rows to last 50
+          const displayData = chartData.slice(-50);
 
           return (
             <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-6 overflow-hidden">
@@ -1436,7 +1095,7 @@ const DatasetDetails: React.FC = () => {
                 </h2>
                 {nonChartColumns.length > 0 && (
                   <span className="text-sm text-gray-500 dark:text-gray-400">
-                    Showing {displayData.length} of {visibleData.length} rows ({nonChartColumns.length} columns)
+                    Showing {displayData.length} of {chartData.length} rows ({nonChartColumns.length} columns)
                   </span>
                 )}
               </div>
@@ -2091,6 +1750,16 @@ const DatasetDetails: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Target Set Save/Load Modal */}
+      <TargetSetModal
+        isOpen={targetSetModalOpen}
+        mode={targetSetModalMode}
+        currentTargets={currentTargetConfigs}
+        onClose={() => setTargetSetModalOpen(false)}
+        onSave={handleTargetSetSaved}
+        onLoad={handleTargetSetLoaded}
+      />
     </div>
   );
 };

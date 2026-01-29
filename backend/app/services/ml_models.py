@@ -751,6 +751,399 @@ class PredictionTargetService:
 
         return True
 
+    def calculate_directional(
+        self,
+        df: pd.DataFrame,
+        horizon: int = 5,
+        direction: str = "up"
+    ) -> pd.Series:
+        """
+        Calculate directional movement target.
+
+        Binary classification: Will price be higher or lower in N bars?
+
+        Args:
+            df: DataFrame with 'Close' column
+            horizon: Number of bars ahead to predict
+            direction: 'up' (price higher) or 'down' (price lower)
+
+        Returns:
+            Series with 1 if condition met, 0 otherwise
+        """
+        n = len(df)
+        targets = np.zeros(n)
+        close = df['Close'].values
+
+        for i in range(n - horizon):
+            future_price = close[i + horizon]
+            current_price = close[i]
+
+            if direction == 'up':
+                targets[i] = 1 if future_price > current_price else 0
+            else:
+                targets[i] = 1 if future_price < current_price else 0
+
+        # Last 'horizon' bars are undefined
+        targets[n - horizon:] = np.nan
+
+        col_name = f"directional_{direction}_{horizon}b"
+        return pd.Series(targets, index=df.index, name=col_name)
+
+    def calculate_triple_barrier(
+        self,
+        df: pd.DataFrame,
+        profit_pct: float = 3.0,
+        stop_pct: float = 2.0,
+        max_bars: int = 10
+    ) -> pd.Series:
+        """
+        Calculate Triple-Barrier target (Marcos Lopez de Prado method).
+
+        Multi-class: 0=stop hit, 1=profit hit, 2=timeout
+
+        Args:
+            df: DataFrame with 'Close', 'High', 'Low' columns
+            profit_pct: Upper barrier profit percentage
+            stop_pct: Lower barrier stop-loss percentage
+            max_bars: Vertical barrier (max bars before timeout)
+
+        Returns:
+            Series with 0 (stop), 1 (profit), or 2 (timeout)
+        """
+        n = len(df)
+        targets = np.full(n, np.nan)
+
+        close = df['Close'].values
+        high = df['High'].values
+        low = df['Low'].values
+
+        for i in range(n - 1):
+            entry_price = close[i]
+            profit_target = entry_price * (1 + profit_pct / 100)
+            stop_price = entry_price * (1 - stop_pct / 100)
+
+            max_look = min(max_bars, n - i - 1)
+            result = 2  # Default: timeout
+
+            for j in range(1, max_look + 1):
+                bar_idx = i + j
+                bar_high = high[bar_idx]
+                bar_low = low[bar_idx]
+
+                # Check stop first (conservative)
+                if bar_low <= stop_price:
+                    result = 0  # Stop hit
+                    break
+                if bar_high >= profit_target:
+                    result = 1  # Profit hit
+                    break
+
+            targets[i] = result
+
+        col_name = f"barrier_{profit_pct}p_{stop_pct}s_{max_bars}b"
+        return pd.Series(targets, index=df.index, name=col_name)
+
+    def calculate_trend_reversal(
+        self,
+        df: pd.DataFrame,
+        indicator: str,
+        indicator_params: dict,
+        threshold: float,
+        direction: str
+    ) -> pd.Series:
+        """
+        Calculate trend reversal target based on technical indicators.
+
+        Binary classification: Detects potential trend reversals.
+
+        Args:
+            df: DataFrame with OHLC columns
+            indicator: 'rsi', 'macd', 'sar', or 'zigzag'
+            indicator_params: Indicator-specific parameters
+            threshold: Threshold value for signal detection
+            direction: 'bullish' (buy signal) or 'bearish' (sell signal)
+
+        Returns:
+            Series with 1 where reversal detected, 0 otherwise
+        """
+        from app.services.indicators import IndicatorService
+
+        n = len(df)
+        targets = np.zeros(n)
+        indicator_service = IndicatorService()
+
+        if indicator == 'rsi':
+            period = indicator_params.get('period', 14)
+            rsi = indicator_service.calculate_rsi(df, period)
+
+            if direction == 'bullish':
+                # Bullish reversal: RSI crosses above oversold threshold
+                for i in range(1, n):
+                    if not pd.isna(rsi.iloc[i]) and not pd.isna(rsi.iloc[i-1]):
+                        if rsi.iloc[i-1] <= threshold and rsi.iloc[i] > threshold:
+                            targets[i] = 1
+            else:
+                # Bearish reversal: RSI crosses below overbought threshold
+                overbought = 100 - threshold
+                for i in range(1, n):
+                    if not pd.isna(rsi.iloc[i]) and not pd.isna(rsi.iloc[i-1]):
+                        if rsi.iloc[i-1] >= overbought and rsi.iloc[i] < overbought:
+                            targets[i] = 1
+
+        elif indicator == 'macd':
+            fast = indicator_params.get('fast', 12)
+            slow = indicator_params.get('slow', 26)
+            signal_period = indicator_params.get('signal', 9)
+            macd_data = indicator_service.calculate_macd(df, fast, slow, signal_period)
+            macd_line = macd_data['macd']
+            signal_line = macd_data['signal']
+
+            if direction == 'bullish':
+                # Bullish: MACD crosses above signal line
+                for i in range(1, n):
+                    if not pd.isna(macd_line.iloc[i]) and not pd.isna(signal_line.iloc[i]):
+                        prev_diff = macd_line.iloc[i-1] - signal_line.iloc[i-1]
+                        curr_diff = macd_line.iloc[i] - signal_line.iloc[i]
+                        if prev_diff <= 0 and curr_diff > 0:
+                            targets[i] = 1
+            else:
+                # Bearish: MACD crosses below signal line
+                for i in range(1, n):
+                    if not pd.isna(macd_line.iloc[i]) and not pd.isna(signal_line.iloc[i]):
+                        prev_diff = macd_line.iloc[i-1] - signal_line.iloc[i-1]
+                        curr_diff = macd_line.iloc[i] - signal_line.iloc[i]
+                        if prev_diff >= 0 and curr_diff < 0:
+                            targets[i] = 1
+
+        elif indicator == 'sar':
+            af_start = indicator_params.get('af_start', 0.02)
+            af_max = indicator_params.get('af_max', 0.2)
+            sar = indicator_service.calculate_sar(df, af_start, af_max)
+            close = df['Close'].values
+
+            if direction == 'bullish':
+                # Bullish: Price crosses above SAR
+                for i in range(1, n):
+                    if not pd.isna(sar.iloc[i]):
+                        if close[i-1] < sar.iloc[i-1] and close[i] > sar.iloc[i]:
+                            targets[i] = 1
+            else:
+                # Bearish: Price crosses below SAR
+                for i in range(1, n):
+                    if not pd.isna(sar.iloc[i]):
+                        if close[i-1] > sar.iloc[i-1] and close[i] < sar.iloc[i]:
+                            targets[i] = 1
+
+        elif indicator == 'zigzag':
+            deviation_pct = indicator_params.get('deviation_pct', 5.0)
+            zigzag = indicator_service.calculate_zigzag(df, deviation_pct)
+
+            # Find pivot points (where zigzag changes direction)
+            for i in range(2, n - 1):
+                if pd.isna(zigzag.iloc[i]):
+                    continue
+
+                prev_val = zigzag.iloc[i-1]
+                curr_val = zigzag.iloc[i]
+                next_val = zigzag.iloc[i+1] if i+1 < n else curr_val
+
+                if direction == 'bullish':
+                    # Bullish: Local low (zigzag turning up)
+                    if curr_val < prev_val and curr_val < next_val:
+                        targets[i] = 1
+                else:
+                    # Bearish: Local high (zigzag turning down)
+                    if curr_val > prev_val and curr_val > next_val:
+                        targets[i] = 1
+
+        col_name = f"reversal_{indicator}_{direction}"
+        return pd.Series(targets, index=df.index, name=col_name)
+
+    def calculate_volatility(
+        self,
+        df: pd.DataFrame,
+        horizon: int = 5,
+        method: str = "std"
+    ) -> pd.Series:
+        """
+        Calculate volatility target (regression).
+
+        Predicts realized volatility for the next N periods.
+
+        Args:
+            df: DataFrame with 'Close', 'High', 'Low' columns
+            horizon: Number of periods ahead
+            method: 'std' (standard deviation), 'range' (high-low range),
+                    or 'atr' (average true range)
+
+        Returns:
+            Series with volatility values (continuous)
+        """
+        n = len(df)
+        targets = np.full(n, np.nan)
+        close = df['Close'].values
+        high = df['High'].values
+        low = df['Low'].values
+
+        for i in range(n - horizon):
+            future_slice = slice(i + 1, i + horizon + 1)
+
+            if method == 'std':
+                # Standard deviation of returns
+                future_prices = close[i:i + horizon + 1]
+                if len(future_prices) > 1:
+                    returns = np.diff(future_prices) / future_prices[:-1]
+                    targets[i] = np.std(returns) * 100  # As percentage
+            elif method == 'range':
+                # Average high-low range
+                ranges = high[future_slice] - low[future_slice]
+                targets[i] = np.mean(ranges / close[i]) * 100  # As percentage of entry price
+            elif method == 'atr':
+                # Average True Range approximation
+                tr_values = []
+                for j in range(i + 1, min(i + horizon + 1, n)):
+                    tr = max(
+                        high[j] - low[j],
+                        abs(high[j] - close[j-1]) if j > 0 else high[j] - low[j],
+                        abs(low[j] - close[j-1]) if j > 0 else high[j] - low[j]
+                    )
+                    tr_values.append(tr)
+                if tr_values:
+                    targets[i] = (np.mean(tr_values) / close[i]) * 100  # As percentage
+
+        col_name = f"volatility_{method}_{horizon}b"
+        return pd.Series(targets, index=df.index, name=col_name)
+
+    def calculate_all_targets(
+        self,
+        df: pd.DataFrame,
+        targets_config: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Calculate all target types and return with statistics.
+
+        Args:
+            df: DataFrame with OHLC columns
+            targets_config: List of target configurations
+
+        Returns:
+            List of calculated targets with data and stats
+        """
+        results = []
+        df = df.copy().sort_values('Date').reset_index(drop=True)
+
+        for config in targets_config:
+            target_type = config.get('type', '')
+
+            try:
+                if target_type == 'price_based':
+                    direction = config.get('direction', 'up')
+                    profit_pct = config.get('profitPct', 10)
+                    max_dd = config.get('maxDrawdownPct', 5)
+                    days = config.get('timeBars', 7)
+                    series = self._calculate_single_target(df, profit_pct, max_dd, days, direction)
+                    col_name = f"price_{direction}_{profit_pct}pct_{max_dd}dd_{days}d"
+                    category = 'binary_classification'
+
+                elif target_type == 'directional':
+                    direction = config.get('direction', 'up')
+                    horizon = config.get('horizon', 5)
+                    series = self.calculate_directional(df, horizon, direction)
+                    col_name = series.name
+                    category = 'binary_classification'
+
+                elif target_type == 'triple_barrier':
+                    profit_pct = config.get('profitPct', 3)
+                    stop_pct = config.get('stopPct', 2)
+                    max_bars = config.get('maxBars', 10)
+                    series = self.calculate_triple_barrier(df, profit_pct, stop_pct, max_bars)
+                    col_name = series.name
+                    category = 'multiclass_classification'
+
+                elif target_type == 'trend_reversal':
+                    indicator = config.get('indicator', 'rsi')
+                    params = config.get('indicatorParams', {})
+                    threshold = config.get('threshold', 30)
+                    direction = config.get('direction', 'bullish')
+                    series = self.calculate_trend_reversal(df, indicator, params, threshold, direction)
+                    col_name = series.name
+                    category = 'binary_classification'
+
+                elif target_type == 'volatility':
+                    horizon = config.get('horizon', 5)
+                    method = config.get('method', 'std')
+                    series = self.calculate_volatility(df, horizon, method)
+                    col_name = series.name
+                    category = 'regression'
+
+                else:
+                    logger.warning(f"Unknown target type: {target_type}")
+                    continue
+
+                # Calculate statistics
+                valid_mask = ~pd.isna(series)
+                valid_values = series[valid_mask]
+
+                stats = {
+                    "totalRows": len(series),
+                    "validRows": int(valid_mask.sum())
+                }
+
+                if category in ['binary_classification']:
+                    pos_count = int((valid_values == 1).sum())
+                    neg_count = int((valid_values == 0).sum())
+                    total = pos_count + neg_count
+                    stats["positiveCount"] = pos_count
+                    stats["negativeCount"] = neg_count
+                    stats["positivePct"] = round(100 * pos_count / total, 2) if total > 0 else 0
+                    stats["negativePct"] = round(100 * neg_count / total, 2) if total > 0 else 0
+
+                elif category == 'multiclass_classification':
+                    profit_count = int((valid_values == 1).sum())
+                    stop_count = int((valid_values == 0).sum())
+                    timeout_count = int((valid_values == 2).sum())
+                    total = profit_count + stop_count + timeout_count
+                    stats["profitHitCount"] = profit_count
+                    stats["stopHitCount"] = stop_count
+                    stats["timeoutCount"] = timeout_count
+                    stats["profitHitPct"] = round(100 * profit_count / total, 2) if total > 0 else 0
+                    stats["stopHitPct"] = round(100 * stop_count / total, 2) if total > 0 else 0
+                    stats["timeoutPct"] = round(100 * timeout_count / total, 2) if total > 0 else 0
+
+                elif category == 'regression':
+                    if len(valid_values) > 0:
+                        stats["mean"] = round(float(valid_values.mean()), 4)
+                        stats["std"] = round(float(valid_values.std()), 4)
+                        stats["min"] = round(float(valid_values.min()), 4)
+                        stats["max"] = round(float(valid_values.max()), 4)
+
+                # Prepare data for frontend
+                dates = df['Date'].tolist() if 'Date' in df.columns else list(range(len(df)))
+                data = [
+                    {"date": str(dates[i]), "value": None if pd.isna(series.iloc[i]) else float(series.iloc[i])}
+                    for i in range(len(series))
+                ]
+
+                results.append({
+                    "config": config,
+                    "columnName": col_name,
+                    "category": category,
+                    "stats": stats,
+                    "data": data
+                })
+
+            except Exception as e:
+                logger.error(f"Error calculating {target_type} target: {e}", exc_info=True)
+                results.append({
+                    "config": config,
+                    "columnName": f"error_{target_type}",
+                    "category": "error",
+                    "stats": {"error": str(e)},
+                    "data": []
+                })
+
+        return results
+
 
 class ClassImbalanceConfig:
     """

@@ -43,6 +43,8 @@ interface GeneticConfig {
 
 interface MetricsConfig {
   optimizeMetric: string;
+  classificationMetric?: string;
+  regressionMetric?: string;
 }
 
 interface PredictionTarget {
