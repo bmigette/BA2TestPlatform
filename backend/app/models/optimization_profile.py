@@ -25,6 +25,7 @@ class OptimizationProfile(Base):
     train_test_split = Column(Float, default=80.0)  # Train/test split percentage
     genetic_config = Column(JSON, nullable=True)  # Genetic algorithm settings
     metrics_config = Column(JSON, nullable=True)  # Optimization metric settings
+    prediction_horizon = Column(Integer, default=3)  # Prediction horizon (bars ahead)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -581,6 +581,7 @@ class OptimizationProfileCreate(BaseModel):
     trainTestSplit: float = 80.0
     geneticConfig: Optional[GeneticConfig] = None
     metricsConfig: Optional[MetricsConfig] = None
+    predictionHorizon: int = 3
 
 
 class ProfileResponse(BaseModel):
@@ -593,6 +594,7 @@ class ProfileResponse(BaseModel):
     trainTestSplit: float
     geneticConfig: Optional[Dict[str, Any]] = None
     metricsConfig: Optional[Dict[str, Any]] = None
+    predictionHorizon: int = 3
     createdAt: str
     updatedAt: Optional[str] = None
 
@@ -609,6 +611,7 @@ def _profile_to_response(profile: OptimizationProfileModel) -> ProfileResponse:
         trainTestSplit=profile.train_test_split or 80.0,
         geneticConfig=profile.genetic_config,
         metricsConfig=profile.metrics_config,
+        predictionHorizon=profile.prediction_horizon or 3,
         createdAt=profile.created_at.isoformat() if profile.created_at else datetime.now().isoformat(),
         updatedAt=profile.updated_at.isoformat() if profile.updated_at else None
     )
@@ -636,7 +639,8 @@ async def create_profile(profile: OptimizationProfileCreate, db: Session = Depen
             prediction_targets=[t.dict() for t in profile.predictionTargets] if profile.predictionTargets else [],
             train_test_split=profile.trainTestSplit,
             genetic_config=profile.geneticConfig.dict() if profile.geneticConfig else None,
-            metrics_config=profile.metricsConfig.dict() if profile.metricsConfig else None
+            metrics_config=profile.metricsConfig.dict() if profile.metricsConfig else None,
+            prediction_horizon=profile.predictionHorizon
         )
 
         db.add(db_profile)
@@ -773,6 +777,7 @@ async def update_profile(profile_id: int, profile: OptimizationProfileCreate, db
     db_profile.train_test_split = profile.trainTestSplit
     db_profile.genetic_config = profile.geneticConfig.dict() if profile.geneticConfig else None
     db_profile.metrics_config = profile.metricsConfig.dict() if profile.metricsConfig else None
+    db_profile.prediction_horizon = profile.predictionHorizon
 
     db.commit()
     db.refresh(db_profile)
@@ -809,6 +814,7 @@ async def export_profile(profile_id: int, db: Session = Depends(get_db)):
         "trainTestSplit": profile.train_test_split or 80,
         "geneticConfig": profile.genetic_config,
         "metricsConfig": profile.metrics_config,
+        "predictionHorizon": profile.prediction_horizon or 3,
         "exportedAt": datetime.now().isoformat(),
         "version": "1.0"
     }
@@ -846,7 +852,8 @@ async def import_profile(profile_data: Dict[str, Any], db: Session = Depends(get
             predictionTargets=[PredictionTarget(**t) for t in profile_data["predictionTargets"]],
             trainTestSplit=profile_data["trainTestSplit"],
             geneticConfig=GeneticConfig(**profile_data["geneticConfig"]) if profile_data.get("geneticConfig") else None,
-            metricsConfig=MetricsConfig(**profile_data["metricsConfig"]) if profile_data.get("metricsConfig") else None
+            metricsConfig=MetricsConfig(**profile_data["metricsConfig"]) if profile_data.get("metricsConfig") else None,
+            predictionHorizon=profile_data.get("predictionHorizon", 3)
         )
 
         # Create as new profile
