@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Clock, CheckCircle, AlertCircle, Loader2, Pause, Play,
   XCircle, Activity, Target, Zap, Timer, ChevronDown, ChevronRight,
-  Info, FileText, Cpu, MemoryStick, RefreshCw, Save, Trophy, Award
+  Info, FileText, Cpu, MemoryStick, RefreshCw, Save, Trophy, Award, Download
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -617,6 +617,76 @@ const JobDetails: React.FC = () => {
             <div>
               <span className="text-gray-500 dark:text-gray-400">Total:</span>
               <span className="ml-2 font-bold">{((job.trainRows || 0) + (job.testRows || 0)).toLocaleString()}</span>
+            </div>
+          </div>
+
+          {/* Dataset Download Buttons */}
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
+            <span className="text-sm text-gray-500 dark:text-gray-400 block">Download Datasets:</span>
+
+            {/* RNN Datasets (LSTM/GRU) */}
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-purple-600 dark:text-purple-400 font-medium w-20">LSTM/GRU:</span>
+              <a
+                href={`http://localhost:8000/api/jobs/${job.id}/datasets/train_rnn.csv`}
+                download
+                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:hover:bg-purple-900/50 transition-colors"
+              >
+                <Download size={10} className="mr-1" />
+                Train
+              </a>
+              <a
+                href={`http://localhost:8000/api/jobs/${job.id}/datasets/test_rnn.csv`}
+                download
+                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:hover:bg-purple-900/50 transition-colors"
+              >
+                <Download size={10} className="mr-1" />
+                Test
+              </a>
+              <span className="text-xs text-gray-400">(shifted targets)</span>
+            </div>
+
+            {/* Multi-step Datasets (NBEATS/TCN/Transformer) */}
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-green-600 dark:text-green-400 font-medium w-20">Multi-step:</span>
+              <a
+                href={`http://localhost:8000/api/jobs/${job.id}/datasets/train_multistep.csv`}
+                download
+                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50 transition-colors"
+              >
+                <Download size={10} className="mr-1" />
+                Train
+              </a>
+              <a
+                href={`http://localhost:8000/api/jobs/${job.id}/datasets/test_multistep.csv`}
+                download
+                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50 transition-colors"
+              >
+                <Download size={10} className="mr-1" />
+                Test
+              </a>
+              <span className="text-xs text-gray-400">(original targets)</span>
+            </div>
+
+            {/* Combined/Debug */}
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20">Debug:</span>
+              <a
+                href={`http://localhost:8000/api/jobs/${job.id}/datasets/combined_dataset.csv`}
+                download
+                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors"
+              >
+                <Download size={10} className="mr-1" />
+                Combined
+              </a>
+              <a
+                href={`http://localhost:8000/api/jobs/${job.id}/datasets/metadata.json`}
+                download
+                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors"
+              >
+                <Download size={10} className="mr-1" />
+                Metadata
+              </a>
             </div>
           </div>
         </div>

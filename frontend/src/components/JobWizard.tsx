@@ -99,9 +99,6 @@ interface JobWizardProps {
   onDeleteProfile: (profileId: number) => Promise<void>;
 }
 
-// RNN models (LSTM/GRU) only support output_chunk_length=1, so disable for horizon > 1
-const RNN_MODELS = ['lstm', 'gru'];
-
 const MODEL_TYPES = [
   { id: 'lstm', name: 'LSTM', description: 'Long Short-Term Memory' },
   { id: 'gru', name: 'GRU', description: 'Gated Recurrent Unit' },
@@ -268,19 +265,12 @@ const JobWizard: React.FC<JobWizardProps> = ({
   };
 
   const handleAllModelsToggle = () => {
-    setState(prev => {
-      // When horizon > 1, exclude RNN models from "select all"
-      const availableModels = prev.predictionHorizon > 1
-        ? MODEL_TYPES.filter(m => !RNN_MODELS.includes(m.id))
-        : MODEL_TYPES;
-
-      return {
-        ...prev,
-        selectedModels: prev.selectedModels.length === availableModels.length
-          ? []
-          : availableModels.map(m => m.id)
-      };
-    });
+    setState(prev => ({
+      ...prev,
+      selectedModels: prev.selectedModels.length === MODEL_TYPES.length
+        ? []
+        : MODEL_TYPES.map(m => m.id)
+    }));
   };
 
   const toggleTargetSet = (targetSetId: number) => {
@@ -799,41 +789,27 @@ const Step1Settings: React.FC<Step1Props> = ({
           </label>
         </div>
         <div className="grid grid-cols-3 gap-3">
-          {MODEL_TYPES.map((model) => {
-            const isRnnModel = RNN_MODELS.includes(model.id);
-            const isDisabled = isRnnModel && state.predictionHorizon > 1;
-
-            return (
+          {MODEL_TYPES.map((model) => (
             <label
               key={model.id}
-              title={isDisabled ? `${model.name} only supports 1-bar prediction horizon` : undefined}
-              className={`flex items-start space-x-3 p-3 rounded-lg border transition-colors ${
-                isDisabled
-                  ? 'opacity-50 cursor-not-allowed border-gray-300 dark:border-gray-700 bg-gray-100 dark:bg-gray-800'
-                  : state.selectedModels.includes(model.id)
-                  ? 'border-green-500 bg-green-50 dark:bg-green-900/20 cursor-pointer'
-                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 cursor-pointer'
+              className={`flex items-start space-x-3 p-3 rounded-lg border transition-colors cursor-pointer ${
+                state.selectedModels.includes(model.id)
+                  ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
               }`}
             >
               <input
                 type="checkbox"
                 checked={state.selectedModels.includes(model.id)}
-                onChange={() => !isDisabled && handleModelToggle(model.id)}
-                disabled={isDisabled}
-                className="mt-1 w-4 h-4 text-green-600 border-gray-300 rounded disabled:opacity-50"
+                onChange={() => handleModelToggle(model.id)}
+                className="mt-1 w-4 h-4 text-green-600 border-gray-300 rounded"
               />
               <div>
                 <div className="font-medium text-sm">{model.name}</div>
                 <span className="text-xs text-gray-500">{model.description}</span>
-                {isDisabled && (
-                  <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                    Only supports 1-bar horizon
-                  </div>
-                )}
               </div>
             </label>
-            );
-          })}
+          ))}
         </div>
       </div>
 
@@ -935,10 +911,10 @@ const Step1Settings: React.FC<Step1Props> = ({
           <ChevronRight size={16} className="text-gray-400" />
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Prediction Horizon</label>
         </div>
-        <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
+        <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 space-y-4">
           <div className="flex items-center space-x-4">
-            <div className="flex-1">
-              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Bars ahead to predict</label>
+            <div className="flex-shrink-0">
+              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Bars ahead</label>
               <input
                 type="number"
                 min={1}
@@ -946,21 +922,35 @@ const Step1Settings: React.FC<Step1Props> = ({
                 value={state.predictionHorizon}
                 onChange={(e) => {
                   const newHorizon = Math.max(1, Math.min(30, Number(e.target.value)));
-                  setState(prev => ({
-                    ...prev,
-                    predictionHorizon: newHorizon,
-                    // Deselect RNN models when horizon > 1
-                    selectedModels: newHorizon > 1
-                      ? prev.selectedModels.filter(m => !RNN_MODELS.includes(m))
-                      : prev.selectedModels
-                  }));
+                  setState(prev => ({ ...prev, predictionHorizon: newHorizon }));
                 }}
                 className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
             <div className="text-sm flex-1">
-              <p className="text-gray-800 dark:text-white">Model will predict <span className="text-blue-500 dark:text-blue-400 font-medium">target values</span> for the next <strong className="text-blue-600 dark:text-blue-300">{state.predictionHorizon}</strong> bar(s).</p>
+              <p className="text-gray-800 dark:text-white">
+                Models will predict target values <strong className="text-blue-600 dark:text-blue-300">{state.predictionHorizon}</strong> bar(s) ahead.
+              </p>
               <p className="text-xs mt-1 text-gray-600 dark:text-gray-300">Higher values give more lead time but may reduce accuracy.</p>
+            </div>
+          </div>
+
+          {/* Model-specific behavior explanation */}
+          <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
+            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2 font-medium">How models handle prediction horizon:</div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
+                <div className="font-medium text-purple-600 dark:text-purple-400 mb-1">LSTM / GRU</div>
+                <p className="text-gray-600 dark:text-gray-300">
+                  Target shifted by {state.predictionHorizon} bars. Model predicts <strong>single value</strong> at bar +{state.predictionHorizon}.
+                </p>
+              </div>
+              <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
+                <div className="font-medium text-green-600 dark:text-green-400 mb-1">N-BEATS / TCN / Transformer / TFT</div>
+                <p className="text-gray-600 dark:text-gray-300">
+                  Multi-step output. Model predicts <strong>{state.predictionHorizon} values</strong> (bars +1 to +{state.predictionHorizon}) in one pass.
+                </p>
+              </div>
             </div>
           </div>
         </div>

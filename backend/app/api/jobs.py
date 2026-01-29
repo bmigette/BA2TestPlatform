@@ -1822,3 +1822,81 @@ async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+# ============================================================================
+# Dataset Download Endpoints
+# ============================================================================
+
+@router.get("/jobs/{job_id}/datasets")
+async def get_job_datasets(job_id: str):
+    """
+    Get information about cached datasets for a training job.
+
+    Returns list of available dataset files with their sizes.
+    """
+    from app.services.job_handler import get_job_datasets as get_datasets
+
+    datasets = get_datasets(job_id)
+
+    if not datasets:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No cached datasets found for job {job_id}"
+        )
+
+    return datasets
+
+
+@router.get("/jobs/{job_id}/datasets/{filename}")
+async def download_job_dataset(job_id: str, filename: str):
+    """
+    Download a specific dataset file for a training job.
+
+    Available files:
+    - combined_dataset.csv: Full dataset with all features and targets (RNN format with shifted columns)
+    - train_rnn.csv: Training data for LSTM/GRU (multiple shifted target columns)
+    - test_rnn.csv: Test data for LSTM/GRU
+    - train_multistep.csv: Training data for NBEATS/TCN/Transformer (single target)
+    - test_multistep.csv: Test data for multi-step models
+    - metadata.json: Dataset metadata including column info
+    """
+    from app.services.job_handler import get_dataset_file_path
+
+    # Validate filename to prevent path traversal
+    allowed_files = [
+        'combined_dataset.csv',
+        'train_rnn.csv', 'test_rnn.csv',
+        'train_multistep.csv', 'test_multistep.csv',
+        'train_dataset.csv', 'test_dataset.csv',  # Legacy format
+        'metadata.json'
+    ]
+    if filename not in allowed_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid filename. Allowed files: {', '.join(allowed_files)}"
+        )
+
+    file_path = get_dataset_file_path(job_id, filename)
+
+    if not file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset file {filename} not found for job {job_id}"
+        )
+
+    # Determine content type
+    content_type = 'text/csv' if filename.endswith('.csv') else 'application/json'
+
+    def file_iterator():
+        with open(file_path, 'rb') as f:
+            while chunk := f.read(8192):
+                yield chunk
+
+    return StreamingResponse(
+        file_iterator(),
+        media_type=content_type,
+        headers={
+            'Content-Disposition': f'attachment; filename="{job_id}_{filename}"'
+        }
+    )

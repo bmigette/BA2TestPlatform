@@ -8,6 +8,7 @@ Uses real ML services instead of simulation.
 import logging
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -16,6 +17,229 @@ from app.models.database import SessionLocal
 from app.models.dataset import Dataset
 
 logger = logging.getLogger(__name__)
+
+# Dataset cache directory
+DATASET_CACHE_DIR = Path(__file__).parent.parent.parent / 'datasets' / 'cache' / 'jobs'
+
+
+def get_job_cache_dir(task_id: str) -> Path:
+    """Get the cache directory for a specific job."""
+    cache_dir = DATASET_CACHE_DIR / task_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+# RNN models that only support output_chunk_length=1
+RNN_MODELS = ['lstm', 'gru']
+
+# Multi-step models that support output_chunk_length > 1
+MULTISTEP_MODELS = ['nbeats', 'tcn', 'transformer', 'tft']
+
+
+def create_rnn_target_columns(
+    df: pd.DataFrame,
+    target_column: str,
+    prediction_horizon: int
+) -> tuple[pd.DataFrame, List[str]]:
+    """
+    Create multiple shifted target columns for RNN models.
+
+    For RNN models (LSTM/GRU) with output_chunk_length=1, we create
+    separate target columns for each prediction step:
+    - target_h1: target shifted by 1 bar (predict 1 bar ahead)
+    - target_h2: target shifted by 2 bars (predict 2 bars ahead)
+    - ...
+    - target_hN: target shifted by N bars (predict N bars ahead)
+
+    Args:
+        df: DataFrame with the original target column
+        target_column: Name of the base target column
+        prediction_horizon: Number of bars ahead to predict
+
+    Returns:
+        Tuple of (modified DataFrame, list of new target column names)
+    """
+    result_df = df.copy()
+    target_columns = []
+
+    for h in range(1, prediction_horizon + 1):
+        new_col = f"{target_column}_h{h}"
+        # Shift target by h bars (negative shift = look ahead)
+        result_df[new_col] = result_df[target_column].shift(-h)
+        target_columns.append(new_col)
+        logger.debug(f"Created RNN target column: {new_col} (shift={-h})")
+
+    logger.info(f"Created {len(target_columns)} RNN target columns for horizon {prediction_horizon}")
+    return result_df, target_columns
+
+
+def save_training_datasets(
+    task_id: str,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    combined_df: pd.DataFrame,
+    target_column: str,
+    feature_columns: List[str],
+    prediction_horizon: int
+) -> Dict[str, Any]:
+    """
+    Save training datasets to cache for debugging and download.
+
+    Creates two dataset versions:
+    1. RNN datasets (for LSTM/GRU with output_chunk_length=1):
+       - Multiple target columns (target_h1, target_h2, ..., target_hN)
+       - Each shifted by 1, 2, ..., N bars respectively
+    2. Multi-step datasets (for NBEATS/TCN/Transformer with output_chunk_length=horizon):
+       - Single target column (no shift)
+       - Model predicts next N values naturally
+
+    Returns:
+        Dictionary with paths to saved files and target column info
+    """
+    cache_dir = get_job_cache_dir(task_id)
+    saved_files = {}
+
+    try:
+        # Create RNN datasets with shifted target columns
+        train_rnn, rnn_target_cols = create_rnn_target_columns(train_df, target_column, prediction_horizon)
+        test_rnn, _ = create_rnn_target_columns(test_df, target_column, prediction_horizon)
+        combined_rnn, _ = create_rnn_target_columns(combined_df, target_column, prediction_horizon)
+
+        # Save RNN train dataset
+        train_rnn_path = cache_dir / 'train_rnn.csv'
+        train_rnn.to_csv(train_rnn_path, index=False)
+        saved_files['train_rnn'] = str(train_rnn_path)
+        logger.info(f"Saved RNN train dataset: {train_rnn_path}")
+
+        # Save RNN test dataset
+        test_rnn_path = cache_dir / 'test_rnn.csv'
+        test_rnn.to_csv(test_rnn_path, index=False)
+        saved_files['test_rnn'] = str(test_rnn_path)
+        logger.info(f"Saved RNN test dataset: {test_rnn_path}")
+
+        # Save multi-step datasets (original target, no shift)
+        # For multi-step models, we use the original target column
+        # The model's output_chunk_length handles multi-step prediction
+        train_multistep_path = cache_dir / 'train_multistep.csv'
+        train_df.to_csv(train_multistep_path, index=False)
+        saved_files['train_multistep'] = str(train_multistep_path)
+        logger.info(f"Saved multi-step train dataset: {train_multistep_path}")
+
+        test_multistep_path = cache_dir / 'test_multistep.csv'
+        test_df.to_csv(test_multistep_path, index=False)
+        saved_files['test_multistep'] = str(test_multistep_path)
+        logger.info(f"Saved multi-step test dataset: {test_multistep_path}")
+
+        # Save combined dataset (RNN version with all columns for debugging)
+        combined_path = cache_dir / 'combined_dataset.csv'
+        combined_rnn.to_csv(combined_path, index=False)
+        saved_files['combined'] = str(combined_path)
+        logger.info(f"Saved combined dataset: {combined_path}")
+
+        # Save metadata
+        import json
+        metadata = {
+            'task_id': task_id,
+            'target_column': target_column,
+            'rnn_target_columns': rnn_target_cols,
+            'feature_columns': feature_columns,
+            'prediction_horizon': prediction_horizon,
+            'combined_rows': len(combined_df),
+            'train_rows': len(train_df),
+            'test_rows': len(test_df),
+            'created_at': datetime.now().isoformat(),
+            'dataset_types': {
+                'rnn': {
+                    'description': 'For LSTM/GRU models with output_chunk_length=1',
+                    'target_columns': rnn_target_cols,
+                    'files': ['train_rnn.csv', 'test_rnn.csv']
+                },
+                'multistep': {
+                    'description': 'For NBEATS/TCN/Transformer models with output_chunk_length=horizon',
+                    'target_column': target_column,
+                    'files': ['train_multistep.csv', 'test_multistep.csv']
+                }
+            }
+        }
+        metadata_path = cache_dir / 'metadata.json'
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        saved_files['metadata'] = str(metadata_path)
+
+        logger.info(f"Saved {len(saved_files)} dataset files for job {task_id}")
+
+        # Return info needed for training
+        return {
+            'saved_files': saved_files,
+            'rnn_target_columns': rnn_target_cols,
+            'multistep_target_column': target_column
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to save training datasets: {e}")
+        return {'saved_files': {}, 'error': str(e)}
+
+
+def get_job_datasets(task_id: str) -> Dict[str, Any]:
+    """
+    Get information about saved datasets for a job.
+
+    Returns:
+        Dictionary with dataset info or None if not found
+    """
+    cache_dir = DATASET_CACHE_DIR / task_id
+
+    if not cache_dir.exists():
+        return None
+
+    result = {
+        'task_id': task_id,
+        'files': []
+    }
+
+    # Check for all expected files (both old and new format)
+    expected_files = [
+        'combined_dataset.csv',
+        'train_rnn.csv', 'test_rnn.csv',
+        'train_multistep.csv', 'test_multistep.csv',
+        # Legacy format
+        'train_dataset.csv', 'test_dataset.csv'
+    ]
+
+    for filename in expected_files:
+        filepath = cache_dir / filename
+        if filepath.exists():
+            stat = filepath.stat()
+            result['files'].append({
+                'name': filename,
+                'size': stat.st_size,
+                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+
+    # Load metadata if available
+    metadata_path = cache_dir / 'metadata.json'
+    if metadata_path.exists():
+        import json
+        with open(metadata_path, 'r') as f:
+            result['metadata'] = json.load(f)
+
+    return result
+
+
+def get_dataset_file_path(task_id: str, filename: str) -> Optional[Path]:
+    """
+    Get the path to a specific dataset file for a job.
+
+    Returns:
+        Path to file or None if not found
+    """
+    cache_dir = DATASET_CACHE_DIR / task_id
+    filepath = cache_dir / filename
+
+    if filepath.exists() and filepath.is_file():
+        return filepath
+
+    return None
 
 # Check for ML libraries
 try:
@@ -742,6 +966,18 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         exclude_cols.extend(target_cols)
         feature_columns = [c for c in combined_df.columns if c not in exclude_cols]
 
+        # Save datasets for debugging and download
+        update_job_progress(task_id, 22, "Saving datasets to cache...")
+        save_training_datasets(
+            task_id=task_id,
+            train_df=train_df,
+            test_df=test_df,
+            combined_df=combined_df,
+            target_column=target_column,
+            feature_columns=feature_columns,
+            prediction_horizon=prediction_horizon
+        )
+
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
 
@@ -1219,6 +1455,12 @@ def train_unified_optimization(
 
     Each individual in the population can be a different model type,
     allowing the GA to compare and optimize across model architectures.
+
+    Dataset handling by model type:
+    - RNN models (LSTM/GRU): Use shifted target column (target_hN), output_chunk_length=1
+      These models predict a single value N bars ahead.
+    - Multi-step models (NBEATS/TCN/Transformer/TFT): Use original target, output_chunk_length=horizon
+      These models predict the next N values in a single forward pass.
     """
     from app.services.task_queue import get_task_queue
 
@@ -1226,31 +1468,64 @@ def train_unified_optimization(
     ml_service = MLModelsService()
     training_service = TrainingService()
 
-    # Prepare data once with proper train/test split
-    # Using prepare_data_split ensures train and test series share the same
-    # index space, which is required for Darts metric functions to work correctly
+    # Prepare data for BOTH model types
+    # RNN models: use shifted target column for the furthest horizon
+    # Multi-step models: use original target column
     try:
-        train_series, test_series, train_covariates, test_covariates = training_service.prepare_data_split(
+        # Create shifted target column for RNN models
+        rnn_df = full_df.copy()
+        rnn_target_column = f"{target_column}_h{prediction_horizon}"
+        rnn_df[rnn_target_column] = rnn_df[target_column].shift(-prediction_horizon)
+
+        # Prepare RNN data (shifted target, will use output_chunk_length=1)
+        rnn_train_series, rnn_test_series, rnn_train_cov, rnn_test_cov = training_service.prepare_data_split(
+            rnn_df,
+            train_ratio=train_ratio,
+            target_column=rnn_target_column,
+            feature_columns=feature_columns[:10],
+            timeframe=timeframe
+        )
+        logger.info(f"RNN data prepared: train={len(rnn_train_series)}, test={len(rnn_test_series)} samples (target: {rnn_target_column})")
+
+        # Prepare multi-step data (original target, will use output_chunk_length=horizon)
+        ms_train_series, ms_test_series, ms_train_cov, ms_test_cov = training_service.prepare_data_split(
             full_df,
             train_ratio=train_ratio,
             target_column=target_column,
             feature_columns=feature_columns[:10],
             timeframe=timeframe
         )
+        logger.info(f"Multi-step data prepared: train={len(ms_train_series)}, test={len(ms_test_series)} samples (target: {target_column})")
+
+        # Store both datasets for use in fitness function
+        data_by_model_type = {
+            'rnn': {
+                'train_series': rnn_train_series,
+                'test_series': rnn_test_series,
+                'train_covariates': rnn_train_cov,
+                'test_covariates': rnn_test_cov,
+                'target_column': rnn_target_column,
+                'output_chunk_length': 1
+            },
+            'multistep': {
+                'train_series': ms_train_series,
+                'test_series': ms_test_series,
+                'train_covariates': ms_train_cov,
+                'test_covariates': ms_test_cov,
+                'target_column': target_column,
+                'output_chunk_length': prediction_horizon
+            }
+        }
 
         # Validate series lengths
-        # RNN models need: training_length (3*input_chunk) + output_chunk samples
-        # Other models need: input_chunk + output_chunk samples
-        min_train_length = 100  # Reasonable minimum for training
-        min_test_length = 50   # Reasonable minimum for evaluation
+        min_train_length = 100
+        min_test_length = 50
 
-        logger.info(f"Data prepared: train={len(train_series)}, test={len(test_series)} samples")
-
-        if len(train_series) < min_train_length:
-            logger.warning(f"Train series ({len(train_series)}) is short. Models may fail to train.")
-
-        if len(test_series) < min_test_length:
-            logger.warning(f"Test series ({len(test_series)}) is very short. Consider larger dataset or different split.")
+        for dtype, dinfo in data_by_model_type.items():
+            if len(dinfo['train_series']) < min_train_length:
+                logger.warning(f"{dtype} train series ({len(dinfo['train_series'])}) is short.")
+            if len(dinfo['test_series']) < min_test_length:
+                logger.warning(f"{dtype} test series ({len(dinfo['test_series'])}) is very short.")
 
     except Exception as e:
         logger.error(f"Failed to prepare data: {e}", exc_info=True)
@@ -1312,6 +1587,19 @@ def train_unified_optimization(
         model_type_idx = int(params.get('model_type_idx', 0))
         model_type = selected_models[model_type_idx % len(selected_models)]
 
+        # Select appropriate data based on model type
+        # RNN models (LSTM/GRU) use shifted target with output_chunk_length=1
+        # Multi-step models use original target with output_chunk_length=horizon
+        is_rnn = model_type in RNN_MODELS
+        data_key = 'rnn' if is_rnn else 'multistep'
+        model_data = data_by_model_type[data_key]
+
+        train_series = model_data['train_series']
+        test_series = model_data['test_series']
+        train_covariates = model_data['train_covariates']
+        test_covariates = model_data['test_covariates']
+        model_output_chunk = model_data['output_chunk_length']
+
         # Calculate progress
         gen_progress = (gen / generations) * progress_range
         individual_progress = (individual_num / population_size) * (progress_range / generations) * 0.8
@@ -1340,8 +1628,8 @@ def train_unified_optimization(
         )
 
         try:
-            # Get model-specific params
-            model_params = get_model_params(model_type, params, training_epochs, prediction_horizon)
+            # Get model-specific params with correct output_chunk_length
+            model_params = get_model_params(model_type, params, training_epochs, model_output_chunk)
             n_epochs = model_params.get('n_epochs', 10)
 
             # Update epoch info and current model params before training
@@ -1606,18 +1894,20 @@ def train_unified_optimization(
     }
 
 
-def get_model_params(model_type: str, params: Dict, training_epochs: int = 10, prediction_horizon: int = 3) -> Dict:
+def get_model_params(model_type: str, params: Dict, training_epochs: int = 10, output_chunk_length: int = 3) -> Dict:
     """Extract model-specific parameters from unified params.
 
     Args:
         model_type: Type of model (lstm, nbeats, etc.)
         params: Unified parameters from genetic optimization
         training_epochs: Number of epochs for training (from geneticConfig)
-        prediction_horizon: Number of bars to predict ahead (output_chunk_length)
+        output_chunk_length: Model's output chunk length
+            - For RNN models (LSTM/GRU): Always 1 (single step prediction)
+            - For multi-step models: prediction_horizon (multi-step prediction)
     """
     model_params = {
         'input_chunk_length': int(params.get('input_chunk_length', 24)),
-        'output_chunk_length': prediction_horizon,
+        'output_chunk_length': output_chunk_length,
         'n_epochs': training_epochs,
         'batch_size': int(params.get('batch_size', 32)),
         'learning_rate': params.get('learning_rate', 0.001),
