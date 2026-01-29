@@ -103,3 +103,16 @@ package-lock.json
 *.pem
 *.key
 credentials.json
+
+# Screenshots (temporary)
+after-refresh
+chart-test
+dataset-page
+
+# Cache directories
+backend/datasets/cache/
+backend/test_output/
+backend/trained_models/
+
+# Accidental duplicate directories
+backend/backend/
