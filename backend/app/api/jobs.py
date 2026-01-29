@@ -1475,7 +1475,7 @@ async def save_elite_to_inventory(
         "filePath": elite_model['file_path'],
         "fileSize": None,
         "generations": job.get('totalGenerations', 50),
-        "bestGeneration": 0,  # Could be extracted from individual info
+        "bestGeneration": job.get('currentGeneration', job.get('totalGenerations', 50)),
         "fitness": elite_model['fitness'],
         # Additional fields for new requirements
         "confusionMatrix": metrics.get('confusion_matrix'),
@@ -1778,7 +1778,7 @@ async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
                 "trainedAt": datetime.now().isoformat(),
                 "filePath": best_model['file_path'],
                 "generations": 1,
-                "bestGeneration": 0,
+                "bestGeneration": 1,  # Retrain jobs are single-generation
                 "fitness": best_model['fitness'],
                 "confusionMatrix": best_model['metrics'].get('confusion_matrix'),
                 "allMetrics": best_model['metrics'],

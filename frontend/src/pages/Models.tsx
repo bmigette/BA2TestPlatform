@@ -356,7 +356,7 @@ const Models: React.FC = () => {
                   <div className="flex items-center gap-2 text-sm">
                     <TrendingUp className="w-4 h-4 text-blue-500" />
                     <span className="text-gray-500 dark:text-gray-400">Fitness:</span>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">{(model.fitness || 0).toFixed(1)}</span>
+                    <span className="font-medium text-gray-900 dark:text-gray-100">{(model.fitness || 0).toFixed(5)}</span>
                   </div>
                 </div>
 
@@ -453,7 +453,7 @@ const Models: React.FC = () => {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <span className="text-sm font-medium text-blue-600">
-                      {(model.fitness || 0).toFixed(1)}
+                      {(model.fitness || 0).toFixed(5)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center">
