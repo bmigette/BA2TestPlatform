@@ -873,7 +873,9 @@ class PredictionTargetService:
         indicator_service = IndicatorService()
 
         if indicator == 'rsi':
-            period = indicator_params.get('period', 14)
+            period = indicator_params.get('period')
+            if period is None:
+                raise ValueError("rsi indicator requires 'period' parameter")
             rsi = indicator_service.calculate_rsi(df, period)
 
             if direction == 'bullish':
@@ -891,9 +893,11 @@ class PredictionTargetService:
                             targets[i] = 1
 
         elif indicator == 'macd':
-            fast = indicator_params.get('fast', 12)
-            slow = indicator_params.get('slow', 26)
-            signal_period = indicator_params.get('signal', 9)
+            fast = indicator_params.get('fast')
+            slow = indicator_params.get('slow')
+            signal_period = indicator_params.get('signal')
+            if fast is None or slow is None or signal_period is None:
+                raise ValueError("macd indicator requires 'fast', 'slow', and 'signal' parameters")
             macd_data = indicator_service.calculate_macd(df, fast, slow, signal_period)
             macd_line = macd_data['macd']
             signal_line = macd_data['signal']
@@ -916,8 +920,11 @@ class PredictionTargetService:
                             targets[i] = 1
 
         elif indicator == 'sar':
-            af_start = indicator_params.get('af_start', 0.02)
-            af_max = indicator_params.get('af_max', 0.2)
+            # Handle both snake_case and camelCase parameter names
+            af_start = indicator_params.get('af_start') or indicator_params.get('afStart')
+            af_max = indicator_params.get('af_max') or indicator_params.get('afMax')
+            if af_start is None or af_max is None:
+                raise ValueError("sar indicator requires 'af_start'/'afStart' and 'af_max'/'afMax' parameters")
             sar = indicator_service.calculate_sar(df, af_start, af_max)
             close = df['Close'].values
 
@@ -935,7 +942,10 @@ class PredictionTargetService:
                             targets[i] = 1
 
         elif indicator == 'zigzag':
-            deviation_pct = indicator_params.get('deviation_pct', 5.0)
+            # Handle both snake_case (backend) and camelCase (frontend) parameter names
+            deviation_pct = indicator_params.get('deviation_pct') or indicator_params.get('deviationPct')
+            if deviation_pct is None:
+                raise ValueError("zigzag indicator requires 'deviation_pct' or 'deviationPct' parameter")
             zigzag = indicator_service.calculate_zigzag(df, deviation_pct)
 
             # The zigzag is interpolated, so we detect direction changes

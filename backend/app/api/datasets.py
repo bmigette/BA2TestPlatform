@@ -520,6 +520,10 @@ async def get_dataset_preview(
             # Default: load all columns
             df = pd.read_csv(file_path)
 
+        # Sort by date to ensure chronological order
+        if 'Date' in df.columns:
+            df = df.sort_values('Date').reset_index(drop=True)
+
         total_rows = len(df)
 
         # Sample if needed
@@ -735,6 +739,10 @@ async def calculate_indicators(
             )
 
         df = pd.read_csv(file_path)
+
+        # Sort by date to ensure consistent ordering with target calculations
+        if 'Date' in df.columns:
+            df = df.sort_values('Date').reset_index(drop=True)
 
         # Parse request
         indicators = request_body.get('indicators', [])
