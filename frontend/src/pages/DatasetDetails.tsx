@@ -2,9 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Calendar, TrendingUp, Database, Download, MessageSquare, Target, Plus, X, Play, Save, RefreshCw, AlertCircle, CheckCircle, Loader, Settings, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
 import TradingChart from '../components/TradingChart';
+import type { IndicatorData } from '../components/TradingChart';
 import PredictionTargetsPanel from '../components/PredictionTargetsPanel';
 import TargetSetModal from '../components/TargetSetModal';
-import type { CalculatedTarget, TargetConfig } from '../types/targets';
+import type { CalculatedTarget, TargetConfig, TrendReversalTarget } from '../types/targets';
 
 interface Dataset {
   id: number;
@@ -153,6 +154,7 @@ const DatasetDetails: React.FC = () => {
 
   // New prediction targets system
   const [calculatedTargets, setCalculatedTargets] = useState<CalculatedTarget[]>([]);
+  const [indicatorData, setIndicatorData] = useState<IndicatorData | undefined>(undefined);
   const [targetSetModalOpen, setTargetSetModalOpen] = useState(false);
   const [targetSetModalMode, setTargetSetModalMode] = useState<'save' | 'load'>('save');
   const [currentTargetConfigs, setCurrentTargetConfigs] = useState<TargetConfig[]>([]);
@@ -395,9 +397,63 @@ const DatasetDetails: React.FC = () => {
   };
 
   // New prediction targets panel callbacks
-  const handleTargetsCalculated = useCallback((targets: CalculatedTarget[]) => {
+  const handleTargetsCalculated = useCallback(async (targets: CalculatedTarget[]) => {
     setCalculatedTargets(targets);
-  }, []);
+
+    // Check if any targets are trend_reversal type and need indicator display
+    const trendReversalTargets = targets.filter(t => t.config.type === 'trend_reversal');
+    if (trendReversalTargets.length > 0 && dataset) {
+      try {
+        // Collect unique indicators to fetch
+        const indicatorsToFetch: Array<{ type: string; [key: string]: unknown }> = [];
+        const seenIndicators = new Set<string>();
+
+        trendReversalTargets.forEach(t => {
+          const config = t.config as TrendReversalTarget;
+          const key = `${config.indicator}_${JSON.stringify(config.indicatorParams)}`;
+          if (!seenIndicators.has(key)) {
+            seenIndicators.add(key);
+            if (config.indicator === 'rsi') {
+              indicatorsToFetch.push({ type: 'rsi', period: (config.indicatorParams as { period?: number }).period || 14 });
+            } else if (config.indicator === 'macd') {
+              const p = config.indicatorParams as { fast?: number; slow?: number; signal?: number };
+              indicatorsToFetch.push({ type: 'macd', fast: p.fast || 12, slow: p.slow || 26, signal: p.signal || 9 });
+            } else if (config.indicator === 'sar') {
+              const p = config.indicatorParams as { afStart?: number; afMax?: number };
+              indicatorsToFetch.push({ type: 'sar', af_start: p.afStart || 0.02, af_max: p.afMax || 0.2 });
+            } else if (config.indicator === 'zigzag') {
+              indicatorsToFetch.push({ type: 'zigzag', deviation_pct: (config.indicatorParams as { deviationPct?: number }).deviationPct || 5 });
+            } else if (config.indicator === 'stochastic') {
+              const p = config.indicatorParams as { kPeriod?: number; dPeriod?: number };
+              indicatorsToFetch.push({ type: 'stochastic', k_period: p.kPeriod || 14, d_period: p.dPeriod || 3 });
+            } else if (config.indicator === 'adx') {
+              indicatorsToFetch.push({ type: 'adx', period: (config.indicatorParams as { period?: number }).period || 14 });
+            } else if (config.indicator === 'donchian') {
+              indicatorsToFetch.push({ type: 'donchian', period: (config.indicatorParams as { period?: number }).period || 20 });
+            }
+          }
+        });
+
+        if (indicatorsToFetch.length > 0) {
+          const response = await fetch(`http://localhost:8002/api/datasets/${dataset.id}/calculate-indicators`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ indicators: indicatorsToFetch }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            setIndicatorData(data);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching indicator data:', error);
+      }
+    } else if (trendReversalTargets.length === 0) {
+      // Clear indicator data if no trend reversal targets
+      setIndicatorData(undefined);
+    }
+  }, [dataset]);
 
   const handleSaveTargetSet = useCallback((targets: TargetConfig[]) => {
     setCurrentTargetConfigs(targets);
@@ -1053,6 +1109,7 @@ const DatasetDetails: React.FC = () => {
             trendData={trendData}
             predictionPreview={predictionPreview}
             calculatedTargets={calculatedTargets}
+            indicatorData={indicatorData}
             height={500}
           />
         ) : (
@@ -1066,12 +1123,14 @@ const DatasetDetails: React.FC = () => {
 
       {/* New Prediction Targets Panel - below chart */}
       {dataset && chartData.length > 0 && (
-        <PredictionTargetsPanel
-          datasetId={dataset.id}
-          onTargetsCalculated={handleTargetsCalculated}
-          onSaveSet={handleSaveTargetSet}
-          onLoadSet={handleLoadTargetSet}
-        />
+        <div className="mt-6">
+          <PredictionTargetsPanel
+            datasetId={dataset.id}
+            onTargetsCalculated={handleTargetsCalculated}
+            onSaveSet={handleSaveTargetSet}
+            onLoadSet={handleLoadTargetSet}
+          />
+        </div>
       )}
 
       {/* Non-Chart Data Table (Fundamental, Sentiment, Macro, and other non-chart columns) */}
@@ -1246,191 +1305,6 @@ const DatasetDetails: React.FC = () => {
             </div>
           </dl>
         </div>
-      </div>
-
-      {/* Prediction Targets Preview Panel */}
-      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mt-6">
-        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-          <Target size={20} className="text-purple-500" />
-          Prediction Targets Preview
-        </h2>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          Define prediction targets to generate training labels. Each target creates binary columns
-          indicating whether the price moved by the specified percentage within the time window.
-        </p>
-
-        {/* Target configuration form */}
-        <div className="flex flex-wrap items-end gap-4 mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-              Profit Target (%)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="100"
-              value={newTarget.profitPct}
-              onChange={(e) => setNewTarget({ ...newTarget, profitPct: parseFloat(e.target.value) || 0 })}
-              className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-              Max Drawdown (%)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="50"
-              value={newTarget.maxDd}
-              onChange={(e) => setNewTarget({ ...newTarget, maxDd: parseFloat(e.target.value) || 0 })}
-              className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-              Time Window (days)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="365"
-              value={newTarget.days}
-              onChange={(e) => setNewTarget({ ...newTarget, days: parseInt(e.target.value) || 0 })}
-              className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-            />
-          </div>
-          <button
-            onClick={addPredictionTarget}
-            className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 flex items-center gap-1"
-          >
-            <Plus size={16} />
-            Add Target
-          </button>
-        </div>
-
-        {/* Added targets list */}
-        {predictionTargets.length > 0 && (
-          <div className="mb-4">
-            <h4 className="text-sm font-medium mb-2">Configured Targets:</h4>
-            <div className="flex flex-wrap gap-2">
-              {predictionTargets.map((t, i) => (
-                <span
-                  key={i}
-                  className="px-3 py-1.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-full text-sm flex items-center gap-2"
-                >
-                  {t.profitPct}% profit / {t.maxDd}% max DD / {t.days} days
-                  <button
-                    onClick={() => removePredictionTarget(i)}
-                    className="hover:text-red-500"
-                  >
-                    <X size={14} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Action buttons */}
-        <div className="flex gap-3 mb-4">
-          <button
-            onClick={previewPredictionTargets}
-            disabled={predictionTargets.length === 0 || previewLoading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-          >
-            <Play size={16} />
-            {previewLoading ? 'Calculating...' : 'Preview Targets'}
-          </button>
-          <button
-            onClick={generateTrainingData}
-            disabled={predictionTargets.length === 0 || generateLoading}
-            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
-          >
-            <Save size={16} />
-            {generateLoading ? 'Generating...' : 'Generate Training Data'}
-          </button>
-        </div>
-
-        {/* Generated files info */}
-        {generatedFiles && (
-          <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
-            <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
-              Training Data Generated
-            </h4>
-            <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1">
-              <div><strong>Training file:</strong> {generatedFiles.training}</div>
-              {generatedFiles.normalization && (
-                <div><strong>Normalization params:</strong> {generatedFiles.normalization}</div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Preview statistics */}
-        {predictionPreview && (
-          <div className="mt-4">
-            <h4 className="text-sm font-medium mb-2">Target Statistics:</h4>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-              Number of data points where each target condition was detected
-            </p>
-            {/* Class imbalance warning */}
-            {Object.values(predictionPreview.statistics).some(s => s.positive_pct < 10) && (
-              <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-2">
-                <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                <div className="text-sm">
-                  <p className="font-medium text-amber-800 dark:text-amber-200">Class Imbalance Detected</p>
-                  <p className="text-amber-700 dark:text-amber-300 mt-1">
-                    Some targets have less than 10% positive samples. During training, use <strong>F1-score</strong> as
-                    the fitness metric and <strong>Focal Loss</strong> to prevent the model from always predicting "no target".
-                  </p>
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {Object.entries(predictionPreview.statistics).map(([col, stats]) => (
-                <div key={col} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                  <div className="font-mono text-xs text-gray-600 dark:text-gray-400 mb-2 break-all">
-                    {col}
-                  </div>
-                  <div className="flex items-center justify-between text-sm mb-2">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                      <span className="text-gray-600 dark:text-gray-300">Detected:</span>
-                      <span className="font-semibold text-green-600 dark:text-green-400">
-                        {stats.positive_count}
-                      </span>
-                      <span className="text-gray-500 text-xs">({stats.positive_pct}%)</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded-full bg-gray-400"></div>
-                      <span className="text-gray-600 dark:text-gray-300">Not detected:</span>
-                      <span className="font-semibold text-gray-600 dark:text-gray-400">
-                        {stats.negative_count}
-                      </span>
-                      <span className="text-gray-500 text-xs">({stats.negative_pct}%)</span>
-                    </div>
-                  </div>
-                  {/* Visual ratio bar */}
-                  <div className="mt-3 flex items-center gap-1">
-                    <div
-                      className="h-1.5 bg-green-500 rounded-l"
-                      style={{ width: `${stats.positive_pct}%`, minWidth: stats.positive_count > 0 ? '4px' : '0' }}
-                    />
-                    <div
-                      className="h-1.5 bg-gray-300 dark:bg-gray-500 rounded-r flex-1"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 text-xs text-gray-500">
-              Total rows: {predictionPreview.total_rows} | Valid samples: {Object.values(predictionPreview.statistics)[0]?.total_valid || 0}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Trend Analysis Configuration Modal */}
