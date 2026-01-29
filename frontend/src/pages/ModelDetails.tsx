@@ -578,18 +578,18 @@ const ModelDetails: React.FC = () => {
                 </div>
               )}
               <div className="space-y-3">
-                {model.predictionTargets.map((target, index) => (
+                {model.predictionTargets?.map((target, index) => (
                   <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-medium text-sm capitalize">
-                        {(target.type as string).replace(/_/g, ' ')}
+                        {(target?.type as string || 'unknown').replace(/_/g, ' ')}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded ${
-                        target.category === 'binary_classification' ? 'bg-blue-100 text-blue-700' :
-                        target.category === 'multiclass_classification' ? 'bg-purple-100 text-purple-700' :
+                        target?.category === 'binary_classification' ? 'bg-blue-100 text-blue-700' :
+                        target?.category === 'multiclass_classification' ? 'bg-purple-100 text-purple-700' :
                         'bg-green-100 text-green-700'
                       }`}>
-                        {(target.category as string).replace(/_/g, ' ')}
+                        {(target?.category as string || 'unknown').replace(/_/g, ' ')}
                       </span>
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 grid grid-cols-2 gap-2">

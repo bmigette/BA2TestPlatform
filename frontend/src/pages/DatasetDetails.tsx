@@ -520,10 +520,14 @@ const DatasetDetails: React.FC = () => {
     console.log('Target set saved');
   }, []);
 
+  // State for loaded target configs to pass to PredictionTargetsPanel
+  const [loadedTargetConfigs, setLoadedTargetConfigs] = useState<TargetConfig[] | undefined>(undefined);
+
   const handleTargetSetLoaded = useCallback((targets: TargetConfig[]) => {
-    // The PredictionTargetsPanel will need to be updated to accept loaded targets
-    // For now, we just close the modal
-    console.log('Loaded targets:', targets);
+    // Pass loaded targets to PredictionTargetsPanel
+    setLoadedTargetConfigs(targets);
+    // Clear after a short delay to allow the panel to pick them up
+    setTimeout(() => setLoadedTargetConfigs(undefined), 100);
   }, []);
 
   // Calculate simple moving average (utility function for future use)
@@ -1199,6 +1203,7 @@ const DatasetDetails: React.FC = () => {
             onTargetsCalculated={handleTargetsCalculated}
             onSaveSet={handleSaveTargetSet}
             onLoadSet={handleLoadTargetSet}
+            loadedTargets={loadedTargetConfigs}
           />
         </div>
       )}

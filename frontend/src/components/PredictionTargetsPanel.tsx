@@ -32,6 +32,7 @@ interface PredictionTargetsPanelProps {
   onTargetsCalculated: (targets: CalculatedTarget[]) => void;
   onSaveSet: (targets: TargetConfig[]) => void;
   onLoadSet: () => void;
+  loadedTargets?: TargetConfig[];  // External targets to load
 }
 
 const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
@@ -39,6 +40,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
   onTargetsCalculated,
   onSaveSet,
   onLoadSet,
+  loadedTargets,
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('price_based');
   const [targets, setTargets] = useState<CalculatedTarget[]>([]);
@@ -117,6 +119,74 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
   const getNextColor = useCallback((): string => {
     return UNIQUE_COLORS[targets.length % UNIQUE_COLORS.length];
   }, [targets.length]);
+
+  // Handle externally loaded targets - add them and calculate
+  useEffect(() => {
+    if (loadedTargets && loadedTargets.length > 0) {
+      // Convert loaded TargetConfigs to CalculatedTargets with colors
+      const newTargets: CalculatedTarget[] = loadedTargets.map((config, index) => ({
+        config,
+        visible: true,
+        color: UNIQUE_COLORS[index % UNIQUE_COLORS.length],
+        columnName: '',
+        data: [],
+        stats: {
+          totalRows: 0,
+          validRows: 0,
+          positiveCount: 0,
+          negativeCount: 0,
+          positivePct: 0,
+          negativePct: 0,
+        },
+      }));
+
+      // Set targets and immediately calculate them
+      setTargets(newTargets);
+
+      // Calculate all targets
+      const calculateLoadedTargets = async () => {
+        setIsCalculating(true);
+        try {
+          const response = await fetch(`http://localhost:8000/api/datasets/${datasetId}/calculate-targets`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targets: loadedTargets,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to calculate targets');
+          }
+
+          const data = await response.json();
+
+          // Update targets with calculated data
+          const calculatedTargets = newTargets.map((target, index) => {
+            const result = data.targets[index];
+            if (result) {
+              return {
+                ...target,
+                columnName: result.columnName,
+                data: result.data,
+                stats: result.stats,
+              };
+            }
+            return target;
+          });
+
+          setTargets(calculatedTargets);
+          onTargetsCalculated(calculatedTargets);
+        } catch (error) {
+          console.error('Error calculating loaded targets:', error);
+        } finally {
+          setIsCalculating(false);
+        }
+      };
+
+      calculateLoadedTargets();
+    }
+  }, [loadedTargets, datasetId, onTargetsCalculated]);
 
   // Add target from form
   const addTarget = useCallback(() => {
