@@ -182,12 +182,16 @@ class DataPreparationService:
                 buffered_max = params["buffered_max"]
                 result[col] = (df[col] - buffered_min) / (buffered_max - buffered_min)
 
-                # Clip to valid range if price exceeds buffer (expected behavior)
+                # Clip to valid range if price exceeds buffer (expected behavior for live data)
                 clipped = result[col].clip(0, 1)
                 if (clipped != result[col]).any():
+                    # Get actual data range for debugging
+                    actual_min = df[col].min()
+                    actual_max = df[col].max()
                     logger.debug(
-                        f"Column {col}: Values exceeded normalization buffer "
-                        f"(range: {buffered_min:.2f} - {buffered_max:.2f}), clipped to 0-1"
+                        f"Column {col}: Values exceeded normalization buffer. "
+                        f"Data range: {actual_min:.2f} - {actual_max:.2f}, "
+                        f"Buffer range: {buffered_min:.2f} - {buffered_max:.2f}"
                     )
                 result[col] = clipped
 
