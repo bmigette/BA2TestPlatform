@@ -90,6 +90,13 @@ class MetricsConfig(BaseModel):
     classificationMetric: Optional[str] = "f1_score"  # For classification targets
     regressionMetric: Optional[str] = "rmse"  # For regression targets
     lossFunction: Optional[str] = "focal_loss"  # focal_loss, weighted_cross_entropy, cross_entropy, mse
+    # Multi-loss function support
+    lossFunctions: Optional[List[str]] = None  # Multiple loss functions for GA optimization
+    optimizeLossFunction: Optional[bool] = False  # Whether to optimize loss function as GA parameter
+    # Threshold optimization settings
+    thresholdMin: Optional[float] = 0.3
+    thresholdMax: Optional[float] = 0.6
+    thresholdStep: Optional[float] = 0.1
 
 
 class CrossValidationConfig(BaseModel):
