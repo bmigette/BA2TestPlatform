@@ -1751,9 +1751,10 @@ const Step3Summary: React.FC<Step3Props> = ({
         suggestedThresholdMax = Math.min(0.7, suggestedThresholdMin + 0.3);
       }
 
-      // Only update if current selection is invalid or not set
-      const currentLossValid = availableLossFunctions.some(l => l.id === state.metricsConfig.lossFunction);
-      const shouldUpdateLoss = !currentLossValid || state.metricsConfig.lossFunction !== recommendedLoss;
+      // Only update if current selection is invalid or threshold not set
+      const currentLossFunctions = state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction || 'focal_loss'];
+      const allLossesValid = currentLossFunctions.every(l => availableLossFunctions.some(a => a.id === l));
+      const shouldUpdateLoss = !allLossesValid;
       const shouldUpdateThreshold = state.metricsConfig.thresholdMin === undefined;
 
       if (shouldUpdateLoss || shouldUpdateThreshold) {
@@ -1761,7 +1762,11 @@ const Step3Summary: React.FC<Step3Props> = ({
           ...prev,
           metricsConfig: {
             ...prev.metricsConfig,
-            ...(shouldUpdateLoss ? { lossFunction: recommendedLoss } : {}),
+            ...(shouldUpdateLoss ? {
+              lossFunction: recommendedLoss,
+              lossFunctions: [recommendedLoss],
+              optimizeLossFunction: false,
+            } : {}),
             ...(shouldUpdateThreshold ? {
               thresholdMin: suggestedThresholdMin,
               thresholdMax: suggestedThresholdMax,
@@ -1994,21 +1999,12 @@ const Step3Summary: React.FC<Step3Props> = ({
             })}
           </div>
 
-          {/* Optimize loss function checkbox */}
+          {/* Info message when multiple loss functions selected */}
           {(state.metricsConfig.lossFunctions?.length || 0) > 1 && (
-            <label className="flex items-center space-x-2 mt-3 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={state.metricsConfig.optimizeLossFunction || false}
-                onChange={(e) => setState(prev => ({
-                  ...prev,
-                  metricsConfig: { ...prev.metricsConfig, optimizeLossFunction: e.target.checked }
-                }))}
-                className="w-4 h-4 text-purple-600 rounded"
-              />
-              <span className="text-gray-700 dark:text-gray-300">Optimize loss function during training</span>
-              <span className="text-xs text-gray-500">(GA will try different loss functions)</span>
-            </label>
+            <div className="mt-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded border border-purple-200 dark:border-purple-800 text-xs text-purple-700 dark:text-purple-300 flex items-center space-x-2">
+              <Info size={14} />
+              <span>GA will optimize across {state.metricsConfig.lossFunctions?.length} selected loss functions</span>
+            </div>
           )}
         </div>
 

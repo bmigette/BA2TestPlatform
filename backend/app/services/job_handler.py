@@ -1709,6 +1709,7 @@ def train_classification_optimization(
         loss_functions = [single_loss]
 
     optimize_loss_function = metrics_config.get('optimizeLossFunction', False) and len(loss_functions) > 1
+    logger.info(f"Loss functions: {loss_functions}, optimize={optimize_loss_function}")
 
     # Threshold optimization settings
     threshold_min = metrics_config.get('thresholdMin', 0.3)
@@ -1945,12 +1946,11 @@ def train_classification_optimization(
             # Add to jobs_store for real-time UI access
             add_individual_to_job(task_id, individual_record)
 
-            # Update progress - include loss function and threshold when optimizing
+            # Update progress - always show loss function and threshold
             current_progress = progress_base + (gen / generations) * progress_range * 0.9
-            progress_msg = f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f}"
-            if optimize_loss_function:
-                progress_msg += f" loss={current_loss_function}"
-            progress_msg += f" thresh={current_threshold:.2f}"
+            # Shorten loss function name for display
+            loss_short = current_loss_function.replace('_loss', '').replace('weighted_cross_entropy', 'weighted_ce').replace('cross_entropy', 'ce')
+            progress_msg = f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f} loss={loss_short} thresh={current_threshold:.2f}"
             update_job_progress(task_id, current_progress, progress_msg)
 
             return fitness
