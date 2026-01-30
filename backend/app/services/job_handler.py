@@ -1945,13 +1945,13 @@ def train_classification_optimization(
             # Add to jobs_store for real-time UI access
             add_individual_to_job(task_id, individual_record)
 
-            # Update progress
+            # Update progress - include loss function and threshold when optimizing
             current_progress = progress_base + (gen / generations) * progress_range * 0.9
-            update_job_progress(
-                task_id,
-                current_progress,
-                f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f}"
-            )
+            progress_msg = f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f}"
+            if optimize_loss_function:
+                progress_msg += f" loss={current_loss_function}"
+            progress_msg += f" thresh={current_threshold:.2f}"
+            update_job_progress(task_id, current_progress, progress_msg)
 
             return fitness
 
