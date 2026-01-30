@@ -1581,7 +1581,7 @@ def train_unified_optimization(
         }
 
     # Build unified parameter ranges including model_type_idx
-    train_length = len(train_series)
+    train_length = len(ms_train_series)
     max_input_chunk = min(60, max(10, train_length // 4))
     ga_param_ranges = build_unified_param_ranges(selected_models, parameter_ranges, max_input_chunk)
 
