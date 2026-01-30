@@ -32,7 +32,9 @@ def model_service():
 @pytest.fixture
 def prepared_data(training_service):
     """Prepare train/test data from AAPL dataset."""
-    df = pd.read_csv(TEST_DATA_PATH).head(500)
+    # Use 800 rows to ensure enough validation samples for InceptionTime
+    # (smaller datasets cause overflow issues in tsai's batch slicing)
+    df = pd.read_csv(TEST_DATA_PATH).head(800)
     original_len = len(df)
 
     feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
