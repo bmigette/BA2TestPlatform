@@ -535,6 +535,17 @@ class TSAITrainingService(ITrainingService):
                     # Shift: softmax for binary classification
                     probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
 
+            # Check for NaN in predictions (can happen with exploding gradients)
+            if np.isnan(probs).any():
+                logger.warning("Predictions contain NaN values - model training likely failed")
+                return {
+                    'f1_score': 0.0,
+                    'accuracy': 0.0,
+                    'precision': 0.0,
+                    'recall': 0.0,
+                    'error': 'Predictions contain NaN - training failed'
+                }
+
             # Calculate metrics
             from sklearn.metrics import (
                 f1_score, accuracy_score, precision_score, recall_score,
