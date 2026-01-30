@@ -37,6 +37,7 @@ class TrainedModel(Base):
     training_date_range = Column(JSON, nullable=True)
     prediction_targets = Column(JSON, nullable=True)
     prediction_horizon = Column(Integer, default=3)
+    prediction_mode = Column(String(20), default="shift")  # "shift" or "multistep"
 
     # Data normalization parameters (for inference)
     # Stores the scaler settings so the same normalization can be applied to new data
@@ -75,6 +76,7 @@ class TrainedModel(Base):
             "trainingDateRange": self.training_date_range,
             "predictionTargets": self.prediction_targets,
             "predictionHorizon": self.prediction_horizon,
+            "predictionMode": self.prediction_mode,
             "normalizationParams": self.normalization_params,
             "generations": self.generations,
             "bestGeneration": self.best_generation,
