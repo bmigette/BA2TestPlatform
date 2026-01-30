@@ -170,6 +170,7 @@ class TSAITrainingService(ITrainingService):
         # This ensures test data won't exceed normalization range
         # (For live prediction, you'd fit only on train data)
         if self.normalize:
+            self.data_prep = DataPreparationService(buffer_pct=self.buffer_pct)
             _ = self.data_prep.fit_transform(df, feature_columns, method="minmax_buffered")
             logger.info(f"Fitted normalization on full dataset ({len(df)} samples) before split")
 

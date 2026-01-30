@@ -586,7 +586,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
       <div className="fixed inset-0 bg-black bg-opacity-50" onClick={onClose} />
 
       <div className="flex min-h-full items-center justify-center p-4">
-        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center space-x-4">
@@ -617,9 +617,26 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 </div>
               </div>
             </div>
-            <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
-              <X size={20} />
-            </button>
+            <div className="flex items-center space-x-2">
+              {/* Profile buttons - available on all tabs */}
+              <button
+                onClick={() => setShowLoadProfileDialog(true)}
+                className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 flex items-center space-x-1"
+              >
+                <FolderOpen size={14} />
+                <span>Load Profile</span>
+              </button>
+              <button
+                onClick={() => setShowSaveProfileDialog(true)}
+                className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 flex items-center space-x-1"
+              >
+                <Save size={14} />
+                <span>Save Profile</span>
+              </button>
+              <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded ml-2">
+                <X size={20} />
+              </button>
+            </div>
           </div>
 
           {/* Content */}
@@ -630,22 +647,12 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 setState={setState}
                 datasets={datasets}
                 selectedDataset={selectedDataset}
-                profiles={profiles}
-                showLoadProfileDialog={showLoadProfileDialog}
-                setShowLoadProfileDialog={setShowLoadProfileDialog}
-                showSaveProfileDialog={showSaveProfileDialog}
-                setShowSaveProfileDialog={setShowSaveProfileDialog}
-                newProfileName={newProfileName}
-                setNewProfileName={setNewProfileName}
                 handleModelToggle={handleModelToggle}
                 handleAllModelsToggle={handleAllModelsToggle}
                 targetSets={targetSets}
                 targetSetsLoading={targetSetsLoading}
                 toggleTargetSet={toggleTargetSet}
                 removeTargetSet={removeTargetSet}
-                loadProfile={loadProfile}
-                saveProfile={saveProfile}
-                onDeleteProfile={onDeleteProfile}
                 availableModels={availableModels}
                 modelsLoading={modelsLoading}
               />
@@ -746,6 +753,62 @@ const JobWizard: React.FC<JobWizardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Load Profile Dialog */}
+      {showLoadProfileDialog && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">Load Profile</h3>
+            {profiles.length === 0 ? (
+              <p className="text-gray-500">No saved profiles</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {profiles.map((profile) => (
+                  <div key={profile.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded">
+                    <button onClick={() => loadProfile(profile)} className="text-left flex-1">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">{profile.name}</div>
+                      <div className="text-xs text-gray-500">
+                        {profile.selectedModels?.length || 0} models
+                        {profile.createdAt && (
+                          <span className="ml-2">
+                            · {new Date(profile.createdAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                    <button onClick={() => onDeleteProfile(profile.id)} className="text-red-500 p-1">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setShowLoadProfileDialog(false)} className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Save Profile Dialog */}
+      {showSaveProfileDialog && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">Save Profile</h3>
+            <input
+              type="text"
+              value={newProfileName}
+              onChange={(e) => setNewProfileName(e.target.value)}
+              placeholder="Profile name..."
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded mb-4 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+            <div className="flex justify-end space-x-2">
+              <button onClick={() => setShowSaveProfileDialog(false)} className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">Cancel</button>
+              <button onClick={saveProfile} disabled={!newProfileName.trim()} className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50 hover:bg-green-700">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -756,22 +819,12 @@ interface Step1Props {
   setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
   datasets: Dataset[];
   selectedDataset: Dataset | undefined;
-  profiles: JobProfile[];
-  showLoadProfileDialog: boolean;
-  setShowLoadProfileDialog: (v: boolean) => void;
-  showSaveProfileDialog: boolean;
-  setShowSaveProfileDialog: (v: boolean) => void;
-  newProfileName: string;
-  setNewProfileName: (v: string) => void;
   handleModelToggle: (id: string) => void;
   handleAllModelsToggle: () => void;
   targetSets: TargetSet[];
   targetSetsLoading: boolean;
   toggleTargetSet: (id: number) => void;
   removeTargetSet: (id: number) => void;
-  loadProfile: (profile: JobProfile) => void;
-  saveProfile: () => void;
-  onDeleteProfile: (id: number) => Promise<void>;
   availableModels: Array<{id: string, name: string, description: string}>;
   modelsLoading: boolean;
 }
@@ -781,22 +834,12 @@ const Step1Settings: React.FC<Step1Props> = ({
   setState,
   datasets,
   selectedDataset,
-  profiles,
-  showLoadProfileDialog,
-  setShowLoadProfileDialog,
-  showSaveProfileDialog,
-  setShowSaveProfileDialog,
-  newProfileName,
-  setNewProfileName,
   handleModelToggle,
   handleAllModelsToggle,
   targetSets,
   targetSetsLoading,
   toggleTargetSet,
   removeTargetSet,
-  loadProfile,
-  saveProfile,
-  onDeleteProfile,
   availableModels,
   modelsLoading,
 }) => {
@@ -805,24 +848,6 @@ const Step1Settings: React.FC<Step1Props> = ({
 
   return (
     <div className="space-y-6">
-      {/* Profile buttons */}
-      <div className="flex justify-end space-x-2">
-        <button
-          onClick={() => setShowLoadProfileDialog(true)}
-          className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 flex items-center space-x-1"
-        >
-          <FolderOpen size={14} />
-          <span>Load Profile</span>
-        </button>
-        <button
-          onClick={() => setShowSaveProfileDialog(true)}
-          className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 flex items-center space-x-1"
-        >
-          <Save size={14} />
-          <span>Save Profile</span>
-        </button>
-      </div>
-
       {/* Job Type Selection */}
       <div>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -1343,61 +1368,6 @@ const Step1Settings: React.FC<Step1Props> = ({
         </div>
       )}
 
-      {/* Load Profile Dialog */}
-      {showLoadProfileDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-semibold mb-4">Load Profile</h3>
-            {profiles.length === 0 ? (
-              <p className="text-gray-500">No saved profiles</p>
-            ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {profiles.map((profile) => (
-                  <div key={profile.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded">
-                    <button onClick={() => loadProfile(profile)} className="text-left flex-1">
-                      <div className="font-medium">{profile.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {profile.selectedModels?.length || 0} models
-                        {profile.createdAt && (
-                          <span className="ml-2">
-                            · {new Date(profile.createdAt).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                    <button onClick={() => onDeleteProfile(profile.id)} className="text-red-500 p-1">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex justify-end mt-4">
-              <button onClick={() => setShowLoadProfileDialog(false)} className="px-4 py-2 text-gray-600">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Save Profile Dialog */}
-      {showSaveProfileDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-semibold mb-4">Save Profile</h3>
-            <input
-              type="text"
-              value={newProfileName}
-              onChange={(e) => setNewProfileName(e.target.value)}
-              placeholder="Profile name..."
-              className="w-full px-3 py-2 border rounded mb-4"
-            />
-            <div className="flex justify-end space-x-2">
-              <button onClick={() => setShowSaveProfileDialog(false)} className="px-4 py-2 text-gray-600">Cancel</button>
-              <button onClick={saveProfile} disabled={!newProfileName.trim()} className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50">Save</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
