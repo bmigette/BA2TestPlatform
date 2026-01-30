@@ -167,13 +167,14 @@ class TSAIModelService(IModelService):
         },
         'patchtst': {
             'name': 'PatchTST',
-            'description': 'State-of-the-art transformer (Nie 2022)',
+            'description': 'State-of-the-art transformer (Nie 2022). Note: MPS limited.',
             'default_params': {
                 'd_model': 128,
                 'n_heads': 8,
                 'patch_len': 16,
                 'd_ff': 256,
                 'dropout': 0.1,
+                'activation': 'gelu',
             },
             'param_ranges': {
                 'd_model': [64, 128, 256],
@@ -181,6 +182,7 @@ class TSAIModelService(IModelService):
                 'patch_len': [8, 16, 24],
                 'd_ff': [128, 256, 512],
                 'dropout': [0.0, 0.1, 0.2],
+                'activation': ['gelu', 'relu'],
             }
         },
         'lstm_fcn': {
@@ -208,6 +210,7 @@ class TSAIModelService(IModelService):
                 'd_ff': 256,
                 'n_layers': 3,
                 'dropout': 0.1,
+                'act': 'gelu',
             },
             'param_ranges': {
                 'd_model': [64, 128, 256],
@@ -215,6 +218,7 @@ class TSAIModelService(IModelService):
                 'd_ff': [128, 256, 512],
                 'n_layers': [2, 3, 4],
                 'dropout': [0.0, 0.1, 0.2],
+                'act': ['gelu', 'relu'],
             }
         },
     }
@@ -349,11 +353,15 @@ class TSAIModelService(IModelService):
                 c_in=c_in, c_out=c_out, seq_len=seq_len,
             )
         elif model_type == 'patchtst':
+            # PatchTST needs patch_len that divides seq_len, use stride=patch_len
+            patch_len = min(p.get('patch_len', 16), seq_len // 2)
             model = model_class(
                 c_in=c_in, c_out=c_out, seq_len=seq_len,
+                pred_dim=c_out,  # For classification
                 d_model=p.get('d_model', 128),
                 n_heads=p.get('n_heads', 8),
-                patch_len=p.get('patch_len', 16),
+                patch_len=patch_len,
+                stride=patch_len,  # Non-overlapping patches
                 d_ff=p.get('d_ff', 256),
                 dropout=p.get('dropout', 0.1),
             )
@@ -373,6 +381,7 @@ class TSAIModelService(IModelService):
                 d_ff=p.get('d_ff', 256),
                 n_layers=p.get('n_layers', 3),
                 dropout=p.get('dropout', 0.1),
+                act=p.get('act', 'gelu'),
             )
         else:
             raise ValueError(f"Model creation not implemented for: {model_type}")

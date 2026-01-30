@@ -129,15 +129,19 @@ def get_services(job_type: str) -> tuple[IModelService, ITrainingService]:
 
 ### Classification Models (tsai)
 
-| Model | Key Parameters |
-|-------|----------------|
-| LSTM | hidden_size, n_layers, bidirectional, dropout |
-| GRU | hidden_size, n_layers, bidirectional, dropout |
-| TCN | layers, ks (kernel size), conv_dropout |
-| InceptionTime | nf (filters), depth, ks |
-| ResNet | nf, kss (kernel sizes) |
-| XceptionTime | nf, depth |
-| OmniScaleCNN | layers, hidden_size |
+| Model | Key Parameters | Notes |
+|-------|----------------|-------|
+| LSTM | hidden_size, n_layers, bidirectional, dropout | Classic RNN |
+| GRU | hidden_size, n_layers, bidirectional, dropout | Faster than LSTM |
+| TCN | layers, ks (kernel size), conv_dropout | Temporal CNN |
+| InceptionTime | nf (filters), depth, ks | State-of-the-art CNN |
+| ResNet | nf, kss (kernel sizes) | Residual CNN |
+| XceptionTime | nf, depth | Improved Inception |
+| OmniScaleCNN | layers, hidden_size | Multi-scale CNN |
+| MiniRocket | num_features | Extremely fast, minimal training |
+| PatchTST | d_model, n_heads, patch_len | State-of-the-art transformer (2022) |
+| LSTM-FCN | hidden_size, rnn_layers, conv_layers | Hybrid LSTM + CNN |
+| TST | d_model, n_heads, d_ff | Time Series Transformer |
 
 ### Regression Models (Darts)
 

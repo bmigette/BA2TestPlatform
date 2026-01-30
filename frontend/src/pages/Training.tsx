@@ -45,6 +45,7 @@ interface MetricsConfig {
   optimizeMetric: string;
   classificationMetric?: string;
   regressionMetric?: string;
+  lossFunction?: string;
 }
 
 interface JobProfile {

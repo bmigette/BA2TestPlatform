@@ -65,19 +65,27 @@ class FocalLoss(nn.Module):
         """
         Calculate Focal Loss.
 
-        Args:
-            inputs: Predicted logits of shape (N,) or (N, C) for multi-class
-            targets: Ground truth labels of shape (N,)
+        For Darts time series models:
+        - inputs: shape (batch, seq_len) or (batch, seq_len, 1) - predicted values
+        - targets: shape (batch, seq_len) - ground truth binary labels (0 or 1)
+
+        For standard classification:
+        - inputs: shape (N,) or (N, C) for multi-class
+        - targets: shape (N,) class labels
 
         Returns:
             Focal loss value
         """
-        # Handle binary classification (single output)
-        if inputs.dim() == 1 or (inputs.dim() == 2 and inputs.size(1) == 1):
-            return self._binary_focal_loss(inputs.view(-1), targets.view(-1).float())
-        else:
-            # Multi-class focal loss
-            return self._multiclass_focal_loss(inputs, targets)
+        # Ensure inputs and targets are float type (Darts may pass Long tensors)
+        inputs = inputs.float()
+        targets = targets.float()
+
+        # Flatten for binary classification (treat all timesteps independently)
+        # This is correct for time series with binary targets (0/1)
+        inputs_flat = inputs.view(-1)
+        targets_flat = targets.view(-1)
+
+        return self._binary_focal_loss(inputs_flat, targets_flat)
 
     def _binary_focal_loss(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Binary focal loss for single-output classification."""

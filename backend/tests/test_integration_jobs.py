@@ -33,10 +33,20 @@ REPORT_PATH = os.path.join(os.path.dirname(__file__), "integration_test_report.j
 MONTHS_OF_DATA = 6  # Use 6 months only
 
 # Classification models to test (tsai)
-CLASSIFICATION_MODELS = ['lstm', 'gru', 'inception', 'resnet']
+# Note: xception and patchtst have MPS limitations on Apple Silicon
+# Note: minirocket requires special preprocessing (can produce NaN)
+CLASSIFICATION_MODELS = [
+    'lstm', 'gru', 'tcn', 'inception', 'resnet',
+    'omniscale', 'lstm_fcn', 'tst'
+]
+
+# Models with known limitations (tested separately)
+# - xception, patchtst: MPS adaptive pooling issues
+# - minirocket: May produce NaN, needs special preprocessing
+LIMITED_MODELS = ['xception', 'patchtst', 'minirocket']
 
 # Regression models to test (Darts)
-REGRESSION_MODELS = ['lstm', 'nbeats']
+REGRESSION_MODELS = ['lstm', 'nbeats', 'tcn', 'gru', 'tft', 'transformer']
 
 
 @pytest.fixture(scope="module")

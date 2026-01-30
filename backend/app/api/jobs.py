@@ -76,6 +76,9 @@ class GeneticConfig(BaseModel):
 class MetricsConfig(BaseModel):
     """Metrics configuration for model optimization"""
     optimizeMetric: str = "f1_score"  # f1_score, accuracy, balanced_accuracy, precision, recall, auc_roc, mcc
+    classificationMetric: Optional[str] = "f1_score"  # For classification targets
+    regressionMetric: Optional[str] = "rmse"  # For regression targets
+    lossFunction: Optional[str] = "focal_loss"  # focal_loss, weighted_cross_entropy, cross_entropy, mse
 
 
 class CrossValidationConfig(BaseModel):

@@ -43,6 +43,7 @@ interface MetricsConfig {
   optimizeMetric: string;
   classificationMetric?: string;
   regressionMetric?: string;
+  lossFunction?: string;
 }
 
 // Target set from backend
@@ -125,6 +126,13 @@ const REGRESSION_METRICS = [
   { id: 'mape', name: 'MAPE', description: 'Mean Absolute Percentage Error' },
 ];
 
+const LOSS_FUNCTIONS = [
+  { id: 'focal_loss', name: 'Focal Loss', description: 'Best for imbalanced classification - reduces weight on easy examples (Recommended)' },
+  { id: 'weighted_cross_entropy', name: 'Weighted BCE', description: 'Binary cross-entropy with class weights based on positive/negative ratio' },
+  { id: 'cross_entropy', name: 'Cross Entropy', description: 'Standard cross-entropy loss - NOT recommended for imbalanced data' },
+  { id: 'mse', name: 'MSE', description: 'Mean squared error - for regression tasks only' },
+];
+
 interface TrainingDateRange {
   startDate: string | null;
   endDate: string | null;
@@ -161,6 +169,7 @@ const getDefaultState = () => ({
     optimizeMetric: 'f1_score',
     classificationMetric: 'f1_score',
     regressionMetric: 'rmse',
+    lossFunction: 'focal_loss',
   } as MetricsConfig,
   predictionTargets: [] as Record<string, unknown>[],
   selectedTargetSetIds: [] as number[],
@@ -1102,6 +1111,42 @@ const Step1Settings: React.FC<Step1Props> = ({
             ))}
           </div>
         </div>
+
+        {/* Loss Function */}
+        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Training Loss Function</label>
+          <div className="flex flex-wrap gap-2">
+            {LOSS_FUNCTIONS.map((loss) => (
+              <label
+                key={loss.id}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                  state.metricsConfig.lossFunction === loss.id
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                }`}
+                title={loss.description}
+              >
+                <input
+                  type="radio"
+                  name="lossFunction"
+                  checked={state.metricsConfig.lossFunction === loss.id}
+                  onChange={() => setState(prev => ({
+                    ...prev,
+                    metricsConfig: {
+                      ...prev.metricsConfig,
+                      lossFunction: loss.id
+                    }
+                  }))}
+                  className="sr-only"
+                />
+                <span>{loss.name}</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            Focal Loss is recommended for imbalanced classification (when positive samples are rare)
+          </p>
+        </div>
       </div>
 
       {/* Summary */}
@@ -1311,10 +1356,11 @@ const Step2Summary: React.FC<Step2Props> = ({
           <div><span className="text-gray-500">Generations:</span> <span className="font-medium">{state.geneticConfig.generations}</span></div>
           <div><span className="text-gray-500">Epochs:</span> <span className="font-medium">{state.geneticConfig.trainingEpochs}</span></div>
         </div>
-        <div className="grid grid-cols-3 gap-4 text-sm">
+        <div className="grid grid-cols-4 gap-4 text-sm">
           <div><span className="text-gray-500">Class. Metric:</span> <span className="font-medium">{state.metricsConfig.classificationMetric || 'f1_score'}</span></div>
           <div><span className="text-gray-500">Reg. Metric:</span> <span className="font-medium">{state.metricsConfig.regressionMetric || 'rmse'}</span></div>
-          <div><span className="text-gray-500">Prediction Horizon:</span> <span className="font-medium">{state.predictionHorizon} bars</span></div>
+          <div><span className="text-gray-500">Loss Function:</span> <span className="font-medium">{state.metricsConfig.lossFunction || 'focal_loss'}</span></div>
+          <div><span className="text-gray-500">Horizon:</span> <span className="font-medium">{state.predictionHorizon} bars</span></div>
         </div>
       </div>
 
