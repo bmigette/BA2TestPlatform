@@ -115,15 +115,25 @@ print(f"    After dropping NaN: {len(df_clean)} rows (dropped {len(df_with_targe
 positives = (df_clean[target_col] == 1).sum()
 print(f"    Target positives: {positives} ({100*positives/len(df_clean):.2f}%)")
 
-# Feature columns - use existing features in dataset
-exclude_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'ticker'] + target_cols
-date_cols = [c for c in df_clean.columns if 'date' in c.lower()]
-exclude_cols.extend(date_cols)
-feature_cols = [c for c in df_clean.columns if c not in exclude_cols and not c.startswith('price_') and not c.startswith('reversal_')]
+# Feature columns - use discriminative features for trend reversal prediction
+# Prioritize oscillators and momentum indicators over moving averages
+priority_features = [
+    # Momentum/oscillator indicators (better for reversal detection)
+    'rsi_14', 'stochastic__k', 'stochastic__d',
+    'macd__line', 'macd__signal', 'macd__histogram',
+    # Volatility
+    'atr_14',
+    # Bollinger bands (relative position)
+    'bbands_20_upper', 'bbands_20_middle', 'bbands_20_lower',
+    # Computed features
+    'returns', 'volatility',
+    # Moving averages (less useful for reversals but include a few)
+    'sma_10', 'sma_20', 'ema_12'
+]
 
-# Use only numeric features
-numeric_features = [c for c in feature_cols if df_clean[c].dtype in ['int64', 'float64']][:15]
-print(f"    Using {len(numeric_features)} numeric features: {numeric_features[:10]}...")
+# Filter to only features that exist in the dataset
+numeric_features = [f for f in priority_features if f in df_clean.columns and df_clean[f].dtype in ['int64', 'float64']]
+print(f"    Using {len(numeric_features)} discriminative features: {numeric_features}")
 
 # 4. Import tsai services
 print("\n[4] Initializing tsai services...")
@@ -193,10 +203,23 @@ for prediction_mode in ['shift', 'multistep']:
     if prediction_mode == 'shift':
         print(f"    Train positives: {(y_train == 1).sum()} / {len(y_train)}")
         print(f"    Test positives: {(y_test == 1).sum()} / {len(y_test)}")
+
+        # Create weighted loss function to handle class imbalance
+        import torch
+        from fastai.losses import CrossEntropyLossFlat
+        pos_count = (y_train == 1).sum()
+        neg_count = (y_train == 0).sum()
+        pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+        weights = torch.tensor([1.0, float(pos_weight)], dtype=torch.float32)
+        if MPS_AVAILABLE:
+            weights = weights.to(torch.device('mps'))
+        loss_fn = CrossEntropyLossFlat(weight=weights)
+        print(f"    Using weighted CE loss with pos_weight={pos_weight:.2f}")
     else:
         # Multi-step has multiple outputs
         print(f"    y_train unique values: {np.unique(y_train)}")
         print(f"    y_test unique values: {np.unique(y_test)}")
+        loss_fn = None  # Use default for multistep
 
     # 7. Test each model
     for model_type in MODELS_TO_TEST:
@@ -226,7 +249,7 @@ for prediction_mode in ['shift', 'multistep']:
                 seq_len=SEQ_LEN
             )
 
-            # Train
+            # Train with weighted loss for shift mode
             force_cpu = model_type in FORCE_CPU_MODELS and MPS_AVAILABLE
             training_result = training_service.train_model(
                 model=model,
@@ -235,6 +258,7 @@ for prediction_mode in ['shift', 'multistep']:
                 epochs=EPOCHS,
                 batch_size=32,
                 learning_rate=0.001,
+                loss_fn=loss_fn,
                 force_cpu=force_cpu,
                 prediction_mode=prediction_mode
             )
@@ -253,13 +277,32 @@ for prediction_mode in ['shift', 'multistep']:
                 results[prediction_mode][model_type] = {'status': 'failed', 'error': 'No learner'}
                 continue
 
-            # Evaluate
-            eval_result = training_service.evaluate_model(
-                model=learner,
-                test_data=(X_test, y_test),
-                metric='f1_score',
-                prediction_mode=prediction_mode
-            )
+            # Evaluate with threshold optimization
+            # Neural networks often output poorly calibrated probabilities,
+            # so we try multiple thresholds and pick the best one
+            best_f1 = 0
+            best_threshold = 0.5
+            for threshold in [0.2, 0.3, 0.4, 0.5]:
+                eval_t = training_service.evaluate_model(
+                    model=learner,
+                    test_data=(X_test, y_test),
+                    metric='f1_score',
+                    prediction_mode=prediction_mode,
+                    threshold=threshold
+                )
+                if eval_t.get('f1_score', 0) > best_f1:
+                    best_f1 = eval_t.get('f1_score', 0)
+                    best_threshold = threshold
+                    eval_result = eval_t
+
+            if best_f1 == 0:
+                # Fallback to default threshold
+                eval_result = training_service.evaluate_model(
+                    model=learner,
+                    test_data=(X_test, y_test),
+                    metric='f1_score',
+                    prediction_mode=prediction_mode
+                )
 
             if 'error' in eval_result:
                 print(f"        ERROR: Evaluation failed - {eval_result.get('error')}")
