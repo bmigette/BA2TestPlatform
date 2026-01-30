@@ -38,6 +38,7 @@ class TrainedModel(Base):
     prediction_targets = Column(JSON, nullable=True)
     prediction_horizon = Column(Integer, default=3)
     prediction_mode = Column(String(20), default="shift")  # "shift" or "multistep"
+    loss_function = Column(String(50), default="focal_loss")  # focal_loss, cross_entropy, weighted_cross_entropy
 
     # Data normalization parameters (for inference)
     # Stores the scaler settings so the same normalization can be applied to new data
@@ -77,6 +78,7 @@ class TrainedModel(Base):
             "predictionTargets": self.prediction_targets,
             "predictionHorizon": self.prediction_horizon,
             "predictionMode": self.prediction_mode,
+            "lossFunction": self.loss_function,
             "normalizationParams": self.normalization_params,
             "generations": self.generations,
             "bestGeneration": self.best_generation,

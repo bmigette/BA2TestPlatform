@@ -880,11 +880,13 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         if not dataset_ids:
             return {'status': 'failed', 'error': 'No datasets specified'}
 
+        job_type = payload.get('job_type', 'classification')  # classification or regression
         selected_models = payload.get('selected_models', ['lstm'])
         parameter_ranges = payload.get('parameter_ranges', {})
         prediction_targets = payload.get('prediction_targets', [])
         train_test_split = payload.get('train_test_split', 80)
         prediction_horizon = payload.get('prediction_horizon', 3)  # Bars to predict ahead
+        prediction_modes = payload.get('prediction_modes', ['shift'])  # shift or multistep
         genetic_config = payload.get('genetic_config', {})
         metrics_config = payload.get('metrics_config', {})
         training_date_range = payload.get('training_date_range', {})

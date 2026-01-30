@@ -164,6 +164,8 @@ def save_model_to_db(model_data: dict, db: Session) -> TrainedModel:
         existing.training_date_range = model_data.get('trainingDateRange', existing.training_date_range)
         existing.prediction_targets = model_data.get('predictionTargets', existing.prediction_targets)
         existing.prediction_horizon = model_data.get('predictionHorizon', existing.prediction_horizon)
+        existing.prediction_mode = model_data.get('predictionMode', existing.prediction_mode)
+        existing.loss_function = model_data.get('lossFunction', existing.loss_function)
         existing.normalization_params = model_data.get('normalizationParams', existing.normalization_params)
         existing.generations = model_data.get('generations', existing.generations)
         existing.best_generation = model_data.get('bestGeneration', existing.best_generation)
@@ -194,6 +196,8 @@ def save_model_to_db(model_data: dict, db: Session) -> TrainedModel:
             training_date_range=model_data.get('trainingDateRange'),
             prediction_targets=model_data.get('predictionTargets'),
             prediction_horizon=model_data.get('predictionHorizon', 3),
+            prediction_mode=model_data.get('predictionMode', 'shift'),
+            loss_function=model_data.get('lossFunction', 'focal_loss'),
             normalization_params=model_data.get('normalizationParams'),
             generations=model_data.get('generations', 0),
             best_generation=model_data.get('bestGeneration', 0),

@@ -94,6 +94,7 @@ class TrainingDateRange(BaseModel):
 
 
 class JobCreate(BaseModel):
+    jobType: str = "classification"  # "classification" or "regression"
     datasetId: Optional[int] = None  # Single dataset (backwards compatible)
     datasetIds: Optional[List[int]] = None  # Multiple datasets
     selectedModels: List[str]
@@ -101,6 +102,7 @@ class JobCreate(BaseModel):
     predictionTargets: List[Any]  # Can be PredictionTarget or TargetConfig
     trainTestSplit: int
     predictionHorizon: int = 3  # Number of bars to predict ahead
+    predictionModes: Optional[List[str]] = None  # ["shift", "multistep"] for classification
     crossValidation: Optional[CrossValidationConfig] = None
     geneticConfig: Optional[GeneticConfig] = None
     metricsConfig: Optional[MetricsConfig] = None
@@ -462,11 +464,13 @@ async def create_job(job_create: JobCreate):
                 prediction_targets.append(pt)
 
         task_payload = {
+            'job_type': job_create.jobType,
             'dataset_ids': dataset_ids,
             'selected_models': job_create.selectedModels,
             'parameter_ranges': params.dict(),
             'prediction_targets': prediction_targets,
             'prediction_horizon': job_create.predictionHorizon,
+            'prediction_modes': job_create.predictionModes or ['shift'],
             'train_test_split': job_create.trainTestSplit,
             'cross_validation': job_create.crossValidation.dict() if job_create.crossValidation else None,
             'genetic_config': genetic_config.dict(),
