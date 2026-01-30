@@ -303,15 +303,14 @@ class TSAITrainingService(ITrainingService):
 
         if prediction_mode == 'multistep':
             # Multi-step mode: use BCEWithLogitsLoss for multi-label classification
-            if loss_type == 'focal':
-                # FocalLoss works with BCE for multi-label
-                return FocalLossFlat(gamma=gamma)
-            elif loss_type == 'weighted_ce' and pos_weight is not None:
+            # Note: FocalLoss is NOT compatible with multi-label - filter in UI
+            if loss_type == 'weighted_ce' and pos_weight is not None:
                 weights = torch.tensor([pos_weight], dtype=torch.float32)
                 if DEVICE:
                     weights = weights.to(DEVICE)
                 return nn.BCEWithLogitsLoss(pos_weight=weights)
             else:
+                # cross_entropy uses BCEWithLogitsLoss for multi-step
                 return nn.BCEWithLogitsLoss()
         else:
             # Shift mode: standard binary classification with softmax
@@ -412,12 +411,22 @@ class TSAITrainingService(ITrainingService):
                 loss_fn = self.get_loss_function('focal', prediction_mode=prediction_mode)
 
             # Create learner with model
-            learn = Learner(
-                dls,
-                model,
-                loss_func=loss_fn,
-                metrics=[accuracy, F1Score(), Precision(), Recall()],
-            )
+            # Note: Standard metrics don't work with multi-label output
+            # For multistep, we skip built-in metrics and calculate them in assess_model
+            if prediction_mode == 'multistep':
+                learn = Learner(
+                    dls,
+                    model,
+                    loss_func=loss_fn,
+                    metrics=[],  # Multi-label metrics calculated in assess_model
+                )
+            else:
+                learn = Learner(
+                    dls,
+                    model,
+                    loss_func=loss_fn,
+                    metrics=[accuracy, F1Score(), Precision(), Recall()],
+                )
 
             # Move model to device
             learn.model = learn.model.to(device)
@@ -435,16 +444,25 @@ class TSAITrainingService(ITrainingService):
             final_metrics = {}
             if hasattr(learn, 'recorder') and learn.recorder.values:
                 last_epoch = learn.recorder.values[-1]
-                # Metrics order: train_loss, valid_loss, accuracy, f1, precision, recall
-                if len(last_epoch) >= 6:
-                    final_metrics = {
-                        'train_loss': float(last_epoch[0]),
-                        'valid_loss': float(last_epoch[1]),
-                        'accuracy': float(last_epoch[2]),
-                        'f1_score': float(last_epoch[3]),
-                        'precision': float(last_epoch[4]),
-                        'recall': float(last_epoch[5]),
-                    }
+                if prediction_mode == 'multistep':
+                    # Multi-step: only train_loss, valid_loss available during training
+                    # Full metrics calculated in assess_model
+                    if len(last_epoch) >= 2:
+                        final_metrics = {
+                            'train_loss': float(last_epoch[0]),
+                            'valid_loss': float(last_epoch[1]),
+                        }
+                else:
+                    # Metrics order: train_loss, valid_loss, accuracy, f1, precision, recall
+                    if len(last_epoch) >= 6:
+                        final_metrics = {
+                            'train_loss': float(last_epoch[0]),
+                            'valid_loss': float(last_epoch[1]),
+                            'accuracy': float(last_epoch[2]),
+                            'f1_score': float(last_epoch[3]),
+                            'precision': float(last_epoch[4]),
+                            'recall': float(last_epoch[5]),
+                        }
 
             return {
                 'status': 'success',

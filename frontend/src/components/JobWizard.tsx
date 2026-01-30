@@ -124,8 +124,9 @@ const LOSS_FUNCTIONS = [
     name: 'Focal Loss',
     description: 'Best for imbalanced classification - reduces weight on easy examples',
     shiftBehavior: 'FocalLossFlat with softmax (c_out=2)',
-    multistepBehavior: 'FocalLossFlat with sigmoid (c_out=N)',
+    multistepBehavior: null,  // Not compatible with multi-step
     forImbalanced: true,
+    supportsMultistep: false,  // Focal loss doesn't work with multi-label
   },
   {
     id: 'weighted_cross_entropy',
@@ -134,6 +135,7 @@ const LOSS_FUNCTIONS = [
     shiftBehavior: 'CrossEntropyLossFlat with class weights',
     multistepBehavior: 'BCEWithLogitsLoss with pos_weight',
     forImbalanced: true,
+    supportsMultistep: true,
   },
   {
     id: 'cross_entropy',
@@ -142,6 +144,7 @@ const LOSS_FUNCTIONS = [
     shiftBehavior: 'CrossEntropyLossFlat (softmax)',
     multistepBehavior: 'BCEWithLogitsLoss (sigmoid)',
     forImbalanced: false,
+    supportsMultistep: true,
   },
 ];
 
@@ -1452,18 +1455,37 @@ const Step2Summary: React.FC<Step2Props> = ({
     ? previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length
     : 50;
 
-  // Auto-select loss function based on imbalance (only on first render with data)
+  // Check if multistep-only mode (focal loss not supported)
+  const isMultistepOnly = state.predictionModes.length === 1 && state.predictionModes.includes('multistep');
+
+  // Filter loss functions based on prediction mode compatibility
+  const availableLossFunctions = LOSS_FUNCTIONS.filter(loss => {
+    if (isMultistepOnly && !loss.supportsMultistep) {
+      return false;
+    }
+    return true;
+  });
+
+  // Auto-select loss function based on imbalance and mode compatibility
   React.useEffect(() => {
     if (previewData && state.jobType === 'classification') {
-      const recommendedLoss = isImbalanced ? 'focal_loss' : 'cross_entropy';
-      if (state.metricsConfig.lossFunction !== recommendedLoss) {
+      let recommendedLoss = isImbalanced ? 'focal_loss' : 'cross_entropy';
+
+      // If focal_loss is not compatible with current mode, fall back
+      if (isMultistepOnly && recommendedLoss === 'focal_loss') {
+        recommendedLoss = isImbalanced ? 'weighted_cross_entropy' : 'cross_entropy';
+      }
+
+      // Only update if current selection is invalid or not set
+      const currentLossValid = availableLossFunctions.some(l => l.id === state.metricsConfig.lossFunction);
+      if (!currentLossValid || state.metricsConfig.lossFunction !== recommendedLoss) {
         setState(prev => ({
           ...prev,
           metricsConfig: { ...prev.metricsConfig, lossFunction: recommendedLoss }
         }));
       }
     }
-  }, [previewData, isImbalanced]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewData, isImbalanced, isMultistepOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
@@ -1614,9 +1636,17 @@ const Step2Summary: React.FC<Step2Props> = ({
             </div>
           </div>
 
+          {/* Note when loss functions are filtered */}
+          {isMultistepOnly && (
+            <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+              <strong>Note:</strong> Focal Loss is not available for Multi-Step mode (not compatible with multi-label classification).
+              {isImbalanced && ' Weighted BCE is recommended for your imbalanced data.'}
+            </div>
+          )}
+
           {/* Loss function options */}
           <div className="space-y-2">
-            {LOSS_FUNCTIONS.map((loss) => (
+            {availableLossFunctions.map((loss) => (
               <label
                 key={loss.id}
                 className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
