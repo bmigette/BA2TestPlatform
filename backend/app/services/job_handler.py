@@ -1940,7 +1940,7 @@ def train_classification_optimization(
     try:
         opt_result = optimizer.optimize(
             fitness_function,
-            generation_callback=generation_callback
+            callback=generation_callback
         )
     except InterruptedError:
         return {
