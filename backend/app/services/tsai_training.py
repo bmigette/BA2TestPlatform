@@ -8,6 +8,12 @@ Uses DataPreparationService for 35% buffered normalization (same as Darts),
 with exportable scaler parameters for inference.
 """
 
+# CRITICAL: Set matplotlib backend before any tsai/fastai imports
+# tsai/fastai use matplotlib internally, and the default TkAgg backend
+# causes errors when running in a web server (non-main thread)
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend
+
 import logging
 import numpy as np
 import pandas as pd
@@ -743,15 +749,19 @@ class TSAITrainingService(ITrainingService):
         return None
 
 
-class EpochProgressCallback:
-    """Callback to report epoch progress during training."""
+class EpochProgressCallback(Callback):
+    """Callback to report epoch progress during training.
+
+    Must inherit from fastai Callback for proper integration with the training loop.
+    The Learner automatically sets self.learn before calling callback methods.
+    """
 
     def __init__(self, on_epoch_end: callable):
+        super().__init__()
         self.on_epoch_end_fn = on_epoch_end
-        self.learn = None
 
     def after_epoch(self):
-        """Called after each epoch."""
+        """Called after each epoch by fastai training loop."""
         if self.on_epoch_end_fn and self.learn:
             metrics = {}
             if hasattr(self.learn, 'recorder') and self.learn.recorder.values:

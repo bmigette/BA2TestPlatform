@@ -35,15 +35,25 @@ job_progress_data: Dict[str, Dict[str, Any]] = {}
 
 
 class PredictionTarget(BaseModel):
-    """Legacy prediction target format (kept for backwards compatibility)"""
+    """Prediction target format supporting both legacy and new target types.
+
+    Supports legacy format (profitPercent, maxDrawdownPercent, timePeriodDays)
+    and new target types (trend_reversal, directional, triple_barrier, etc.).
+
+    Uses extra='allow' to preserve all target-specific fields like 'indicator',
+    'direction', 'threshold', 'indicatorParams', etc. without losing them.
+    """
     profitPercent: Optional[float] = None
     maxDrawdownPercent: Optional[float] = None
     timePeriodDays: Optional[int] = None
     # New target format fields
     type: Optional[str] = None  # price_based, directional, triple_barrier, trend_reversal, volatility
     category: Optional[str] = None  # binary_classification, multiclass_classification, regression
-    # Type-specific fields passed through as dict
+    # Type-specific fields passed through as dict (alternative to extra fields)
     config: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = 'allow'  # Preserve target-specific fields like indicator, direction, etc.
 
 
 class ParameterRanges(BaseModel):
