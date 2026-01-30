@@ -116,6 +116,28 @@ class TestTSAITrainingService:
         assert X_seq.shape == (88, 5, 10)
         assert y_seq.shape == (88,)
 
+    def test_sequence_creation_multistep(self, training_service):
+        """Test multi-step sequence creation."""
+        X = np.random.randn(100, 5).astype(np.float32)
+        y = np.random.randint(0, 2, 100).astype(np.int64)
+
+        X_seq, y_seq = training_service._create_sequences_multistep(X, y, seq_len=10, prediction_horizon=3)
+
+        # n_samples = 100 - 10 - 3 + 1 = 88
+        assert X_seq.shape == (88, 5, 10)
+        assert y_seq.shape == (88, 3)  # Multi-step: 2D with horizon as second dim
+
+    def test_sequence_creation_multistep_horizon_1(self, training_service):
+        """Test multi-step with horizon=1."""
+        X = np.random.randn(100, 5).astype(np.float32)
+        y = np.random.randint(0, 2, 100).astype(np.int64)
+
+        X_seq, y_seq = training_service._create_sequences_multistep(X, y, seq_len=10, prediction_horizon=1)
+
+        # n_samples = 100 - 10 - 1 + 1 = 90
+        assert X_seq.shape == (90, 5, 10)
+        assert y_seq.shape == (90, 1)
+
 
 class TestTrainingWithRealData:
     """Integration tests with real AAPL data."""

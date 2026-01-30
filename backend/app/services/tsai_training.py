@@ -71,6 +71,7 @@ class TSAITrainingService(ITrainingService):
         timeframe: str = 'daily',
         seq_len: int = 24,
         prediction_horizon: int = 0,
+        prediction_mode: str = 'shift',
         fit_scaler: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -86,6 +87,7 @@ class TSAITrainingService(ITrainingService):
             timeframe: Data timeframe (not used for tsai but kept for interface)
             seq_len: Sequence length for sliding window
             prediction_horizon: How many bars ahead to predict (0 = predict at end of sequence)
+            prediction_mode: 'shift' for single target at T+N, 'multistep' for T+1...T+N
             fit_scaler: Whether to fit the scaler (True for train, False for test)
 
         Returns:
@@ -120,9 +122,14 @@ class TSAITrainingService(ITrainingService):
             X_data = df[feature_columns].values.astype(np.float32)
 
         # Create sliding window sequences with prediction horizon
-        X, y = self._create_sequences(X_data, y_data, seq_len, prediction_horizon)
+        if prediction_mode == 'multistep':
+            if prediction_horizon < 1:
+                raise ValueError("Multi-step mode requires prediction_horizon >= 1")
+            X, y = self._create_sequences_multistep(X_data, y_data, seq_len, prediction_horizon)
+        else:
+            X, y = self._create_sequences(X_data, y_data, seq_len, prediction_horizon)
 
-        logger.info(f"Prepared data: X shape {X.shape}, y shape {y.shape}, horizon={prediction_horizon}, normalized={self.normalize}")
+        logger.info(f"Prepared data: X shape {X.shape}, y shape {y.shape}, horizon={prediction_horizon}, mode={prediction_mode}, normalized={self.normalize}")
         return X, y
 
     def prepare_data_split(
@@ -133,7 +140,8 @@ class TSAITrainingService(ITrainingService):
         feature_columns: List[str],
         timeframe: str = 'daily',
         seq_len: int = 24,
-        prediction_horizon: int = 0
+        prediction_horizon: int = 0,
+        prediction_mode: str = 'shift'
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Prepare and split data into train/test sets.
@@ -150,6 +158,7 @@ class TSAITrainingService(ITrainingService):
             timeframe: Data timeframe
             seq_len: Sequence length for sliding window
             prediction_horizon: How many bars ahead to predict (0 = predict at end of sequence)
+            prediction_mode: 'shift' for single target at T+N, 'multistep' for T+1...T+N
 
         Returns:
             Tuple of (X_train, X_test, y_train, y_test)
@@ -164,15 +173,17 @@ class TSAITrainingService(ITrainingService):
 
         # Prepare train data (fit scaler)
         X_train, y_train = self.prepare_data(
-            df_train, target_column, feature_columns, timeframe, seq_len, prediction_horizon, fit_scaler=True
+            df_train, target_column, feature_columns, timeframe, seq_len,
+            prediction_horizon, prediction_mode, fit_scaler=True
         )
 
         # Prepare test data (use fitted scaler)
         X_test, y_test = self.prepare_data(
-            df_test, target_column, feature_columns, timeframe, seq_len, prediction_horizon, fit_scaler=False
+            df_test, target_column, feature_columns, timeframe, seq_len,
+            prediction_horizon, prediction_mode, fit_scaler=False
         )
 
-        logger.info(f"Split data: train={len(X_train)}, test={len(X_test)}, horizon={prediction_horizon}")
+        logger.info(f"Split data: train={len(X_train)}, test={len(X_test)}, horizon={prediction_horizon}, mode={prediction_mode}")
         return X_train, X_test, y_train, y_test
 
     def _create_sequences(
@@ -219,6 +230,47 @@ class TSAITrainingService(ITrainingService):
             # Target is prediction_horizon bars AFTER the end of the input sequence
             # End of sequence is at index i+seq_len-1, so target is at i+seq_len-1+prediction_horizon
             y_seq[i] = y[i + seq_len - 1 + prediction_horizon]
+
+        return X_seq, y_seq
+
+    def _create_sequences_multistep(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        seq_len: int,
+        prediction_horizon: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Create sequences with multi-step targets (T+1, T+2, ..., T+N).
+
+        Args:
+            X: Feature array of shape (n_rows, n_features)
+            y: Target array of shape (n_rows,)
+            seq_len: Length of input sequence (lookback window)
+            prediction_horizon: Number of future steps to predict
+
+        Returns:
+            X_seq: Sequences of shape (n_samples, n_features, seq_len)
+            y_seq: Multi-step targets of shape (n_samples, prediction_horizon)
+
+        Example with seq_len=24, prediction_horizon=3:
+            Input: Bars T-23 to T (24 bars)
+            Targets: [y[T+1], y[T+2], y[T+3]] - class labels at each future step
+        """
+        n_samples = len(X) - seq_len - prediction_horizon + 1
+
+        if n_samples <= 0:
+            raise ValueError(
+                f"Not enough data: need at least {seq_len + prediction_horizon} rows, got {len(X)}"
+            )
+
+        n_features = X.shape[1]
+        X_seq = np.zeros((n_samples, n_features, seq_len), dtype=np.float32)
+        y_seq = np.zeros((n_samples, prediction_horizon), dtype=np.float32)
+
+        for i in range(n_samples):
+            X_seq[i] = X[i:i+seq_len].T
+            for h in range(prediction_horizon):
+                y_seq[i, h] = y[i + seq_len + h]
 
         return X_seq, y_seq
 
