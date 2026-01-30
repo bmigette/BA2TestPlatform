@@ -277,18 +277,23 @@ class TSAITrainingService(ITrainingService):
     def get_loss_function(
         self,
         loss_type: str = 'focal',
-        alpha: float = None,
+        prediction_mode: str = 'shift',
         gamma: float = 2.0,
-        class_weights: np.ndarray = None
+        pos_weight: float = None
     ) -> Any:
         """
         Get loss function for classification.
 
+        Note: Loss function choice depends on data imbalance, not model quality.
+        - Focal Loss: Best for imbalanced data (rare positive class)
+        - CrossEntropy: Standard choice for balanced data
+        - Weighted BCE/CE: Manual class weighting
+
         Args:
             loss_type: 'focal', 'ce' (cross-entropy), 'weighted_ce'
-            alpha: Alpha for focal loss (class balance)
+            prediction_mode: 'shift' for binary classification, 'multistep' for multi-label
             gamma: Gamma for focal loss (focusing parameter)
-            class_weights: Class weights for weighted CE
+            pos_weight: Weight for positive class (for imbalanced data)
 
         Returns:
             Loss function
@@ -296,17 +301,31 @@ class TSAITrainingService(ITrainingService):
         if not TSAI_AVAILABLE:
             raise RuntimeError("tsai library not available")
 
-        if loss_type == 'focal':
-            return FocalLossFlat(gamma=gamma)
-        elif loss_type == 'ce':
-            return CrossEntropyLossFlat()
-        elif loss_type == 'weighted_ce' and class_weights is not None:
-            weights = torch.tensor(class_weights, dtype=torch.float32)
-            if DEVICE:
-                weights = weights.to(DEVICE)
-            return CrossEntropyLossFlat(weight=weights)
+        if prediction_mode == 'multistep':
+            # Multi-step mode: use BCEWithLogitsLoss for multi-label classification
+            if loss_type == 'focal':
+                # FocalLoss works with BCE for multi-label
+                return FocalLossFlat(gamma=gamma)
+            elif loss_type == 'weighted_ce' and pos_weight is not None:
+                weights = torch.tensor([pos_weight], dtype=torch.float32)
+                if DEVICE:
+                    weights = weights.to(DEVICE)
+                return nn.BCEWithLogitsLoss(pos_weight=weights)
+            else:
+                return nn.BCEWithLogitsLoss()
         else:
-            return CrossEntropyLossFlat()
+            # Shift mode: standard binary classification with softmax
+            if loss_type == 'focal':
+                return FocalLossFlat(gamma=gamma)
+            elif loss_type == 'ce':
+                return CrossEntropyLossFlat()
+            elif loss_type == 'weighted_ce' and pos_weight is not None:
+                weights = torch.tensor([1.0, pos_weight], dtype=torch.float32)
+                if DEVICE:
+                    weights = weights.to(DEVICE)
+                return CrossEntropyLossFlat(weight=weights)
+            else:
+                return CrossEntropyLossFlat()
 
     def train_model(
         self,
@@ -319,6 +338,7 @@ class TSAITrainingService(ITrainingService):
         loss_fn: Any = None,
         epoch_callback: callable = None,
         force_cpu: bool = False,
+        prediction_mode: str = 'shift',
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -334,6 +354,7 @@ class TSAITrainingService(ITrainingService):
             loss_fn: Optional custom loss function
             epoch_callback: Optional callback for progress updates
             force_cpu: Force CPU training (for MPS-limited models like xception, patchtst)
+            prediction_mode: 'shift' for binary classification, 'multistep' for multi-label
             **kwargs: Additional options
 
         Returns:
@@ -388,7 +409,7 @@ class TSAITrainingService(ITrainingService):
 
             # Get loss function
             if loss_fn is None:
-                loss_fn = self.get_loss_function('focal')
+                loss_fn = self.get_loss_function('focal', prediction_mode=prediction_mode)
 
             # Create learner with model
             learn = Learner(
