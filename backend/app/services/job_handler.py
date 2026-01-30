@@ -863,6 +863,11 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
     Returns:
         Result dictionary with trained model info and metrics
     """
+    # Dump full payload for debugging
+    import json
+    logger.info(f"=== JOB RECEIVED: {task_id} ===")
+    logger.info(f"Full payload:\n{json.dumps(payload, indent=2, default=str)}")
+
     if not ML_AVAILABLE:
         return {
             'status': 'failed',
