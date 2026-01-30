@@ -374,20 +374,19 @@ class TSAITrainingService(ITrainingService):
             X_test, y_test = test_data
             learner = kwargs.get('learner')
 
-            if learner is None:
-                # If no learner, just do inference
-                model.eval()
-                with torch.no_grad():
-                    X_tensor = torch.tensor(X_test, dtype=torch.float32)
-                    if DEVICE:
-                        X_tensor = X_tensor.to(DEVICE)
-                        model = model.to(DEVICE)
-                    outputs = model(X_tensor)
-                    probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
-            else:
-                # Use learner for prediction
-                probs, _, preds = learner.get_X_preds(X_test)
-                probs = probs[:, 1] if len(probs.shape) > 1 else probs
+            # Always use direct inference to avoid batch size issues with learner.get_X_preds
+            # which can drop incomplete last batches
+            if learner is not None:
+                model = learner.model
+
+            model.eval()
+            with torch.no_grad():
+                X_tensor = torch.tensor(X_test, dtype=torch.float32)
+                if DEVICE:
+                    X_tensor = X_tensor.to(DEVICE)
+                    model = model.to(DEVICE)
+                outputs = model(X_tensor)
+                probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
 
             # Convert to binary predictions
             y_pred = (np.array(probs) > threshold).astype(int)
@@ -467,19 +466,20 @@ class TSAITrainingService(ITrainingService):
 
         learner = kwargs.get('learner')
 
+        # Always use direct inference to avoid batch size issues with learner.get_X_preds
+        # which can drop incomplete last batches
         if learner is not None:
-            probs, _, _ = learner.get_X_preds(X)
-            return probs[:, 1] if len(probs.shape) > 1 else probs
-        else:
-            model.eval()
-            with torch.no_grad():
-                X_tensor = torch.tensor(X, dtype=torch.float32)
-                if DEVICE:
-                    X_tensor = X_tensor.to(DEVICE)
-                    model = model.to(DEVICE)
-                outputs = model(X_tensor)
-                probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
-            return probs
+            model = learner.model
+
+        model.eval()
+        with torch.no_grad():
+            X_tensor = torch.tensor(X, dtype=torch.float32)
+            if DEVICE:
+                X_tensor = X_tensor.to(DEVICE)
+                model = model.to(DEVICE)
+            outputs = model(X_tensor)
+            probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
+        return probs
 
     def save_model(self, learner: Any, name: str, metadata: Dict = None) -> str:
         """
