@@ -1965,6 +1965,8 @@ const Step3Summary: React.FC<Step3Props> = ({
                             ...prev.metricsConfig,
                             lossFunctions: newLosses,
                             lossFunction: newLosses[0], // Keep backward compatibility
+                            // Auto-enable optimization when multiple selected, disable when single
+                            optimizeLossFunction: newLosses.length > 1,
                           }
                         };
                       });

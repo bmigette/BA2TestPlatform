@@ -142,7 +142,17 @@ const MODEL_TEXT_COLORS: Record<string, string> = {
   tcn: 'text-orange-600 bg-orange-100 dark:bg-orange-900/50 dark:text-orange-300',
   transformer: 'text-pink-600 bg-pink-100 dark:bg-pink-900/50 dark:text-pink-300',
   tft: 'text-cyan-600 bg-cyan-100 dark:bg-cyan-900/50 dark:text-cyan-300',
+  inception: 'text-indigo-600 bg-indigo-100 dark:bg-indigo-900/50 dark:text-indigo-300',
+  resnet: 'text-rose-600 bg-rose-100 dark:bg-rose-900/50 dark:text-rose-300',
+  xception: 'text-amber-600 bg-amber-100 dark:bg-amber-900/50 dark:text-amber-300',
+  omniscale: 'text-teal-600 bg-teal-100 dark:bg-teal-900/50 dark:text-teal-300',
+  minirocket: 'text-violet-600 bg-violet-100 dark:bg-violet-900/50 dark:text-violet-300',
+  lstm_fcn: 'text-sky-600 bg-sky-100 dark:bg-sky-900/50 dark:text-sky-300',
+  tst: 'text-fuchsia-600 bg-fuchsia-100 dark:bg-fuchsia-900/50 dark:text-fuchsia-300',
+  patchtst: 'text-lime-600 bg-lime-100 dark:bg-lime-900/50 dark:text-lime-300',
 };
+
+const DEFAULT_MODEL_COLOR = 'text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300';
 
 const JobDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -719,7 +729,7 @@ const JobDetails: React.FC = () => {
                   <Activity size={14} className="text-orange-500" />
                   <span>Current Model</span>
                   {job.currentModelType && (
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[job.currentModelType] || 'bg-gray-100'}`}>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[job.currentModelType] || DEFAULT_MODEL_COLOR}`}>
                       {job.currentModelType.toUpperCase()}
                     </span>
                   )}
@@ -985,7 +995,7 @@ const JobDetails: React.FC = () => {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
               <span className="text-gray-500">Model:</span>{' '}
-              <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[individualsData.best_individual.model_type] || 'bg-gray-100'}`}>
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[individualsData.best_individual.model_type] || DEFAULT_MODEL_COLOR}`}>
                 {individualsData.best_individual.model_type.toUpperCase()}
               </span>
             </div>
@@ -1145,7 +1155,7 @@ const JobDetails: React.FC = () => {
                         <span className="w-6 text-center font-bold text-gray-500">#{model.rank}</span>
                       )}
                     </div>
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${MODEL_TEXT_COLORS[model.model_type] || 'bg-gray-100'}`}>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${MODEL_TEXT_COLORS[model.model_type] || DEFAULT_MODEL_COLOR}`}>
                       {model.model_type.toUpperCase()}
                     </span>
                     <span className="text-sm">
@@ -1255,7 +1265,7 @@ const JobDetails: React.FC = () => {
                             <tr key={idx} className={`border-t border-gray-200 dark:border-gray-700 ${idx === 0 ? 'bg-green-50 dark:bg-green-900/20' : ''}`}>
                               <td className="py-2 px-2">{ind.individual}</td>
                               <td className="py-2 px-2">
-                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[ind.model_type] || 'bg-gray-100'}`}>
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[ind.model_type] || DEFAULT_MODEL_COLOR}`}>
                                   {ind.model_type.toUpperCase()}
                                 </span>
                               </td>
