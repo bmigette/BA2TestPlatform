@@ -285,11 +285,17 @@ class TSAITrainingService(ITrainingService):
             else:
                 device = torch.device('cpu')
 
+            # Auto-adjust batch size for small datasets to avoid empty batches
+            val_size = len(splits[1]) if len(splits) > 1 else int(len(X_all) * 0.2)
+            effective_bs = min(batch_size, val_size, len(splits[0]))
+            if effective_bs < batch_size:
+                logger.info(f"Reduced batch size from {batch_size} to {effective_bs} for small dataset")
+
             # Create dataloaders with explicit device
             dls = get_ts_dls(
                 X_all, y_all,
                 splits=splits,
-                bs=batch_size,
+                bs=effective_bs,
                 batch_tfms=[TSStandardize()],
                 device=device,  # Set device for dataloaders
             )
