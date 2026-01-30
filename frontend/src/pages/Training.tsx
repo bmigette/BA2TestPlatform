@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, X, BarChart2, Target, Clock, CheckCircle, AlertCircle, Loader2, Pause, SkipForward, XCircle, ArrowLeft, Activity, Timer, Zap, FileText } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import JobWizard from '../components/JobWizard';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface Dataset {
   id: number;
@@ -156,6 +157,15 @@ const Training: React.FC = () => {
   const [selectedGeneration, setSelectedGeneration] = useState<number | null>(null);
   const [selectedModelTypeFilter, setSelectedModelTypeFilter] = useState<string>('');
 
+  // Confirm dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
+
   // Load profiles from API on mount
   useEffect(() => {
     const fetchProfiles = async () => {
@@ -268,38 +278,52 @@ const Training: React.FC = () => {
     }
   };
 
-  const handleCancelJob = async (jobId: string) => {
-    if (!confirm('Are you sure you want to cancel this job?')) return;
-    try {
-      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/cancel`, {
-        method: 'POST',
-      });
-      if (response.ok) {
-        fetchJobProgress(jobId);
-      }
-    } catch (err) {
-      console.error('Failed to cancel job:', err);
-    }
+  const handleCancelJob = (jobId: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Cancel Job',
+      message: 'Are you sure you want to cancel this job?',
+      variant: 'warning',
+      onConfirm: async () => {
+        try {
+          const response = await fetch(`http://localhost:8000/api/jobs/${jobId}/cancel`, {
+            method: 'POST',
+          });
+          if (response.ok) {
+            fetchJobProgress(jobId);
+          }
+        } catch (err) {
+          console.error('Failed to cancel job:', err);
+        }
+      },
+    });
   };
 
-  const handleDeleteJob = async (jobId: string, e: React.MouseEvent) => {
+  const handleDeleteJob = (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent opening job monitor
-    if (!confirm('Are you sure you want to delete this job? This cannot be undone.')) return;
-    try {
-      const response = await fetch(`http://localhost:8000/api/jobs/${jobId}`, {
-        method: 'DELETE',
-      });
-      if (response.ok) {
-        // Refresh jobs list
-        fetchJobs();
-        // Close monitor if this job was selected
-        if (selectedJobId === jobId) {
-          setSelectedJobId(null);
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Job',
+      message: 'Are you sure you want to delete this job? This cannot be undone.',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const response = await fetch(`http://localhost:8000/api/jobs/${jobId}`, {
+            method: 'DELETE',
+          });
+          if (response.ok) {
+            // Refresh jobs list
+            fetchJobs();
+            // Close monitor if this job was selected
+            if (selectedJobId === jobId) {
+              setSelectedJobId(null);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to delete job:', err);
         }
-      }
-    } catch (err) {
-      console.error('Failed to delete job:', err);
-    }
+      },
+    });
   };
 
   const openJobMonitor = (jobId: string) => {
@@ -967,6 +991,17 @@ const Training: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+        confirmText={confirmDialog.variant === 'danger' ? 'Delete' : 'Confirm'}
+      />
     </div>
   );
 };

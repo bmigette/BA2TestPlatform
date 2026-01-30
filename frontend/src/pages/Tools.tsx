@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp, Trash2, HardDrive } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface NewsArticle {
   title: string;
@@ -1332,6 +1333,13 @@ const MaintenancePanel: React.FC = () => {
   const [totalSizeMB, setTotalSizeMB] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
 
   const scanOrphanModels = async () => {
     setScanning(true);
@@ -1437,9 +1445,13 @@ const MaintenancePanel: React.FC = () => {
 
               <button
                 onClick={() => {
-                  if (confirm(`Are you sure you want to delete ${orphanModels.length} orphan model folders (${totalSizeMB} MB)? This cannot be undone.`)) {
-                    cleanupOrphanModels(false);
-                  }
+                  setConfirmDialog({
+                    isOpen: true,
+                    title: 'Delete Orphan Models',
+                    message: `Are you sure you want to delete ${orphanModels.length} orphan model folders (${totalSizeMB} MB)? This cannot be undone.`,
+                    variant: 'danger',
+                    onConfirm: () => cleanupOrphanModels(false),
+                  });
                 }}
                 disabled={cleaning}
                 className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
@@ -1511,6 +1523,17 @@ const MaintenancePanel: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+        confirmText="Delete"
+      />
     </div>
   );
 };

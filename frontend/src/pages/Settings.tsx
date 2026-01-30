@@ -4,6 +4,7 @@ import {
   Activity, Clock, Download, Upload, Power, PowerOff, AlertCircle,
   CheckCircle, Loader2
 } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface WorkerCapabilities {
   train: boolean;
@@ -56,6 +57,13 @@ const Settings: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [healthChecking, setHealthChecking] = useState<number | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
   const [formData, setFormData] = useState<WorkerFormData>({
     name: '',
     url: '',
@@ -126,15 +134,22 @@ const Settings: React.FC = () => {
     }
   };
 
-  const handleDeleteWorker = async (workerId: number) => {
-    if (!confirm('Are you sure you want to delete this worker?')) return;
-    try {
-      const response = await fetch(`${API_BASE}/workers/${workerId}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error('Failed to delete worker');
-      fetchWorkers();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete worker');
-    }
+  const handleDeleteWorker = (workerId: number) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Worker',
+      message: 'Are you sure you want to delete this worker?',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const response = await fetch(`${API_BASE}/workers/${workerId}`, { method: 'DELETE' });
+          if (!response.ok) throw new Error('Failed to delete worker');
+          fetchWorkers();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Failed to delete worker');
+        }
+      },
+    });
   };
 
   const handleToggleEnabled = async (worker: Worker) => {
@@ -527,6 +542,17 @@ const Settings: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+        confirmText="Delete"
+      />
     </div>
   );
 };
