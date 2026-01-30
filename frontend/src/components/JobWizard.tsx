@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Database, Cpu, Target, Trash2, Split, Save, FolderOpen, Play, AlertTriangle, ChevronRight, ChevronLeft, Loader2, Activity, Zap, Info, Layers } from 'lucide-react';
+import { X, Database, Cpu, Target, Trash2, Split, Save, FolderOpen, Play, AlertTriangle, ChevronRight, ChevronLeft, Loader2, Activity, Zap, Info, Layers, Sliders } from 'lucide-react';
 import type { TargetConfig } from '../types/targets';
 
 interface Dataset {
@@ -45,6 +45,13 @@ interface MetricsConfig {
   classificationMetric?: string;
   regressionMetric?: string;
   lossFunction?: string;
+  // Multi-loss function support
+  lossFunctions?: string[];
+  optimizeLossFunction?: boolean;
+  // Threshold optimization
+  thresholdMin?: number;
+  thresholdMax?: number;
+  thresholdStep?: number;
 }
 
 // Target set from backend
@@ -112,6 +119,16 @@ const CLASSIFICATION_METRICS = [
   { id: 'recall', name: 'Recall', description: 'Minimize false negatives' },
   { id: 'mcc', name: 'MCC', description: 'Matthews Correlation Coefficient' },
 ];
+
+// Extended descriptions for metrics - shown below selection
+const METRIC_GUIDANCE: Record<string, string> = {
+  f1_score: 'Balances precision and recall - best for imbalanced data',
+  accuracy: 'Overall correctness - may be misleading with imbalanced classes',
+  balanced_accuracy: 'Better for imbalanced data than accuracy',
+  precision: 'Minimizes false positives - use when false alarms are costly',
+  recall: 'Minimizes false negatives - use when missing positives is costly',
+  mcc: 'Matthews Correlation - robust to class imbalance',
+};
 
 const REGRESSION_METRICS = [
   { id: 'mse', name: 'MSE', description: 'Mean Squared Error' },
@@ -191,6 +208,11 @@ const getDefaultState = () => ({
     classificationMetric: 'f1_score',
     regressionMetric: 'rmse',
     lossFunction: 'focal_loss',
+    lossFunctions: ['focal_loss'],
+    optimizeLossFunction: false,
+    thresholdMin: 0.3,
+    thresholdMax: 0.6,
+    thresholdStep: 0.1,
   } as MetricsConfig,
   predictionTargets: [] as Record<string, unknown>[],
   selectedTargetSetIds: [] as number[],
@@ -1594,6 +1616,13 @@ const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
               </label>
             ))}
           </div>
+          {/* Metric guidance text */}
+          {state.metricsConfig.classificationMetric && METRIC_GUIDANCE[state.metricsConfig.classificationMetric] && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 flex items-center space-x-1">
+              <Info size={12} />
+              <span>{METRIC_GUIDANCE[state.metricsConfig.classificationMetric]}</span>
+            </p>
+          )}
         ) : (
           <div className="flex flex-wrap gap-2">
             {REGRESSION_METRICS.map((metric) => (
@@ -1686,7 +1715,7 @@ const Step3Summary: React.FC<Step3Props> = ({
     return true;
   });
 
-  // Auto-select loss function based on imbalance and mode compatibility
+  // Auto-select loss function and threshold range based on imbalance and metric
   React.useEffect(() => {
     if (previewData && state.jobType === 'classification') {
       let recommendedLoss = isImbalanced ? 'focal_loss' : 'cross_entropy';
@@ -1696,16 +1725,50 @@ const Step3Summary: React.FC<Step3Props> = ({
         recommendedLoss = isImbalanced ? 'weighted_cross_entropy' : 'cross_entropy';
       }
 
+      // Calculate smart threshold defaults based on metric and class imbalance
+      const metric = state.metricsConfig.classificationMetric || 'f1_score';
+      const positiveRatio = previewData.positiveCount && previewData.totalCount
+        ? previewData.positiveCount / previewData.totalCount
+        : 0.1;
+
+      let suggestedThresholdMin: number;
+      let suggestedThresholdMax: number;
+
+      if (metric === 'recall') {
+        // Recall: bias low to catch more positives
+        suggestedThresholdMin = 0.1;
+        suggestedThresholdMax = 0.4;
+      } else if (metric === 'precision') {
+        // Precision: bias high for confident predictions
+        suggestedThresholdMin = 0.4;
+        suggestedThresholdMax = 0.7;
+      } else {
+        // F1/Accuracy/MCC: optimize around class ratio
+        suggestedThresholdMin = Math.max(0.1, Math.round(positiveRatio * 10) / 10);
+        suggestedThresholdMax = Math.min(0.7, suggestedThresholdMin + 0.3);
+      }
+
       // Only update if current selection is invalid or not set
       const currentLossValid = availableLossFunctions.some(l => l.id === state.metricsConfig.lossFunction);
-      if (!currentLossValid || state.metricsConfig.lossFunction !== recommendedLoss) {
+      const shouldUpdateLoss = !currentLossValid || state.metricsConfig.lossFunction !== recommendedLoss;
+      const shouldUpdateThreshold = state.metricsConfig.thresholdMin === undefined;
+
+      if (shouldUpdateLoss || shouldUpdateThreshold) {
         setState(prev => ({
           ...prev,
-          metricsConfig: { ...prev.metricsConfig, lossFunction: recommendedLoss }
+          metricsConfig: {
+            ...prev.metricsConfig,
+            ...(shouldUpdateLoss ? { lossFunction: recommendedLoss } : {}),
+            ...(shouldUpdateThreshold ? {
+              thresholdMin: suggestedThresholdMin,
+              thresholdMax: suggestedThresholdMax,
+              thresholdStep: 0.1,
+            } : {}),
+          }
         }));
       }
     }
-  }, [previewData, isImbalanced, isMultistepOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewData, isImbalanced, isMultistepOnly, state.metricsConfig.classificationMetric]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
@@ -1864,56 +1927,168 @@ const Step3Summary: React.FC<Step3Props> = ({
             </div>
           )}
 
-          {/* Loss function options */}
+          {/* Loss function options - multi-select checkboxes */}
           <div className="space-y-2">
-            {availableLossFunctions.map((loss) => (
-              <label
-                key={loss.id}
-                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  state.metricsConfig.lossFunction === loss.id
-                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
-                    : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="lossFunction"
-                  checked={state.metricsConfig.lossFunction === loss.id}
-                  onChange={() => setState(prev => ({
-                    ...prev,
-                    metricsConfig: { ...prev.metricsConfig, lossFunction: loss.id }
-                  }))}
-                  className="mt-1 w-4 h-4 text-purple-600"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center space-x-2">
-                    <span className="font-medium text-sm">{loss.name}</span>
-                    {loss.forImbalanced && isImbalanced && (
-                      <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
-                        Recommended
-                      </span>
-                    )}
-                    {!loss.forImbalanced && !isImbalanced && (
-                      <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
-                        Recommended
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">{loss.description}</p>
-                  {state.predictionModes.length > 0 && (
-                    <div className="mt-2 text-xs text-gray-400 space-y-0.5">
-                      {state.predictionModes.includes('shift') && (
-                        <div><span className="text-green-600 dark:text-green-400">Shift:</span> {loss.shiftBehavior}</div>
+            {availableLossFunctions.map((loss) => {
+              const isSelected = (state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction]).includes(loss.id);
+              return (
+                <label
+                  key={loss.id}
+                  className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                    isSelected
+                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => {
+                      setState(prev => {
+                        const currentLosses = prev.metricsConfig.lossFunctions || [prev.metricsConfig.lossFunction || 'focal_loss'];
+                        let newLosses: string[];
+                        if (isSelected) {
+                          // Remove (but keep at least one)
+                          newLosses = currentLosses.filter(l => l !== loss.id);
+                          if (newLosses.length === 0) newLosses = [loss.id];
+                        } else {
+                          // Add
+                          newLosses = [...currentLosses, loss.id];
+                        }
+                        return {
+                          ...prev,
+                          metricsConfig: {
+                            ...prev.metricsConfig,
+                            lossFunctions: newLosses,
+                            lossFunction: newLosses[0], // Keep backward compatibility
+                          }
+                        };
+                      });
+                    }}
+                    className="mt-1 w-4 h-4 text-purple-600 rounded"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-medium text-sm">{loss.name}</span>
+                      {loss.forImbalanced && isImbalanced && (
+                        <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
+                          Recommended
+                        </span>
                       )}
-                      {state.predictionModes.includes('multistep') && (
-                        <div><span className="text-blue-600 dark:text-blue-400">Multi-step:</span> {loss.multistepBehavior}</div>
+                      {!loss.forImbalanced && !isImbalanced && (
+                        <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
+                          Recommended
+                        </span>
                       )}
                     </div>
-                  )}
-                </div>
-              </label>
-            ))}
+                    <p className="text-xs text-gray-500 mt-1">{loss.description}</p>
+                  </div>
+                </label>
+              );
+            })}
           </div>
+
+          {/* Optimize loss function checkbox */}
+          {(state.metricsConfig.lossFunctions?.length || 0) > 1 && (
+            <label className="flex items-center space-x-2 mt-3 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={state.metricsConfig.optimizeLossFunction || false}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  metricsConfig: { ...prev.metricsConfig, optimizeLossFunction: e.target.checked }
+                }))}
+                className="w-4 h-4 text-purple-600 rounded"
+              />
+              <span className="text-gray-700 dark:text-gray-300">Optimize loss function during training</span>
+              <span className="text-xs text-gray-500">(GA will try different loss functions)</span>
+            </label>
+          )}
+        </div>
+
+        {/* Threshold Optimization */}
+        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center space-x-2">
+            <Sliders size={16} />
+            <span>Threshold Optimization</span>
+          </h4>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            Smart defaults for {state.metricsConfig.classificationMetric || 'F1'} with{' '}
+            {previewData ? `${((previewData.positiveCount / previewData.totalCount) * 100).toFixed(1)}%` : '~10%'} positive class
+          </p>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Min</label>
+              <select
+                value={state.metricsConfig.thresholdMin || 0.3}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  metricsConfig: { ...prev.metricsConfig, thresholdMin: parseFloat(e.target.value) }
+                }))}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+              >
+                {[0.1, 0.2, 0.3, 0.4, 0.5, 0.6].map(v => (
+                  <option key={v} value={v}>{v.toFixed(1)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Max</label>
+              <select
+                value={state.metricsConfig.thresholdMax || 0.6}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  metricsConfig: { ...prev.metricsConfig, thresholdMax: parseFloat(e.target.value) }
+                }))}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+              >
+                {[0.3, 0.4, 0.5, 0.6, 0.7, 0.8].map(v => (
+                  <option key={v} value={v}>{v.toFixed(1)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Step</label>
+              <select
+                value={state.metricsConfig.thresholdStep || 0.1}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  metricsConfig: { ...prev.metricsConfig, thresholdStep: parseFloat(e.target.value) }
+                }))}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+              >
+                {[0.05, 0.1, 0.2].map(v => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              // Recalculate suggested thresholds
+              const metric = state.metricsConfig.classificationMetric || 'f1_score';
+              const positiveRatio = previewData?.positiveCount && previewData?.totalCount
+                ? previewData.positiveCount / previewData.totalCount
+                : 0.1;
+              let min: number, max: number;
+              if (metric === 'recall') {
+                min = 0.1; max = 0.4;
+              } else if (metric === 'precision') {
+                min = 0.4; max = 0.7;
+              } else {
+                min = Math.max(0.1, Math.round(positiveRatio * 10) / 10);
+                max = Math.min(0.7, min + 0.3);
+              }
+              setState(prev => ({
+                ...prev,
+                metricsConfig: { ...prev.metricsConfig, thresholdMin: min, thresholdMax: max, thresholdStep: 0.1 }
+              }));
+            }}
+            className="mt-3 text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400"
+          >
+            Reset to suggested
+          </button>
         </div>
       )}
 

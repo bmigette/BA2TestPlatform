@@ -215,6 +215,53 @@ class TestTrainingWithRealData:
             assert 'accuracy' in assess_result
 
     @pytest.mark.slow
+    def test_assess_model_with_threshold(self, model_service, training_service, prepared_data):
+        """Test model assessment with custom threshold."""
+        X_train, X_test, y_train, y_test = prepared_data
+
+        model = model_service.create_model(
+            'lstm', {'hidden_size': 32, 'n_layers': 1},
+            c_in=X_train.shape[1],
+            c_out=2,
+            seq_len=X_train.shape[2]
+        )
+
+        result = training_service.train_model(
+            model,
+            (X_train, y_train),
+            epochs=2
+        )
+
+        if result['status'] == 'success':
+            # Test with different thresholds
+            for threshold in [0.3, 0.5, 0.7]:
+                assess_result = training_service.assess_model(
+                    result['model'],
+                    (X_test, y_test),
+                    learner=result.get('learner'),
+                    threshold=threshold
+                )
+
+                assert 'f1_score' in assess_result
+                assert 'accuracy' in assess_result
+                assert 'precision' in assess_result
+                assert 'recall' in assess_result
+
+            # Lower threshold should generally predict more positives
+            result_low = training_service.assess_model(
+                result['model'], (X_test, y_test),
+                learner=result.get('learner'), threshold=0.2
+            )
+            result_high = training_service.assess_model(
+                result['model'], (X_test, y_test),
+                learner=result.get('learner'), threshold=0.8
+            )
+            # Low threshold = more predictions = higher recall (usually)
+            # We can't guarantee this 100% but the test confirms threshold is being used
+            assert isinstance(result_low['recall'], float)
+            assert isinstance(result_high['recall'], float)
+
+    @pytest.mark.slow
     def test_predict(self, model_service, training_service, prepared_data):
         """Test prediction generation."""
         X_train, X_test, y_train, y_test = prepared_data

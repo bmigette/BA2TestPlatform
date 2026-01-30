@@ -1698,10 +1698,25 @@ def train_classification_optimization(
         logger.error("Classification training failed: metrics_config.classificationMetric is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.classificationMetric is required'}
 
-    loss_function = metrics_config.get('lossFunction')
-    if loss_function is None:
-        logger.error("Classification training failed: metrics_config.lossFunction is required")
-        return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.lossFunction is required'}
+    # Support both single lossFunction (legacy) and lossFunctions array (new)
+    loss_functions = metrics_config.get('lossFunctions')
+    if loss_functions is None:
+        # Fallback to single loss function for backwards compatibility
+        single_loss = metrics_config.get('lossFunction')
+        if single_loss is None:
+            logger.error("Classification training failed: metrics_config.lossFunction or lossFunctions is required")
+            return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.lossFunction or lossFunctions is required'}
+        loss_functions = [single_loss]
+
+    optimize_loss_function = metrics_config.get('optimizeLossFunction', False) and len(loss_functions) > 1
+
+    # Threshold optimization settings
+    threshold_min = metrics_config.get('thresholdMin', 0.3)
+    threshold_max = metrics_config.get('thresholdMax', 0.6)
+    threshold_step = metrics_config.get('thresholdStep', 0.1)
+    # Calculate number of threshold steps for GA
+    n_thresholds = max(1, int(round((threshold_max - threshold_min) / threshold_step)) + 1)
+    logger.info(f"Threshold optimization: min={threshold_min}, max={threshold_max}, step={threshold_step}, n_steps={n_thresholds}")
 
     seq_len = parameter_ranges.get('seqLen')
     if seq_len is None:
@@ -1825,6 +1840,18 @@ def train_classification_optimization(
         dropout = float(params['dropout'])
         learning_rate = float(params['learning_rate'])
 
+        # Get loss function from genes if optimizing, otherwise use first one
+        if 'loss_function_idx' in params:
+            loss_idx = int(params['loss_function_idx'])
+            current_loss_function = loss_functions[loss_idx % len(loss_functions)]
+        else:
+            current_loss_function = loss_functions[0]
+
+        # Get threshold from genes (decode discrete index to actual threshold)
+        threshold_idx = int(params.get('threshold_idx', 0))
+        current_threshold = threshold_min + threshold_idx * threshold_step
+        current_threshold = min(current_threshold, threshold_max)  # Clamp to max
+
         try:
             # Create model
             model_params = {
@@ -1839,9 +1866,9 @@ def train_classification_optimization(
                 seq_len=X_train.shape[2]
             )
 
-            # Get loss function
+            # Get loss function (use current_loss_function from GA params)
             loss_fn = training_service.get_loss_function(
-                loss_type=loss_function.replace('_loss', '').replace('weighted_cross_entropy', 'weighted_ce'),
+                loss_type=current_loss_function.replace('_loss', '').replace('weighted_cross_entropy', 'weighted_ce'),
                 prediction_mode=mode
             )
 
@@ -1873,12 +1900,13 @@ def train_classification_optimization(
                 progress_state['error_count'] += 1
                 return 0.0
 
-            # Assess model
+            # Assess model with optimized threshold
             metrics = training_service.assess_model(
                 result['model'],
                 (X_test, y_test),
                 prediction_mode=mode,
-                learner=result.get('learner')
+                learner=result.get('learner'),
+                threshold=current_threshold
             )
 
             fitness = metrics.get(optimize_metric, 0.0)
@@ -1894,20 +1922,28 @@ def train_classification_optimization(
                     'model_type': model_type,
                     'prediction_mode': mode,
                     **model_params,
-                    'learning_rate': learning_rate
+                    'learning_rate': learning_rate,
+                    'loss_function': current_loss_function,
+                    'threshold': current_threshold
                 }
 
             progress_state['success_count'] += 1
 
             # Record individual
-            progress_state['all_individuals'].append({
+            individual_record = {
                 'generation': gen,
                 'model_type': model_type,
                 'prediction_mode': mode,
                 'params': model_params,
+                'loss_function': current_loss_function,
+                'threshold': current_threshold,
                 'fitness': fitness,
                 'metrics': metrics
-            })
+            }
+            progress_state['all_individuals'].append(individual_record)
+
+            # Add to jobs_store for real-time UI access
+            add_individual_to_job(task_id, individual_record)
 
             # Update progress
             current_progress = progress_base + (gen / generations) * progress_range * 0.9
@@ -1962,6 +1998,14 @@ def train_classification_optimization(
     # Add prediction mode to genes if multiple modes
     if len(prediction_modes) > 1:
         ga_param_ranges['prediction_mode_idx'] = {'type': 'int', 'min': 0, 'max': len(prediction_modes) - 1}
+
+    # Add loss function to GA if optimization enabled
+    if optimize_loss_function:
+        ga_param_ranges['loss_function_idx'] = {'type': 'int', 'min': 0, 'max': len(loss_functions) - 1}
+        logger.info(f"Loss function optimization enabled with {len(loss_functions)} options: {loss_functions}")
+
+    # Add threshold to GA (discrete steps)
+    ga_param_ranges['threshold_idx'] = {'type': 'int', 'min': 0, 'max': n_thresholds - 1}
 
     # Run genetic optimization - get required GA params
     from app.services.genetic import GeneticOptimizer, DEAP_AVAILABLE
