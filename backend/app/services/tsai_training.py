@@ -166,18 +166,25 @@ class TSAITrainingService(ITrainingService):
         if not TSAI_AVAILABLE:
             raise RuntimeError("tsai library not available")
 
-        # Split DataFrame first (before normalization to avoid data leakage)
+        # For backtesting on known data: fit normalization on FULL dataset
+        # This ensures test data won't exceed normalization range
+        # (For live prediction, you'd fit only on train data)
+        if self.normalize:
+            _ = self.data_prep.fit_transform(df, feature_columns, method="minmax_buffered")
+            logger.info(f"Fitted normalization on full dataset ({len(df)} samples) before split")
+
+        # Split DataFrame
         split_idx = int(len(df) * train_ratio)
         df_train = df.iloc[:split_idx]
         df_test = df.iloc[split_idx:]
 
-        # Prepare train data (fit scaler)
+        # Prepare train data (scaler already fitted on full data)
         X_train, y_train = self.prepare_data(
             df_train, target_column, feature_columns, timeframe, seq_len,
-            prediction_horizon, prediction_mode, fit_scaler=True
+            prediction_horizon, prediction_mode, fit_scaler=False
         )
 
-        # Prepare test data (use fitted scaler)
+        # Prepare test data (use same fitted scaler)
         X_test, y_test = self.prepare_data(
             df_test, target_column, feature_columns, timeframe, seq_len,
             prediction_horizon, prediction_mode, fit_scaler=False
