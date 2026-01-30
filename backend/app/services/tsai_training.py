@@ -465,6 +465,7 @@ class TSAITrainingService(ITrainingService):
         test_data: Tuple[np.ndarray, np.ndarray],
         metric: str = 'f1_score',
         threshold: float = 0.5,
+        prediction_mode: str = 'shift',
         **kwargs
     ) -> Dict[str, float]:
         """
@@ -475,6 +476,7 @@ class TSAITrainingService(ITrainingService):
             test_data: Tuple of (X_test, y_test)
             metric: Primary metric to optimize
             threshold: Classification threshold
+            prediction_mode: 'shift' for binary classification, 'multistep' for multi-label
             **kwargs: Additional options (e.g., 'learner' for Learner object)
 
         Returns:
@@ -499,11 +501,13 @@ class TSAITrainingService(ITrainingService):
                     X_tensor = X_tensor.to(DEVICE)
                     model = model.to(DEVICE)
                 outputs = model(X_tensor)
-                probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
 
-            # Convert to binary predictions
-            y_pred = (np.array(probs) > threshold).astype(int)
-            y_true = np.array(y_test)
+                if prediction_mode == 'multistep':
+                    # Multi-step: sigmoid for each output
+                    probs = torch.sigmoid(outputs).cpu().numpy()
+                else:
+                    # Shift: softmax for binary classification
+                    probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
 
             # Calculate metrics
             from sklearn.metrics import (
@@ -511,24 +515,50 @@ class TSAITrainingService(ITrainingService):
                 roc_auc_score, matthews_corrcoef, confusion_matrix
             )
 
-            metrics = {
-                'f1_score': f1_score(y_true, y_pred, zero_division=0),
-                'accuracy': accuracy_score(y_true, y_pred),
-                'precision': precision_score(y_true, y_pred, zero_division=0),
-                'recall': recall_score(y_true, y_pred, zero_division=0),
-                'mcc': matthews_corrcoef(y_true, y_pred),
-            }
+            if prediction_mode == 'multistep':
+                # Multi-step: calculate per-horizon metrics
+                y_pred = (probs > threshold).astype(int)
+                y_true = np.array(y_test)
 
-            # AUC-ROC if we have both classes
-            if len(np.unique(y_true)) > 1:
-                metrics['auc_roc'] = roc_auc_score(y_true, probs)
+                metrics = {}
+                n_horizons = probs.shape[1]
 
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred)
-            metrics['true_negatives'] = int(cm[0, 0])
-            metrics['false_positives'] = int(cm[0, 1]) if cm.shape[1] > 1 else 0
-            metrics['false_negatives'] = int(cm[1, 0]) if cm.shape[0] > 1 else 0
-            metrics['true_positives'] = int(cm[1, 1]) if cm.shape[0] > 1 and cm.shape[1] > 1 else 0
+                # Per-horizon metrics
+                for h in range(n_horizons):
+                    metrics[f'h{h+1}_f1'] = f1_score(y_true[:, h], y_pred[:, h], zero_division=0)
+                    metrics[f'h{h+1}_accuracy'] = accuracy_score(y_true[:, h], y_pred[:, h])
+                    metrics[f'h{h+1}_precision'] = precision_score(y_true[:, h], y_pred[:, h], zero_division=0)
+                    metrics[f'h{h+1}_recall'] = recall_score(y_true[:, h], y_pred[:, h], zero_division=0)
+
+                # Average metrics for genetic optimization
+                metrics['f1_score'] = np.mean([metrics[f'h{i+1}_f1'] for i in range(n_horizons)])
+                metrics['accuracy'] = np.mean([metrics[f'h{i+1}_accuracy'] for i in range(n_horizons)])
+                metrics['precision'] = np.mean([metrics[f'h{i+1}_precision'] for i in range(n_horizons)])
+                metrics['recall'] = np.mean([metrics[f'h{i+1}_recall'] for i in range(n_horizons)])
+                metrics['mcc'] = np.mean([matthews_corrcoef(y_true[:, h], y_pred[:, h]) for h in range(n_horizons)])
+            else:
+                # Shift: standard binary classification
+                y_pred = (np.array(probs) > threshold).astype(int)
+                y_true = np.array(y_test)
+
+                metrics = {
+                    'f1_score': f1_score(y_true, y_pred, zero_division=0),
+                    'accuracy': accuracy_score(y_true, y_pred),
+                    'precision': precision_score(y_true, y_pred, zero_division=0),
+                    'recall': recall_score(y_true, y_pred, zero_division=0),
+                    'mcc': matthews_corrcoef(y_true, y_pred),
+                }
+
+                # AUC-ROC if we have both classes
+                if len(np.unique(y_true)) > 1:
+                    metrics['auc_roc'] = roc_auc_score(y_true, probs)
+
+                # Confusion matrix
+                cm = confusion_matrix(y_true, y_pred)
+                metrics['true_negatives'] = int(cm[0, 0])
+                metrics['false_positives'] = int(cm[0, 1]) if cm.shape[1] > 1 else 0
+                metrics['false_negatives'] = int(cm[1, 0]) if cm.shape[0] > 1 else 0
+                metrics['true_positives'] = int(cm[1, 1]) if cm.shape[0] > 1 and cm.shape[1] > 1 else 0
 
             logger.info(f"Assessment metrics: {metrics}")
             return metrics
@@ -555,6 +585,7 @@ class TSAITrainingService(ITrainingService):
         self,
         model: Any,
         data: np.ndarray,
+        prediction_mode: str = 'shift',
         **kwargs
     ) -> np.ndarray:
         """
@@ -563,10 +594,13 @@ class TSAITrainingService(ITrainingService):
         Args:
             model: Trained model or Learner
             data: Input data (X array or tuple with X)
+            prediction_mode: 'shift' for binary classification, 'multistep' for multi-label
             **kwargs: Additional options
 
         Returns:
             Predictions (probabilities for positive class)
+            - Shift mode: 1D array of probabilities
+            - Multi-step mode: 2D array of probabilities (samples, horizons)
         """
         if not TSAI_AVAILABLE:
             raise RuntimeError("tsai not available")
@@ -591,7 +625,11 @@ class TSAITrainingService(ITrainingService):
                 X_tensor = X_tensor.to(DEVICE)
                 model = model.to(DEVICE)
             outputs = model(X_tensor)
-            probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
+
+            if prediction_mode == 'multistep':
+                probs = torch.sigmoid(outputs).cpu().numpy()
+            else:
+                probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
         return probs
 
     def save_model(self, learner: Any, name: str, metadata: Dict = None) -> str:
