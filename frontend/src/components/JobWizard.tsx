@@ -755,6 +755,7 @@ const Step1Settings: React.FC<Step1Props> = ({
               checked={state.jobType === 'classification'}
               onChange={() => setState(prev => ({ ...prev, jobType: 'classification', selectedModels: [] }))}
               className="sr-only"
+              tabIndex={-1}
             />
             <Target size={20} className={state.jobType === 'classification' ? 'text-green-600' : 'text-gray-400'} />
             <div>
@@ -776,6 +777,7 @@ const Step1Settings: React.FC<Step1Props> = ({
               checked={state.jobType === 'regression'}
               onChange={() => setState(prev => ({ ...prev, jobType: 'regression', selectedModels: [] }))}
               className="sr-only"
+              tabIndex={-1}
             />
             <Activity size={20} className={state.jobType === 'regression' ? 'text-blue-600' : 'text-gray-400'} />
             <div>
@@ -1198,6 +1200,7 @@ const Step1Settings: React.FC<Step1Props> = ({
                       }
                     }))}
                     className="sr-only"
+                    tabIndex={-1}
                   />
                   <span>{metric.name}</span>
                 </label>
@@ -1230,6 +1233,7 @@ const Step1Settings: React.FC<Step1Props> = ({
                         }
                       }))}
                       className="sr-only"
+                      tabIndex={-1}
                     />
                     <span>{loss.name}</span>
                   </label>
@@ -1266,6 +1270,7 @@ const Step1Settings: React.FC<Step1Props> = ({
                     }
                   }))}
                   className="sr-only"
+                  tabIndex={-1}
                 />
                 <span>{metric.name}</span>
               </label>
