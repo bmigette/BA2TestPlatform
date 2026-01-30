@@ -59,7 +59,8 @@ class ParameterRanges(BaseModel):
     dropoutMin: float = 0.0
     dropoutMax: float = 0.5
     dropoutStep: float = 0.1
-    activationFunctions: List[str]
+    seqLen: Optional[int] = None  # Sequence length for classification models
+    # Note: activationFunctions removed - not configurable on most tsai models
 
 
 class GeneticConfig(BaseModel):
@@ -445,8 +446,7 @@ async def create_job(job_create: JobCreate):
         layer_size_count = max(1, (params.layerSizeMax - params.layerSizeMin) // params.layerSizeStep + 1)
         lr_count = max(1, int((params.learningRateMax - params.learningRateMin) / params.learningRateStep) + 1)
         dropout_count = max(1, int((params.dropoutMax - params.dropoutMin) / params.dropoutStep) + 1)
-        activation_count = len(params.activationFunctions)
-        total_combinations = layers_count * layer_size_count * lr_count * dropout_count * activation_count * len(job_create.selectedModels)
+        total_combinations = layers_count * layer_size_count * lr_count * dropout_count * len(job_create.selectedModels)
 
         # Get genetic config with defaults
         genetic_config = job_create.geneticConfig or GeneticConfig()
@@ -1466,10 +1466,9 @@ async def save_elite_to_inventory(
         "jobId": job_id,
         "status": "trained",
         "hyperparameters": {
-            "layers": params.get('n_rnn_layers', 2),
-            "layerSize": params.get('hidden_dim', 64) if isinstance(params.get('hidden_dim'), int) else 64,
+            "layers": params.get('n_rnn_layers', params.get('n_layers', 2)),
+            "layerSize": params.get('hidden_dim', params.get('hidden_size', 64)) if isinstance(params.get('hidden_dim', params.get('hidden_size')), int) else 64,
             "learningRate": params.get('learning_rate', 0.001),
-            "activationFunction": "relu",
             "dropout": params.get('dropout', 0.1),
             "batchSize": params.get('batch_size', 32),
             "epochs": job.get('geneticConfig', {}).get('trainingEpochs', 10)
@@ -1592,19 +1591,18 @@ async def create_retrain_job(retrain_request: RetrainJobCreate):
         # Build parameter ranges from model params (fixed values)
         params = all_params if all_params else hyperparams
         parameter_ranges = ParameterRanges(
-            layersMin=params.get('n_rnn_layers', params.get('layers', 2)),
-            layersMax=params.get('n_rnn_layers', params.get('layers', 2)),
+            layersMin=params.get('n_rnn_layers', params.get('n_layers', params.get('layers', 2))),
+            layersMax=params.get('n_rnn_layers', params.get('n_layers', params.get('layers', 2))),
             layersStep=1,
-            layerSizeMin=params.get('hidden_dim', params.get('layerSize', 64)),
-            layerSizeMax=params.get('hidden_dim', params.get('layerSize', 64)),
+            layerSizeMin=params.get('hidden_dim', params.get('hidden_size', params.get('layerSize', 64))),
+            layerSizeMax=params.get('hidden_dim', params.get('hidden_size', params.get('layerSize', 64))),
             layerSizeStep=1,
             learningRateMin=params.get('learning_rate', params.get('learningRate', 0.001)),
             learningRateMax=params.get('learning_rate', params.get('learningRate', 0.001)),
             learningRateStep=0.001,
             dropoutMin=params.get('dropout', 0.1),
             dropoutMax=params.get('dropout', 0.1),
-            dropoutStep=0.1,
-            activationFunctions=[params.get('activationFunction', 'relu')]
+            dropoutStep=0.1
         )
 
         # Get prediction targets from original job if available

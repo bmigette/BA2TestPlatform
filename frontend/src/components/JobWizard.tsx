@@ -26,7 +26,7 @@ interface ParameterRanges {
   dropoutMin: number;
   dropoutMax: number;
   dropoutStep: number;
-  activationFunctions: string[];
+  seqLen?: number;  // Sequence length for classification models
 }
 
 interface GeneticConfig {
@@ -171,7 +171,7 @@ const getDefaultState = () => ({
     dropoutMin: 0.0,
     dropoutMax: 0.5,
     dropoutStep: 0.1,
-    activationFunctions: ['relu'],
+    seqLen: 24,
   } as ParameterRanges,
   geneticConfig: {
     populationSize: 20,
@@ -291,8 +291,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
       state.parameterRanges.layersMin <= state.parameterRanges.layersMax &&
       state.parameterRanges.layerSizeMin <= state.parameterRanges.layerSizeMax &&
       state.parameterRanges.learningRateMin <= state.parameterRanges.learningRateMax &&
-      state.parameterRanges.dropoutMin <= state.parameterRanges.dropoutMax &&
-      state.parameterRanges.activationFunctions.length > 0
+      state.parameterRanges.dropoutMin <= state.parameterRanges.dropoutMax
     );
   };
 
@@ -311,9 +310,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
     const layerSizeCount = Math.max(1, Math.floor((parameterRanges.layerSizeMax - parameterRanges.layerSizeMin) / parameterRanges.layerSizeStep) + 1);
     const lrCount = Math.max(1, Math.floor((parameterRanges.learningRateMax - parameterRanges.learningRateMin) / parameterRanges.learningRateStep) + 1);
     const dropoutCount = Math.max(1, Math.floor((parameterRanges.dropoutMax - parameterRanges.dropoutMin) / parameterRanges.dropoutStep) + 1);
-    const activationCount = parameterRanges.activationFunctions.length;
     const modelCount = selectedModels.length || 1;
-    return layersCount * layerSizeCount * lrCount * dropoutCount * activationCount * modelCount;
+    return layersCount * layerSizeCount * lrCount * dropoutCount * modelCount;
   };
 
   const handleModelToggle = (modelId: string) => {

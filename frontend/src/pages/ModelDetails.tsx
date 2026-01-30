@@ -26,7 +26,6 @@ interface HyperParameters {
   layers: number;
   layerSize: number;
   learningRate: number;
-  activationFunction: string;
   dropout: number;
   batchSize: number;
   epochs: number;
@@ -436,10 +435,6 @@ const ModelDetails: React.FC = () => {
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Learning Rate</td>
                   <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.learningRate ?? 'N/A'}</td>
-                </tr>
-                <tr>
-                  <td className="py-2 text-sm text-gray-500">Activation</td>
-                  <td className="py-2 text-sm font-medium text-right">{model.hyperparameters?.activationFunction ?? 'N/A'}</td>
                 </tr>
                 <tr>
                   <td className="py-2 text-sm text-gray-500">Dropout</td>

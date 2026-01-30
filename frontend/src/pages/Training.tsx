@@ -28,7 +28,7 @@ interface ParameterRanges {
   dropoutMin: number;
   dropoutMax: number;
   dropoutStep: number;
-  activationFunctions: string[];
+  seqLen?: number;
 }
 
 interface GeneticConfig {

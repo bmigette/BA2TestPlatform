@@ -30,10 +30,10 @@ class HyperParameters(BaseModel):
     layers: Optional[int] = None
     layerSize: Optional[int] = None
     learningRate: Optional[float] = None
-    activationFunction: Optional[str] = None
     dropout: Optional[float] = None
     batchSize: Optional[int] = None
     epochs: Optional[int] = None
+    # Note: activationFunction removed - not configurable on most models
 
     class Config:
         extra = "allow"  # Allow extra fields from database

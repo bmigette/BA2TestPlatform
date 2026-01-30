@@ -872,7 +872,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
     try:
         update_job_progress(task_id, 0, "Starting training job...")
 
-        # Extract configuration
+        # Extract configuration - NO DEFAULTS for job config, fail early if missing
         dataset_ids = payload.get('dataset_ids', [])
         if not dataset_ids and payload.get('dataset_id'):
             dataset_ids = [payload['dataset_id']]
@@ -880,15 +880,37 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         if not dataset_ids:
             return {'status': 'failed', 'error': 'No datasets specified'}
 
-        job_type = payload.get('job_type', 'classification')  # classification or regression
-        selected_models = payload.get('selected_models', ['lstm'])
+        # Required config - fail early if missing
+        job_type = payload.get('job_type')
+        if not job_type:
+            return {'status': 'failed', 'error': 'job_type is required (classification or regression)'}
+
+        selected_models = payload.get('selected_models')
+        if not selected_models:
+            return {'status': 'failed', 'error': 'selected_models is required'}
+
+        train_test_split = payload.get('train_test_split')
+        if train_test_split is None:
+            return {'status': 'failed', 'error': 'train_test_split is required'}
+
+        prediction_horizon = payload.get('prediction_horizon')
+        if prediction_horizon is None:
+            return {'status': 'failed', 'error': 'prediction_horizon is required'}
+
+        prediction_modes = payload.get('prediction_modes')
+        if not prediction_modes:
+            return {'status': 'failed', 'error': 'prediction_modes is required'}
+
+        genetic_config = payload.get('genetic_config')
+        if not genetic_config:
+            return {'status': 'failed', 'error': 'genetic_config is required'}
+
+        metrics_config = payload.get('metrics_config')
+        if not metrics_config:
+            return {'status': 'failed', 'error': 'metrics_config is required'}
+
         parameter_ranges = payload.get('parameter_ranges', {})
         prediction_targets = payload.get('prediction_targets', [])
-        train_test_split = payload.get('train_test_split', 80)
-        prediction_horizon = payload.get('prediction_horizon', 3)  # Bars to predict ahead
-        prediction_modes = payload.get('prediction_modes', ['shift'])  # shift or multistep
-        genetic_config = payload.get('genetic_config', {})
-        metrics_config = payload.get('metrics_config', {})
         training_date_range = payload.get('training_date_range', {})
 
         # Extract date range for subset training
@@ -924,28 +946,86 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         # Calculate prediction targets
         if prediction_targets:
             update_job_progress(task_id, 15, "Calculating prediction targets...")
-            target_service = PredictionTargetService()
 
-            targets = []
-            for pt in prediction_targets:
-                targets.append({
-                    'profit_pct': pt.get('profitPercent', 10),
-                    'max_dd': pt.get('maxDrawdownPercent', 5),
-                    'days': pt.get('timePeriodDays', 7),
-                    'direction': 'up'
-                })
-                # Add symmetric down target
-                targets.append({
-                    'profit_pct': pt.get('profitPercent', 10),
-                    'max_dd': pt.get('maxDrawdownPercent', 5),
-                    'days': pt.get('timePeriodDays', 7),
-                    'direction': 'down'
-                })
+            # Check target type - new format vs legacy format
+            first_target = prediction_targets[0] if prediction_targets else {}
+            target_type = first_target.get('type')
 
-            combined_df = target_service.calculate_prediction_targets(combined_df, targets)
+            if target_type and target_type != 'price_based':
+                # New target format (trend_reversal, directional, etc.)
+                from app.services.trend_targets import TrendTargetService
+                trend_service = TrendTargetService()
 
-            # Get the first target column name for training
-            target_column = f"price_up_{targets[0]['profit_pct']}pct_{targets[0]['max_dd']}dd_{targets[0]['days']}d"
+                target_column = None
+                for pt in prediction_targets:
+                    pt_type = pt.get('type')
+                    pt_config = pt.get('config', {}) or {}
+
+                    if pt_type == 'trend_reversal':
+                        # ZigZag-based trend reversal
+                        zigzag_pct = pt_config.get('zigzagPercent')
+                        if zigzag_pct is None:
+                            return {'status': 'failed', 'error': 'trend_reversal target requires zigzagPercent in config'}
+                        col_name = f"zigzag_{zigzag_pct}pct_reversal"
+                        combined_df = trend_service.calculate_zigzag_reversals(
+                            combined_df,
+                            zigzag_pct=zigzag_pct,
+                            column_name=col_name
+                        )
+                        if target_column is None:
+                            target_column = col_name
+                        logger.info(f"Created trend reversal target: {col_name}")
+
+                    elif pt_type == 'directional':
+                        # Simple directional target
+                        horizon = pt_config.get('horizon')
+                        if horizon is None:
+                            return {'status': 'failed', 'error': 'directional target requires horizon in config'}
+                        col_name = f"direction_{horizon}bar"
+                        combined_df[col_name] = (combined_df['Close'].shift(-horizon) > combined_df['Close']).astype(int)
+                        if target_column is None:
+                            target_column = col_name
+                        logger.info(f"Created directional target: {col_name}")
+
+                    else:
+                        return {'status': 'failed', 'error': f'Unknown target type: {pt_type}'}
+
+                if target_column is None:
+                    return {'status': 'failed', 'error': 'No valid target was created from prediction_targets'}
+
+            else:
+                # Legacy price-based format
+                target_service = PredictionTargetService()
+
+                targets = []
+                for pt in prediction_targets:
+                    profit_pct = pt.get('profitPercent')
+                    max_dd = pt.get('maxDrawdownPercent')
+                    days = pt.get('timePeriodDays')
+
+                    # All values are required for price-based targets
+                    if profit_pct is None or max_dd is None or days is None:
+                        return {'status': 'failed', 'error': f'Price-based target requires profitPercent, maxDrawdownPercent, and timePeriodDays. Got: {pt}'}
+
+                    targets.append({
+                        'profit_pct': profit_pct,
+                        'max_dd': max_dd,
+                        'days': days,
+                        'direction': 'up'
+                    })
+                    # Add symmetric down target
+                    targets.append({
+                        'profit_pct': profit_pct,
+                        'max_dd': max_dd,
+                        'days': days,
+                        'direction': 'down'
+                    })
+
+                if targets:
+                    combined_df = target_service.calculate_prediction_targets(combined_df, targets)
+                    target_column = f"price_up_{targets[0]['profit_pct']}pct_{targets[0]['max_dd']}dd_{targets[0]['days']}d"
+                else:
+                    return {'status': 'failed', 'error': 'No valid price-based targets configured'}
         else:
             # Default: use Close for regression
             target_column = 'Close'
@@ -1002,36 +1082,70 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
 
-        # Train with unified optimization (model type is an optimization parameter)
-        update_job_progress(task_id, 25, f"Starting unified optimization across {len(selected_models)} model types...")
+        # Route based on job type
+        if job_type == 'classification':
+            # Use tsai for classification
+            update_job_progress(task_id, 25, f"Starting classification optimization across {len(selected_models)} model types...")
 
-        try:
-            model_result = train_unified_optimization(
-                task_id=task_id,
-                selected_models=selected_models,
-                full_df=combined_df,
-                train_ratio=train_ratio,
-                target_column=target_column,
-                feature_columns=feature_columns,
-                parameter_ranges=parameter_ranges,
-                genetic_config=genetic_config,
-                metrics_config=metrics_config,
-                prediction_horizon=prediction_horizon,
-                progress_base=25,
-                progress_range=65,
-                timeframe=timeframe
-            )
-            results = [model_result]
+            try:
+                model_result = train_classification_optimization(
+                    task_id=task_id,
+                    selected_models=selected_models,
+                    full_df=combined_df,
+                    train_ratio=train_ratio,
+                    target_column=target_column,
+                    feature_columns=feature_columns,
+                    parameter_ranges=parameter_ranges,
+                    genetic_config=genetic_config,
+                    metrics_config=metrics_config,
+                    prediction_horizon=prediction_horizon,
+                    prediction_modes=prediction_modes,
+                    progress_base=25,
+                    progress_range=65,
+                    timeframe=timeframe
+                )
+                results = [model_result]
 
-        except Exception as e:
-            logger.error(f"Failed unified optimization: {e}", exc_info=True)
-            import traceback
-            traceback.print_exc()
-            results = [{
-                'model_type': 'unified',
-                'status': 'failed',
-                'error': str(e)
-            }]
+            except Exception as e:
+                logger.error(f"Failed classification optimization: {e}", exc_info=True)
+                import traceback
+                traceback.print_exc()
+                results = [{
+                    'model_type': 'classification',
+                    'status': 'failed',
+                    'error': str(e)
+                }]
+        else:
+            # Use darts for regression (unified optimization)
+            update_job_progress(task_id, 25, f"Starting unified optimization across {len(selected_models)} model types...")
+
+            try:
+                model_result = train_unified_optimization(
+                    task_id=task_id,
+                    selected_models=selected_models,
+                    full_df=combined_df,
+                    train_ratio=train_ratio,
+                    target_column=target_column,
+                    feature_columns=feature_columns,
+                    parameter_ranges=parameter_ranges,
+                    genetic_config=genetic_config,
+                    metrics_config=metrics_config,
+                    prediction_horizon=prediction_horizon,
+                    progress_base=25,
+                    progress_range=65,
+                    timeframe=timeframe
+                )
+                results = [model_result]
+
+            except Exception as e:
+                logger.error(f"Failed unified optimization: {e}", exc_info=True)
+                import traceback
+                traceback.print_exc()
+                results = [{
+                    'model_type': 'unified',
+                    'status': 'failed',
+                    'error': str(e)
+                }]
 
         # Find best model
         update_job_progress(task_id, 90, "Analyzing results...")
@@ -1203,19 +1317,29 @@ def train_single_model(
     max_input_chunk = min(60, max(10, train_length // 4))
     ga_param_ranges = build_param_ranges(model_type, parameter_ranges, max_input_chunk=max_input_chunk)
 
-    # Get genetic config
-    population_size = genetic_config.get('populationSize', 20)
-    generations = genetic_config.get('generations', 50)
-    crossover_prob = genetic_config.get('crossoverProb', 0.7)
-    mutation_prob = genetic_config.get('mutationProb', 0.2)
-    early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
-    elitism_percent = genetic_config.get('elitismPercent', 10.0)
+    # Get genetic config - required parameters (no defaults)
+    required_ga_keys = ['populationSize', 'generations', 'crossoverProb', 'mutationProb',
+                        'earlyStoppingGenerations', 'elitismPercent']
+    for key in required_ga_keys:
+        if key not in genetic_config:
+            return {'model_type': model_type, 'status': 'failed', 'error': f'genetic_config.{key} is required'}
 
-    # Optimize metric
-    optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
+    population_size = genetic_config['populationSize']
+    generations = genetic_config['generations']
+    crossover_prob = genetic_config['crossoverProb']
+    mutation_prob = genetic_config['mutationProb']
+    early_stopping = genetic_config['earlyStoppingGenerations']
+    elitism_percent = genetic_config['elitismPercent']
 
-    # Loss function configuration
-    loss_function_type = metrics_config.get('lossFunction', 'focal_loss')
+    # Optimize metric - required
+    optimize_metric = metrics_config.get('optimizeMetric')
+    if optimize_metric is None:
+        return {'model_type': model_type, 'status': 'failed', 'error': 'metrics_config.optimizeMetric is required'}
+
+    # Loss function configuration - required
+    loss_function_type = metrics_config.get('lossFunction')
+    if loss_function_type is None:
+        return {'model_type': model_type, 'status': 'failed', 'error': 'metrics_config.lossFunction is required'}
     loss_fn = None
 
     # Create loss function if not using default MSE
@@ -1480,6 +1604,339 @@ def train_single_model(
     }
 
 
+def train_classification_optimization(
+    task_id: str,
+    selected_models: List[str],
+    full_df: pd.DataFrame,
+    train_ratio: float,
+    target_column: str,
+    feature_columns: List[str],
+    parameter_ranges: Dict[str, Any],
+    genetic_config: Dict[str, Any],
+    metrics_config: Dict[str, Any],
+    prediction_horizon: int,
+    prediction_modes: List[str],
+    progress_base: float,
+    progress_range: float,
+    timeframe: str = 'daily'
+) -> Dict[str, Any]:
+    """
+    Classification optimization using tsai models.
+
+    Uses TSAIModelService and TSAITrainingService for classification tasks.
+    Supports shift and multistep prediction modes.
+    """
+    from app.services.task_queue import get_task_queue
+    from app.services.tsai_models import TSAIModelService, TSAI_AVAILABLE
+    from app.services.tsai_training import TSAITrainingService
+
+    if not TSAI_AVAILABLE:
+        return {
+            'model_type': 'classification',
+            'status': 'failed',
+            'error': 'tsai library not available for classification'
+        }
+
+    # Initialize services
+    model_service = TSAIModelService()
+    training_service = TSAITrainingService()
+
+    # Get genetic config - required parameters (no defaults)
+    population_size = genetic_config.get('populationSize')
+    if population_size is None:
+        return {'model_type': 'classification', 'status': 'failed', 'error': 'genetic_config.populationSize is required'}
+
+    generations = genetic_config.get('generations')
+    if generations is None:
+        return {'model_type': 'classification', 'status': 'failed', 'error': 'genetic_config.generations is required'}
+
+    training_epochs = genetic_config.get('trainingEpochs')
+    if training_epochs is None:
+        return {'model_type': 'classification', 'status': 'failed', 'error': 'genetic_config.trainingEpochs is required'}
+
+    optimize_metric = metrics_config.get('classificationMetric')
+    if optimize_metric is None:
+        return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.classificationMetric is required'}
+
+    loss_function = metrics_config.get('lossFunction')
+    if loss_function is None:
+        return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.lossFunction is required'}
+
+    seq_len = parameter_ranges.get('seqLen')
+    if seq_len is None:
+        return {'model_type': 'classification', 'status': 'failed', 'error': 'parameter_ranges.seqLen is required for classification'}
+
+    # Prepare data for each prediction mode
+    data_by_mode = {}
+
+    for mode in prediction_modes:
+        try:
+            X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+                full_df,
+                train_ratio=train_ratio,
+                target_column=target_column,
+                feature_columns=feature_columns[:20],  # Limit features
+                seq_len=seq_len,
+                prediction_horizon=prediction_horizon,
+                prediction_mode=mode
+            )
+            c_out = 2 if mode == 'shift' else prediction_horizon
+            data_by_mode[mode] = {
+                'X_train': X_train, 'X_test': X_test,
+                'y_train': y_train, 'y_test': y_test,
+                'c_out': c_out
+            }
+            logger.info(f"Prepared {mode} data: train={len(X_train)}, test={len(X_test)}, c_out={c_out}")
+        except Exception as e:
+            logger.error(f"Failed to prepare {mode} data: {e}")
+            continue
+
+    if not data_by_mode:
+        return {
+            'model_type': 'classification',
+            'status': 'failed',
+            'error': 'Failed to prepare data for any prediction mode'
+        }
+
+    # Progress tracking
+    progress_state = {
+        'current_generation': 0,
+        'current_individual': 0,
+        'best_fitness': 0.0,
+        'best_model_type': None,
+        'best_mode': None,
+        'cancelled': False,
+        'all_individuals': [],
+        'error_count': 0,
+        'success_count': 0
+    }
+
+    best_model = [None]
+    best_metrics = [{}]
+    best_params = [{}]
+
+    def check_cancelled() -> bool:
+        task_queue = get_task_queue()
+        status = task_queue.get_task_status(task_id)
+        if status and status.get('status') in ['cancelled', 'paused']:
+            progress_state['cancelled'] = True
+            return True
+        return False
+
+    def fitness_function(params: Dict) -> float:
+        """Evaluate model with given parameters."""
+        if progress_state['cancelled'] or check_cancelled():
+            raise InterruptedError("Task cancelled")
+
+        progress_state['current_individual'] += 1
+        gen = progress_state['current_generation']
+
+        # Get model type from params
+        model_type_idx = int(params.get('model_type_idx', 0))
+        model_type = selected_models[model_type_idx % len(selected_models)]
+
+        # Get prediction mode from params (if multiple modes)
+        mode_idx = int(params.get('prediction_mode_idx', 0))
+        mode = prediction_modes[mode_idx % len(prediction_modes)]
+
+        # Get data for this mode
+        mode_data = data_by_mode.get(mode)
+        if not mode_data:
+            logger.warning(f"No data for mode {mode}, skipping")
+            return 0.0
+
+        X_train = mode_data['X_train']
+        X_test = mode_data['X_test']
+        y_train = mode_data['y_train']
+        y_test = mode_data['y_test']
+        c_out = mode_data['c_out']
+
+        # Extract hyperparameters (from genetic algorithm params - no defaults needed, GA generates them)
+        hidden_size = int(params['hidden_size'])
+        n_layers = int(params['n_layers'])
+        dropout = float(params['dropout'])
+        learning_rate = float(params['learning_rate'])
+
+        try:
+            # Create model
+            model_params = {
+                'hidden_size': hidden_size,
+                'n_layers': n_layers,
+                'dropout': dropout,
+            }
+            model = model_service.create_model(
+                model_type, model_params,
+                c_in=X_train.shape[1],
+                c_out=c_out,
+                seq_len=X_train.shape[2]
+            )
+
+            # Get loss function
+            loss_fn = training_service.get_loss_function(
+                loss_type=loss_function.replace('_loss', '').replace('weighted_cross_entropy', 'weighted_ce'),
+                prediction_mode=mode
+            )
+
+            # Train
+            result = training_service.train_model(
+                model,
+                (X_train, y_train),
+                val_data=(X_test, y_test),
+                epochs=training_epochs,
+                learning_rate=learning_rate,
+                loss_fn=loss_fn,
+                prediction_mode=mode
+            )
+
+            if result['status'] != 'success':
+                progress_state['error_count'] += 1
+                return 0.0
+
+            # Assess model
+            metrics = training_service.assess_model(
+                result['model'],
+                (X_test, y_test),
+                prediction_mode=mode,
+                learner=result.get('learner')
+            )
+
+            fitness = metrics.get(optimize_metric, 0.0)
+
+            # Track best
+            if fitness > progress_state['best_fitness']:
+                progress_state['best_fitness'] = fitness
+                progress_state['best_model_type'] = model_type
+                progress_state['best_mode'] = mode
+                best_model[0] = result['model']
+                best_metrics[0] = metrics
+                best_params[0] = {
+                    'model_type': model_type,
+                    'prediction_mode': mode,
+                    **model_params,
+                    'learning_rate': learning_rate
+                }
+
+            progress_state['success_count'] += 1
+
+            # Record individual
+            progress_state['all_individuals'].append({
+                'generation': gen,
+                'model_type': model_type,
+                'prediction_mode': mode,
+                'params': model_params,
+                'fitness': fitness,
+                'metrics': metrics
+            })
+
+            # Update progress
+            current_progress = progress_base + (gen / generations) * progress_range * 0.9
+            update_job_progress(
+                task_id,
+                current_progress,
+                f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f}"
+            )
+
+            return fitness
+
+        except Exception as e:
+            logger.error(f"Training error: {e}")
+            progress_state['error_count'] += 1
+            return 0.0
+
+    def generation_callback(gen: int, best_fitness: float, pop_fitness: list):
+        progress_state['current_generation'] = gen
+        progress_state['current_individual'] = 0
+
+    # Build parameter ranges for genetic algorithm - all required (no defaults)
+    required_param_keys = ['layerSizeMin', 'layerSizeMax', 'layersMin', 'layersMax',
+                           'dropoutMin', 'dropoutMax', 'learningRateMin', 'learningRateMax']
+    for key in required_param_keys:
+        if key not in parameter_ranges:
+            return {'model_type': 'classification', 'status': 'failed', 'error': f'parameter_ranges.{key} is required'}
+
+    ga_param_ranges = {
+        'model_type_idx': {'type': 'int', 'min': 0, 'max': len(selected_models) - 1},
+        'hidden_size': {'type': 'int', 'min': parameter_ranges['layerSizeMin'],
+                        'max': parameter_ranges['layerSizeMax']},
+        'n_layers': {'type': 'int', 'min': parameter_ranges['layersMin'],
+                     'max': parameter_ranges['layersMax']},
+        'dropout': {'type': 'float', 'min': parameter_ranges['dropoutMin'],
+                    'max': parameter_ranges['dropoutMax']},
+        'learning_rate': {'type': 'float', 'min': parameter_ranges['learningRateMin'],
+                          'max': parameter_ranges['learningRateMax']},
+    }
+
+    # Add prediction mode to genes if multiple modes
+    if len(prediction_modes) > 1:
+        ga_param_ranges['prediction_mode_idx'] = {'type': 'int', 'min': 0, 'max': len(prediction_modes) - 1}
+
+    # Run genetic optimization - get required GA params
+    from app.services.genetic import GeneticOptimizer, DEAP_AVAILABLE
+
+    if not DEAP_AVAILABLE:
+        return {
+            'model_type': 'classification',
+            'status': 'failed',
+            'error': 'DEAP library not available for genetic optimization'
+        }
+
+    required_ga_keys = ['crossoverProb', 'mutationProb', 'elitismPercent', 'earlyStoppingGenerations']
+    for key in required_ga_keys:
+        if key not in genetic_config:
+            return {'model_type': 'classification', 'status': 'failed', 'error': f'genetic_config.{key} is required'}
+
+    optimizer = GeneticOptimizer(
+        param_ranges=ga_param_ranges,
+        population_size=population_size,
+        generations=generations,
+        crossover_prob=genetic_config['crossoverProb'],
+        mutation_prob=genetic_config['mutationProb'],
+        elitism_percent=genetic_config['elitismPercent'],
+        early_stopping_generations=genetic_config['earlyStoppingGenerations']
+    )
+
+    try:
+        opt_result = optimizer.optimize(
+            fitness_function,
+            generation_callback=generation_callback
+        )
+    except InterruptedError:
+        return {
+            'model_type': 'classification',
+            'status': 'cancelled',
+            'error': 'Job cancelled by user'
+        }
+
+    # Save best model
+    model_path = None
+    if best_model[0] is not None:
+        import torch
+        models_dir = get_job_models_dir(task_id)
+        model_path = str(models_dir / f"best_classification_model.pt")
+        torch.save(best_model[0].state_dict(), model_path)
+        logger.info(f"Saved best model to {model_path}")
+
+    update_job_progress(
+        task_id,
+        progress_base + progress_range,
+        f"Classification: Completed with fitness {opt_result.get('best_fitness', 0):.4f}"
+    )
+
+    return {
+        'model_type': 'classification',
+        'status': 'completed',
+        'best_params': best_params[0],
+        'best_fitness': opt_result.get('best_fitness'),
+        'generations_run': opt_result.get('generations_run'),
+        'metrics': best_metrics[0],
+        'model_path': model_path,
+        'all_individuals': progress_state['all_individuals'],
+        'error_count': progress_state['error_count'],
+        'success_count': progress_state['success_count'],
+        'history': opt_result.get('history', [])[-5:]
+    }
+
+
 def train_unified_optimization(
     task_id: str,
     selected_models: List[str],
@@ -1585,18 +2042,29 @@ def train_unified_optimization(
     max_input_chunk = min(60, max(10, train_length // 4))
     ga_param_ranges = build_unified_param_ranges(selected_models, parameter_ranges, max_input_chunk)
 
-    # Get genetic config
-    population_size = genetic_config.get('populationSize', 20)
-    generations = genetic_config.get('generations', 50)
-    crossover_prob = genetic_config.get('crossoverProb', 0.7)
-    mutation_prob = genetic_config.get('mutationProb', 0.2)
-    early_stopping = genetic_config.get('earlyStoppingGenerations', 5)
-    elitism_percent = genetic_config.get('elitismPercent', 10.0)
-    training_epochs = genetic_config.get('trainingEpochs', 10)
-    optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
+    # Get genetic config - required parameters (no defaults)
+    required_ga_keys = ['populationSize', 'generations', 'crossoverProb', 'mutationProb',
+                        'earlyStoppingGenerations', 'elitismPercent', 'trainingEpochs']
+    for key in required_ga_keys:
+        if key not in genetic_config:
+            return {'model_type': 'unified', 'status': 'failed', 'error': f'genetic_config.{key} is required'}
+
+    population_size = genetic_config['populationSize']
+    generations = genetic_config['generations']
+    crossover_prob = genetic_config['crossoverProb']
+    mutation_prob = genetic_config['mutationProb']
+    early_stopping = genetic_config['earlyStoppingGenerations']
+    elitism_percent = genetic_config['elitismPercent']
+    training_epochs = genetic_config['trainingEpochs']
+
+    optimize_metric = metrics_config.get('optimizeMetric')
+    if optimize_metric is None:
+        return {'model_type': 'unified', 'status': 'failed', 'error': 'metrics_config.optimizeMetric is required'}
 
     # Loss function configuration
-    loss_function_type = metrics_config.get('lossFunction', 'focal_loss')
+    loss_function_type = metrics_config.get('lossFunction')
+    if loss_function_type is None:
+        return {'model_type': 'unified', 'status': 'failed', 'error': 'metrics_config.lossFunction is required'}
     loss_fn = None
 
     # Create loss function if not using default MSE
