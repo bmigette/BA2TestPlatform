@@ -843,7 +843,7 @@ def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
         db.close()
 
 
-def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     """
     Handle ML training job.
 
@@ -859,6 +859,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
             - train_test_split: Train/test split percentage
             - genetic_config: Genetic algorithm configuration
             - metrics_config: Metrics configuration
+        dry_run: If True, only validate config and prepare data without training
 
     Returns:
         Result dictionary with trained model info and metrics
@@ -958,30 +959,35 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
 
             if target_type and target_type != 'price_based':
                 # New target format (trend_reversal, directional, etc.)
-                from app.services.trend_targets import TrendTargetService
-                trend_service = TrendTargetService()
+                # Use PredictionTargetService which has calculate_trend_reversal
+                target_service = PredictionTargetService()
 
                 target_column = None
                 for pt in prediction_targets:
                     pt_type = pt.get('type')
                     # Support both old format (config) and new format (indicatorParams)
                     pt_config = pt.get('config') or pt.get('indicatorParams') or {}
+                    direction = pt.get('direction', 'bullish')
+                    threshold = pt.get('threshold', 30)
+                    indicator = pt.get('indicator', 'zigzag')
 
                     if pt_type == 'trend_reversal':
-                        # ZigZag-based trend reversal
-                        # Support both zigzagPercent and deviationPct field names
-                        zigzag_pct = pt_config.get('zigzagPercent') or pt_config.get('deviationPct')
-                        if zigzag_pct is None:
-                            return {'status': 'failed', 'error': f'trend_reversal target requires zigzagPercent or deviationPct in config/indicatorParams. Got: {pt}'}
-                        col_name = f"zigzag_{zigzag_pct}pct_reversal"
-                        combined_df = trend_service.calculate_zigzag_reversals(
-                            combined_df,
-                            zigzag_pct=zigzag_pct,
-                            column_name=col_name
-                        )
-                        if target_column is None:
-                            target_column = col_name
-                        logger.info(f"Created trend reversal target: {col_name}")
+                        # Use calculate_trend_reversal from PredictionTargetService
+                        col_name = f"{indicator}_{direction}_reversal"
+                        try:
+                            target_series = target_service.calculate_trend_reversal(
+                                combined_df,
+                                indicator=indicator,
+                                indicator_params=pt_config,
+                                threshold=threshold,
+                                direction=direction
+                            )
+                            combined_df[col_name] = target_series
+                            if target_column is None:
+                                target_column = col_name
+                            logger.info(f"Created trend reversal target: {col_name}, positives: {int(target_series.sum())}")
+                        except Exception as e:
+                            return {'status': 'failed', 'error': f'Failed to calculate trend_reversal target: {e}'}
 
                     elif pt_type == 'directional':
                         # Simple directional target
@@ -1088,6 +1094,25 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
 
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
+
+        # Dry run - return after data preparation without training
+        if dry_run:
+            logger.info(f"Dry run complete. Data prepared successfully.")
+            target_stats = combined_df[target_column].value_counts().to_dict()
+            return {
+                'status': 'dry_run_success',
+                'job_type': job_type,
+                'dataset_rows': len(combined_df),
+                'train_rows': len(train_df),
+                'test_rows': len(test_df),
+                'feature_count': len(feature_columns),
+                'target_column': target_column,
+                'target_distribution': target_stats,
+                'selected_models': selected_models,
+                'prediction_modes': prediction_modes,
+                'prediction_horizon': prediction_horizon,
+                'timeframe': timeframe,
+            }
 
         # Route based on job type
         if job_type == 'classification':
