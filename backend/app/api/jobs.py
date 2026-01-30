@@ -1522,7 +1522,11 @@ async def save_elite_to_inventory(
         "predictionTargets": job.get('predictionTargets', []),
         "predictionHorizon": job.get('predictionHorizon', 3),
         # Normalization params - critical for inference to apply same transformation
-        "normalizationParams": elite_model.get('normalization_params') or job.get('normalizationParams')
+        "normalizationParams": elite_model.get('normalization_params') or job.get('normalizationParams'),
+        # Classification training params (from GA optimization)
+        "predictionMode": elite_model.get('prediction_mode') or params.get('prediction_mode'),
+        "lossFunction": elite_model.get('loss_function') or params.get('loss_function'),
+        "threshold": elite_model.get('threshold') or params.get('threshold', 0.5)
     }
 
     # Save to database
@@ -1833,7 +1837,10 @@ async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
                 "sourceModelId": source_model_id,
                 "retrainMode": job.get('retrainMode'),
                 # Normalization params for inference
-                "normalizationParams": best_model.get('normalization_params') or job.get('normalizationParams')
+                "normalizationParams": best_model.get('normalization_params') or job.get('normalizationParams'),
+                # Classification training params
+                "lossFunction": best_model.get('loss_function'),
+                "threshold": best_model.get('threshold', 0.5)
             }
 
             # Save to database
