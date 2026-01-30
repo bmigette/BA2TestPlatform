@@ -4,6 +4,12 @@ Deep Learning Financial Forecasting Platform - Main API Application
 This is the entry point for the FastAPI application.
 """
 
+# CRITICAL: Set matplotlib backend before any imports that might use it
+# tsai/fastai use matplotlib internally, and the default TkAgg backend
+# causes errors when running in a web server (non-main thread)
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

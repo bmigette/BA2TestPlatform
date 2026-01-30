@@ -6,6 +6,12 @@ Supports: LSTM, GRU, TCN, InceptionTime, ResNet, XceptionTime,
 OmniScaleCNN, MiniRocket, PatchTST, LSTM-FCN, TST.
 """
 
+# CRITICAL: Set matplotlib backend before any tsai/fastai imports
+# tsai/fastai use matplotlib internally, and the default TkAgg backend
+# causes errors when running in a web server (non-main thread)
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend
+
 import logging
 from typing import Any, Dict, List, Optional
 

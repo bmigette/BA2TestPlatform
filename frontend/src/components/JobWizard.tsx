@@ -443,7 +443,27 @@ const JobWizard: React.FC<JobWizardProps> = ({
     setShowDeleteConfirmDialog(false);
   };
 
-  const fetchPreview = async () => {
+  const getTargetLabel = useCallback((config: Record<string, unknown> | undefined): string => {
+    if (!config || !config.type) {
+      return 'Unknown target';
+    }
+    switch (config.type) {
+      case 'price_based':
+        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} bars)`;
+      case 'directional':
+        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} bars)`;
+      case 'triple_barrier':
+        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} bars)`;
+      case 'trend_reversal':
+        return `${String(config.indicator || 'Unknown').toUpperCase()} ${config.direction || ''} reversal`;
+      case 'volatility':
+        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} bars)`;
+      default:
+        return `Target: ${String(config.type)}`;
+    }
+  }, []);
+
+  const fetchPreview = useCallback(async () => {
     if (!state.selectedDatasetId || state.predictionTargets.length === 0) return;
 
     setPreviewLoading(true);
@@ -517,27 +537,14 @@ const JobWizard: React.FC<JobWizardProps> = ({
     } finally {
       setPreviewLoading(false);
     }
-  };
+  }, [state.selectedDatasetId, state.predictionTargets, state.trainTestSplit, getTargetLabel]);
 
-  const getTargetLabel = (config: Record<string, unknown> | undefined): string => {
-    if (!config || !config.type) {
-      return 'Unknown target';
+  // Refetch preview when prediction targets change (e.g., from loading a profile)
+  useEffect(() => {
+    if (currentStep === 3 && state.predictionTargets.length > 0 && state.selectedDatasetId) {
+      fetchPreview();
     }
-    switch (config.type) {
-      case 'price_based':
-        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} bars)`;
-      case 'directional':
-        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} bars)`;
-      case 'triple_barrier':
-        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} bars)`;
-      case 'trend_reversal':
-        return `${String(config.indicator || 'Unknown').toUpperCase()} ${config.direction || ''} reversal`;
-      case 'volatility':
-        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} bars)`;
-      default:
-        return `Target: ${String(config.type)}`;
-    }
-  };
+  }, [currentStep, state.predictionTargets, state.selectedDatasetId, fetchPreview]);
 
   const handleNext = async () => {
     if (currentStep === 1) {
