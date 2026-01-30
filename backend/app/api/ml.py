@@ -60,15 +60,52 @@ async def get_system_info():
 @router.get("/models")
 async def get_available_models():
     """
-    Get list of available ML model architectures.
+    Get list of available ML model architectures for regression/forecasting.
 
     Returns:
         Dictionary of model configurations with parameters
     """
     return {
         "models": MLModelsService.get_available_models(),
-        "description": "Available ML model architectures for timeseries forecasting"
+        "description": "Available ML model architectures for timeseries forecasting (Darts)",
+        "type": "regression"
     }
+
+
+@router.get("/classification-models")
+async def get_classification_models():
+    """
+    Get list of available ML model architectures for classification.
+
+    Excludes forecasting-only models like PatchTST.
+
+    Returns:
+        Dictionary of classification model configurations
+    """
+    try:
+        from app.services.tsai_models import TSAIModelService, TSAI_AVAILABLE
+        if not TSAI_AVAILABLE:
+            return {
+                "models": {},
+                "description": "tsai library not available",
+                "type": "classification",
+                "available": False
+            }
+
+        service = TSAIModelService()
+        return {
+            "models": service.get_available_models(include_forecasting=False),
+            "description": "Available ML model architectures for classification (tsai)",
+            "type": "classification",
+            "available": True
+        }
+    except ImportError:
+        return {
+            "models": {},
+            "description": "tsai library not installed",
+            "type": "classification",
+            "available": False
+        }
 
 
 @router.get("/models/{model_type}")

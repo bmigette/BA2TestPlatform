@@ -79,6 +79,7 @@ class ModelResponse(BaseModel):
     trainingDateRange: Optional[Dict[str, str]] = None
     predictionTargets: Optional[List[Dict[str, Any]]] = None
     predictionHorizon: Optional[int] = 3
+    normalizationParams: Optional[Dict[str, Any]] = None  # Scaler settings for inference
     createdAt: Optional[str] = None
     trainedAt: Optional[str] = None
     filePath: Optional[str] = None
@@ -163,6 +164,7 @@ def save_model_to_db(model_data: dict, db: Session) -> TrainedModel:
         existing.training_date_range = model_data.get('trainingDateRange', existing.training_date_range)
         existing.prediction_targets = model_data.get('predictionTargets', existing.prediction_targets)
         existing.prediction_horizon = model_data.get('predictionHorizon', existing.prediction_horizon)
+        existing.normalization_params = model_data.get('normalizationParams', existing.normalization_params)
         existing.generations = model_data.get('generations', existing.generations)
         existing.best_generation = model_data.get('bestGeneration', existing.best_generation)
         existing.fitness = model_data.get('fitness', existing.fitness)
@@ -192,6 +194,7 @@ def save_model_to_db(model_data: dict, db: Session) -> TrainedModel:
             training_date_range=model_data.get('trainingDateRange'),
             prediction_targets=model_data.get('predictionTargets'),
             prediction_horizon=model_data.get('predictionHorizon', 3),
+            normalization_params=model_data.get('normalizationParams'),
             generations=model_data.get('generations', 0),
             best_generation=model_data.get('bestGeneration', 0),
             fitness=model_data.get('fitness', 0),

@@ -449,6 +449,13 @@ def save_generation_model(
         model_filename = f"gen{generation:03d}_ind{individual:03d}_{model_type}_f{fitness:.4f}"
         full_path = models_dir / f"{model_filename}.pt"
 
+        # Get normalization params from training service if available
+        normalization_params = None
+        if hasattr(training_service, 'get_normalization_params'):
+            normalization_params = training_service.get_normalization_params()
+        elif hasattr(training_service, 'data_prep') and training_service.data_prep:
+            normalization_params = training_service.data_prep.export_params()
+
         metadata = {
             'task_id': task_id,
             'generation': generation,
@@ -456,7 +463,8 @@ def save_generation_model(
             'model_type': model_type,
             'fitness': fitness,
             'params': params,
-            'metrics': metrics
+            'metrics': metrics,
+            'normalization_params': normalization_params  # For inference consistency
         }
 
         # Note: Callbacks are now serializable (EpochProgressCallback implements
@@ -538,13 +546,21 @@ def save_best_model(
         models_dir = get_job_models_dir(task_id)
         model_name = f"best_{model_type}_f{fitness:.4f}"
 
+        # Get normalization params from training service if available
+        normalization_params = None
+        if hasattr(training_service, 'get_normalization_params'):
+            normalization_params = training_service.get_normalization_params()
+        elif hasattr(training_service, 'data_prep') and training_service.data_prep:
+            normalization_params = training_service.data_prep.export_params()
+
         metadata = {
             'task_id': task_id,
             'model_type': model_type,
             'fitness': fitness,
             'params': params,
             'metrics': metrics,
-            'is_best': True
+            'is_best': True,
+            'normalization_params': normalization_params  # For inference consistency
         }
 
         model_path = training_service.save_model(model, str(models_dir / model_name), metadata)

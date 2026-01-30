@@ -167,7 +167,7 @@ class TSAIModelService(IModelService):
         },
         'patchtst': {
             'name': 'PatchTST',
-            'description': 'State-of-the-art transformer (Nie 2022). Note: MPS limited.',
+            'description': 'Long-horizon forecasting transformer (Nie 2022). NOT for classification.',
             'default_params': {
                 'd_model': 128,
                 'n_heads': 8,
@@ -183,7 +183,8 @@ class TSAIModelService(IModelService):
                 'd_ff': [128, 256, 512],
                 'dropout': [0.0, 0.1, 0.2],
                 'activation': ['gelu', 'relu'],
-            }
+            },
+            'forecasting_only': True,  # Not suitable for classification
         },
         'lstm_fcn': {
             'name': 'LSTM-FCN',
@@ -237,13 +238,21 @@ class TSAIModelService(IModelService):
         else:
             logger.info("Using CPU for model training")
 
-    def get_available_models(self) -> Dict[str, Dict]:
-        """Get available tsai model architectures."""
+    def get_available_models(self, include_forecasting: bool = False) -> Dict[str, Dict]:
+        """Get available tsai model architectures for classification.
+
+        Args:
+            include_forecasting: If True, include forecasting-only models (default False)
+
+        Returns:
+            Dictionary of model architectures suitable for classification
+        """
         return {k: {
             'name': v['name'],
             'description': v['description'],
             'default_params': v['default_params'],
-        } for k, v in self.MODEL_ARCHITECTURES.items()}
+        } for k, v in self.MODEL_ARCHITECTURES.items()
+          if include_forecasting or not v.get('forecasting_only', False)}
 
     def get_parameter_ranges(self, model_type: str) -> Dict[str, List]:
         """Get hyperparameter ranges for a model type."""
@@ -353,16 +362,19 @@ class TSAIModelService(IModelService):
                 c_in=c_in, c_out=c_out, seq_len=seq_len,
             )
         elif model_type == 'patchtst':
-            # PatchTST needs patch_len that divides seq_len, use stride=patch_len
-            patch_len = min(p.get('patch_len', 16), seq_len // 2)
+            # PatchTST for classification - ensure patch_len divides evenly into seq_len
+            patch_len = p.get('patch_len', 8)
+            # Adjust patch_len to divide seq_len evenly
+            while seq_len % patch_len != 0 and patch_len > 1:
+                patch_len -= 1
+            # Use smaller defaults for faster training and better stability
             model = model_class(
                 c_in=c_in, c_out=c_out, seq_len=seq_len,
-                pred_dim=c_out,  # For classification
-                d_model=p.get('d_model', 128),
-                n_heads=p.get('n_heads', 8),
+                d_model=p.get('d_model', 64),
+                n_heads=p.get('n_heads', 4),
                 patch_len=patch_len,
                 stride=patch_len,  # Non-overlapping patches
-                d_ff=p.get('d_ff', 256),
+                d_ff=p.get('d_ff', 128),
                 dropout=p.get('dropout', 0.1),
             )
         elif model_type == 'lstm_fcn':

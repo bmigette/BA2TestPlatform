@@ -3,6 +3,9 @@ tsai Training Service for classification models.
 
 Provides training, evaluation, and prediction functionality using the tsai/fastai library.
 Supports focal loss, class weighting, and comprehensive classification metrics.
+
+Uses DataPreparationService for 35% buffered normalization (same as Darts),
+with exportable scaler parameters for inference.
 """
 
 import logging
@@ -11,6 +14,9 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import json
+
+from app.services.data_preparation import DataPreparationService
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +44,24 @@ from app.services.tsai_models import DEVICE, MPS_AVAILABLE, CUDA_AVAILABLE
 class TSAITrainingService(ITrainingService):
     """
     tsai-based training service for time series classification.
+
+    Uses 35% buffered normalization (same as Darts) for consistency.
+    Scaler parameters are saved with the model for inference.
     """
 
-    def __init__(self, models_dir: str = "trained_models"):
-        """Initialize TSAITrainingService."""
+    def __init__(self, models_dir: str = "trained_models", normalize: bool = True, buffer_pct: float = 0.35):
+        """Initialize TSAITrainingService.
+
+        Args:
+            models_dir: Directory to save trained models
+            normalize: Whether to apply per-feature normalization (required for MiniRocket)
+            buffer_pct: Extra room above/below observed min/max for price normalization (default 35%)
+        """
         self.models_dir = Path(models_dir)
         self.models_dir.mkdir(exist_ok=True)
+        self.normalize = normalize
+        self.buffer_pct = buffer_pct
+        self.data_prep = None  # DataPreparationService instance, fitted on training data
 
     def prepare_data(
         self,
@@ -51,10 +69,14 @@ class TSAITrainingService(ITrainingService):
         target_column: str,
         feature_columns: List[str],
         timeframe: str = 'daily',
-        seq_len: int = 24
+        seq_len: int = 24,
+        fit_scaler: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Prepare data for tsai model training.
+
+        Uses 35% buffered MinMax normalization (same as Darts) for consistency.
+        This handles the huge range difference between Volume (millions) and prices (~200).
 
         Args:
             df: DataFrame with features and target
@@ -62,6 +84,7 @@ class TSAITrainingService(ITrainingService):
             feature_columns: List of feature column names
             timeframe: Data timeframe (not used for tsai but kept for interface)
             seq_len: Sequence length for sliding window
+            fit_scaler: Whether to fit the scaler (True for train, False for test)
 
         Returns:
             Tuple of (X, y) numpy arrays
@@ -69,14 +92,31 @@ class TSAITrainingService(ITrainingService):
         if not TSAI_AVAILABLE:
             raise RuntimeError("tsai library not available")
 
-        # Extract features and target
-        X_data = df[feature_columns].values
+        # Extract target
         y_data = df[target_column].values.astype(np.int64)
+
+        # Apply 35% buffered normalization (same as Darts)
+        if self.normalize:
+            if fit_scaler:
+                self.data_prep = DataPreparationService(buffer_pct=self.buffer_pct)
+                df_normalized = self.data_prep.fit_transform(df, feature_columns, method="minmax_buffered")
+                logger.info(f"Fitted 35% buffered scaler on {len(df)} samples, {len(feature_columns)} features")
+            elif self.data_prep is not None:
+                df_normalized = self.data_prep.transform(df)
+            else:
+                # No scaler fitted yet, create one
+                self.data_prep = DataPreparationService(buffer_pct=self.buffer_pct)
+                df_normalized = self.data_prep.fit_transform(df, feature_columns, method="minmax_buffered")
+                logger.warning("Scaler not fitted, fitting on current data")
+
+            X_data = df_normalized[feature_columns].values.astype(np.float32)
+        else:
+            X_data = df[feature_columns].values.astype(np.float32)
 
         # Create sliding window sequences
         X, y = self._create_sequences(X_data, y_data, seq_len)
 
-        logger.info(f"Prepared data: X shape {X.shape}, y shape {y.shape}")
+        logger.info(f"Prepared data: X shape {X.shape}, y shape {y.shape}, normalized={self.normalize}")
         return X, y
 
     def prepare_data_split(
@@ -91,6 +131,10 @@ class TSAITrainingService(ITrainingService):
         """
         Prepare and split data into train/test sets.
 
+        Applies per-feature normalization: fits scaler on train data,
+        transforms both train and test. This is critical for MiniRocket
+        and models sensitive to feature scale differences (e.g., Volume vs Price).
+
         Args:
             df: Full DataFrame
             train_ratio: Fraction for training (0.0-1.0)
@@ -102,12 +146,23 @@ class TSAITrainingService(ITrainingService):
         Returns:
             Tuple of (X_train, X_test, y_train, y_test)
         """
-        X, y = self.prepare_data(df, target_column, feature_columns, timeframe, seq_len)
+        if not TSAI_AVAILABLE:
+            raise RuntimeError("tsai library not available")
 
-        # Split by time (no shuffling for time series)
-        split_idx = int(len(X) * train_ratio)
-        X_train, X_test = X[:split_idx], X[split_idx:]
-        y_train, y_test = y[:split_idx], y[split_idx:]
+        # Split DataFrame first (before normalization to avoid data leakage)
+        split_idx = int(len(df) * train_ratio)
+        df_train = df.iloc[:split_idx]
+        df_test = df.iloc[split_idx:]
+
+        # Prepare train data (fit scaler)
+        X_train, y_train = self.prepare_data(
+            df_train, target_column, feature_columns, timeframe, seq_len, fit_scaler=True
+        )
+
+        # Prepare test data (use fitted scaler)
+        X_test, y_test = self.prepare_data(
+            df_test, target_column, feature_columns, timeframe, seq_len, fit_scaler=False
+        )
 
         logger.info(f"Split data: train={len(X_train)}, test={len(X_test)}")
         return X_train, X_test, y_train, y_test
@@ -177,6 +232,7 @@ class TSAITrainingService(ITrainingService):
         learning_rate: float = 0.001,
         loss_fn: Any = None,
         epoch_callback: callable = None,
+        force_cpu: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -191,6 +247,7 @@ class TSAITrainingService(ITrainingService):
             learning_rate: Learning rate
             loss_fn: Optional custom loss function
             epoch_callback: Optional callback for progress updates
+            force_cpu: Force CPU training (for MPS-limited models like xception, patchtst)
             **kwargs: Additional options
 
         Returns:
@@ -217,12 +274,24 @@ class TSAITrainingService(ITrainingService):
                 splits = (list(range(split_idx)),
                          list(range(split_idx, len(X_all))))
 
-            # Create dataloaders
+            # Determine device (force_cpu only applies on Apple Silicon MPS)
+            import torch
+            if force_cpu and MPS_AVAILABLE:
+                # Force CPU only on Apple Silicon - some models have MPS limitations
+                device = torch.device('cpu')
+                logger.info("Training on CPU (force_cpu=True, MPS available but skipped)")
+            elif DEVICE:
+                device = DEVICE
+            else:
+                device = torch.device('cpu')
+
+            # Create dataloaders with explicit device
             dls = get_ts_dls(
                 X_all, y_all,
                 splits=splits,
                 bs=batch_size,
                 batch_tfms=[TSStandardize()],
+                device=device,  # Set device for dataloaders
             )
 
             # Get loss function
@@ -237,9 +306,8 @@ class TSAITrainingService(ITrainingService):
                 metrics=[accuracy, F1Score(), Precision(), Recall()],
             )
 
-            # Move to device
-            if DEVICE:
-                learn.model = learn.model.to(DEVICE)
+            # Move model to device
+            learn.model = learn.model.to(device)
 
             # Add epoch callback if provided
             callbacks = []
@@ -414,19 +482,77 @@ class TSAITrainingService(ITrainingService):
             return probs
 
     def save_model(self, learner: Any, name: str, metadata: Dict = None) -> str:
-        """Save a trained model."""
+        """
+        Save a trained model with normalization parameters.
+
+        Saves both the model (.pkl) and the normalization params (.norm.json)
+        so that inference can apply the same data transformation.
+
+        Args:
+            learner: Trained tsai Learner
+            name: Model name
+            metadata: Optional additional metadata
+
+        Returns:
+            Path to saved model
+        """
         model_path = self.models_dir / f"{name}.pkl"
+        norm_path = self.models_dir / f"{name}.norm.json"
+
+        # Save the model
         learner.export(model_path)
         logger.info(f"Saved model to {model_path}")
+
+        # Save normalization parameters if available
+        if self.data_prep is not None:
+            params = self.data_prep.export_params()
+            if metadata:
+                params["metadata"] = metadata
+            with open(norm_path, 'w') as f:
+                json.dump(params, f, indent=2)
+            logger.info(f"Saved normalization params to {norm_path}")
+
         return str(model_path)
 
     def load_model(self, name: str) -> Any:
-        """Load a saved model."""
+        """
+        Load a saved model with its normalization parameters.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Loaded tsai Learner
+        """
         from tsai.all import load_learner
+
         model_path = self.models_dir / f"{name}.pkl"
+        norm_path = self.models_dir / f"{name}.norm.json"
+
+        # Load the model
         learner = load_learner(model_path)
         logger.info(f"Loaded model from {model_path}")
+
+        # Load normalization parameters if available
+        if norm_path.exists():
+            self.data_prep = DataPreparationService()
+            self.data_prep.load_params_from_file(str(norm_path))
+            logger.info(f"Loaded normalization params from {norm_path}")
+        else:
+            logger.warning(f"No normalization params found at {norm_path}")
+
         return learner
+
+    def get_normalization_params(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the current normalization parameters.
+
+        Returns:
+            Dictionary with normalization params or None if not fitted
+        """
+        if self.data_prep is not None:
+            return self.data_prep.export_params()
+        return None
 
 
 class EpochProgressCallback:

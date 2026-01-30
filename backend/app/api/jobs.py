@@ -1495,7 +1495,9 @@ async def save_elite_to_inventory(
         "trainingDateRange": job.get('trainingDateRange'),
         # Prediction targets and horizon - critical for model inference
         "predictionTargets": job.get('predictionTargets', []),
-        "predictionHorizon": job.get('predictionHorizon', 3)
+        "predictionHorizon": job.get('predictionHorizon', 3),
+        # Normalization params - critical for inference to apply same transformation
+        "normalizationParams": elite_model.get('normalization_params') or job.get('normalizationParams')
     }
 
     # Save to database
@@ -1805,7 +1807,9 @@ async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
                 "trainingDateRange": job.get('trainingDateRange'),
                 # Source model reference
                 "sourceModelId": source_model_id,
-                "retrainMode": job.get('retrainMode')
+                "retrainMode": job.get('retrainMode'),
+                # Normalization params for inference
+                "normalizationParams": best_model.get('normalization_params') or job.get('normalizationParams')
             }
 
             # Save to database

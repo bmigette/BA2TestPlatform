@@ -662,6 +662,38 @@ class DartsTrainingService(ITrainingService):
         logger.info(f"Loaded model from {model_path}")
         return model
 
+    def get_normalization_params(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the current normalization/scaler parameters.
+
+        For Darts, this returns basic scaler info. The scaler is also saved
+        as a separate .pt file alongside the model for torch-based loading.
+
+        Returns:
+            Dictionary with scaler params or None if not fitted
+        """
+        if self.scaler is None:
+            return None
+
+        # Darts Scaler uses sklearn internally
+        scaler_info = {
+            'version': '1.0',
+            'type': 'darts_scaler',
+            'created_at': datetime.now().isoformat(),
+            'description': 'Darts MinMax scaler - load with torch.load(scaler_path)'
+        }
+
+        # Try to extract sklearn scaler params
+        try:
+            if hasattr(self.scaler, 'transformer') and hasattr(self.scaler.transformer, 'data_min_'):
+                scaler_info['data_min'] = self.scaler.transformer.data_min_.tolist()
+                scaler_info['data_max'] = self.scaler.transformer.data_max_.tolist()
+                scaler_info['data_range'] = self.scaler.transformer.data_range_.tolist()
+        except Exception:
+            pass
+
+        return scaler_info
+
     def predict(self, model: Any, data: Any, n: int = None, **kwargs) -> Any:
         """
         Generate predictions from a trained Darts model.

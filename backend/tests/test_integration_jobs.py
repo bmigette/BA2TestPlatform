@@ -32,18 +32,22 @@ TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "test_integration.db")
 REPORT_PATH = os.path.join(os.path.dirname(__file__), "integration_test_report.json")
 MONTHS_OF_DATA = 6  # Use 6 months only
 
-# Classification models to test (tsai)
-# Note: xception and patchtst have MPS limitations on Apple Silicon
-# Note: minirocket requires special preprocessing (can produce NaN)
+# Classification models to test (tsai) - 10 models
+# Note: xception has MPS limitations on Apple Silicon (use CPU fallback)
+# Note: minirocket requires per-feature normalization (added to TSAITrainingService)
+# Note: patchtst is EXCLUDED - it's designed for forecasting, not classification
 CLASSIFICATION_MODELS = [
     'lstm', 'gru', 'tcn', 'inception', 'resnet',
-    'omniscale', 'lstm_fcn', 'tst'
+    'omniscale', 'lstm_fcn', 'tst', 'minirocket'
 ]
 
-# Models with known limitations (tested separately)
-# - xception, patchtst: MPS adaptive pooling issues
-# - minirocket: May produce NaN, needs special preprocessing
-LIMITED_MODELS = ['xception', 'patchtst', 'minirocket']
+# Models requiring CPU fallback on Apple Silicon MPS
+# These models use operations not fully supported on MPS (adaptive pooling)
+MPS_LIMITED_MODELS = ['xception']
+
+# Models not suitable for classification (forecasting models)
+# PatchTST outputs (batch, features, seq_len) for forecasting, not (batch, classes)
+FORECASTING_ONLY_MODELS = ['patchtst']
 
 # Regression models to test (Darts)
 REGRESSION_MODELS = ['lstm', 'nbeats', 'tcn', 'gru', 'tft', 'transformer']
@@ -132,11 +136,20 @@ def dataset_with_targets(test_dataframe):
     df['returns'] = df['Close'].pct_change()
     df['volatility_target'] = df['returns'].rolling(window=10).std().shift(-10)
 
-    # Add balanced classification target (price up in next 5 bars) for better F1
+    # Classification targets with different prediction horizons
+    # Horizon 1: Price up in next 1 bar (short-term)
+    df['price_up_h1'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+    target_cols.append('price_up_h1')
+
+    # Horizon 3: Price up in next 3 bars (medium-term)
+    df['price_up_h3'] = (df['Close'].shift(-3) > df['Close']).astype(int)
+    target_cols.append('price_up_h3')
+
+    # Horizon 5: Price up in next 5 bars (for backward compatibility)
     df['price_up_5bars'] = (df['Close'].shift(-5) > df['Close']).astype(int)
     target_cols.append('price_up_5bars')
 
-    # Clean NaN
+    # Clean NaN (drop rows where any target is NaN)
     df = df.dropna()
 
     return df, target_cols
@@ -148,6 +161,8 @@ class TestIntegrationJobs:
     results = {
         'timestamp': datetime.now().isoformat(),
         'classification': {},
+        'classification_h1': {},  # Horizon 1 results
+        'classification_h3': {},  # Horizon 3 results
         'regression': {},
         'summary': {}
     }
@@ -237,6 +252,198 @@ class TestIntegrationJobs:
                 self.results['classification'][model_type] = {
                     'status': 'error',
                     'error': str(e)
+                }
+                print(f"  {model_type}: ERROR - {e}")
+
+    def test_classification_horizons(self, dataset_with_targets):
+        """Test classification with different prediction horizons (1 and 3)."""
+        from app.services.tsai_models import TSAIModelService, TSAI_AVAILABLE
+        from app.services.tsai_training import TSAITrainingService
+
+        if not TSAI_AVAILABLE:
+            pytest.skip("tsai not available")
+
+        df, target_cols = dataset_with_targets
+
+        # Test with representative models only (for speed)
+        test_models = ['lstm', 'inception']
+        feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+        model_service = TSAIModelService()
+        training_service = TSAITrainingService()
+
+        # Test horizon 1 (short-term)
+        print("\n=== Testing Horizon 1 (price_up_h1) ===")
+        if 'price_up_h1' in target_cols:
+            X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+                df, train_ratio=0.8,
+                target_column='price_up_h1',
+                feature_columns=feature_cols,
+                seq_len=24
+            )
+
+            for model_type in test_models:
+                try:
+                    model = model_service.create_model(
+                        model_type,
+                        {'hidden_size': 32, 'n_layers': 1, 'nf': 16, 'depth': 2},
+                        c_in=X_train.shape[1], c_out=2, seq_len=X_train.shape[2]
+                    )
+                    result = training_service.train_model(
+                        model, (X_train, y_train),
+                        val_data=(X_test, y_test),
+                        epochs=3, batch_size=64
+                    )
+                    if result['status'] == 'success':
+                        metrics = training_service.assess_model(
+                            result['model'], (X_test, y_test),
+                            learner=result.get('learner')
+                        )
+                        f1 = metrics.get('f1_score', 0)
+                        self.results['classification_h1'][model_type] = {
+                            'status': 'success', 'f1_score': f1, 'horizon': 1
+                        }
+                        print(f"  H1 {model_type}: F1={f1:.4f}")
+                    else:
+                        self.results['classification_h1'][model_type] = {
+                            'status': 'failed', 'error': result.get('error')
+                        }
+                except Exception as e:
+                    self.results['classification_h1'][model_type] = {
+                        'status': 'error', 'error': str(e)
+                    }
+                    print(f"  H1 {model_type}: ERROR - {e}")
+
+        # Test horizon 3 (medium-term)
+        print("\n=== Testing Horizon 3 (price_up_h3) ===")
+        if 'price_up_h3' in target_cols:
+            # Need fresh training service for new scaler
+            training_service = TSAITrainingService()
+            X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+                df, train_ratio=0.8,
+                target_column='price_up_h3',
+                feature_columns=feature_cols,
+                seq_len=24
+            )
+
+            for model_type in test_models:
+                try:
+                    model = model_service.create_model(
+                        model_type,
+                        {'hidden_size': 32, 'n_layers': 1, 'nf': 16, 'depth': 2},
+                        c_in=X_train.shape[1], c_out=2, seq_len=X_train.shape[2]
+                    )
+                    result = training_service.train_model(
+                        model, (X_train, y_train),
+                        val_data=(X_test, y_test),
+                        epochs=3, batch_size=64
+                    )
+                    if result['status'] == 'success':
+                        metrics = training_service.assess_model(
+                            result['model'], (X_test, y_test),
+                            learner=result.get('learner')
+                        )
+                        f1 = metrics.get('f1_score', 0)
+                        self.results['classification_h3'][model_type] = {
+                            'status': 'success', 'f1_score': f1, 'horizon': 3
+                        }
+                        print(f"  H3 {model_type}: F1={f1:.4f}")
+                    else:
+                        self.results['classification_h3'][model_type] = {
+                            'status': 'failed', 'error': result.get('error')
+                        }
+                except Exception as e:
+                    self.results['classification_h3'][model_type] = {
+                        'status': 'error', 'error': str(e)
+                    }
+                    print(f"  H3 {model_type}: ERROR - {e}")
+
+    def test_mps_limited_models(self, dataset_with_targets):
+        """Test MPS-limited models (xception, patchtst) with CPU fallback."""
+        import torch
+        from app.services.tsai_models import TSAIModelService, TSAI_AVAILABLE, MPS_AVAILABLE
+        from app.services.tsai_training import TSAITrainingService
+
+        if not TSAI_AVAILABLE:
+            pytest.skip("tsai not available")
+
+        df, target_cols = dataset_with_targets
+
+        if not target_cols:
+            pytest.skip("No target columns found")
+
+        # Force CPU for these models due to MPS limitations
+        model_service = TSAIModelService(use_gpu=False)
+        training_service = TSAITrainingService()
+
+        target_col = 'price_up_5bars' if 'price_up_5bars' in target_cols else target_cols[0]
+        feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+        print(f"\nTesting MPS-limited models on CPU (target: {target_col})")
+
+        # Prepare data
+        X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+            df, train_ratio=0.8,
+            target_column=target_col,
+            feature_columns=feature_cols,
+            seq_len=24
+        )
+
+        for model_type in MPS_LIMITED_MODELS:
+            print(f"\nTesting MPS-limited model (CPU): {model_type}")
+
+            try:
+                # Create model with small params
+                model = model_service.create_model(
+                    model_type,
+                    {'nf': 16, 'd_model': 64, 'n_heads': 4, 'patch_len': 8},
+                    c_in=X_train.shape[1],
+                    c_out=2,
+                    seq_len=X_train.shape[2]
+                )
+
+                # Train on CPU (force_cpu only applies on Apple Silicon)
+                result = training_service.train_model(
+                    model,
+                    (X_train, y_train),
+                    val_data=(X_test, y_test),
+                    epochs=3,  # Fewer epochs for slow CPU training
+                    batch_size=32,
+                    force_cpu=True  # Force CPU for MPS-limited models
+                )
+
+                if result['status'] == 'success':
+                    metrics = training_service.assess_model(
+                        result['model'],
+                        (X_test, y_test),
+                        learner=result.get('learner')
+                    )
+
+                    f1 = metrics.get('f1_score', 0)
+                    accuracy = metrics.get('accuracy', 0)
+
+                    self.results['classification'][model_type] = {
+                        'status': 'success',
+                        'f1_score': f1,
+                        'accuracy': accuracy,
+                        'metrics': metrics,
+                        'note': 'CPU fallback due to MPS limitations'
+                    }
+
+                    print(f"  {model_type}: F1={f1:.4f}, Accuracy={accuracy:.4f} (CPU)")
+                    assert f1 >= 0, f"F1 should be >= 0, got {f1}"
+                else:
+                    self.results['classification'][model_type] = {
+                        'status': 'failed',
+                        'error': result.get('error')
+                    }
+                    print(f"  {model_type}: FAILED - {result.get('error')}")
+
+            except Exception as e:
+                self.results['classification'][model_type] = {
+                    'status': 'error',
+                    'error': str(e),
+                    'note': 'MPS-limited model'
                 }
                 print(f"  {model_type}: ERROR - {e}")
 
@@ -355,32 +562,38 @@ class TestIntegrationJobs:
             if v.get('status') == 'success'
         )
         
+        # Total classification models = main + MPS-limited
+        total_classification = len(CLASSIFICATION_MODELS) + len(MPS_LIMITED_MODELS)
+
         self.results['summary'] = {
             'data_rows': len(df),
             'target_columns': target_cols,
-            'classification_models_tested': len(CLASSIFICATION_MODELS),
+            'classification_models_tested': total_classification,
             'classification_models_passed': classification_success,
+            'classification_models_list': CLASSIFICATION_MODELS + MPS_LIMITED_MODELS,
             'regression_models_tested': len(REGRESSION_MODELS),
             'regression_models_passed': regression_success,
         }
-        
+
         # Write report
         with open(REPORT_PATH, 'w') as f:
             json.dump(self.results, f, indent=2, default=str)
-        
+
         print(f"\n{'='*60}")
         print("INTEGRATION TEST REPORT")
         print(f"{'='*60}")
         print(f"Data rows: {len(df)}")
-        print(f"Classification: {classification_success}/{len(CLASSIFICATION_MODELS)} passed")
+        print(f"Classification: {classification_success}/{total_classification} passed")
+        print(f"  Main models: {CLASSIFICATION_MODELS}")
+        print(f"  MPS-limited: {MPS_LIMITED_MODELS}")
         print(f"Regression: {regression_success}/{len(REGRESSION_MODELS)} passed")
         print(f"Report saved to: {REPORT_PATH}")
         print(f"{'='*60}")
-        
+
         # Assert overall success
-        total_models = len(CLASSIFICATION_MODELS) + len(REGRESSION_MODELS)
+        total_models = total_classification + len(REGRESSION_MODELS)
         total_passed = classification_success + regression_success
-        
+
         assert total_passed > 0, "At least one model should pass"
 
 
