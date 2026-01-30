@@ -1900,14 +1900,18 @@ def train_classification_optimization(
             progress_state['success_count'] += 1
 
             # Record individual
-            progress_state['all_individuals'].append({
+            individual_record = {
                 'generation': gen,
                 'model_type': model_type,
                 'prediction_mode': mode,
                 'params': model_params,
                 'fitness': fitness,
                 'metrics': metrics
-            })
+            }
+            progress_state['all_individuals'].append(individual_record)
+
+            # Add to jobs_store for real-time UI access
+            add_individual_to_job(task_id, individual_record)
 
             # Update progress
             current_progress = progress_base + (gen / generations) * progress_range * 0.9
