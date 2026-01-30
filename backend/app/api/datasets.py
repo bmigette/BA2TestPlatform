@@ -108,13 +108,41 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
         }
         interval = interval_map.get(timeframe, "1d")
 
+        # Calculate warmup period needed for indicators
+        # Find max period from all indicators to determine how many extra bars we need
+        max_period = 0
+        for ind in technical_indicators:
+            period = ind.get('period', 0)
+            slow = ind.get('slow', 0)  # For MACD
+            max_period = max(max_period, period, slow)
+
+        # Calculate warmup days based on timeframe
+        # For intraday, consider market hours only (~6.5 hours/day for US stocks)
+        bars_per_day = {
+            '1m': 390, '5m': 78, '15m': 26, '30m': 13,
+            '1h': 7, '4h': 2, '1d': 1, '1w': 0.2, '1mo': 0.05
+        }.get(timeframe, 1)
+
+        # Calculate how many extra days to fetch
+        # Need max_period bars for warmup, plus buffer for weekends/holidays/gaps
+        warmup_bars_needed = max_period + 50 if max_period > 0 else 0
+        warmup_days = int(warmup_bars_needed / max(bars_per_day, 0.1) * 1.5) if warmup_bars_needed > 0 else 0
+
+        # Store original requested start date for filtering later
+        requested_start_date = start_date
+
+        # Adjust fetch start date to include warmup period
+        fetch_start_date = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
+        if warmup_days > 0:
+            logger.info(f"[Thread] Warmup: fetching {warmup_days} extra days for {max_period}-period indicators")
+
         # Fetch OHLC data
         provider = get_ohlcv_provider(provider_name)
-        logger.info(f"[Thread] Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
+        logger.info(f"[Thread] Fetching data from {fetch_start_date.date()} to {end_date.date()} using {provider_name}")
 
         data_points = provider.get_data(
             symbol=ticker,
-            start_date=start_date,
+            start_date=fetch_start_date,
             end_date=end_date,
             interval=interval
         )
@@ -135,14 +163,15 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
         logger.info(f"[Thread] Fetched {len(df)} OHLC data points")
 
         # Validate date range (with 5-day tolerance)
+        # Use fetch_start_date for validation since we may have requested earlier data for warmup
         data_start = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
         data_end = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
-        req_start = start_date.date() if hasattr(start_date, 'date') else start_date
+        fetch_start = fetch_start_date.date() if hasattr(fetch_start_date, 'date') else fetch_start_date
         req_end = end_date.date() if hasattr(end_date, 'date') else end_date
 
-        if (data_start - req_start).days > 5:
+        if (data_start - fetch_start).days > 5:
             db_dataset.status = DatasetStatus.ERROR.value
-            db_dataset.error_message = f"Data starts at {data_start}, but requested {req_start}"
+            db_dataset.error_message = f"Data starts at {data_start}, but requested {fetch_start} (including warmup)"
             db.commit()
             return
 
@@ -230,6 +259,18 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
                                 df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
             except Exception as e:
                 logger.error(f"[Thread] Error fetching fundamentals: {e}")
+
+        # Filter out warmup rows - only keep data from the originally requested start date
+        if warmup_days > 0:
+            rows_before = len(df)
+            df['Date'] = pd.to_datetime(df['Date'])
+            requested_start_ts = pd.to_datetime(requested_start_date)
+            # Handle timezone-aware dates
+            if df['Date'].dt.tz is not None:
+                requested_start_ts = requested_start_ts.tz_localize(df['Date'].dt.tz)
+            df = df[df['Date'] >= requested_start_ts].reset_index(drop=True)
+            rows_filtered = rows_before - len(df)
+            logger.info(f"[Thread] Filtered {rows_filtered} warmup rows, {len(df)} rows remaining")
 
         # Save dataset
         df.to_csv(file_path, index=False)

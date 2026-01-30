@@ -853,8 +853,8 @@ class PredictionTargetService:
     def calculate_directional(
         self,
         df: pd.DataFrame,
-        horizon: int = 5,
-        direction: str = "up"
+        horizon: int,
+        direction: str
     ) -> pd.Series:
         """
         Calculate directional movement target.
@@ -891,9 +891,9 @@ class PredictionTargetService:
     def calculate_triple_barrier(
         self,
         df: pd.DataFrame,
-        profit_pct: float = 3.0,
-        stop_pct: float = 2.0,
-        max_bars: int = 10
+        profit_pct: float,
+        stop_pct: float,
+        max_bars: int
     ) -> pd.Series:
         """
         Calculate Triple-Barrier target (Marcos Lopez de Prado method).
@@ -1077,8 +1077,8 @@ class PredictionTargetService:
     def calculate_volatility(
         self,
         df: pd.DataFrame,
-        horizon: int = 5,
-        method: str = "std"
+        horizon: int,
+        method: str
     ) -> pd.Series:
         """
         Calculate volatility target (regression).
@@ -1152,41 +1152,71 @@ class PredictionTargetService:
 
             try:
                 if target_type == 'price_based':
-                    direction = config.get('direction', 'up')
-                    profit_pct = config.get('profitPct', 10)
-                    max_dd = config.get('maxDrawdownPct', 5)
-                    days = config.get('timeBars', 7)
+                    direction = config.get('direction')
+                    profit_pct = config.get('profitPct')
+                    max_dd = config.get('maxDrawdownPct')
+                    days = config.get('timeBars')
+                    if direction is None:
+                        raise ValueError("price_based target requires 'direction' field")
+                    if profit_pct is None:
+                        raise ValueError("price_based target requires 'profitPct' field")
+                    if max_dd is None:
+                        raise ValueError("price_based target requires 'maxDrawdownPct' field")
+                    if days is None:
+                        raise ValueError("price_based target requires 'timeBars' field")
                     series = self._calculate_single_target(df, profit_pct, max_dd, days, direction)
                     col_name = f"price_{direction}_{profit_pct}pct_{max_dd}dd_{days}d"
                     category = 'binary_classification'
 
                 elif target_type == 'directional':
-                    direction = config.get('direction', 'up')
-                    horizon = config.get('horizon', 5)
+                    direction = config.get('direction')
+                    horizon = config.get('horizon')
+                    if direction is None:
+                        raise ValueError("directional target requires 'direction' field")
+                    if horizon is None:
+                        raise ValueError("directional target requires 'horizon' field")
                     series = self.calculate_directional(df, horizon, direction)
                     col_name = series.name
                     category = 'binary_classification'
 
                 elif target_type == 'triple_barrier':
-                    profit_pct = config.get('profitPct', 3)
-                    stop_pct = config.get('stopPct', 2)
-                    max_bars = config.get('maxBars', 10)
+                    profit_pct = config.get('profitPct')
+                    stop_pct = config.get('stopPct')
+                    max_bars = config.get('maxBars')
+                    if profit_pct is None:
+                        raise ValueError("triple_barrier target requires 'profitPct' field")
+                    if stop_pct is None:
+                        raise ValueError("triple_barrier target requires 'stopPct' field")
+                    if max_bars is None:
+                        raise ValueError("triple_barrier target requires 'maxBars' field")
                     series = self.calculate_triple_barrier(df, profit_pct, stop_pct, max_bars)
                     col_name = series.name
                     category = 'multiclass_classification'
 
                 elif target_type == 'trend_reversal':
-                    indicator = config.get('indicator', 'rsi')
-                    params = config.get('indicatorParams', {})
-                    threshold = config.get('threshold', 30)
-                    direction = config.get('direction', 'bullish')
+                    indicator = config.get('indicator')
+                    params = config.get('indicatorParams')
+                    threshold = config.get('threshold')
+                    direction = config.get('direction')
+                    if indicator is None:
+                        raise ValueError("trend_reversal target requires 'indicator' field")
+                    if params is None:
+                        raise ValueError("trend_reversal target requires 'indicatorParams' field")
+                    if threshold is None:
+                        raise ValueError("trend_reversal target requires 'threshold' field")
+                    if direction is None:
+                        raise ValueError("trend_reversal target requires 'direction' field")
                     series = self.calculate_trend_reversal(df, indicator, params, threshold, direction)
                     col_name = series.name
                     category = 'binary_classification'
 
                 elif target_type == 'volatility':
-                    horizon = config.get('horizon', 5)
-                    method = config.get('method', 'std')
+                    horizon = config.get('horizon')
+                    method = config.get('method')
+                    if horizon is None:
+                        raise ValueError("volatility target requires 'horizon' field")
+                    if method is None:
+                        raise ValueError("volatility target requires 'method' field")
                     series = self.calculate_volatility(df, horizon, method)
                     col_name = series.name
                     category = 'regression'

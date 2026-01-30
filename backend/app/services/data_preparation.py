@@ -184,7 +184,9 @@ class DataPreparationService:
 
                 # Clip to valid range if price exceeds buffer (expected behavior for live data)
                 clipped = result[col].clip(0, 1)
-                if (clipped != result[col]).any():
+                # Check if any non-NaN values were clipped (NaN != NaN is True, so exclude NaN)
+                non_nan_mask = ~result[col].isna()
+                if ((clipped[non_nan_mask] != result[col][non_nan_mask]).any()):
                     # Get actual data range for debugging
                     actual_min = df[col].min()
                     actual_max = df[col].max()
