@@ -378,9 +378,12 @@ class GeneticOptimizer:
             if on_generation_start:
                 on_generation_start(gen)
 
-            # Evaluate fitness for all individuals
-            fitnesses = list(map(self.toolbox.evaluate, population))
-            for ind, fit in zip(population, fitnesses):
+            # Only evaluate individuals whose fitness is invalid (not elites)
+            # This prevents re-evaluating elites which would give different results
+            # due to stochastic neural network training
+            invalid_ind = [ind for ind in population if not ind.fitness.valid]
+            fitnesses = list(map(self.toolbox.evaluate, invalid_ind))
+            for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
 
             # Record statistics
