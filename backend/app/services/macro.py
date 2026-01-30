@@ -237,19 +237,22 @@ class MacroService:
             # Sort macro data for merge_asof
             macro_df = macro_df.sort_values('Date').reset_index(drop=True)
 
+            # Calculate YoY change on raw macro data BEFORE merging
+            # Macro data is monthly/quarterly, so periods=12 means 12 observations back (~1 year for monthly data)
+            # This is more accurate than calculating YoY after forward-fill, which depends on OHLC timeframe
+            yoy_col = f'{indicator}_yoy_change'
+            macro_df[yoy_col] = macro_df[indicator].pct_change(periods=12, fill_method=None) * 100
+
             # Use merge_asof to get the most recent macro value for each OHLC row
             # This is the correct way to align less-frequent data with more-frequent data
             result_df = pd.merge_asof(
                 result_df,
-                macro_df[['Date', indicator]],
+                macro_df[['Date', indicator, yoy_col]],
                 on='Date',
                 direction='backward'  # Get the most recent macro value at or before each OHLC date
             )
 
             logger.debug(f"Merged {indicator}: {result_df[indicator].notna().sum()} non-null values")
-
-            # Add derived features - Year-over-year change (if enough data)
-            result_df[f'{indicator}_yoy_change'] = result_df[indicator].pct_change(periods=252, fill_method=None) * 100
 
         logger.info(f"Integrated {len(indicators)} macro indicators with OHLC data")
         return result_df
