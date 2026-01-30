@@ -320,17 +320,19 @@ class GeneticOptimizer:
         callback: Callable[[int, float, Dict], None] = None,
         start_generation: int = 0,
         initial_population: list = None,
-        checkpoint_callback: Callable[[int, list], None] = None
+        checkpoint_callback: Callable[[int, list], None] = None,
+        on_generation_start: Callable[[int], None] = None
     ) -> Dict:
         """
         Run genetic algorithm optimization.
 
         Args:
             fitness_function: Function that takes params dict and returns fitness score
-            callback: Optional callback(generation, best_fitness, best_params)
+            callback: Optional callback(generation, best_fitness, best_params) called after each generation
             start_generation: Generation to start from (for resume)
             initial_population: Initial population data (for resume)
             checkpoint_callback: Called after each generation with (gen, population) for saving
+            on_generation_start: Optional callback(generation) called before evaluating each generation
 
         Returns:
             Dictionary with best parameters and optimization history
@@ -372,6 +374,10 @@ class GeneticOptimizer:
 
         # Evolution loop
         for gen in range(start_generation, self.n_generations):
+            # Notify generation start before evaluations
+            if on_generation_start:
+                on_generation_start(gen)
+
             # Evaluate fitness for all individuals
             fitnesses = list(map(self.toolbox.evaluate, population))
             for ind, fit in zip(population, fitnesses):

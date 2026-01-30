@@ -1538,12 +1538,13 @@ def train_single_model(
             logger.error(f"Fitness evaluation failed: {e}", exc_info=True)
             return 0.0
 
-    def ga_callback(generation: int, best_fitness: float, best_params: Dict):
-        """Called after each generation completes."""
-        # Reset individual counter for next generation
-        progress_state['current_generation'] = generation + 1
+    def on_generation_start(generation: int):
+        """Called BEFORE evaluating individuals in a generation."""
+        progress_state['current_generation'] = generation
         progress_state['current_individual'] = 0
 
+    def ga_callback(generation: int, best_fitness: float, best_params: Dict):
+        """Called after each generation completes."""
         # Update progress at generation boundary
         progress = progress_base + ((generation + 1) / generations) * progress_range * 0.9
         update_job_progress(
@@ -1579,7 +1580,8 @@ def train_single_model(
     try:
         opt_result = optimizer.optimize(
             fitness_function=fitness_function,
-            callback=ga_callback
+            callback=ga_callback,
+            on_generation_start=on_generation_start
         )
     except InterruptedError:
         update_job_progress(
@@ -1960,10 +1962,14 @@ def train_classification_optimization(
             progress_state['error_count'] += 1
             return 0.0
 
-    def generation_callback(gen: int, best_fitness: float, pop_fitness: list):
+    def on_generation_start(gen: int):
+        """Called BEFORE evaluating individuals in a generation."""
         progress_state['current_generation'] = gen
         progress_state['current_individual'] = 0
-        # Update job training state for UI
+
+    def generation_callback(gen: int, best_fitness: float, pop_fitness: list):
+        """Called AFTER all individuals in a generation are evaluated."""
+        # Update job training state for UI (generation complete)
         update_job_training_state(
             task_id,
             current_generation=gen,
@@ -2035,7 +2041,8 @@ def train_classification_optimization(
     try:
         opt_result = optimizer.optimize(
             fitness_function,
-            callback=generation_callback
+            callback=generation_callback,
+            on_generation_start=on_generation_start
         )
     except InterruptedError:
         return {
@@ -2450,12 +2457,15 @@ def train_unified_optimization(
             )
             return 0.0
 
+    def on_generation_start(gen: int):
+        """Called BEFORE evaluating individuals in a generation."""
+        progress_state['current_generation'] = gen
+        progress_state['current_individual'] = 0
+
     def ga_callback(gen: int, best_fitness: float, best_params: Dict):
         """Called after each generation completes."""
         if check_cancelled():
             raise InterruptedError("Task cancelled")
-        progress_state['current_generation'] = gen + 1
-        progress_state['current_individual'] = 0
 
         # Note: We keep all models during training and cleanup at the end
         # to preserve elite models from any generation
@@ -2463,7 +2473,7 @@ def train_unified_optimization(
         # Update training state for UI
         update_job_training_state(
             task_id,
-            current_generation=gen + 1,
+            current_generation=gen,
             current_individual=0,
             best_fitness=best_fitness
         )
@@ -2514,7 +2524,8 @@ def train_unified_optimization(
             callback=ga_callback,
             start_generation=start_generation,
             initial_population=initial_population,
-            checkpoint_callback=checkpoint_callback
+            checkpoint_callback=checkpoint_callback,
+            on_generation_start=on_generation_start
         )
         # Clear checkpoint on successful completion
         clear_ga_checkpoint(task_id)
