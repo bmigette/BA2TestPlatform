@@ -501,15 +501,31 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
   const handleNext = async () => {
     if (currentStep === 1) {
-      await fetchPreview();
       setCurrentStep(2);
+    } else if (currentStep === 2) {
+      await fetchPreview();
+      setCurrentStep(3);
     }
   };
 
   const handleBack = () => {
     if (currentStep === 2) {
       setCurrentStep(1);
+    } else if (currentStep === 3) {
+      setCurrentStep(2);
     }
+  };
+
+  const isStep2Valid = () => {
+    const gc = state.geneticConfig;
+    return (
+      gc.populationSize > 0 &&
+      gc.generations > 0 &&
+      gc.trainingEpochs > 0 &&
+      gc.crossoverProb >= 0 && gc.crossoverProb <= 1 &&
+      gc.mutationProb >= 0 && gc.mutationProb <= 1 &&
+      gc.elitismPercent >= 0 && gc.elitismPercent <= 100
+    );
   };
 
   const submitJob = async () => {
@@ -567,13 +583,20 @@ const JobWizard: React.FC<JobWizardProps> = ({
                   currentStep === 1 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'
                 }`}>
                   <span className="font-medium">1</span>
-                  <span>Settings</span>
+                  <span>ML Settings</span>
                 </div>
                 <ChevronRight size={16} className="text-gray-400" />
                 <div className={`flex items-center space-x-1 px-3 py-1 rounded-full text-sm ${
                   currentStep === 2 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'
                 }`}>
                   <span className="font-medium">2</span>
+                  <span>Optimization</span>
+                </div>
+                <ChevronRight size={16} className="text-gray-400" />
+                <div className={`flex items-center space-x-1 px-3 py-1 rounded-full text-sm ${
+                  currentStep === 3 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'
+                }`}>
+                  <span className="font-medium">3</span>
                   <span>Summary</span>
                 </div>
               </div>
@@ -585,7 +608,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
           {/* Content */}
           <div className="p-6 overflow-y-auto flex-1">
-            {currentStep === 1 ? (
+            {currentStep === 1 && (
               <Step1Settings
                 state={state}
                 setState={setState}
@@ -607,12 +630,19 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 loadProfile={loadProfile}
                 saveProfile={saveProfile}
                 onDeleteProfile={onDeleteProfile}
-                calculateCombinations={calculateCombinations}
                 availableModels={availableModels}
                 modelsLoading={modelsLoading}
               />
-            ) : (
-              <Step2Summary
+            )}
+            {currentStep === 2 && (
+              <Step2GeneticOptimization
+                state={state}
+                setState={setState}
+                calculateCombinations={calculateCombinations}
+              />
+            )}
+            {currentStep === 3 && (
+              <Step3Summary
                 state={state}
                 setState={setState}
                 selectedDataset={selectedDataset}
@@ -628,7 +658,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
           {/* Footer */}
           <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700">
             <div>
-              {currentStep === 2 && (
+              {currentStep > 1 && (
                 <button
                   onClick={handleBack}
                   className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 flex items-center space-x-2"
@@ -645,7 +675,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
               >
                 Cancel
               </button>
-              {currentStep === 1 ? (
+              {currentStep === 1 && (
                 <button
                   onClick={handleNext}
                   disabled={!isStep1Valid()}
@@ -658,7 +688,22 @@ const JobWizard: React.FC<JobWizardProps> = ({
                   <span>Next</span>
                   <ChevronRight size={16} />
                 </button>
-              ) : (
+              )}
+              {currentStep === 2 && (
+                <button
+                  onClick={handleNext}
+                  disabled={!isStep2Valid()}
+                  className={`px-4 py-2 rounded-md flex items-center space-x-2 ${
+                    isStep2Valid()
+                      ? 'bg-green-600 text-white hover:bg-green-700'
+                      : 'bg-gray-300 dark:bg-gray-600 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={16} />
+                </button>
+              )}
+              {currentStep === 3 && (
                 <button
                   onClick={submitJob}
                   disabled={isSubmitting}
@@ -711,7 +756,6 @@ interface Step1Props {
   loadProfile: (profile: JobProfile) => void;
   saveProfile: () => void;
   onDeleteProfile: (id: number) => Promise<void>;
-  calculateCombinations: () => number;
   availableModels: Array<{id: string, name: string, description: string}>;
   modelsLoading: boolean;
 }
@@ -737,7 +781,6 @@ const Step1Settings: React.FC<Step1Props> = ({
   loadProfile,
   saveProfile,
   onDeleteProfile,
-  calculateCombinations,
   availableModels,
   modelsLoading,
 }) => {
@@ -1225,144 +1268,34 @@ const Step1Settings: React.FC<Step1Props> = ({
         )}
       </div>
 
-      {/* Genetic Algorithm Config */}
-      <div>
-        <div className="flex items-center space-x-2 mb-3">
-          <Activity size={16} className="text-gray-400" />
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Genetic Algorithm</label>
-        </div>
-        <div className="grid grid-cols-4 gap-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-          <div>
-            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Population</label>
+      {/* Sequence Length (for classification) */}
+      {state.jobType === 'classification' && (
+        <div>
+          <div className="flex items-center space-x-2 mb-3">
+            <Layers size={16} className="text-gray-400" />
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Sequence Length
+            </label>
+          </div>
+          <div className="flex items-center space-x-4">
             <input
               type="number"
-              value={state.geneticConfig.populationSize}
-              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, populationSize: Number(e.target.value) } }))}
-              className="w-full px-2 py-1 border rounded text-sm"
+              min={8}
+              max={128}
+              value={state.parameterRanges.seqLen || 24}
+              onChange={(e) => setState(prev => ({
+                ...prev,
+                parameterRanges: { ...prev.parameterRanges, seqLen: Number(e.target.value) }
+              }))}
+              className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
+            <span className="text-sm text-gray-500">bars</span>
           </div>
-          <div>
-            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Generations</label>
-            <input
-              type="number"
-              value={state.geneticConfig.generations}
-              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, generations: Number(e.target.value) } }))}
-              className="w-full px-2 py-1 border rounded text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Epochs/Individual</label>
-            <input
-              type="number"
-              value={state.geneticConfig.trainingEpochs}
-              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, trainingEpochs: Number(e.target.value) } }))}
-              className="w-full px-2 py-1 border rounded text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Early Stop (gens)</label>
-            <input
-              type="number"
-              value={state.geneticConfig.earlyStoppingGenerations}
-              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, earlyStoppingGenerations: Number(e.target.value) } }))}
-              className="w-full px-2 py-1 border rounded text-sm"
-            />
-          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Number of consecutive time bars the model uses as input. Higher values capture longer patterns but require more data.
+          </p>
         </div>
-      </div>
-
-      {/* Optimization Metrics */}
-      <div>
-        <div className="flex items-center space-x-2 mb-3">
-          <Zap size={16} className="text-gray-400" />
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-            Optimization Metric
-          </label>
-        </div>
-
-        {state.jobType === 'classification' ? (
-          <>
-            {/* Classification Metric */}
-            <div className="flex flex-wrap gap-2">
-              {CLASSIFICATION_METRICS.map((metric) => (
-                <label
-                  key={metric.id}
-                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                    state.metricsConfig.classificationMetric === metric.id
-                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
-                      : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-                  }`}
-                  title={metric.description}
-                >
-                  <input
-                    type="radio"
-                    name="optimizeMetric"
-                    checked={state.metricsConfig.classificationMetric === metric.id}
-                    onChange={() => setState(prev => ({
-                      ...prev,
-                      metricsConfig: {
-                        ...prev.metricsConfig,
-                        classificationMetric: metric.id,
-                        optimizeMetric: metric.id
-                      }
-                    }))}
-                    className="sr-only"
-                    tabIndex={-1}
-                  />
-                  <span>{metric.name}</span>
-                </label>
-              ))}
-            </div>
-
-          </>
-        ) : (
-          /* Regression Metric */
-          <div className="flex flex-wrap gap-2">
-            {REGRESSION_METRICS.map((metric) => (
-              <label
-                key={metric.id}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                  state.metricsConfig.regressionMetric === metric.id
-                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700'
-                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-                }`}
-                title={metric.description}
-              >
-                <input
-                  type="radio"
-                  name="optimizeMetric"
-                  checked={state.metricsConfig.regressionMetric === metric.id}
-                  onChange={() => setState(prev => ({
-                    ...prev,
-                    metricsConfig: {
-                      ...prev.metricsConfig,
-                      regressionMetric: metric.id,
-                      optimizeMetric: metric.id
-                    }
-                  }))}
-                  className="sr-only"
-                  tabIndex={-1}
-                />
-                <span>{metric.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Summary */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-600 dark:text-gray-400">Total Parameter Combinations:</span>
-          <span className="font-bold text-blue-600">{calculateCombinations().toLocaleString()}</span>
-        </div>
-        <div className="flex items-center justify-between mt-2">
-          <span className="text-sm text-gray-600 dark:text-gray-400">Total Individuals to Evaluate:</span>
-          <span className="font-bold text-blue-600">
-            {(state.geneticConfig.populationSize * state.geneticConfig.generations).toLocaleString()}
-          </span>
-        </div>
-      </div>
+      )}
 
       {/* Load Profile Dialog */}
       {showLoadProfileDialog && (
@@ -1423,8 +1356,202 @@ const Step1Settings: React.FC<Step1Props> = ({
   );
 };
 
-// Step 2: Summary Component
-interface Step2Props {
+// Step 2: Genetic Optimization Component
+interface Step2GeneticProps {
+  state: ReturnType<typeof getDefaultState>;
+  setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
+  calculateCombinations: () => number;
+}
+
+const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
+  state,
+  setState,
+  calculateCombinations,
+}) => {
+  return (
+    <div className="space-y-6">
+      {/* Genetic Algorithm Config */}
+      <div>
+        <div className="flex items-center space-x-2 mb-3">
+          <Activity size={16} className="text-gray-400" />
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Genetic Algorithm</label>
+        </div>
+        <div className="grid grid-cols-4 gap-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Population</label>
+            <input
+              type="number"
+              value={state.geneticConfig.populationSize}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, populationSize: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Generations</label>
+            <input
+              type="number"
+              value={state.geneticConfig.generations}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, generations: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Epochs/Individual</label>
+            <input
+              type="number"
+              value={state.geneticConfig.trainingEpochs}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, trainingEpochs: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Early Stop (gens)</label>
+            <input
+              type="number"
+              value={state.geneticConfig.earlyStoppingGenerations}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, earlyStoppingGenerations: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+          </div>
+        </div>
+
+        {/* Advanced GA Settings */}
+        <div className="grid grid-cols-3 gap-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 mt-4">
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Crossover Probability</label>
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max="1"
+              value={state.geneticConfig.crossoverProb}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, crossoverProb: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+            <p className="text-xs text-gray-500 mt-1">Probability of combining two parents (0-1)</p>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Mutation Probability</label>
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max="1"
+              value={state.geneticConfig.mutationProb}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, mutationProb: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+            <p className="text-xs text-gray-500 mt-1">Probability of random changes (0-1)</p>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Elitism Percent</label>
+            <input
+              type="number"
+              step="5"
+              min="0"
+              max="100"
+              value={state.geneticConfig.elitismPercent}
+              onChange={(e) => setState(prev => ({ ...prev, geneticConfig: { ...prev.geneticConfig, elitismPercent: Number(e.target.value) } }))}
+              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+            <p className="text-xs text-gray-500 mt-1">% of best individuals kept (0-100)</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Optimization Metrics */}
+      <div>
+        <div className="flex items-center space-x-2 mb-3">
+          <Zap size={16} className="text-gray-400" />
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Optimization Metric
+          </label>
+        </div>
+
+        {state.jobType === 'classification' ? (
+          <div className="flex flex-wrap gap-2">
+            {CLASSIFICATION_METRICS.map((metric) => (
+              <label
+                key={metric.id}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                  state.metricsConfig.classificationMetric === metric.id
+                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                }`}
+                title={metric.description}
+              >
+                <input
+                  type="radio"
+                  name="optimizeMetric"
+                  checked={state.metricsConfig.classificationMetric === metric.id}
+                  onChange={() => setState(prev => ({
+                    ...prev,
+                    metricsConfig: {
+                      ...prev.metricsConfig,
+                      classificationMetric: metric.id,
+                      optimizeMetric: metric.id
+                    }
+                  }))}
+                  className="sr-only"
+                  tabIndex={-1}
+                />
+                <span>{metric.name}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {REGRESSION_METRICS.map((metric) => (
+              <label
+                key={metric.id}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                  state.metricsConfig.regressionMetric === metric.id
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                }`}
+                title={metric.description}
+              >
+                <input
+                  type="radio"
+                  name="optimizeMetric"
+                  checked={state.metricsConfig.regressionMetric === metric.id}
+                  onChange={() => setState(prev => ({
+                    ...prev,
+                    metricsConfig: {
+                      ...prev.metricsConfig,
+                      regressionMetric: metric.id,
+                      optimizeMetric: metric.id
+                    }
+                  }))}
+                  className="sr-only"
+                  tabIndex={-1}
+                />
+                <span>{metric.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Summary */}
+      <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-600 dark:text-gray-400">Total Parameter Combinations:</span>
+          <span className="font-bold text-blue-600">{calculateCombinations().toLocaleString()}</span>
+        </div>
+        <div className="flex items-center justify-between mt-2">
+          <span className="text-sm text-gray-600 dark:text-gray-400">Total Individuals to Evaluate:</span>
+          <span className="font-bold text-blue-600">
+            {(state.geneticConfig.populationSize * state.geneticConfig.generations).toLocaleString()}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Step 3: Summary Component
+interface Step3Props {
   state: ReturnType<typeof getDefaultState>;
   setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
   selectedDataset: Dataset | undefined;
@@ -1435,7 +1562,7 @@ interface Step2Props {
   availableModels: Array<{id: string, name: string, description: string}>;
 }
 
-const Step2Summary: React.FC<Step2Props> = ({
+const Step3Summary: React.FC<Step3Props> = ({
   state,
   setState,
   selectedDataset,
