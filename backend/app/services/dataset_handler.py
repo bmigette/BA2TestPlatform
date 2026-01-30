@@ -23,6 +23,41 @@ from app.services.task_queue import get_task_queue
 logger = logging.getLogger(__name__)
 
 
+def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add time-based features to OHLCV DataFrame.
+
+    Adds:
+    - day_of_week: 0=Monday, 6=Sunday
+    - hour_of_day: 0-23
+
+    These features can help models learn time-dependent patterns
+    like day-of-week effects or intraday patterns.
+
+    Args:
+        df: DataFrame with 'Date' column (must be datetime)
+
+    Returns:
+        DataFrame with added time features
+    """
+    if 'Date' not in df.columns:
+        logger.warning("Cannot add time features: 'Date' column not found")
+        return df
+
+    df = df.copy()
+
+    # Ensure Date is datetime
+    if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+        df['Date'] = pd.to_datetime(df['Date'])
+
+    # Add time-based features
+    df['day_of_week'] = df['Date'].dt.dayofweek  # 0=Monday, 6=Sunday
+    df['hour_of_day'] = df['Date'].dt.hour        # 0-23
+
+    logger.debug(f"Added time features: day_of_week and hour_of_day")
+    return df
+
+
 def update_dataset_progress(dataset_id: int, message: str, task_id: Optional[str] = None):
     """
     Update dataset progress message using a short-lived DB session.
@@ -103,6 +138,10 @@ def handle_dataset_regeneration(task_id: str, payload: Dict[str, Any]) -> Dict[s
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values('Date').reset_index(drop=True)
+
+        # Add time-based features (day_of_week, hour_of_day)
+        df = add_time_features(df)
+
         logger.info(f"[Task {task_id}] Processing {len(df)} OHLCV data points")
         update_dataset_progress(dataset_id, f"Loaded {len(df)} OHLCV data points", task_id)
 

@@ -35,6 +35,119 @@ RNN_MODELS = ['lstm', 'gru']
 # Multi-step models that support output_chunk_length > 1
 MULTISTEP_MODELS = ['nbeats', 'tcn', 'transformer', 'tft']
 
+# Sparse indicators that should be forward-filled at training time
+# These indicators have NaN between pivot points which can cause training issues
+SPARSE_INDICATOR_PATTERNS = ['zigzag', 'zigzag_direction']
+
+
+def ffill_sparse_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Forward-fill sparse indicators at training time.
+
+    Sparse indicators like ZigZag have NaN values between pivot points.
+    This is useful for visualization but causes issues during training.
+    Forward-filling makes the data usable for ML while keeping the
+    original sparse data in the dataset for chart visualization.
+
+    Args:
+        df: DataFrame with indicator columns
+
+    Returns:
+        DataFrame with sparse indicators forward-filled
+    """
+    df = df.copy()
+    ffilled_cols = []
+
+    for col in df.columns:
+        col_lower = col.lower()
+        if any(pattern in col_lower for pattern in SPARSE_INDICATOR_PATTERNS):
+            nan_count_before = df[col].isna().sum()
+            if nan_count_before > 0:
+                df[col] = df[col].ffill()
+                nan_count_after = df[col].isna().sum()
+                if nan_count_before != nan_count_after:
+                    ffilled_cols.append(col)
+                    logger.debug(f"Forward-filled {col}: {nan_count_before} -> {nan_count_after} NaNs")
+
+    if ffilled_cols:
+        logger.info(f"Forward-filled {len(ffilled_cols)} sparse indicator(s): {ffilled_cols}")
+
+    return df
+
+
+def add_target_features(df: pd.DataFrame, target_config: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Add target-derived features based on target configuration.
+
+    Creates additional features that can help the model learn:
+    - Lagged indicator values (for indicator-based targets)
+    - Bars-since-last-signal counter
+
+    Args:
+        df: DataFrame with indicator columns
+        target_config: Target configuration dict with:
+            - includeValues: bool - Include indicator values as features
+            - valueLookback: int - How many bars of lagged values (default 5)
+            - includeBarsSince: bool - Include bars-since-last-signal counter
+            - indicator: str - Name of indicator (for indicator-based targets)
+
+    Returns:
+        DataFrame with added target features
+    """
+    df = df.copy()
+    added_features = []
+
+    # Check if we should include indicator values as features
+    if target_config.get('includeValues', False):
+        # Find the indicator column
+        indicator = target_config.get('indicator')
+        if indicator:
+            # Look for columns matching the indicator
+            indicator_cols = [c for c in df.columns if indicator.lower() in c.lower()]
+            lookback = target_config.get('valueLookback', 5)
+
+            for indicator_col in indicator_cols:
+                # Add lagged values
+                for lag in range(1, lookback + 1):
+                    lag_col = f'{indicator_col}_lag_{lag}'
+                    df[lag_col] = df[indicator_col].shift(lag).ffill()
+                    added_features.append(lag_col)
+                logger.debug(f"Added {lookback} lagged features for {indicator_col}")
+
+    # Check if we should include bars-since-last-signal
+    if target_config.get('includeBarsSince', False):
+        # Look for the target column
+        target_col = None
+        for col in df.columns:
+            if col.lower() == 'target' or col.startswith('target_'):
+                target_col = col
+                break
+
+        if target_col and target_col in df.columns:
+            df['bars_since_signal'] = calculate_bars_since_change(df[target_col])
+            added_features.append('bars_since_signal')
+            logger.debug(f"Added bars_since_signal feature from {target_col}")
+
+    if added_features:
+        logger.info(f"Added {len(added_features)} target-derived features: {added_features[:5]}{'...' if len(added_features) > 5 else ''}")
+
+    return df
+
+
+def calculate_bars_since_change(series: pd.Series) -> pd.Series:
+    """
+    Count bars since last value change in a series.
+
+    Args:
+        series: pandas Series with target values
+
+    Returns:
+        Series with bar counts since last change
+    """
+    changes = series != series.shift(1)
+    groups = changes.cumsum()
+    return series.groupby(groups).cumcount()
+
 
 def create_rnn_target_columns(
     df: pd.DataFrame,
@@ -518,6 +631,87 @@ def cleanup_generation_models(task_id: str, generation: int):
         logger.warning(f"Failed to cleanup generation {generation} models: {e}")
 
 
+def cleanup_non_elite_models(
+    task_id: str,
+    all_individuals: List[Dict[str, Any]],
+    elitism_percent: float,
+    population_size: int
+):
+    """
+    Remove all model files that are not in the elite set.
+
+    Called after each generation to prevent disk from filling up.
+    Keeps only the top N models based on fitness.
+
+    Args:
+        task_id: Job ID
+        all_individuals: List of all evaluated individuals with their info
+        elitism_percent: Percentage of population to keep as elite
+        population_size: Size of population for calculating elite count
+    """
+    import re
+
+    try:
+        models_dir = get_job_models_dir(task_id)
+
+        # Calculate number of elite models to keep
+        elite_count = max(1, int((elitism_percent / 100.0) * population_size))
+        # Keep at least 10 models for final selection
+        elite_count = max(elite_count, 10)
+
+        # Sort individuals by fitness (descending) and get elite set
+        sorted_individuals = sorted(
+            all_individuals,
+            key=lambda x: x.get('fitness', 0),
+            reverse=True
+        )
+        elite_individuals = sorted_individuals[:elite_count]
+
+        # Build set of elite model keys (gen, individual, model_type) to keep
+        elite_keys = set()
+        for ind in elite_individuals:
+            gen = ind.get('generation', 0)
+            individual_num = ind.get('individual', 0)
+            model_type = ind.get('model_type', 'unknown')
+            elite_keys.add((gen, individual_num, model_type))
+
+        # Find all model files and delete non-elite ones
+        # Pattern: gen{gen:03d}_ind{ind:03d}_{model_type}_f{fitness:.4f}.pt or _meta.json
+        all_model_files = list(models_dir.glob("gen*_ind*_*"))
+        deleted_count = 0
+
+        # Regex to parse filename: gen000_ind001_lstm_f0.1234.pt
+        pattern = re.compile(r'^gen(\d{3})_ind(\d{3})_([^_]+)_f[\d.]+')
+
+        for file_path in all_model_files:
+            filename = file_path.stem
+            if filename.endswith('_meta'):
+                filename = filename[:-5]  # Remove _meta suffix
+
+            match = pattern.match(filename)
+            if not match:
+                continue  # Skip files that don't match pattern
+
+            file_gen = int(match.group(1))
+            file_ind = int(match.group(2))
+            file_model_type = match.group(3)
+
+            file_key = (file_gen, file_ind, file_model_type)
+
+            if file_key not in elite_keys:
+                try:
+                    file_path.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete {file_path}: {e}")
+
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} non-elite model files, kept {len(elite_keys)} elite models")
+
+    except Exception as e:
+        logger.warning(f"Failed to cleanup non-elite models: {e}", exc_info=True)
+
+
 def save_best_model(
     task_id: str,
     model: Any,
@@ -792,6 +986,10 @@ def load_dataset(
         df = pd.read_csv(file_path)
         original_rows = len(df)
         logger.info(f"Loaded dataset {dataset_id}: {original_rows} rows, {len(df.columns)} columns")
+
+        # Forward-fill sparse indicators (e.g., zigzag) for training
+        # These have NaN between pivots which can cause training issues
+        df = ffill_sparse_indicators(df)
 
         # Apply date range filter if specified
         if start_date or end_date:
@@ -1721,42 +1919,67 @@ def train_classification_optimization(
     n_thresholds = max(1, int(round((threshold_max - threshold_min) / threshold_step)) + 1)
     logger.info(f"Threshold optimization: min={threshold_min}, max={threshold_max}, step={threshold_step}, n_steps={n_thresholds}")
 
-    seq_len = parameter_ranges.get('seqLen')
-    if seq_len is None:
-        logger.error("Classification training failed: parameter_ranges.seqLen is required")
-        return {'model_type': 'classification', 'status': 'failed', 'error': 'parameter_ranges.seqLen is required for classification'}
+    # Handle seq_len - either fixed or optimizable range
+    optimize_seq_len = parameter_ranges.get('optimizeSeqLen', False)
+    if optimize_seq_len:
+        seq_len_min = parameter_ranges.get('seqLenMin', 24)
+        seq_len_max = parameter_ranges.get('seqLenMax', 48)
+        seq_len_step = parameter_ranges.get('seqLenStep', 12)
+        # Generate all possible seq_len values
+        seq_len_values = list(range(seq_len_min, seq_len_max + 1, seq_len_step))
+        if not seq_len_values:
+            seq_len_values = [seq_len_min]
+        seq_len = seq_len_values[0]  # Default for initial data prep
+        logger.info(f"SeqLen optimization enabled: values={seq_len_values}")
+    else:
+        seq_len = parameter_ranges.get('seqLen')
+        if seq_len is None:
+            logger.error("Classification training failed: parameter_ranges.seqLen is required")
+            return {'model_type': 'classification', 'status': 'failed', 'error': 'parameter_ranges.seqLen is required for classification'}
+        seq_len_values = [seq_len]  # Only one value
 
-    # Prepare data for each prediction mode
-    data_by_mode = {}
+    # Prepare data for each prediction mode and seq_len combination
+    # When optimizing seq_len, we need data prepared for each value
+    data_by_mode_and_seqlen = {}
 
-    for mode in prediction_modes:
-        try:
-            X_train, X_test, y_train, y_test = training_service.prepare_data_split(
-                full_df,
-                train_ratio=train_ratio,
-                target_column=target_column,
-                feature_columns=feature_columns[:20],  # Limit features
-                seq_len=seq_len,
-                prediction_horizon=prediction_horizon,
-                prediction_mode=mode
-            )
-            c_out = 2 if mode == 'shift' else prediction_horizon
-            data_by_mode[mode] = {
-                'X_train': X_train, 'X_test': X_test,
-                'y_train': y_train, 'y_test': y_test,
-                'c_out': c_out
-            }
-            logger.info(f"Prepared {mode} data: train={len(X_train)}, test={len(X_test)}, c_out={c_out}")
-        except Exception as e:
-            logger.error(f"Failed to prepare {mode} data: {e}")
-            continue
+    for current_seq_len in seq_len_values:
+        for mode in prediction_modes:
+            cache_key = (mode, current_seq_len)
+            try:
+                X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+                    full_df,
+                    train_ratio=train_ratio,
+                    target_column=target_column,
+                    feature_columns=feature_columns[:20],  # Limit features
+                    seq_len=current_seq_len,
+                    prediction_horizon=prediction_horizon,
+                    prediction_mode=mode
+                )
+                c_out = 2 if mode == 'shift' else prediction_horizon
+                data_by_mode_and_seqlen[cache_key] = {
+                    'X_train': X_train, 'X_test': X_test,
+                    'y_train': y_train, 'y_test': y_test,
+                    'c_out': c_out,
+                    'seq_len': current_seq_len
+                }
+                logger.info(f"Prepared {mode} data (seq_len={current_seq_len}): train={len(X_train)}, test={len(X_test)}, c_out={c_out}")
+            except Exception as e:
+                logger.error(f"Failed to prepare {mode} data (seq_len={current_seq_len}): {e}")
+                continue
 
-    if not data_by_mode:
+    if not data_by_mode_and_seqlen:
         return {
             'model_type': 'classification',
             'status': 'failed',
             'error': 'Failed to prepare data for any prediction mode'
         }
+
+    # For backwards compatibility, create data_by_mode using default seq_len
+    data_by_mode = {}
+    for mode in prediction_modes:
+        cache_key = (mode, seq_len_values[0])
+        if cache_key in data_by_mode_and_seqlen:
+            data_by_mode[mode] = data_by_mode_and_seqlen[cache_key]
 
     # Progress tracking
     progress_state = {
@@ -1803,6 +2026,7 @@ def train_classification_optimization(
 
         progress_state['current_individual'] += 1
         gen = progress_state['current_generation']
+        individual_num = progress_state['current_individual']
 
         # Get model type from params
         model_type_idx = int(params.get('model_type_idx', 0))
@@ -1825,17 +2049,30 @@ def train_classification_optimization(
         mode_idx = int(params.get('prediction_mode_idx', 0))
         mode = prediction_modes[mode_idx % len(prediction_modes)]
 
-        # Get data for this mode
-        mode_data = data_by_mode.get(mode)
+        # Get seq_len from params (if optimizing seq_len)
+        if 'seq_len_idx' in params and optimize_seq_len:
+            seq_len_idx = int(params['seq_len_idx'])
+            current_seq_len = seq_len_values[seq_len_idx % len(seq_len_values)]
+        else:
+            current_seq_len = seq_len_values[0]
+
+        # Get data for this mode and seq_len combination
+        cache_key = (mode, current_seq_len)
+        mode_data = data_by_mode_and_seqlen.get(cache_key)
         if not mode_data:
-            logger.warning(f"No data for mode {mode}, skipping")
-            return 0.0
+            # Fallback to default seq_len
+            cache_key = (mode, seq_len_values[0])
+            mode_data = data_by_mode_and_seqlen.get(cache_key)
+            if not mode_data:
+                logger.warning(f"No data for mode {mode}, seq_len {current_seq_len}, skipping")
+                return 0.0
 
         X_train = mode_data['X_train']
         X_test = mode_data['X_test']
         y_train = mode_data['y_train']
         y_test = mode_data['y_test']
         c_out = mode_data['c_out']
+        actual_seq_len = mode_data['seq_len']
 
         # Extract hyperparameters (from genetic algorithm params - no defaults needed, GA generates them)
         hidden_size = int(params['hidden_size'])
@@ -1927,17 +2164,51 @@ def train_classification_optimization(
                     **model_params,
                     'learning_rate': learning_rate,
                     'loss_function': current_loss_function,
-                    'threshold': current_threshold
+                    'threshold': current_threshold,
+                    'seq_len': actual_seq_len
                 }
 
             progress_state['success_count'] += 1
 
+            # Save individual model for elite selection later
+            import json
+            import torch
+            models_dir = get_job_models_dir(task_id)
+            model_filename = f"gen{gen:03d}_ind{individual_num:03d}_{model_type}_f{fitness:.4f}"
+            model_save_path = models_dir / f"{model_filename}.pt"
+            meta_save_path = models_dir / f"{model_filename}_meta.json"
+            try:
+                torch.save(result['model'].state_dict(), model_save_path)
+                # Save metadata for model reconstruction
+                metadata = {
+                    'task_id': task_id,
+                    'generation': gen,
+                    'individual': individual_num,
+                    'model_type': model_type,
+                    'fitness': fitness,
+                    'params': model_params,
+                    'learning_rate': learning_rate,
+                    'loss_function': current_loss_function,
+                    'threshold': current_threshold,
+                    'prediction_mode': mode,
+                    'seq_len': actual_seq_len,
+                    'c_in': X_train.shape[1],
+                    'c_out': c_out,
+                    'metrics': metrics
+                }
+                with open(meta_save_path, 'w') as f:
+                    json.dump(metadata, f, indent=2, default=str)
+            except Exception as save_err:
+                logger.warning(f"Failed to save individual model: {save_err}")
+
             # Record individual
             individual_record = {
                 'generation': gen,
+                'individual': individual_num,
                 'model_type': model_type,
                 'prediction_mode': mode,
                 'params': model_params,
+                'seq_len': actual_seq_len,
                 'loss_function': current_loss_function,
                 'threshold': current_threshold,
                 'fitness': fitness,
@@ -1952,7 +2223,8 @@ def train_classification_optimization(
             current_progress = progress_base + (gen / generations) * progress_range * 0.9
             # Shorten loss function name for display
             loss_short = current_loss_function.replace('_loss', '').replace('weighted_cross_entropy', 'weighted_ce').replace('cross_entropy', 'ce')
-            progress_msg = f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f} loss={loss_short} thresh={current_threshold:.2f}"
+            seq_len_str = f" seq={actual_seq_len}" if optimize_seq_len else ""
+            progress_msg = f"Gen {gen}: {model_type} ({mode}) fitness={fitness:.4f} loss={loss_short} thresh={current_threshold:.2f}{seq_len_str}"
             update_job_progress(task_id, current_progress, progress_msg)
 
             return fitness
@@ -1980,6 +2252,15 @@ def train_classification_optimization(
             error_count=progress_state['error_count'],
             success_count=progress_state['success_count'],
             reset_epoch_history=True
+        )
+
+        # Cleanup non-elite models to save disk space
+        elitism_pct = genetic_config.get('elitismPercent', 10.0)
+        cleanup_non_elite_models(
+            task_id=task_id,
+            all_individuals=progress_state['all_individuals'],
+            elitism_percent=elitism_pct,
+            population_size=population_size
         )
 
     # Build parameter ranges for genetic algorithm - all required (no defaults)
@@ -2060,9 +2341,20 @@ def train_classification_optimization(
         torch.save(best_model[0].state_dict(), model_path)
         logger.info(f"Saved best model to {model_path}")
 
+    # Save elite models (top N based on elitism percent or default 10)
+    elitism_percent = genetic_config.get('elitismPercent', 10.0)
+    elite_paths = save_elite_models(
+        task_id=task_id,
+        all_individuals=progress_state['all_individuals'],
+        elitism_percent=elitism_percent,
+        population_size=population_size,
+        default_elite_count=10
+    )
+    logger.info(f"Saved {len(elite_paths)} elite models for classification job")
+
     update_job_progress(
         task_id,
-        progress_base + progress_range,
+        100.0,  # Ensure 100% progress on completion
         f"Classification: Completed with fitness {opt_result.get('best_fitness', 0):.4f}"
     )
 
@@ -2074,6 +2366,7 @@ def train_classification_optimization(
         'generations_run': opt_result.get('generations_run'),
         'metrics': best_metrics[0],
         'model_path': model_path,
+        'elite_model_paths': elite_paths,
         'all_individuals': progress_state['all_individuals'],
         'error_count': progress_state['error_count'],
         'success_count': progress_state['success_count'],
@@ -2467,8 +2760,14 @@ def train_unified_optimization(
         if check_cancelled():
             raise InterruptedError("Task cancelled")
 
-        # Note: We keep all models during training and cleanup at the end
-        # to preserve elite models from any generation
+        # Cleanup non-elite models to save disk space
+        elitism_pct = genetic_config.get('elitismPercent', 10.0)
+        cleanup_non_elite_models(
+            task_id=task_id,
+            all_individuals=progress_state['all_individuals'],
+            elitism_percent=elitism_pct,
+            population_size=population_size
+        )
 
         # Update training state for UI
         update_job_training_state(
@@ -2771,5 +3070,31 @@ def build_param_ranges(model_type: str, ranges: Dict[str, Any], max_input_chunk:
         param_ranges['nhead'] = {'min': 2, 'max': 8, 'step': 2, 'type': 'int'}
         param_ranges['num_encoder_layers'] = {'min': 1, 'max': 4, 'step': 1, 'type': 'int'}
         param_ranges['num_decoder_layers'] = {'min': 1, 'max': 4, 'step': 1, 'type': 'int'}
+
+    # Add seq_len optimization if enabled
+    if ranges.get('optimizeSeqLen', False):
+        seq_min = ranges.get('seqLenMin', 24)
+        seq_max = ranges.get('seqLenMax', 48)
+        seq_step = ranges.get('seqLenStep', 12)
+
+        # Calculate number of discrete seq_len values
+        n_seq_values = int((seq_max - seq_min) / seq_step) + 1
+        if n_seq_values > 1:
+            # Store as index that will be decoded to actual seq_len
+            # seq_len = seq_min + seq_len_idx * seq_step
+            param_ranges['seq_len_idx'] = {
+                'min': 0,
+                'max': n_seq_values - 1,
+                'step': 1,
+                'type': 'int'
+            }
+            # Store the range info for decoding later
+            param_ranges['_seq_len_config'] = {
+                'min': seq_min,
+                'max': seq_max,
+                'step': seq_step,
+                'type': 'meta'  # Not a real parameter, just config
+            }
+            logger.info(f"SeqLen optimization enabled: {seq_min}-{seq_max} step {seq_step} ({n_seq_values} values)")
 
     return param_ranges
