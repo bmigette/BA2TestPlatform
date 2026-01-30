@@ -243,5 +243,99 @@ class TestTrainingWithRealData:
             assert all(0 <= p <= 1 for p in preds)
 
 
+class TestAllModelsShiftMode:
+    """Parametrized tests for all models with shift mode."""
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model_type,horizon", [
+        ('lstm', 1), ('lstm', 3),
+        ('gru', 1), ('gru', 3),
+        ('tcn', 1), ('tcn', 3),
+        ('inception', 1), ('inception', 3),
+        ('resnet', 1), ('resnet', 3),
+        ('xception', 1), ('xception', 3),
+        ('omniscale', 1), ('omniscale', 3),
+        ('minirocket', 1), ('minirocket', 3),
+        ('lstm_fcn', 1), ('lstm_fcn', 3),
+        ('tst', 1), ('tst', 3),
+    ])
+    def test_train_all_models_shift_mode(self, model_service, training_service, model_type, horizon):
+        """Test all models with shift mode at horizon 1 and 3."""
+        df = pd.read_csv(TEST_DATA_PATH).head(800)
+        feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+        df = df.dropna(subset=feature_cols + ['target'])
+
+        X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+            df, train_ratio=0.8, target_column='target', feature_columns=feature_cols,
+            seq_len=24, prediction_horizon=horizon, prediction_mode='shift'
+        )
+
+        # Shift mode: 1D target
+        assert len(y_train.shape) == 1
+
+        model = model_service.create_model(
+            model_type, {},
+            c_in=X_train.shape[1], c_out=2, seq_len=X_train.shape[2]
+        )
+        result = training_service.train_model(
+            model, (X_train, y_train), val_data=(X_test, y_test),
+            epochs=2, prediction_mode='shift'
+        )
+        assert result['status'] == 'success'
+
+
+class TestAllModelsMultistepMode:
+    """Parametrized tests for all models with multi-step mode."""
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model_type,horizon", [
+        ('lstm', 1), ('lstm', 3),
+        ('gru', 1), ('gru', 3),
+        ('tcn', 1), ('tcn', 3),
+        ('inception', 1), ('inception', 3),
+        ('resnet', 1), ('resnet', 3),
+        ('xception', 1), ('xception', 3),
+        ('omniscale', 1), ('omniscale', 3),
+        ('minirocket', 1), ('minirocket', 3),
+        ('lstm_fcn', 1), ('lstm_fcn', 3),
+        ('tst', 1), ('tst', 3),
+    ])
+    def test_train_all_models_multistep_mode(self, model_service, training_service, model_type, horizon):
+        """Test all models with multi-step mode at horizon 1 and 3."""
+        df = pd.read_csv(TEST_DATA_PATH).head(800)
+        feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+        df = df.dropna(subset=feature_cols + ['target'])
+
+        X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+            df, train_ratio=0.8, target_column='target', feature_columns=feature_cols,
+            seq_len=24, prediction_horizon=horizon, prediction_mode='multistep'
+        )
+
+        # Multi-step mode: 2D target
+        assert len(y_train.shape) == 2
+        assert y_train.shape[1] == horizon
+
+        model = model_service.create_model(
+            model_type, {},
+            c_in=X_train.shape[1], c_out=horizon, seq_len=X_train.shape[2]
+        )
+        result = training_service.train_model(
+            model, (X_train, y_train), val_data=(X_test, y_test),
+            epochs=2, prediction_mode='multistep'
+        )
+        assert result['status'] == 'success'
+
+        # Test assessment for multi-step
+        if result['status'] == 'success':
+            metrics = training_service.assess_model(
+                result['model'], (X_test, y_test),
+                prediction_mode='multistep', learner=result.get('learner')
+            )
+            assert 'h1_f1' in metrics
+            assert 'f1_score' in metrics
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
