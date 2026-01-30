@@ -17,7 +17,7 @@ from app.services.tsai_models import TSAIModelService, TSAI_AVAILABLE
 pytestmark = pytest.mark.skipif(not TSAI_AVAILABLE, reason="tsai not available")
 
 # Test data path
-TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data/AAPL_1h_test.csv")
+TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "AAPL_1h_test.csv")
 
 
 @pytest.fixture
@@ -48,13 +48,13 @@ class TestTSAIModelService:
     """Tests for TSAIModelService."""
 
     def test_get_available_models(self, model_service):
-        """Test getting available models."""
+        """Test getting available models (excludes forecasting-only models)."""
         models = model_service.get_available_models()
-        assert len(models) == 11
+        assert len(models) == 10  # PatchTST excluded (forecasting-only)
         assert 'lstm' in models
         assert 'inception' in models
         assert 'minirocket' in models
-        assert 'patchtst' in models
+        assert 'patchtst' not in models  # Excluded from classification
 
     def test_get_parameter_ranges(self, model_service):
         """Test getting parameter ranges."""

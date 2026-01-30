@@ -27,7 +27,7 @@ import pandas as pd
 import numpy as np
 
 # Test configuration
-TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data/AAPL_1h_test.csv")
+TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "AAPL_1h_test.csv")
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "test_integration.db")
 REPORT_PATH = os.path.join(os.path.dirname(__file__), "integration_test_report.json")
 MONTHS_OF_DATA = 6  # Use 6 months only

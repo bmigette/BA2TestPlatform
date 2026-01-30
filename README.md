@@ -98,6 +98,11 @@ For GPU-accelerated training, install PyTorch with CUDA support **before** insta
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
    ```
 
+**Note:** The tsai library (used for classification models) requires PyTorch < 2.8. If you encounter dependency conflicts, pin to compatible versions:
+```bash
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+```
+
 Then install the remaining dependencies:
 ```bash
 pip install -r requirements.txt
@@ -117,8 +122,8 @@ If you see `AttributeError: partially initialized module 'torchvision'` or simil
 # Uninstall existing PyTorch packages
 pip uninstall torch torchvision torchaudio -y
 
-# Reinstall all three together from the same source
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+# Reinstall all three together from the same source (pinned for tsai compatibility)
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ### 2. Configure API Keys

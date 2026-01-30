@@ -16,7 +16,7 @@ from app.services.tsai_training import TSAITrainingService
 
 pytestmark = pytest.mark.skipif(not TSAI_AVAILABLE, reason="tsai not available")
 
-TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data/AAPL_1h_test.csv")
+TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "AAPL_1h_test.csv")
 
 
 @pytest.fixture
@@ -33,12 +33,17 @@ def model_service():
 def prepared_data(training_service):
     """Prepare train/test data from AAPL dataset."""
     df = pd.read_csv(TEST_DATA_PATH).head(500)
+    original_len = len(df)
+
+    feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
 
     # Add simple binary target (price up next bar)
     df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-    df = df.dropna()
+    # Only drop NaN for columns we use (not all columns which have indicator warmup NaNs)
+    df = df.dropna(subset=feature_cols + ['target'])
 
-    feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    # Ensure dropna didn't remove too many rows (should only lose 1 row from shift)
+    assert len(df) >= original_len * 0.9, f"dropna removed too many rows: {original_len} -> {len(df)}"
 
     X_train, X_test, y_train, y_test = training_service.prepare_data_split(
         df, train_ratio=0.8,
@@ -55,13 +60,19 @@ class TestTSAITrainingService:
     def test_prepare_data_split(self, training_service):
         """Test data preparation and splitting."""
         df = pd.read_csv(TEST_DATA_PATH).head(200)
+        original_len = len(df)
+        feature_cols = ['Close', 'Volume']
         df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-        df = df.dropna()
+        # Only drop NaN for columns we use (not all columns which have indicator warmup NaNs)
+        df = df.dropna(subset=feature_cols + ['target'])
+
+        # Ensure dropna didn't remove too many rows (should only lose 1 row from shift)
+        assert len(df) >= original_len * 0.9, f"dropna removed too many rows: {original_len} -> {len(df)}"
 
         X_train, X_test, y_train, y_test = training_service.prepare_data_split(
             df, train_ratio=0.8,
             target_column='target',
-            feature_columns=['Close', 'Volume'],
+            feature_columns=feature_cols,
             seq_len=10
         )
 
