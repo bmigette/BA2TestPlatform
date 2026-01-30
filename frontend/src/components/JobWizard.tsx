@@ -66,10 +66,12 @@ interface JobProfile {
   selectedModels: string[];
   parameterRanges: ParameterRanges;
   predictionTargets: Record<string, unknown>[];  // Can be old or new TargetConfig format
+  selectedTargetSetIds?: number[];  // IDs of selected target sets
   trainTestSplit: number;
   geneticConfig?: GeneticConfig;
   metricsConfig?: MetricsConfig;
   predictionHorizon?: number;
+  predictionModes?: ('shift' | 'multistep')[];
 }
 
 interface TargetPreview {
@@ -214,6 +216,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
   const [state, setState] = useState(getDefaultState());
   const [showLoadProfileDialog, setShowLoadProfileDialog] = useState(false);
   const [showSaveProfileDialog, setShowSaveProfileDialog] = useState(false);
+  const [showDeleteConfirmDialog, setShowDeleteConfirmDialog] = useState(false);
+  const [profileToDelete, setProfileToDelete] = useState<JobProfile | null>(null);
   const [newProfileName, setNewProfileName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -383,6 +387,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
         seqLen: profile.parameterRanges?.seqLen ?? prev.parameterRanges.seqLen ?? 24,
       },
       predictionTargets: profile.predictionTargets || [],
+      selectedTargetSetIds: profile.selectedTargetSetIds || [],
       trainTestSplit: profile.trainTestSplit || 80,
       // Merge geneticConfig to preserve defaults for fields not in old profiles
       geneticConfig: {
@@ -395,7 +400,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
         ...(profile.metricsConfig || {}),
       },
       predictionHorizon: profile.predictionHorizon || 3,
-      predictionModes: (profile as any).predictionModes || ['shift'],
+      predictionModes: profile.predictionModes || ['shift'],
     }));
     // Fetch models for the profile's job type
     fetchModels(jobType);
@@ -409,6 +414,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
       selectedModels: state.selectedModels,
       parameterRanges: state.parameterRanges,
       predictionTargets: state.predictionTargets,
+      selectedTargetSetIds: state.selectedTargetSetIds,
       trainTestSplit: state.trainTestSplit,
       geneticConfig: state.geneticConfig,
       metricsConfig: state.metricsConfig,
@@ -417,6 +423,24 @@ const JobWizard: React.FC<JobWizardProps> = ({
     });
     setNewProfileName('');
     setShowSaveProfileDialog(false);
+  };
+
+  const handleDeleteProfileClick = (profile: JobProfile) => {
+    setProfileToDelete(profile);
+    setShowDeleteConfirmDialog(true);
+  };
+
+  const confirmDeleteProfile = async () => {
+    if (profileToDelete) {
+      await onDeleteProfile(profileToDelete.id);
+      setProfileToDelete(null);
+      setShowDeleteConfirmDialog(false);
+    }
+  };
+
+  const cancelDeleteProfile = () => {
+    setProfileToDelete(null);
+    setShowDeleteConfirmDialog(false);
   };
 
   const fetchPreview = async () => {
@@ -776,7 +800,14 @@ const JobWizard: React.FC<JobWizardProps> = ({
                         )}
                       </div>
                     </button>
-                    <button onClick={() => onDeleteProfile(profile.id)} className="text-red-500 p-1">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteProfileClick(profile);
+                      }}
+                      className="text-red-500 p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+                      title="Delete profile"
+                    >
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -805,6 +836,37 @@ const JobWizard: React.FC<JobWizardProps> = ({
             <div className="flex justify-end space-x-2">
               <button onClick={() => setShowSaveProfileDialog(false)} className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">Cancel</button>
               <button onClick={saveProfile} disabled={!newProfileName.trim()} className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50 hover:bg-green-700">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirmDialog && profileToDelete && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-sm w-full">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                <AlertTriangle size={20} className="text-red-600 dark:text-red-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Delete Profile</h3>
+            </div>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">
+              Are you sure you want to delete "<span className="font-medium text-gray-900 dark:text-gray-100">{profileToDelete.name}</span>"? This action cannot be undone.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={cancelDeleteProfile}
+                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteProfile}
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+              >
+                Delete
+              </button>
             </div>
           </div>
         </div>

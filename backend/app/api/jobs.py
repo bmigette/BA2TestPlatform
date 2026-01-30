@@ -582,26 +582,32 @@ from app.models.optimization_profile import OptimizationProfile as OptimizationP
 class OptimizationProfileCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    jobType: str = 'classification'
     selectedModels: List[str]
     parameterRanges: ParameterRanges
     predictionTargets: List[PredictionTarget]
+    selectedTargetSetIds: Optional[List[int]] = None
     trainTestSplit: float = 80.0
     geneticConfig: Optional[GeneticConfig] = None
     metricsConfig: Optional[MetricsConfig] = None
     predictionHorizon: int = 3
+    predictionModes: Optional[List[str]] = None
 
 
 class ProfileResponse(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    jobType: str = 'classification'
     selectedModels: List[str]
     parameterRanges: Dict[str, Any]
     predictionTargets: List[Dict[str, Any]]
+    selectedTargetSetIds: Optional[List[int]] = None
     trainTestSplit: float
     geneticConfig: Optional[Dict[str, Any]] = None
     metricsConfig: Optional[Dict[str, Any]] = None
     predictionHorizon: int = 3
+    predictionModes: Optional[List[str]] = None
     createdAt: str
     updatedAt: Optional[str] = None
 
@@ -612,13 +618,16 @@ def _profile_to_response(profile: OptimizationProfileModel) -> ProfileResponse:
         id=profile.id,
         name=profile.name,
         description=profile.description,
+        jobType=profile.job_type or 'classification',
         selectedModels=profile.model_types or [],
         parameterRanges=profile.parameter_ranges or {},
         predictionTargets=profile.prediction_targets or [],
+        selectedTargetSetIds=profile.selected_target_set_ids or [],
         trainTestSplit=profile.train_test_split or 80.0,
         geneticConfig=profile.genetic_config,
         metricsConfig=profile.metrics_config,
         predictionHorizon=profile.prediction_horizon or 3,
+        predictionModes=profile.prediction_modes or ['shift'],
         createdAt=profile.created_at.isoformat() if profile.created_at else datetime.now().isoformat(),
         updatedAt=profile.updated_at.isoformat() if profile.updated_at else None
     )
@@ -641,13 +650,16 @@ async def create_profile(profile: OptimizationProfileCreate, db: Session = Depen
         db_profile = OptimizationProfileModel(
             name=profile.name,
             description=profile.description,
+            job_type=profile.jobType,
             model_types=profile.selectedModels,
             parameter_ranges=profile.parameterRanges.dict() if profile.parameterRanges else {},
             prediction_targets=[t.dict() for t in profile.predictionTargets] if profile.predictionTargets else [],
+            selected_target_set_ids=profile.selectedTargetSetIds,
             train_test_split=profile.trainTestSplit,
             genetic_config=profile.geneticConfig.dict() if profile.geneticConfig else None,
             metrics_config=profile.metricsConfig.dict() if profile.metricsConfig else None,
-            prediction_horizon=profile.predictionHorizon
+            prediction_horizon=profile.predictionHorizon,
+            prediction_modes=profile.predictionModes
         )
 
         db.add(db_profile)
