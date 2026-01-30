@@ -28,48 +28,56 @@ class MacroService:
     FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
 
     # Economic indicator series IDs from FRED
+    # 'yoy_periods' indicates how many observations make 1 year for YoY calculation
     MACRO_INDICATORS = {
         'interest_rate': {
             'series': 'FEDFUNDS',
             'name': 'Federal Funds Rate',
             'description': 'Federal Reserve target interest rate',
-            'unit': '%'
+            'unit': '%',
+            'yoy_periods': 12  # Monthly data
         },
         'gdp': {
             'series': 'GDP',
             'name': 'Gross Domestic Product',
             'description': 'US GDP in billions of dollars',
-            'unit': 'Billions USD'
+            'unit': 'Billions USD',
+            'yoy_periods': 4  # Quarterly data
         },
         'inflation': {
             'series': 'CPIAUCSL',
             'name': 'Consumer Price Index',
             'description': 'CPI for all urban consumers',
-            'unit': 'Index'
+            'unit': 'Index',
+            'yoy_periods': 12  # Monthly data
         },
         'unemployment': {
             'series': 'UNRATE',
             'name': 'Unemployment Rate',
             'description': 'Percentage of labor force unemployed',
-            'unit': '%'
+            'unit': '%',
+            'yoy_periods': 12  # Monthly data
         },
         'vix': {
             'series': 'VIXCLS',
             'name': 'VIX Volatility Index',
             'description': 'Market volatility indicator',
-            'unit': 'Index'
+            'unit': 'Index',
+            'yoy_periods': 252  # Daily data
         },
         'yield_10y': {
             'series': 'DGS10',
             'name': '10-Year Treasury Yield',
             'description': 'Constant maturity treasury rate',
-            'unit': '%'
+            'unit': '%',
+            'yoy_periods': 252  # Daily data
         },
         'yield_2y': {
             'series': 'DGS2',
             'name': '2-Year Treasury Yield',
             'description': 'Constant maturity treasury rate',
-            'unit': '%'
+            'unit': '%',
+            'yoy_periods': 252  # Daily data
         }
     }
 
@@ -214,8 +222,10 @@ class MacroService:
         if hasattr(end_date, 'to_pydatetime'):
             end_date = end_date.to_pydatetime()
 
-        # Fetch macro data
-        macro_data = self.get_macro_data(indicators, start_date, end_date)
+        # Fetch macro data with 13 months of additional history for YoY calculation
+        # (12 months lookback + 1 month buffer for quarterly data alignment)
+        macro_start_date = start_date - timedelta(days=400)
+        macro_data = self.get_macro_data(indicators, macro_start_date, end_date)
 
         # Merge each indicator using merge_asof for proper time-based alignment
         # This handles the case where FRED releases data monthly (e.g., 1st of month)
@@ -238,10 +248,10 @@ class MacroService:
             macro_df = macro_df.sort_values('Date').reset_index(drop=True)
 
             # Calculate YoY change on raw macro data BEFORE merging
-            # Macro data is monthly/quarterly, so periods=12 means 12 observations back (~1 year for monthly data)
-            # This is more accurate than calculating YoY after forward-fill, which depends on OHLC timeframe
+            # Use frequency-specific periods (12 for monthly, 4 for quarterly, 252 for daily)
             yoy_col = f'{indicator}_yoy_change'
-            macro_df[yoy_col] = macro_df[indicator].pct_change(periods=12, fill_method=None) * 100
+            yoy_periods = self.MACRO_INDICATORS.get(indicator, {}).get('yoy_periods', 12)
+            macro_df[yoy_col] = macro_df[indicator].pct_change(periods=yoy_periods, fill_method=None) * 100
 
             # Use merge_asof to get the most recent macro value for each OHLC row
             # This is the correct way to align less-frequent data with more-frequent data
