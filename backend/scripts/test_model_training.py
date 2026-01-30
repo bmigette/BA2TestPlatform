@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-Test script for model training service.
+Test script to debug F1=0 issue with model training.
 
-Tests different model architectures (LSTM, GRU, RNN, N-BEATS, TCN) with small
-configurations (1 layer, 128 neurons) on the test dataset.
-
-Run from backend directory:
-    python scripts/test_model_training.py
+Tests LSTM and NBEATS models with ZigZag prediction targets.
 """
 
 import sys
@@ -16,408 +12,290 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from pathlib import Path
-import logging
-import time
 
-# Setup logging
-from app.logging_config import setup_logging
-setup_logging(console_level=logging.INFO)
+# Configuration
+DATASET_PATH = "datasets/AAPL_1h_20260128_204556.csv"
+ZIGZAG_DEVIATION = 2.0  # 2% - lower to get more signals
+PREDICTION_HORIZON = 3
+TRAIN_RATIO = 0.5  # 50/50 split to have more test data
+EPOCHS = 30  # More epochs to learn better discrimination
+INPUT_CHUNK_LENGTH = 24
 
-logger = logging.getLogger(__name__)
+print("=" * 80)
+print("MODEL TRAINING TEST SCRIPT")
+print("=" * 80)
 
-# Check for required libraries
-try:
-    import torch
-    TORCH_AVAILABLE = True
-    # Check for MPS (Apple Silicon) or CUDA
-    if torch.backends.mps.is_available():
-        DEVICE = "mps"
-    elif torch.cuda.is_available():
-        DEVICE = "cuda"
-    else:
-        DEVICE = "cpu"
-    print(f"PyTorch available, using device: {DEVICE}")
-except ImportError:
-    TORCH_AVAILABLE = False
-    DEVICE = "cpu"
-    print("PyTorch not available")
+# 1. Load dataset
+print("\n[1] Loading dataset...")
+df = pd.read_csv(DATASET_PATH)
+print(f"    Loaded {len(df)} rows")
+print(f"    Date range: {df['Date'].iloc[0]} to {df['Date'].iloc[-1]}")
 
-try:
-    from darts import TimeSeries
-    from darts.models import RNNModel, NBEATSModel, TCNModel, BlockRNNModel
-    from darts.dataprocessing.transformers import Scaler
-    from darts.metrics import mape, mae, rmse
-    DARTS_AVAILABLE = True
-    print("Darts library available")
-except ImportError as e:
-    DARTS_AVAILABLE = False
-    print(f"Darts library not available: {e}")
+# 2. Calculate prediction targets using calculate_all_targets
+print(f"\n[2] Calculating ZigZag trend reversal targets (deviation={ZIGZAG_DEVIATION}%)...")
+from app.services.darts_models import PredictionTargetService
+target_service = PredictionTargetService()
 
-
-# Model configurations to test
-# Using smaller input_chunk_length (12) to work with limited test data
-MODEL_CONFIGS = {
-    "LSTM": {
-        "class": "RNNModel",
-        "params": {
-            "model": "LSTM",
-            "hidden_dim": 128,
-            "n_rnn_layers": 1,
-            "input_chunk_length": 12,  # 12 bars lookback (3 days at 4h)
-            "output_chunk_length": 1,  # RNNModel only supports output_chunk_length=1
-            "training_length": 24,  # Training sequence length
-            "n_epochs": 10,
-            "batch_size": 16,
-            "dropout": 0.1,
-            "random_state": 42,
-        }
+# Calculate bullish and bearish zigzag targets
+targets_config = [
+    {
+        'type': 'trend_reversal',
+        'indicator': 'zigzag',
+        'indicatorParams': {'deviationPct': ZIGZAG_DEVIATION},
+        'threshold': 0,
+        'direction': 'bullish'
     },
-    "GRU": {
-        "class": "RNNModel",
-        "params": {
-            "model": "GRU",
-            "hidden_dim": 128,
-            "n_rnn_layers": 1,
-            "input_chunk_length": 12,
-            "output_chunk_length": 1,
-            "training_length": 24,
-            "n_epochs": 10,
-            "batch_size": 16,
-            "dropout": 0.1,
-            "random_state": 42,
-        }
-    },
-    "RNN": {
-        "class": "RNNModel",
-        "params": {
-            "model": "RNN",
-            "hidden_dim": 128,
-            "n_rnn_layers": 1,
-            "input_chunk_length": 12,
-            "output_chunk_length": 1,
-            "training_length": 24,
-            "n_epochs": 10,
-            "batch_size": 16,
-            "dropout": 0.1,
-            "random_state": 42,
-        }
-    },
-    "NBEATS": {
-        "class": "NBEATSModel",
-        "params": {
-            "input_chunk_length": 12,
-            "output_chunk_length": 6,
-            "num_stacks": 2,
-            "num_blocks": 1,
-            "num_layers": 1,
-            "layer_widths": 128,
-            "n_epochs": 10,
-            "batch_size": 16,
-            "random_state": 42,
-        }
-    },
-    "TCN": {
-        "class": "TCNModel",
-        "params": {
-            "input_chunk_length": 12,
-            "output_chunk_length": 6,
-            "num_layers": 1,
-            "num_filters": 128,
-            "kernel_size": 3,
-            "dilation_base": 2,
-            "n_epochs": 10,
-            "batch_size": 16,
-            "dropout": 0.1,
-            "random_state": 42,
-        }
-    },
-}
-
-
-def load_test_dataset(dataset_path: str) -> pd.DataFrame:
-    """Load the test dataset."""
-    df = pd.read_csv(dataset_path)
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values('Date').reset_index(drop=True)
-    print(f"Loaded dataset: {len(df)} rows, {len(df.columns)} columns")
-    print(f"Date range: {df['Date'].min()} to {df['Date'].max()}")
-    return df
-
-
-def prepare_data(df: pd.DataFrame, target_col: str = 'Close'):
-    """Prepare data for Darts models."""
-    # Select numeric columns only, excluding date columns
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-
-    # Remove any columns with all NaN
-    valid_cols = [c for c in numeric_cols if df[c].notna().any()]
-
-    # Create a clean dataframe
-    df_clean = df[['Date'] + valid_cols].copy()
-
-    # Fill NaN values with forward fill then backward fill
-    for col in valid_cols:
-        df_clean[col] = df_clean[col].ffill().bfill()
-
-    # Drop any remaining rows with NaN
-    df_clean = df_clean.dropna()
-
-    print(f"Clean dataset: {len(df_clean)} rows, {len(valid_cols)} numeric columns")
-
-    # Remove timezone info and set Date as index
-    df_clean['Date'] = pd.to_datetime(df_clean['Date']).dt.tz_localize(None)
-    df_clean = df_clean.set_index('Date')
-
-    # For intraday data with gaps (weekends, market hours), use integer index
-    # This avoids issues with frequency detection
-    df_clean = df_clean.reset_index(drop=True)
-
-    # Create target series using values directly (integer index)
-    target_values = df_clean[[target_col]].values
-    target_series = TimeSeries.from_values(target_values)
-
-    # Scale the data
-    scaler = Scaler()
-    target_series_scaled = scaler.fit_transform(target_series)
-
-    # Create covariates from other numeric columns
-    covariate_cols = [c for c in valid_cols if c != target_col]
-    if covariate_cols:
-        # Limit covariates to avoid memory issues (use only technical indicators)
-        tech_cols = [c for c in covariate_cols if any(c.startswith(p) for p in
-                     ['sma_', 'ema_', 'rsi_', 'macd_', 'bbands_', 'atr_', 'stochastic_'])]
-        if tech_cols:
-            covariate_cols = tech_cols[:10]  # Limit to 10 covariates
-        else:
-            covariate_cols = covariate_cols[:10]
-
-        # Use values directly for covariates (integer index)
-        cov_values = df_clean[covariate_cols].values
-        covariates = TimeSeries.from_values(cov_values)
-        cov_scaler = Scaler()
-        covariates_scaled = cov_scaler.fit_transform(covariates)
-        print(f"Using {len(covariate_cols)} covariates: {covariate_cols[:5]}...")
-    else:
-        covariates_scaled = None
-
-    return target_series_scaled, covariates_scaled, scaler
-
-
-def create_model(model_name: str, config: dict):
-    """Create a Darts model from configuration."""
-    model_class = config["class"]
-    params = config["params"].copy()
-
-    # Add device configuration for PyTorch models
-    if TORCH_AVAILABLE:
-        # For MPS, use CPU for now as some operations may not be supported
-        pl_trainer_kwargs = {
-            "accelerator": "cpu",  # Use CPU for compatibility
-            "enable_progress_bar": True,
-        }
-        params["pl_trainer_kwargs"] = pl_trainer_kwargs
-
-    if model_class == "RNNModel":
-        return RNNModel(**params)
-    elif model_class == "NBEATSModel":
-        return NBEATSModel(**params)
-    elif model_class == "TCNModel":
-        return TCNModel(**params)
-    elif model_class == "BlockRNNModel":
-        return BlockRNNModel(**params)
-    else:
-        raise ValueError(f"Unknown model class: {model_class}")
-
-
-def train_and_evaluate(
-    model_name: str,
-    model,
-    train_series,
-    val_series,
-    covariates=None
-) -> dict:
-    """Train a model and evaluate it."""
-    print(f"\n{'='*60}")
-    print(f"Training {model_name}")
-    print(f"{'='*60}")
-
-    result = {
-        "model_name": model_name,
-        "status": "pending",
-        "train_time": 0,
-        "metrics": {}
+    {
+        'type': 'trend_reversal',
+        'indicator': 'zigzag',
+        'indicatorParams': {'deviationPct': ZIGZAG_DEVIATION},
+        'threshold': 0,
+        'direction': 'bearish'
     }
+]
 
-    start_time = time.time()
+# Use calculate_all_targets which handles all target types
+target_results = target_service.calculate_all_targets(df.copy(), targets_config)
+
+print(f"    Calculated {len(target_results)} targets:")
+for result in target_results:
+    col_name = result.get('columnName', 'unknown')  # Note: camelCase
+    stats = result.get('stats', {})
+    print(f"    - {col_name}: positives={stats.get('positiveCount', 0)}, "
+          f"total={stats.get('validRows', 0)}, "
+          f"positive_pct={stats.get('positivePct', 0):.2f}%")
+
+# Add target columns to DataFrame
+df_with_targets = df.copy()
+target_cols = []
+for result in target_results:
+    col_name = result.get('columnName')
+    data = result.get('data', [])  # This is a list of {date, value} dicts
+    if col_name and len(data) == len(df_with_targets):
+        # Extract values from the data list
+        values = [d.get('value', 0) if d.get('value') is not None else 0 for d in data]
+        df_with_targets[col_name] = values
+        target_cols.append(col_name)
+        print(f"    Added column: {col_name}")
+
+print(f"    Target columns: {target_cols}")
+
+# Show where targets are positive
+for col in target_cols:
+    pos_indices = df_with_targets[df_with_targets[col] == 1].index.tolist()
+    print(f"    {col} positive at {len(pos_indices)} indices, first 10: {pos_indices[:10]}")
+
+# 3. Prepare features
+print("\n[3] Preparing features...")
+from app.services.darts_models import DatasetSplitter
+from app.services.indicators import IndicatorService
+
+indicator_service = IndicatorService()
+
+# Add some additional features
+df_with_targets['returns'] = df_with_targets['Close'].pct_change()
+df_with_targets['log_returns'] = np.log(df_with_targets['Close'] / df_with_targets['Close'].shift(1))
+df_with_targets['volatility'] = df_with_targets['returns'].rolling(10).std()
+
+# Drop NaN rows
+df_clean = df_with_targets.dropna()
+print(f"    After dropping NaN: {len(df_clean)} rows (dropped {len(df_with_targets) - len(df_clean)})")
+
+# Re-check target distribution after dropping NaN
+for col in target_cols:
+    positives = (df_clean[col] == 1).sum()
+    print(f"    {col} after cleanup: {positives} positives ({100*positives/len(df_clean):.2f}%)")
+
+# Feature columns - use existing features in dataset
+exclude_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'ticker'] + target_cols
+# Also exclude date columns
+date_cols = [c for c in df_clean.columns if 'date' in c.lower()]
+exclude_cols.extend(date_cols)
+feature_cols = [c for c in df_clean.columns if c not in exclude_cols and not c.startswith('price_') and not c.startswith('reversal_')]
+print(f"    Feature columns ({len(feature_cols)}): {feature_cols[:15]}...")
+
+# 4. Train/test split
+print("\n[4] Splitting data...")
+train_df, test_df = DatasetSplitter.train_test_split(df_clean, train_ratio=TRAIN_RATIO)
+print(f"    Train: {len(train_df)} rows, Test: {len(test_df)} rows")
+
+# Check target distribution in train/test
+for col in target_cols:
+    train_pos = (train_df[col] == 1).sum()
+    test_pos = (test_df[col] == 1).sum()
+    print(f"    {col}: train={train_pos} ({100*train_pos/len(train_df):.2f}%), test={test_pos} ({100*test_pos/len(test_df):.2f}%)")
+
+if not target_cols:
+    print("\n    ERROR: No target columns found! Check target calculation.")
+    sys.exit(1)
+
+# 5. Prepare Darts TimeSeries
+print("\n[5] Preparing Darts TimeSeries...")
+from app.services.darts_training import DartsTrainingService as TrainingService, DARTS_AVAILABLE
+
+if not DARTS_AVAILABLE:
+    print("    ERROR: Darts not available!")
+    sys.exit(1)
+
+training_service = TrainingService()
+
+# Use first target column for this test
+target_col = target_cols[0]
+print(f"    Using target: {target_col}")
+
+# Prepare data split - use only numeric feature columns
+numeric_features = [c for c in feature_cols if df_clean[c].dtype in ['int64', 'float64']][:10]
+print(f"    Using {len(numeric_features)} numeric features: {numeric_features}")
+
+train_series, test_series, train_cov, test_cov = training_service.prepare_data_split(
+    df_clean,
+    train_ratio=TRAIN_RATIO,
+    target_column=target_col,
+    feature_columns=numeric_features,
+    timeframe='1h'
+)
+
+print(f"    Train series: {len(train_series)} samples")
+print(f"    Test series: {len(test_series)} samples")
+
+# Check target values in series
+train_vals = train_series.values().flatten()
+test_vals = test_series.values().flatten()
+print(f"    Train target values: min={train_vals.min()}, max={train_vals.max()}, mean={train_vals.mean():.4f}")
+print(f"    Train unique values: {np.unique(train_vals)}")
+print(f"    Train positives in series: {(train_vals == 1).sum()} / {len(train_vals)}")
+print(f"    Test target values: min={test_vals.min()}, max={test_vals.max()}, mean={test_vals.mean():.4f}")
+print(f"    Test unique values: {np.unique(test_vals)}")
+print(f"    Test positives in series: {(test_vals == 1).sum()} / {len(test_vals)}")
+
+# Check class balance
+total_positives = (train_vals == 1).sum() + (test_vals == 1).sum()
+total_samples = len(train_vals) + len(test_vals)
+print(f"\n    CLASS BALANCE: {total_positives} positives / {total_samples} total ({100*total_positives/total_samples:.2f}%)")
+
+if total_positives == 0:
+    print("    WARNING: No positive samples! Model cannot learn anything useful.")
+    print("    Try adjusting ZigZag deviation or using a different target type.")
+
+# 6. Create and train models
+print("\n[6] Training models...")
+from app.services.darts_models import DartsModelService as MLModelsService
+from app.services.losses import get_loss_function
+
+ml_service = MLModelsService()
+
+# Create focal loss function for imbalanced classification
+positive_count = (train_vals == 1).sum()
+negative_count = (train_vals == 0).sum()
+print(f"    Creating FocalLoss with positive={positive_count}, negative={negative_count}")
+loss_fn = get_loss_function(
+    loss_type='focal_loss',
+    positive_count=positive_count,
+    negative_count=negative_count
+)
+print(f"    Loss function: {type(loss_fn).__name__}")
+
+models_to_test = [
+    ('lstm', {
+        'input_chunk_length': INPUT_CHUNK_LENGTH,
+        'output_chunk_length': 1,  # RNN uses shifted target
+        'hidden_dim': 64,
+        'n_rnn_layers': 2,
+        'dropout': 0.1,
+        'n_epochs': EPOCHS,
+        'batch_size': 32,
+        'learning_rate': 0.001,
+    }),
+]
+
+for model_type, params in models_to_test:
+    print(f"\n    --- Training {model_type.upper()} ---")
+    print(f"    Params: input_chunk={params['input_chunk_length']}, output_chunk={params['output_chunk_length']}, epochs={params['n_epochs']}")
 
     try:
-        # Train the model
-        print(f"  Training on {len(train_series)} samples...")
+        # Create model with focal loss
+        model = ml_service.create_model(model_type, params, loss_fn=loss_fn)
 
-        # Train without covariates for simplicity (RNNModel doesn't support past_covariates)
-        # In production, use future_covariates for RNNModel if needed
-        model.fit(train_series, verbose=True)
+        # Train
+        print(f"    Training for {EPOCHS} epochs...")
+        training_result = training_service.train_model(
+            model, train_series,
+            val_series=test_series,
+            covariates=train_cov,
+            verbose=True
+        )
 
-        train_time = time.time() - start_time
-        result["train_time"] = round(train_time, 2)
-        print(f"  Training completed in {train_time:.2f} seconds")
+        if training_result.get('status') == 'failed':
+            print(f"    ERROR: Training failed - {training_result.get('error')}")
+            continue
 
-        # Evaluate on validation set
-        print(f"  Evaluating on {len(val_series)} samples...")
+        print(f"    Training completed!")
 
-        # Make predictions
-        input_length = model.input_chunk_length
-        output_length = model.output_chunk_length
+        # Evaluate
+        print(f"    Evaluating...")
+        eval_result = training_service.evaluate_model(
+            model, test_series,
+            covariates=test_cov,
+            optimize_metric='f1_score'
+        )
 
-        # We need at least input_length + output_length samples for prediction
-        if len(val_series) > input_length:
-            n_predictions = min(output_length, len(val_series) - input_length)
+        if 'error' in eval_result:
+            print(f"    ERROR: Evaluation failed - {eval_result.get('error')}")
+            continue
 
-            try:
-                predictions = model.predict(n=n_predictions)
-                actuals = val_series[input_length:input_length + n_predictions]
+        print(f"    Evaluation results:")
+        for metric, value in eval_result.items():
+            if isinstance(value, (int, float)) and not pd.isna(value):
+                print(f"        {metric}: {value:.4f}")
 
-                # Calculate metrics
-                result["metrics"] = {
-                    "mape": float(mape(actuals, predictions)),
-                    "mae": float(mae(actuals, predictions)),
-                    "rmse": float(rmse(actuals, predictions)),
-                }
-                print(f"  MAPE: {result['metrics']['mape']:.4f}")
-                print(f"  MAE:  {result['metrics']['mae']:.4f}")
-                print(f"  RMSE: {result['metrics']['rmse']:.4f}")
-            except Exception as e:
-                print(f"  Prediction failed: {e}")
-                result["metrics"] = {"error": str(e)}
-        else:
-            print(f"  Validation set too small for prediction (need > {input_length} samples)")
-            result["metrics"] = {"error": "Validation set too small"}
+        # Get predictions for analysis
+        print(f"    Analyzing predictions...")
+        try:
+            predictions = model.predict(n=len(test_series), series=train_series)
+            pred_vals = predictions.values().flatten()
 
-        result["status"] = "completed"
+            print(f"        Prediction shape: {pred_vals.shape}")
+            print(f"        Prediction range: [{pred_vals.min():.4f}, {pred_vals.max():.4f}]")
+            print(f"        Prediction mean: {pred_vals.mean():.4f}")
+            print(f"        Prediction std: {pred_vals.std():.4f}")
+
+            # Compare with actual test values
+            actual = test_vals[:len(pred_vals)]
+            print(f"        Actual positives: {(actual == 1).sum()} / {len(actual)}")
+
+            # Binary classification threshold
+            threshold = 0.5
+            pred_binary = (pred_vals > threshold).astype(int)
+            print(f"        Predicted positives (>{threshold}): {pred_binary.sum()} / {len(pred_binary)}")
+
+            # Confusion matrix
+            from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
+            cm = confusion_matrix(actual, pred_binary)
+            print(f"        Confusion matrix:")
+            print(f"            TN={cm[0,0]}, FP={cm[0,1]}")
+            if cm.shape[0] > 1:
+                print(f"            FN={cm[1,0]}, TP={cm[1,1]}")
+
+            # Try different thresholds
+            print(f"        Threshold analysis:")
+            for t in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]:
+                pred_t = (pred_vals > t).astype(int)
+                if len(np.unique(pred_t)) > 1 or len(np.unique(actual)) > 1:
+                    f1 = f1_score(actual, pred_t, zero_division=0)
+                    prec = precision_score(actual, pred_t, zero_division=0)
+                    rec = recall_score(actual, pred_t, zero_division=0)
+                    print(f"            t={t}: pred_pos={pred_t.sum()}, F1={f1:.4f}, P={prec:.4f}, R={rec:.4f}")
+
+        except Exception as e:
+            print(f"        Error getting predictions: {e}")
+            import traceback
+            traceback.print_exc()
 
     except Exception as e:
-        result["status"] = "failed"
-        result["error"] = str(e)
-        print(f"  Training failed: {e}")
+        print(f"    ERROR: {e}")
         import traceback
         traceback.print_exc()
 
-    return result
-
-
-def main():
-    """Main test function."""
-    print("=" * 80)
-    print("MODEL TRAINING TEST")
-    print("=" * 80)
-    print(f"Date: {datetime.now()}")
-    print(f"Device: {DEVICE}")
-    print()
-
-    if not DARTS_AVAILABLE:
-        print("ERROR: Darts library not available. Cannot run tests.")
-        return
-
-    if not TORCH_AVAILABLE:
-        print("WARNING: PyTorch not available. Some models may not work.")
-
-    # Load test dataset
-    dataset_path = Path("test/test_dataset.csv")
-    if not dataset_path.exists():
-        print(f"ERROR: Test dataset not found at {dataset_path}")
-        print("Run scripts/test_dataset_generation.py first to generate test data")
-        return
-
-    df = load_test_dataset(str(dataset_path))
-
-    # Prepare data
-    print("\nPreparing data...")
-    target_series, covariates, scaler = prepare_data(df, target_col='Close')
-
-    # Split into train/validation (80/20)
-    split_idx = int(len(target_series) * 0.8)
-    train_series = target_series[:split_idx]
-    val_series = target_series[split_idx:]
-
-    if covariates is not None:
-        train_covariates = covariates[:split_idx]
-        val_covariates = covariates[split_idx:]
-    else:
-        train_covariates = None
-        val_covariates = None
-
-    print(f"\nTrain samples: {len(train_series)}")
-    print(f"Validation samples: {len(val_series)}")
-
-    # Check if we have enough data
-    min_samples = 30  # Minimum for training
-    if len(train_series) < min_samples:
-        print(f"\nERROR: Not enough training samples (need at least {min_samples})")
-        return
-
-    # Test each model
-    results = []
-    for model_name, config in MODEL_CONFIGS.items():
-        try:
-            model = create_model(model_name, config)
-            result = train_and_evaluate(
-                model_name,
-                model,
-                train_series,
-                val_series,
-                train_covariates
-            )
-            results.append(result)
-        except Exception as e:
-            print(f"\n{model_name} failed to initialize: {e}")
-            results.append({
-                "model_name": model_name,
-                "status": "init_failed",
-                "error": str(e)
-            })
-
-    # Summary
-    print("\n" + "=" * 80)
-    print("SUMMARY")
-    print("=" * 80)
-    print(f"{'Model':<12} {'Status':<12} {'Time (s)':<10} {'MAPE':<10} {'MAE':<10} {'RMSE':<10}")
-    print("-" * 80)
-
-    for r in results:
-        status = r.get("status", "unknown")
-        train_time = r.get("train_time", 0)
-        metrics = r.get("metrics", {})
-
-        mape_val = metrics.get("mape", "N/A")
-        mae_val = metrics.get("mae", "N/A")
-        rmse_val = metrics.get("rmse", "N/A")
-
-        if isinstance(mape_val, float):
-            mape_val = f"{mape_val:.4f}"
-        if isinstance(mae_val, float):
-            mae_val = f"{mae_val:.4f}"
-        if isinstance(rmse_val, float):
-            rmse_val = f"{rmse_val:.4f}"
-
-        print(f"{r['model_name']:<12} {status:<12} {train_time:<10} {mape_val:<10} {mae_val:<10} {rmse_val:<10}")
-
-    # Check results
-    successful = sum(1 for r in results if r.get("status") == "completed")
-    failed = sum(1 for r in results if r.get("status") in ["failed", "init_failed"])
-
-    print("-" * 80)
-    print(f"Completed: {successful}/{len(results)}, Failed: {failed}/{len(results)}")
-
-    if successful == len(results):
-        print("\nTEST PASSED: All models trained successfully")
-    elif successful > 0:
-        print(f"\nTEST PARTIAL: {successful} models trained, {failed} failed")
-    else:
-        print("\nTEST FAILED: No models trained successfully")
-
-    print("=" * 80)
-
-
-if __name__ == "__main__":
-    main()
+print("\n" + "=" * 80)
+print("TEST COMPLETE")
+print("=" * 80)

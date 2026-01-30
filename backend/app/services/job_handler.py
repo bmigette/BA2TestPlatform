@@ -243,9 +243,12 @@ def get_dataset_file_path(task_id: str, filename: str) -> Optional[Path]:
 
 # Check for ML libraries
 try:
-    from app.services.training import TrainingService, DARTS_AVAILABLE
-    from app.services.ml_models import MLModelsService, PredictionTargetService, DatasetSplitter
+    from app.services.darts_training import DartsTrainingService, DARTS_AVAILABLE
+    from app.services.darts_models import DartsModelService, PredictionTargetService, DatasetSplitter
     from app.services.genetic import GeneticOptimizer, DEAP_AVAILABLE
+    # Backwards compatibility aliases
+    TrainingService = DartsTrainingService
+    MLModelsService = DartsModelService
     ML_AVAILABLE = DARTS_AVAILABLE and DEAP_AVAILABLE
 except ImportError as e:
     logger.warning(f"ML libraries not fully available: {e}")
@@ -1193,6 +1196,30 @@ def train_single_model(
     # Optimize metric
     optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
 
+    # Loss function configuration
+    loss_function_type = metrics_config.get('lossFunction', 'focal_loss')
+    loss_fn = None
+
+    # Create loss function if not using default MSE
+    if loss_function_type and loss_function_type != 'mse':
+        try:
+            from app.services.losses import get_loss_function
+            # Calculate class counts from training data for weighted loss
+            train_vals = train_series.values().flatten()
+            positive_count = int((train_vals == 1).sum())
+            negative_count = int((train_vals == 0).sum())
+            logger.info(f"Class distribution for loss: {positive_count} positive, {negative_count} negative")
+
+            loss_fn = get_loss_function(
+                loss_type=loss_function_type,
+                positive_count=positive_count,
+                negative_count=negative_count
+            )
+            logger.info(f"Using {loss_function_type} loss function for training")
+        except Exception as e:
+            logger.warning(f"Failed to create {loss_function_type} loss function: {e}. Using default MSE.")
+            loss_fn = None
+
     # Progress tracking state - mutable to allow updates from nested functions
     progress_state = {
         'current_generation': 0,
@@ -1265,8 +1292,8 @@ def train_single_model(
                     epoch_metrics=metrics
                 )
 
-            # Create model with epoch callback
-            model = ml_service.create_model(model_type, params, epoch_callback=epoch_callback)
+            # Create model with epoch callback and custom loss function
+            model = ml_service.create_model(model_type, params, epoch_callback=epoch_callback, loss_fn=loss_fn)
 
             # Train with validation series to get val_loss during training
             train_result = training_service.train_model(
@@ -1550,6 +1577,31 @@ def train_unified_optimization(
     training_epochs = genetic_config.get('trainingEpochs', 10)
     optimize_metric = metrics_config.get('optimizeMetric', 'f1_score')
 
+    # Loss function configuration
+    loss_function_type = metrics_config.get('lossFunction', 'focal_loss')
+    loss_fn = None
+
+    # Create loss function if not using default MSE
+    if loss_function_type and loss_function_type != 'mse':
+        try:
+            from app.services.losses import get_loss_function
+            # Calculate class counts from training data for weighted loss
+            # Use train_series which should be available at this point
+            train_vals = train_series.values().flatten()
+            positive_count = int((train_vals == 1).sum())
+            negative_count = int((train_vals == 0).sum())
+            logger.info(f"Class distribution for loss: {positive_count} positive, {negative_count} negative")
+
+            loss_fn = get_loss_function(
+                loss_type=loss_function_type,
+                positive_count=positive_count,
+                negative_count=negative_count
+            )
+            logger.info(f"Using {loss_function_type} loss function for training")
+        except Exception as e:
+            logger.warning(f"Failed to create {loss_function_type} loss function: {e}. Using default MSE.")
+            loss_fn = None
+
     # Progress tracking
     progress_state = {
         'current_generation': 0,
@@ -1651,7 +1703,7 @@ def train_unified_optimization(
                     epoch_metrics=metrics
                 )
 
-            model = ml_service.create_model(model_type, model_params, epoch_callback=epoch_callback)
+            model = ml_service.create_model(model_type, model_params, epoch_callback=epoch_callback, loss_fn=loss_fn)
 
             # Train with validation series to get val_loss during training
             training_result = training_service.train_model(

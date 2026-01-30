@@ -11,7 +11,7 @@ import numpy as np
 
 from darts import TimeSeries
 from darts.models import RNNModel
-from app.services.ml_models import EpochProgressCallback, LIGHTNING_CALLBACK_AVAILABLE
+from app.services.darts_models import EpochProgressCallback, LIGHTNING_CALLBACK_AVAILABLE
 
 def test_serializable_callback():
     """Test that EpochProgressCallback can be serialized with model."""

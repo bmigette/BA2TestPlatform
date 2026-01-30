@@ -585,7 +585,7 @@ async def preview_prediction_targets(
         Target distribution with warnings
     """
     try:
-        from app.services.ml_models import PredictionTargetService
+        from app.services.darts_models import PredictionTargetService
 
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not dataset:
@@ -820,7 +820,7 @@ async def calculate_prediction_targets_v2(
         Calculated target data with statistics
     """
     try:
-        from app.services.ml_models import PredictionTargetService
+        from app.services.darts_models import PredictionTargetService
 
         dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not dataset:

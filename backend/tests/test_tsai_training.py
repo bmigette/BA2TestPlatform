@@ -1,0 +1,199 @@
+"""
+Comprehensive unit tests for tsai training service.
+Tests training, model assessment, and loss functions with real AAPL data.
+"""
+import pytest
+import numpy as np
+import pandas as pd
+import sys
+import os
+
+# Add backend to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.services.tsai_models import TSAIModelService, TSAI_AVAILABLE
+from app.services.tsai_training import TSAITrainingService
+
+pytestmark = pytest.mark.skipif(not TSAI_AVAILABLE, reason="tsai not available")
+
+TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data/AAPL_1h_test.csv")
+
+
+@pytest.fixture
+def training_service():
+    return TSAITrainingService()
+
+
+@pytest.fixture
+def model_service():
+    return TSAIModelService()
+
+
+@pytest.fixture
+def prepared_data(training_service):
+    """Prepare train/test data from AAPL dataset."""
+    df = pd.read_csv(TEST_DATA_PATH).head(500)
+
+    # Add simple binary target (price up next bar)
+    df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+    df = df.dropna()
+
+    feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+    X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+        df, train_ratio=0.8,
+        target_column='target',
+        feature_columns=feature_cols,
+        seq_len=24
+    )
+    return X_train, X_test, y_train, y_test
+
+
+class TestTSAITrainingService:
+    """Tests for TSAITrainingService."""
+
+    def test_prepare_data_split(self, training_service):
+        """Test data preparation and splitting."""
+        df = pd.read_csv(TEST_DATA_PATH).head(200)
+        df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+        df = df.dropna()
+
+        X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+            df, train_ratio=0.8,
+            target_column='target',
+            feature_columns=['Close', 'Volume'],
+            seq_len=10
+        )
+
+        assert len(X_train) > 0
+        assert len(X_test) > 0
+        assert X_train.shape[1] == 2  # features
+        assert X_train.shape[2] == 10  # seq_len
+
+    def test_get_loss_function_focal(self, training_service):
+        """Test focal loss creation."""
+        loss = training_service.get_loss_function('focal')
+        assert loss is not None
+
+    def test_get_loss_function_ce(self, training_service):
+        """Test cross-entropy loss creation."""
+        loss = training_service.get_loss_function('ce')
+        assert loss is not None
+
+    def test_sequence_creation(self, training_service):
+        """Test sliding window sequence creation."""
+        X = np.random.randn(100, 5).astype(np.float32)
+        y = np.random.randint(0, 2, 100).astype(np.int64)
+
+        X_seq, y_seq = training_service._create_sequences(X, y, seq_len=10)
+
+        assert X_seq.shape == (91, 5, 10)
+        assert y_seq.shape == (91,)
+
+
+class TestTrainingWithRealData:
+    """Integration tests with real AAPL data."""
+
+    @pytest.mark.slow
+    def test_train_lstm(self, model_service, training_service, prepared_data):
+        """Test training LSTM model."""
+        X_train, X_test, y_train, y_test = prepared_data
+
+        model = model_service.create_model(
+            'lstm', {'hidden_size': 32, 'n_layers': 1},
+            c_in=X_train.shape[1],
+            c_out=2,
+            seq_len=X_train.shape[2]
+        )
+
+        result = training_service.train_model(
+            model,
+            (X_train, y_train),
+            val_data=(X_test, y_test),
+            epochs=2,
+            batch_size=32
+        )
+
+        assert result['status'] == 'success'
+        assert 'metrics' in result
+
+    @pytest.mark.slow
+    def test_train_inception(self, model_service, training_service, prepared_data):
+        """Test training InceptionTime model."""
+        X_train, X_test, y_train, y_test = prepared_data
+
+        model = model_service.create_model(
+            'inception', {'nf': 16, 'depth': 3},
+            c_in=X_train.shape[1],
+            c_out=2,
+            seq_len=X_train.shape[2]
+        )
+
+        result = training_service.train_model(
+            model,
+            (X_train, y_train),
+            val_data=(X_test, y_test),
+            epochs=2
+        )
+
+        assert result['status'] == 'success'
+
+    @pytest.mark.slow
+    def test_assess_model(self, model_service, training_service, prepared_data):
+        """Test model assessment."""
+        X_train, X_test, y_train, y_test = prepared_data
+
+        model = model_service.create_model(
+            'lstm', {'hidden_size': 32, 'n_layers': 1},
+            c_in=X_train.shape[1],
+            c_out=2,
+            seq_len=X_train.shape[2]
+        )
+
+        result = training_service.train_model(
+            model,
+            (X_train, y_train),
+            epochs=2
+        )
+
+        if result['status'] == 'success':
+            assess_result = training_service.assess_model(
+                result['model'],
+                (X_test, y_test),
+                learner=result.get('learner')
+            )
+
+            assert 'f1_score' in assess_result
+            assert 'accuracy' in assess_result
+
+    @pytest.mark.slow
+    def test_predict(self, model_service, training_service, prepared_data):
+        """Test prediction generation."""
+        X_train, X_test, y_train, y_test = prepared_data
+
+        model = model_service.create_model(
+            'lstm', {'hidden_size': 32, 'n_layers': 1},
+            c_in=X_train.shape[1],
+            c_out=2,
+            seq_len=X_train.shape[2]
+        )
+
+        result = training_service.train_model(
+            model,
+            (X_train, y_train),
+            epochs=2
+        )
+
+        if result['status'] == 'success':
+            preds = training_service.predict(
+                result['model'],
+                X_test,
+                learner=result.get('learner')
+            )
+
+            assert len(preds) == len(X_test)
+            assert all(0 <= p <= 1 for p in preds)
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

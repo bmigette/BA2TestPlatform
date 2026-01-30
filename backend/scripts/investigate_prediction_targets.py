@@ -48,7 +48,7 @@ def main():
     print(f"\n2. Calculating prediction targets...")
     print(f"   Parameters: profit={PROFIT_PCT}%, max_dd={MAX_DD}%, days={DAYS}")
 
-    from app.services.ml_models import PredictionTargetService
+    from app.services.darts_models import PredictionTargetService
     target_service = PredictionTargetService()
 
     targets = [
@@ -113,7 +113,7 @@ def main():
     # Simulate data preparation for training
     print(f"\n5. Simulating TrainingService data preparation...")
 
-    from app.services.training import TrainingService
+    from app.services.darts_training import DartsTrainingService as TrainingService
     ts = TrainingService()
 
     # Prepare data with the target column (like the job does)

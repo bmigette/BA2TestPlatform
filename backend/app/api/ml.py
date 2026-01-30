@@ -16,13 +16,17 @@ from pathlib import Path
 from app.models.database import get_db
 from app.models.dataset import Dataset
 from app.models.normalization_config import NormalizationConfig
-from app.services.ml_models import (
-    MLModelsService,
+from app.services.darts_models import (
+    DartsModelService,
     PredictionTargetService,
     DatasetSplitter,
     ClassImbalanceConfig
 )
-from app.services.training import TrainingService, ModelEvaluator
+from app.services.darts_training import DartsTrainingService, ModelEvaluator
+
+# Backwards compatibility aliases
+MLModelsService = DartsModelService
+TrainingService = DartsTrainingService
 from app.services.genetic import GeneticOptimizer, FitnessEvaluator, DEAP_AVAILABLE
 from app.services.genetic_optimizer_base import (
     GeneticOptimizerFactory,

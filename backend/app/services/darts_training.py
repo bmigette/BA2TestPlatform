@@ -1,8 +1,9 @@
 """
-Model Training Service
+Darts Training Service
 
 Provides model training, evaluation, and saving functionality.
 Integrates with Darts library for timeseries model training.
+This service is designed for REGRESSION tasks (time series forecasting).
 """
 
 import pandas as pd
@@ -13,6 +14,8 @@ import logging
 import os
 from pathlib import Path
 import json
+
+from app.services.model_interface import ITrainingService
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +43,9 @@ except ImportError:
     DARTS_AVAILABLE = False
 
 
-class TrainingService:
+class DartsTrainingService(ITrainingService):
     """
-    Service for training and evaluating ML models.
+    Darts-based training service for time series regression/forecasting.
     """
 
     def __init__(self, models_dir: str = "trained_models"):
@@ -97,12 +100,16 @@ class TrainingService:
         if is_intraday:
             # For intraday stock data: use from_values() which treats data as
             # an ordered sequence without time semantics (ignores market hours gaps)
-            target_values = df_sorted[[target_column]].values
+            # Ensure float type for compatibility with classification loss functions
+            target_values = df_sorted[[target_column]].values.astype('float32')
             target_series = TimeSeries.from_values(target_values)
         else:
             # For daily/weekly: fill missing dates (weekends/holidays)
+            # Ensure target column is float for compatibility with loss functions
+            df_target = df_sorted[[target_column]].copy()
+            df_target[target_column] = df_target[target_column].astype('float32')
             target_series = TimeSeries.from_dataframe(
-                df_sorted[[target_column]],
+                df_target,
                 value_cols=target_column,
                 fill_missing_dates=True,
                 freq=freq
@@ -112,9 +119,9 @@ class TrainingService:
         self.scaler = Scaler()
         target_series = self.scaler.fit_transform(target_series)
 
-        # MPS (Apple Silicon GPU) doesn't support float64, convert to float32
-        if MPS_WILL_BE_USED:
-            target_series = target_series.astype('float32')
+        # Always convert to float32 for compatibility with loss functions
+        # (FocalLoss and other classification losses require float targets)
+        target_series = target_series.astype('float32')
 
         # Create covariates if specified
         covariates = None
@@ -486,9 +493,13 @@ class TrainingService:
         pred_values = predictions_orig.values().flatten()
         actual_values = actuals_orig.values().flatten()
 
-        # For classification: predictions are probabilities, actuals are 0/1
-        # Clip predictions to [0, 1] range (model may output values outside)
-        pred_proba = np.clip(pred_values, 0, 1)
+        # For classification: apply sigmoid to convert logits to probabilities
+        # This is needed when using FocalLoss or other logit-based loss functions
+        # Sigmoid: 1 / (1 + exp(-x))
+        pred_proba = 1 / (1 + np.exp(-pred_values))
+
+        # Ensure predictions are in valid probability range [0, 1]
+        pred_proba = np.clip(pred_proba, 0, 1)
 
         # Actuals should be binary (0 or 1) - round to handle any float noise
         actual_binary = np.round(actual_values).astype(int)
@@ -650,6 +661,23 @@ class TrainingService:
 
         logger.info(f"Loaded model from {model_path}")
         return model
+
+    def predict(self, model: Any, data: Any, n: int = None, **kwargs) -> Any:
+        """
+        Generate predictions from a trained Darts model.
+
+        Args:
+            model: Trained Darts model
+            data: Input series (TimeSeries or can be used as series context)
+            n: Number of steps to predict (defaults to model's output_chunk_length)
+            **kwargs: Additional prediction options
+
+        Returns:
+            Predictions as TimeSeries
+        """
+        if n is None:
+            n = getattr(model, 'output_chunk_length', 1)
+        return model.predict(n=n, series=data, **kwargs)
 
 
 class ModelEvaluator:

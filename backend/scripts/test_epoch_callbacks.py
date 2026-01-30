@@ -43,7 +43,7 @@ def test_callback_with_mock_trainer():
     print("="*60)
 
     try:
-        from app.services.ml_models import EpochProgressCallback, LIGHTNING_CALLBACK_AVAILABLE
+        from app.services.darts_models import EpochProgressCallback, LIGHTNING_CALLBACK_AVAILABLE
 
         if not LIGHTNING_CALLBACK_AVAILABLE:
             print("SKIP: PyTorch Lightning not available")
@@ -115,8 +115,8 @@ def test_real_model_training():
     collected_metrics.clear()
 
     try:
-        from app.services.ml_models import MLModelsService, DARTS_AVAILABLE
-        from app.services.training import TrainingService, DARTS_AVAILABLE as TRAINING_DARTS
+        from app.services.darts_models import DartsModelService as MLModelsService, DARTS_AVAILABLE
+        from app.services.darts_training import DartsTrainingService as TrainingService, DARTS_AVAILABLE as TRAINING_DARTS
 
         if not DARTS_AVAILABLE or not TRAINING_DARTS:
             print("SKIP: Darts library not available")

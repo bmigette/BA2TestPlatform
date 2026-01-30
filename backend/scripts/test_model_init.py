@@ -77,7 +77,7 @@ def test_model_initialization():
     # Test TrainingService
     logger.info("\nTesting TrainingService.prepare_data()...")
     try:
-        from app.services.training import TrainingService
+        from app.services.darts_training import DartsTrainingService as TrainingService
         training_service = TrainingService()
 
         target_series, covariates = training_service.prepare_data(

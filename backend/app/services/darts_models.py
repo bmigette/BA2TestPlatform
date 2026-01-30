@@ -1,8 +1,9 @@
 """
-ML Models Service
+Darts Models Service
 
 Provides machine learning model architectures using PyTorch and Darts library.
 Supports LSTM, GRU, N-BEATS, TCN, Transformer for timeseries forecasting.
+This service is designed for REGRESSION tasks (time series forecasting).
 """
 
 import pandas as pd
@@ -11,6 +12,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 import os
+
+from app.services.model_interface import IModelService
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +129,9 @@ except ImportError:
     EpochProgressCallback = None
 
 
-class MLModelsService:
+class DartsModelService(IModelService):
     """
-    Service for creating and managing ML model architectures.
+    Darts-based model service for time series regression/forecasting.
 
     Supports:
     - LSTM (Long Short-Term Memory)
@@ -136,6 +139,7 @@ class MLModelsService:
     - N-BEATS (Neural Basis Expansion Analysis)
     - TCN (Temporal Convolutional Network)
     - Transformer (Attention-based model)
+    - TFT (Temporal Fusion Transformer)
     """
 
     # Model architecture configurations
@@ -228,7 +232,7 @@ class MLModelsService:
 
     def __init__(self, use_gpu: bool = True):
         """
-        Initialize MLModelsService.
+        Initialize DartsModelService.
 
         Args:
             use_gpu: Whether to use GPU if available
@@ -280,13 +284,14 @@ class MLModelsService:
 
         return kwargs
 
-    def create_lstm_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_lstm_model(self, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create LSTM model architecture using Darts.
 
         Args:
             params: Model parameters (uses defaults if not provided)
                    - hidden_dim: Must be int (Darts RNNModel uses same size for all layers)
+            loss_fn: Optional PyTorch loss function
 
         Returns:
             Darts RNNModel configured as LSTM
@@ -311,30 +316,39 @@ class MLModelsService:
         input_chunk_length = p['input_chunk_length']
         training_length = max(input_chunk_length + 1, 3 * input_chunk_length)
 
-        model = RNNModel(
-            model='LSTM',
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=p['output_chunk_length'],
-            training_length=training_length,
-            hidden_dim=hidden_dim,
-            n_rnn_layers=n_rnn_layers,
-            dropout=p['dropout'],
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
-        )
+        # Build model kwargs
+        model_kwargs = {
+            'model': 'LSTM',
+            'input_chunk_length': input_chunk_length,
+            'output_chunk_length': p['output_chunk_length'],
+            'training_length': training_length,
+            'hidden_dim': hidden_dim,
+            'n_rnn_layers': n_rnn_layers,
+            'dropout': p['dropout'],
+            'batch_size': p['batch_size'],
+            'n_epochs': p['n_epochs'],
+            'optimizer_kwargs': {'lr': p.get('learning_rate', 1e-3)},
+            'pl_trainer_kwargs': self._build_trainer_kwargs(epoch_callback)
+        }
+
+        # Add loss function if provided
+        if loss_fn is not None:
+            model_kwargs['loss_fn'] = loss_fn
+            logger.info(f"Using custom loss function: {type(loss_fn).__name__}")
+
+        model = RNNModel(**model_kwargs)
 
         logger.info(f"Created LSTM model with params: {p}")
         return model
 
-    def create_nbeats_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_nbeats_model(self, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create N-BEATS model architecture using Darts.
 
         Args:
             params: Model parameters (uses defaults if not provided)
                    - layer_widths: Can be int (same for all layers) or list (per-layer)
+            loss_fn: Optional PyTorch loss function
 
         Returns:
             Darts NBEATSModel
@@ -362,29 +376,38 @@ class MLModelsService:
                     layer_widths = list(layer_widths) + [layer_widths[-1]] * (num_stacks - len(layer_widths))
             logger.info(f"Using per-stack widths ({len(layer_widths)} for {num_stacks} stacks): {layer_widths[:5]}...")
 
-        model = NBEATSModel(
-            input_chunk_length=p['input_chunk_length'],
-            output_chunk_length=p['output_chunk_length'],
-            num_stacks=p['num_stacks'],
-            num_blocks=p['num_blocks'],
-            num_layers=num_layers,
-            layer_widths=layer_widths,
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
-        )
+        # Build model kwargs
+        model_kwargs = {
+            'input_chunk_length': p['input_chunk_length'],
+            'output_chunk_length': p['output_chunk_length'],
+            'num_stacks': p['num_stacks'],
+            'num_blocks': p['num_blocks'],
+            'num_layers': num_layers,
+            'layer_widths': layer_widths,
+            'batch_size': p['batch_size'],
+            'n_epochs': p['n_epochs'],
+            'optimizer_kwargs': {'lr': p.get('learning_rate', 1e-3)},
+            'pl_trainer_kwargs': self._build_trainer_kwargs(epoch_callback)
+        }
+
+        # Add loss function if provided
+        if loss_fn is not None:
+            model_kwargs['loss_fn'] = loss_fn
+            logger.info(f"Using custom loss function: {type(loss_fn).__name__}")
+
+        model = NBEATSModel(**model_kwargs)
 
         logger.info(f"Created N-BEATS model with params: {p}")
         return model
 
-    def create_gru_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_gru_model(self, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create GRU model architecture using Darts.
 
         Args:
             params: Model parameters (uses defaults if not provided)
                    - hidden_dim: Must be int (Darts RNNModel uses same size for all layers)
+            loss_fn: Optional PyTorch loss function
 
         Returns:
             Darts RNNModel configured as GRU
@@ -407,29 +430,38 @@ class MLModelsService:
         input_chunk_length = p['input_chunk_length']
         training_length = max(input_chunk_length + 1, 3 * input_chunk_length)
 
-        model = RNNModel(
-            model='GRU',
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=p['output_chunk_length'],
-            training_length=training_length,
-            hidden_dim=hidden_dim,
-            n_rnn_layers=n_rnn_layers,
-            dropout=p['dropout'],
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
-        )
+        # Build model kwargs
+        model_kwargs = {
+            'model': 'GRU',
+            'input_chunk_length': input_chunk_length,
+            'output_chunk_length': p['output_chunk_length'],
+            'training_length': training_length,
+            'hidden_dim': hidden_dim,
+            'n_rnn_layers': n_rnn_layers,
+            'dropout': p['dropout'],
+            'batch_size': p['batch_size'],
+            'n_epochs': p['n_epochs'],
+            'optimizer_kwargs': {'lr': p.get('learning_rate', 1e-3)},
+            'pl_trainer_kwargs': self._build_trainer_kwargs(epoch_callback)
+        }
+
+        # Add loss function if provided
+        if loss_fn is not None:
+            model_kwargs['loss_fn'] = loss_fn
+            logger.info(f"Using custom loss function: {type(loss_fn).__name__}")
+
+        model = RNNModel(**model_kwargs)
 
         logger.info(f"Created GRU model with params: {p}")
         return model
 
-    def create_tcn_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_tcn_model(self, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create TCN (Temporal Convolutional Network) model using Darts.
 
         Args:
             params: Model parameters (uses defaults if not provided)
+            loss_fn: Optional PyTorch loss function
 
         Returns:
             Darts TCNModel
@@ -439,28 +471,37 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['tcn']['default_params'], **(params or {})}
 
-        model = TCNModel(
-            input_chunk_length=p['input_chunk_length'],
-            output_chunk_length=p['output_chunk_length'],
-            kernel_size=p.get('kernel_size', 3),
-            num_filters=p.get('num_filters', 64),
-            dilation_base=p.get('dilation_base', 2),
-            dropout=p['dropout'],
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
-        )
+        # Build model kwargs
+        model_kwargs = {
+            'input_chunk_length': p['input_chunk_length'],
+            'output_chunk_length': p['output_chunk_length'],
+            'kernel_size': p.get('kernel_size', 3),
+            'num_filters': p.get('num_filters', 64),
+            'dilation_base': p.get('dilation_base', 2),
+            'dropout': p['dropout'],
+            'batch_size': p['batch_size'],
+            'n_epochs': p['n_epochs'],
+            'optimizer_kwargs': {'lr': p.get('learning_rate', 1e-3)},
+            'pl_trainer_kwargs': self._build_trainer_kwargs(epoch_callback)
+        }
+
+        # Add loss function if provided
+        if loss_fn is not None:
+            model_kwargs['loss_fn'] = loss_fn
+            logger.info(f"Using custom loss function: {type(loss_fn).__name__}")
+
+        model = TCNModel(**model_kwargs)
 
         logger.info(f"Created TCN model with params: {p}")
         return model
 
-    def create_transformer_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_transformer_model(self, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create Transformer model using Darts.
 
         Args:
             params: Model parameters (uses defaults if not provided)
+            loss_fn: Optional PyTorch loss function
 
         Returns:
             Darts TransformerModel
@@ -478,25 +519,33 @@ class MLModelsService:
             d_model = ((d_model // nhead) + 1) * nhead
             logger.info(f"Adjusted d_model to {d_model} to be divisible by nhead={nhead}")
 
-        model = TransformerModel(
-            input_chunk_length=p['input_chunk_length'],
-            output_chunk_length=p['output_chunk_length'],
-            d_model=d_model,
-            nhead=nhead,
-            num_encoder_layers=p.get('num_encoder_layers', 2),
-            num_decoder_layers=p.get('num_decoder_layers', 2),
-            dim_feedforward=p.get('dim_feedforward', 128),
-            dropout=p['dropout'],
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
-        )
+        # Build model kwargs
+        model_kwargs = {
+            'input_chunk_length': p['input_chunk_length'],
+            'output_chunk_length': p['output_chunk_length'],
+            'd_model': d_model,
+            'nhead': nhead,
+            'num_encoder_layers': p.get('num_encoder_layers', 2),
+            'num_decoder_layers': p.get('num_decoder_layers', 2),
+            'dim_feedforward': p.get('dim_feedforward', 128),
+            'dropout': p['dropout'],
+            'batch_size': p['batch_size'],
+            'n_epochs': p['n_epochs'],
+            'optimizer_kwargs': {'lr': p.get('learning_rate', 1e-3)},
+            'pl_trainer_kwargs': self._build_trainer_kwargs(epoch_callback)
+        }
+
+        # Add loss function if provided
+        if loss_fn is not None:
+            model_kwargs['loss_fn'] = loss_fn
+            logger.info(f"Using custom loss function: {type(loss_fn).__name__}")
+
+        model = TransformerModel(**model_kwargs)
 
         logger.info(f"Created Transformer model with params: {p}")
         return model
 
-    def create_tft_model(self, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_tft_model(self, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create TFT (Temporal Fusion Transformer) model using Darts.
 
@@ -505,6 +554,7 @@ class MLModelsService:
 
         Args:
             params: Model parameters (uses defaults if not provided)
+            loss_fn: Optional PyTorch loss function
 
         Returns:
             Darts TFTModel
@@ -514,24 +564,32 @@ class MLModelsService:
 
         p = {**self.MODEL_ARCHITECTURES['tft']['default_params'], **(params or {})}
 
-        model = TFTModel(
-            input_chunk_length=p['input_chunk_length'],
-            output_chunk_length=p['output_chunk_length'],
-            hidden_size=p.get('hidden_size', 64),
-            lstm_layers=p.get('lstm_layers', 1),
-            num_attention_heads=p.get('num_attention_heads', 4),
-            dropout=p['dropout'],
-            batch_size=p['batch_size'],
-            n_epochs=p['n_epochs'],
-            add_relative_index=True,  # Auto-generate future covariates from time index
-            optimizer_kwargs={'lr': p.get('learning_rate', 1e-3)},
-            pl_trainer_kwargs=self._build_trainer_kwargs(epoch_callback)
-        )
+        # Build model kwargs
+        model_kwargs = {
+            'input_chunk_length': p['input_chunk_length'],
+            'output_chunk_length': p['output_chunk_length'],
+            'hidden_size': p.get('hidden_size', 64),
+            'lstm_layers': p.get('lstm_layers', 1),
+            'num_attention_heads': p.get('num_attention_heads', 4),
+            'dropout': p['dropout'],
+            'batch_size': p['batch_size'],
+            'n_epochs': p['n_epochs'],
+            'add_relative_index': True,  # Auto-generate future covariates from time index
+            'optimizer_kwargs': {'lr': p.get('learning_rate', 1e-3)},
+            'pl_trainer_kwargs': self._build_trainer_kwargs(epoch_callback)
+        }
+
+        # Add loss function if provided
+        if loss_fn is not None:
+            model_kwargs['loss_fn'] = loss_fn
+            logger.info(f"Using custom loss function: {type(loss_fn).__name__}")
+
+        model = TFTModel(**model_kwargs)
 
         logger.info(f"Created TFT model with params: {p}")
         return model
 
-    def create_model(self, model_type: str, params: Dict = None, epoch_callback: callable = None) -> Any:
+    def create_model(self, model_type: str, params: Dict = None, epoch_callback: callable = None, loss_fn: Any = None) -> Any:
         """
         Create a model of the specified type.
 
@@ -539,6 +597,7 @@ class MLModelsService:
             model_type: One of 'lstm', 'nbeats', 'gru', 'tcn', 'transformer', 'tft'
             params: Model parameters
             epoch_callback: Optional callback function(current_epoch, total_epochs) called after each epoch
+            loss_fn: Optional PyTorch loss function for training (e.g., FocalLoss, WeightedBCELoss)
 
         Returns:
             Configured Darts model
@@ -557,7 +616,7 @@ class MLModelsService:
         if model_type not in creators:
             raise ValueError(f"Unknown model type: {model_type}. Supported: {list(creators.keys())}")
 
-        return creators[model_type](params, epoch_callback=epoch_callback)
+        return creators[model_type](params, epoch_callback=epoch_callback, loss_fn=loss_fn)
 
     @staticmethod
     def get_available_models() -> Dict[str, Dict]:
@@ -567,7 +626,47 @@ class MLModelsService:
         Returns:
             Dictionary of model configurations
         """
-        return MLModelsService.MODEL_ARCHITECTURES.copy()
+        return DartsModelService.MODEL_ARCHITECTURES.copy()
+
+    def get_parameter_ranges(self, model_type: str) -> Dict[str, List]:
+        """
+        Get hyperparameter ranges for genetic optimization.
+
+        Args:
+            model_type: Model architecture name
+
+        Returns:
+            Dictionary mapping param names to valid value ranges
+        """
+        model_type = model_type.lower()
+        if model_type not in self.MODEL_ARCHITECTURES:
+            raise ValueError(f"Unknown model type: {model_type}")
+
+        # Return param ranges from the hyperparameter ranges defined in MODEL_ARCHITECTURES
+        arch = self.MODEL_ARCHITECTURES[model_type]
+        return arch.get('hyperparameter_ranges', {})
+
+    def apply_layer_size_factor(self, params: Dict, factor: float) -> Dict:
+        """
+        Scale layer size parameters by a factor.
+
+        Args:
+            params: Original parameters
+            factor: Scaling factor (e.g., 0.5, 1.0, 2.0)
+
+        Returns:
+            Scaled parameters
+        """
+        scaled = params.copy()
+        size_params = ['hidden_dim', 'layer_widths', 'd_model', 'dim_feedforward',
+                       'hidden_size', 'num_filters']
+        for key in size_params:
+            if key in scaled:
+                if isinstance(scaled[key], (list, tuple)):
+                    scaled[key] = [int(v * factor) for v in scaled[key]]
+                else:
+                    scaled[key] = int(scaled[key] * factor)
+        return scaled
 
 
 class PredictionTargetService:

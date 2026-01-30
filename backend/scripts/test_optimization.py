@@ -143,8 +143,8 @@ def run_test():
 
 def test_individual_models():
     """Test each model type individually to isolate issues."""
-    from app.services.ml_models import MLModelsService
-    from app.services.training import TrainingService
+    from app.services.darts_models import DartsModelService as MLModelsService
+    from app.services.darts_training import DartsTrainingService as TrainingService
     from app.services.job_handler import load_dataset
     import pandas as pd
 
