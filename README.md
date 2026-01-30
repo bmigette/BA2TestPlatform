@@ -118,7 +118,7 @@ If you see `AttributeError: partially initialized module 'torchvision'` or simil
 pip uninstall torch torchvision torchaudio -y
 
 # Reinstall all three together from the same source
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 ```
 
 ### 2. Configure API Keys
