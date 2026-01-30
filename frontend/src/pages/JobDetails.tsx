@@ -321,10 +321,11 @@ const JobDetails: React.FC = () => {
         fetchResources();
       }, 1500);
 
-      // Slower refresh for generations and individuals (5s)
+      // Slower refresh for generations, individuals, and elite models (5s)
       const slowInterval = setInterval(() => {
         fetchGenerations();
         fetchIndividuals();
+        fetchEliteModels();  // Also refresh elite models during running
       }, 5000);
 
       return () => {
@@ -332,7 +333,7 @@ const JobDetails: React.FC = () => {
         clearInterval(slowInterval);
       };
     }
-  }, [job?.status, fetchJob, fetchGenerations, fetchIndividuals, fetchResources]);
+  }, [job?.status, fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
 
   // Update elapsed time
   useEffect(() => {

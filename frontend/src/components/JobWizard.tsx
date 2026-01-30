@@ -26,7 +26,12 @@ interface ParameterRanges {
   dropoutMin: number;
   dropoutMax: number;
   dropoutStep: number;
-  seqLen?: number;  // Sequence length for classification models
+  seqLen?: number;  // Sequence length for classification models (fixed value)
+  // SeqLen optimization (when optimizeSeqLen is true)
+  optimizeSeqLen?: boolean;
+  seqLenMin?: number;
+  seqLenMax?: number;
+  seqLenStep?: number;
   normalizationBuffer?: number;  // Buffer % for normalization (default 35%)
 }
 
@@ -192,6 +197,10 @@ const getDefaultState = () => ({
     dropoutMax: 0.5,
     dropoutStep: 0.1,
     seqLen: 24,
+    optimizeSeqLen: false,
+    seqLenMin: 24,
+    seqLenMax: 48,
+    seqLenStep: 12,
     normalizationBuffer: 35,
   } as ParameterRanges,
   geneticConfig: {
@@ -654,7 +663,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center space-x-4">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                New Optimization Job
+                New Opt Job
               </h2>
               {/* Step indicator */}
               <div className="flex items-center space-x-2">
@@ -1419,22 +1428,108 @@ const Step1Settings: React.FC<Step1Props> = ({
               Sequence Length
             </label>
           </div>
-          <div className="flex items-center space-x-4">
-            <input
-              type="number"
-              min={8}
-              max={128}
-              value={state.parameterRanges.seqLen || 24}
-              onChange={(e) => setState(prev => ({
-                ...prev,
-                parameterRanges: { ...prev.parameterRanges, seqLen: Number(e.target.value) }
-              }))}
-              className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-            />
-            <span className="text-sm text-gray-500">bars</span>
+
+          {/* Fixed vs Optimize toggle */}
+          <div className="flex items-center space-x-4 mb-3">
+            <label className="inline-flex items-center">
+              <input
+                type="radio"
+                name="seqLenMode"
+                checked={!state.parameterRanges.optimizeSeqLen}
+                onChange={() => setState(prev => ({
+                  ...prev,
+                  parameterRanges: { ...prev.parameterRanges, optimizeSeqLen: false }
+                }))}
+                className="form-radio text-blue-600"
+              />
+              <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">Fixed</span>
+            </label>
+            <label className="inline-flex items-center">
+              <input
+                type="radio"
+                name="seqLenMode"
+                checked={state.parameterRanges.optimizeSeqLen === true}
+                onChange={() => setState(prev => ({
+                  ...prev,
+                  parameterRanges: { ...prev.parameterRanges, optimizeSeqLen: true }
+                }))}
+                className="form-radio text-blue-600"
+              />
+              <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">Optimize range</span>
+            </label>
           </div>
-          <p className="text-xs text-gray-500 mt-1">
-            Number of consecutive time bars the model uses as input. Higher values capture longer patterns but require more data.
+
+          {!state.parameterRanges.optimizeSeqLen ? (
+            /* Fixed sequence length */
+            <div className="flex items-center space-x-4">
+              <input
+                type="number"
+                min={8}
+                max={128}
+                value={state.parameterRanges.seqLen || 24}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  parameterRanges: { ...prev.parameterRanges, seqLen: Number(e.target.value) }
+                }))}
+                className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <span className="text-sm text-gray-500">bars</span>
+            </div>
+          ) : (
+            /* Optimize sequence length range */
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Min</label>
+                <input
+                  type="number"
+                  min={8}
+                  max={128}
+                  step={4}
+                  value={state.parameterRanges.seqLenMin ?? 24}
+                  onChange={(e) => setState(prev => ({
+                    ...prev,
+                    parameterRanges: { ...prev.parameterRanges, seqLenMin: Number(e.target.value) }
+                  }))}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Max</label>
+                <input
+                  type="number"
+                  min={8}
+                  max={128}
+                  step={4}
+                  value={state.parameterRanges.seqLenMax ?? 48}
+                  onChange={(e) => setState(prev => ({
+                    ...prev,
+                    parameterRanges: { ...prev.parameterRanges, seqLenMax: Number(e.target.value) }
+                  }))}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Step</label>
+                <input
+                  type="number"
+                  min={4}
+                  max={24}
+                  step={4}
+                  value={state.parameterRanges.seqLenStep ?? 12}
+                  onChange={(e) => setState(prev => ({
+                    ...prev,
+                    parameterRanges: { ...prev.parameterRanges, seqLenStep: Number(e.target.value) }
+                  }))}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                />
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-gray-500 mt-2">
+            {state.parameterRanges.optimizeSeqLen
+              ? 'GA will explore different sequence lengths within this range to find optimal value.'
+              : 'Number of consecutive time bars the model uses as input. Higher values capture longer patterns but require more data.'}
           </p>
         </div>
       )}

@@ -69,7 +69,12 @@ class ParameterRanges(BaseModel):
     dropoutMin: float = 0.0
     dropoutMax: float = 0.5
     dropoutStep: float = 0.1
-    seqLen: Optional[int] = None  # Sequence length for classification models
+    seqLen: Optional[int] = None  # Sequence length for classification models (fixed value)
+    # SeqLen optimization support
+    optimizeSeqLen: Optional[bool] = False  # Whether to optimize sequence length via GA
+    seqLenMin: Optional[int] = 24  # Minimum seq_len when optimizing
+    seqLenMax: Optional[int] = 48  # Maximum seq_len when optimizing
+    seqLenStep: Optional[int] = 12  # Step size for seq_len optimization
     # Note: activationFunctions removed - not configurable on most tsai models
 
 

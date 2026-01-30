@@ -21,6 +21,7 @@ from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
 from app.services.sentiment import SentimentService
+from app.services.dataset_handler import add_time_features
 from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
 from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
 
@@ -65,6 +66,101 @@ router = APIRouter()
 
 # Thread pool for background dataset generation
 _dataset_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dataset_gen")
+
+
+def calculate_regen_flags(old_config: Dict[str, Any], new_config: Dict[str, Any]) -> DatasetRegenerate:
+    """
+    Calculate which dataset components need regeneration based on config differences.
+
+    Performs a diff between old and new configuration to determine the minimal
+    set of regeneration flags needed. This avoids unnecessary refetching of
+    expensive data (e.g., sentiment, fundamentals) when only indicators changed.
+
+    Args:
+        old_config: Current dataset configuration
+        new_config: New/updated dataset configuration
+
+    Returns:
+        DatasetRegenerate with appropriate flags set
+    """
+    flags = DatasetRegenerate(
+        regenerate_ohlcv=False,
+        regenerate_technical=False,
+        regenerate_sentiment=False,
+        regenerate_fundamentals=False,
+        regenerate_macro=False
+    )
+
+    # Ticker change = full regeneration
+    if old_config.get('ticker') != new_config.get('ticker'):
+        flags.regenerate_ohlcv = True
+        flags.regenerate_technical = True
+        flags.regenerate_sentiment = True
+        flags.regenerate_fundamentals = True
+        flags.regenerate_macro = True
+        return flags
+
+    # Data provider change = refetch OHLCV
+    if old_config.get('data_provider') != new_config.get('data_provider'):
+        flags.regenerate_ohlcv = True
+        flags.regenerate_technical = True  # Recalc on new data
+
+    # Date range expanding = refetch OHLCV
+    old_start = old_config.get('start_date')
+    new_start = new_config.get('start_date')
+    old_end = old_config.get('end_date')
+    new_end = new_config.get('end_date')
+
+    if old_start and new_start:
+        # Convert to comparable format
+        try:
+            old_start_dt = datetime.strptime(old_start, "%Y-%m-%d") if isinstance(old_start, str) else old_start
+            new_start_dt = datetime.strptime(new_start, "%Y-%m-%d") if isinstance(new_start, str) else new_start
+            if new_start_dt < old_start_dt:
+                flags.regenerate_ohlcv = True
+                flags.regenerate_technical = True
+        except (ValueError, TypeError):
+            pass
+
+    if old_end and new_end:
+        try:
+            old_end_dt = datetime.strptime(old_end, "%Y-%m-%d") if isinstance(old_end, str) else old_end
+            new_end_dt = datetime.strptime(new_end, "%Y-%m-%d") if isinstance(new_end, str) else new_end
+            if new_end_dt > old_end_dt:
+                flags.regenerate_ohlcv = True
+                flags.regenerate_technical = True
+        except (ValueError, TypeError):
+            pass
+
+    # Date range shrinking = recalc indicators (different lookback context)
+    if not flags.regenerate_ohlcv and (old_start != new_start or old_end != new_end):
+        flags.regenerate_technical = True
+
+    # Indicator changes
+    old_indicators = old_config.get('technical_indicators', [])
+    new_indicators = new_config.get('technical_indicators', [])
+    if old_indicators != new_indicators:
+        flags.regenerate_technical = True
+
+    # Sentiment config changes
+    old_sentiment = old_config.get('sentiment_config', {})
+    new_sentiment = new_config.get('sentiment_config', {})
+    if old_sentiment != new_sentiment:
+        flags.regenerate_sentiment = True
+
+    # Fundamentals config changes
+    old_fundamentals = old_config.get('fundamentals_config', {})
+    new_fundamentals = new_config.get('fundamentals_config', {})
+    if old_fundamentals != new_fundamentals:
+        flags.regenerate_fundamentals = True
+
+    # Macro config changes (if applicable)
+    old_macro = old_config.get('macro_config', {})
+    new_macro = new_config.get('macro_config', {})
+    if old_macro != new_macro:
+        flags.regenerate_macro = True
+
+    return flags
 
 
 def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
@@ -160,6 +256,10 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
             'Low': dp.low, 'Close': dp.close, 'Volume': dp.volume
         } for dp in data_points])
         df = df.sort_values('Date').reset_index(drop=True)
+
+        # Add time-based features (day_of_week, hour_of_day)
+        df = add_time_features(df)
+
         logger.info(f"[Thread] Fetched {len(df)} OHLC data points")
 
         # Validate date range (with 5-day tolerance)
@@ -1434,6 +1534,10 @@ async def regenerate_dataset(
                 'Volume': dp.volume
             } for dp in data_points])
             df = df.sort_values('Date').reset_index(drop=True)
+
+            # Add time-based features (day_of_week, hour_of_day)
+            df = add_time_features(df)
+
             logger.info(f"Fetched {len(df)} OHLC data points")
         else:
             # Load existing CSV and extract OHLCV columns for reprocessing
@@ -1766,6 +1870,9 @@ async def duplicate_dataset(
         } for dp in data_points])
         df = df.sort_values('Date').reset_index(drop=True)
 
+        # Add time-based features (day_of_week, hour_of_day)
+        df = add_time_features(df)
+
         # Save to new file
         datasets_dir = Path("datasets")
         datasets_dir.mkdir(exist_ok=True)
@@ -2005,6 +2112,10 @@ async def update_dataset(
     df = pd.DataFrame(ohlcv_data)
     df['Date'] = pd.to_datetime(df['Date'])
     df = df.sort_values('Date').reset_index(drop=True)
+
+    # Add time-based features (day_of_week, hour_of_day)
+    df = add_time_features(df)
+
     logger.info(f"Fetched {len(df)} OHLC data points")
 
     # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)

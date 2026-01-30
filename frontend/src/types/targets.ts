@@ -11,6 +11,10 @@ export interface BaseTargetConfig {
   category: TargetCategory;
   enabled?: boolean;
   color?: string;
+  // Target feature options - additional features derived from target for training
+  includeValues?: boolean;      // Include indicator values as features (for indicator-based targets)
+  valueLookback?: number;       // How many bars of lagged values to include (default 5)
+  includeBarsSince?: boolean;   // Include bars-since-last-signal counter feature
 }
 
 // Price-based target (existing)
@@ -40,7 +44,7 @@ export interface TripleBarrierTarget extends BaseTargetConfig {
   maxBars: number;
 }
 
-// Trend reversal target
+// Trend reversal target (binary - single direction)
 export interface TrendReversalTarget extends BaseTargetConfig {
   type: 'trend_reversal';
   category: 'binary_classification';
@@ -48,6 +52,16 @@ export interface TrendReversalTarget extends BaseTargetConfig {
   indicatorParams: IndicatorParams;
   threshold: number;
   direction: 'bullish' | 'bearish';
+}
+
+// Unified 3-class trend target (bearish/neutral/bullish)
+export interface UnifiedTrendTarget extends BaseTargetConfig {
+  type: 'unified_trend';
+  category: 'multiclass_classification';
+  indicator: 'zigzag' | 'macd' | 'rsi' | 'adx';
+  indicatorParams: IndicatorParams;
+  // Classes: 0=bearish, 1=neutral, 2=bullish
+  classes: ['bearish', 'neutral', 'bullish'];
 }
 
 // Volatility target
@@ -64,6 +78,7 @@ export type TargetConfig =
   | DirectionalTarget
   | TripleBarrierTarget
   | TrendReversalTarget
+  | UnifiedTrendTarget
   | VolatilityTarget;
 
 // Indicator parameters
