@@ -455,20 +455,23 @@ const JobWizard: React.FC<JobWizardProps> = ({
     }
   };
 
-  const getTargetLabel = (config: Record<string, unknown>): string => {
+  const getTargetLabel = (config: Record<string, unknown> | undefined): string => {
+    if (!config || !config.type) {
+      return 'Unknown target';
+    }
     switch (config.type) {
       case 'price_based':
-        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct}% (${config.timeBars} bars)`;
+        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} bars)`;
       case 'directional':
-        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon} bars)`;
+        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} bars)`;
       case 'triple_barrier':
-        return `Triple Barrier TP:${config.profitPct}% SL:${config.stopPct}% (${config.maxBars} bars)`;
+        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} bars)`;
       case 'trend_reversal':
-        return `${String(config.indicator).toUpperCase()} ${config.direction} reversal`;
+        return `${String(config.indicator || 'Unknown').toUpperCase()} ${config.direction || ''} reversal`;
       case 'volatility':
-        return `Volatility (${config.method}, ${config.horizon} bars)`;
+        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} bars)`;
       default:
-        return 'Unknown target';
+        return `Target: ${String(config.type)}`;
     }
   };
 
@@ -1430,9 +1433,9 @@ const Step2Summary: React.FC<Step2Props> = ({
       <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
         <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
           <Target size={16} />
-          <span>Prediction Targets</span>
+          <span>Prediction Targets ({previewData?.targets?.length || state.predictionTargets.length})</span>
           {hasWarnings && (
-            <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full text-xs flex items-center space-x-1">
+            <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full text-xs flex items-center space-x-1">
               <AlertTriangle size={12} />
               <span>Warnings</span>
             </span>
@@ -1454,8 +1457,8 @@ const Step2Summary: React.FC<Step2Props> = ({
               <div><span className="text-gray-500">Test:</span> <span className="font-medium">{previewData.test_rows.toLocaleString()}</span></div>
             </div>
 
-            {previewData.targets.map((target) => (
-              <div key={target.name} className={`p-4 rounded-lg border ${target.warnings.length > 0 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20' : 'border-gray-200 dark:border-gray-600'}`}>
+            {previewData.targets.map((target, idx) => (
+              <div key={`${target.name}-${idx}`} className={`p-4 rounded-lg border ${target.warnings.length > 0 ? 'border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/10' : 'border-gray-200 dark:border-gray-600'}`}>
                 <div className="font-medium text-sm mb-2">{target.label}</div>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
@@ -1475,8 +1478,8 @@ const Step2Summary: React.FC<Step2Props> = ({
                 </div>
                 {target.warnings.length > 0 && (
                   <div className="mt-3 space-y-1">
-                    {target.warnings.map((warning, idx) => (
-                      <div key={idx} className="flex items-start space-x-2 text-sm text-yellow-700 dark:text-yellow-300">
+                    {target.warnings.map((warning, warnIdx) => (
+                      <div key={warnIdx} className="flex items-start space-x-2 text-sm text-amber-600 dark:text-amber-400">
                         <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
                         <span>{warning}</span>
                       </div>
@@ -1536,12 +1539,12 @@ const Step2Summary: React.FC<Step2Props> = ({
 
       {/* Final Warning */}
       {hasWarnings && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-500 rounded-lg p-4">
+        <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-400 dark:border-amber-600 rounded-lg p-4">
           <div className="flex items-start space-x-3">
-            <AlertTriangle className="text-yellow-600 flex-shrink-0 mt-0.5" size={20} />
+            <AlertTriangle className="text-amber-500 dark:text-amber-400 flex-shrink-0 mt-0.5" size={20} />
             <div>
-              <div className="font-medium text-yellow-800 dark:text-yellow-200">Data Imbalance Warning</div>
-              <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+              <div className="font-medium text-amber-700 dark:text-amber-300">Data Imbalance Warning</div>
+              <p className="text-sm text-amber-600 dark:text-amber-400 mt-1">
                 Some prediction targets have no positive samples in the test set.
                 This means F1/precision/recall metrics will be 0 regardless of model quality.
                 Consider using less strict target criteria (lower profit %, higher DD tolerance, or longer time window).
