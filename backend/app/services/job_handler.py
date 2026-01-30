@@ -1214,6 +1214,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
             # Training failed
             error_messages = [r.get('error', 'Unknown error') for r in results if r.get('status') == 'failed']
             combined_error = "; ".join(set(error_messages[:3]))  # Dedupe and limit
+            logger.error(f"Training job {task_id} failed: {combined_error}")
             update_job_progress(task_id, 100, f"Training failed: {combined_error}")
 
             return {
@@ -1676,26 +1677,32 @@ def train_classification_optimization(
     # Get genetic config - required parameters (no defaults)
     population_size = genetic_config.get('populationSize')
     if population_size is None:
+        logger.error("Classification training failed: genetic_config.populationSize is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'genetic_config.populationSize is required'}
 
     generations = genetic_config.get('generations')
     if generations is None:
+        logger.error("Classification training failed: genetic_config.generations is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'genetic_config.generations is required'}
 
     training_epochs = genetic_config.get('trainingEpochs')
     if training_epochs is None:
+        logger.error("Classification training failed: genetic_config.trainingEpochs is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'genetic_config.trainingEpochs is required'}
 
     optimize_metric = metrics_config.get('classificationMetric')
     if optimize_metric is None:
+        logger.error("Classification training failed: metrics_config.classificationMetric is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.classificationMetric is required'}
 
     loss_function = metrics_config.get('lossFunction')
     if loss_function is None:
+        logger.error("Classification training failed: metrics_config.lossFunction is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.lossFunction is required'}
 
     seq_len = parameter_ranges.get('seqLen')
     if seq_len is None:
+        logger.error("Classification training failed: parameter_ranges.seqLen is required")
         return {'model_type': 'classification', 'status': 'failed', 'error': 'parameter_ranges.seqLen is required for classification'}
 
     # Prepare data for each prediction mode

@@ -373,11 +373,25 @@ const JobWizard: React.FC<JobWizardProps> = ({
       ...prev,
       jobType,
       selectedModels: profile.selectedModels || [],
-      parameterRanges: profile.parameterRanges || prev.parameterRanges,
+      // Merge parameterRanges to preserve defaults (like seqLen) for fields not in old profiles
+      parameterRanges: {
+        ...prev.parameterRanges,
+        ...(profile.parameterRanges || {}),
+        // Ensure seqLen has a value (old profiles may not have it)
+        seqLen: profile.parameterRanges?.seqLen ?? prev.parameterRanges.seqLen ?? 24,
+      },
       predictionTargets: profile.predictionTargets || [],
       trainTestSplit: profile.trainTestSplit || 80,
-      geneticConfig: profile.geneticConfig || prev.geneticConfig,
-      metricsConfig: profile.metricsConfig || prev.metricsConfig,
+      // Merge geneticConfig to preserve defaults for fields not in old profiles
+      geneticConfig: {
+        ...prev.geneticConfig,
+        ...(profile.geneticConfig || {}),
+      },
+      // Merge metricsConfig to preserve defaults
+      metricsConfig: {
+        ...prev.metricsConfig,
+        ...(profile.metricsConfig || {}),
+      },
       predictionHorizon: profile.predictionHorizon || 3,
       predictionModes: (profile as any).predictionModes || ['shift'],
     }));
