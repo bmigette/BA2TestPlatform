@@ -61,6 +61,7 @@ interface JobProfile {
   name: string;
   createdAt: string;
   updatedAt?: string;
+  jobType?: 'classification' | 'regression';
   selectedModels: string[];
   parameterRanges: ParameterRanges;
   predictionTargets: Record<string, unknown>[];  // Can be old or new TargetConfig format
@@ -100,15 +101,6 @@ interface JobWizardProps {
   onDeleteProfile: (profileId: number) => Promise<void>;
 }
 
-const MODEL_TYPES = [
-  { id: 'lstm', name: 'LSTM', description: 'Long Short-Term Memory' },
-  { id: 'gru', name: 'GRU', description: 'Gated Recurrent Unit' },
-  { id: 'nbeats', name: 'N-BEATS', description: 'Neural Basis Expansion Analysis' },
-  { id: 'tcn', name: 'TCN', description: 'Temporal Convolutional Network' },
-  { id: 'transformer', name: 'Transformer', description: 'Standard Transformer' },
-  { id: 'tft', name: 'TFT', description: 'Temporal Fusion Transformer (Google)' },
-];
-
 const CLASSIFICATION_METRICS = [
   { id: 'f1_score', name: 'F1 Score', description: 'Harmonic mean of precision and recall' },
   { id: 'accuracy', name: 'Accuracy', description: 'Overall correctness' },
@@ -139,6 +131,7 @@ interface TrainingDateRange {
 }
 
 const getDefaultState = () => ({
+  jobType: 'classification' as 'classification' | 'regression',
   selectedDatasetId: null as number | null,
   selectedModels: [] as string[],
   parameterRanges: {
@@ -202,6 +195,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [targetSets, setTargetSets] = useState<TargetSet[]>([]);
   const [targetSetsLoading, setTargetSetsLoading] = useState(false);
+  const [availableModels, setAvailableModels] = useState<Array<{id: string, name: string, description: string}>>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
 
   // Fetch target sets when modal opens
   const fetchTargetSets = useCallback(async () => {
@@ -219,6 +214,31 @@ const JobWizard: React.FC<JobWizardProps> = ({
     }
   }, []);
 
+  // Fetch models based on job type
+  const fetchModels = useCallback(async (jobType: 'classification' | 'regression') => {
+    setModelsLoading(true);
+    try {
+      const endpoint = jobType === 'classification'
+        ? 'http://localhost:8000/api/ml/classification-models'
+        : 'http://localhost:8000/api/ml/models';
+      const response = await fetch(endpoint);
+      if (response.ok) {
+        const data = await response.json();
+        // Transform to array format
+        const models = Object.entries(data.models || {}).map(([id, info]: [string, any]) => ({
+          id,
+          name: info.name || id.toUpperCase(),
+          description: info.description || '',
+        }));
+        setAvailableModels(models);
+      }
+    } catch (error) {
+      console.error('Failed to fetch models:', error);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, []);
+
   // Reset when opened
   useEffect(() => {
     if (isOpen) {
@@ -227,8 +247,16 @@ const JobWizard: React.FC<JobWizardProps> = ({
       setPreviewData(null);
       setPreviewError(null);
       fetchTargetSets();
+      fetchModels('classification'); // Default job type
     }
-  }, [isOpen, fetchTargetSets]);
+  }, [isOpen, fetchTargetSets, fetchModels]);
+
+  // Fetch models when job type changes
+  useEffect(() => {
+    if (isOpen) {
+      fetchModels(state.jobType);
+    }
+  }, [isOpen, state.jobType, fetchModels]);
 
   if (!isOpen) return null;
 
@@ -276,9 +304,9 @@ const JobWizard: React.FC<JobWizardProps> = ({
   const handleAllModelsToggle = () => {
     setState(prev => ({
       ...prev,
-      selectedModels: prev.selectedModels.length === MODEL_TYPES.length
+      selectedModels: prev.selectedModels.length === availableModels.length
         ? []
-        : MODEL_TYPES.map(m => m.id)
+        : availableModels.map(m => m.id)
     }));
   };
 
@@ -318,8 +346,10 @@ const JobWizard: React.FC<JobWizardProps> = ({
   };
 
   const loadProfile = (profile: JobProfile) => {
+    const jobType = profile.jobType || 'classification';  // Default for old profiles
     setState(prev => ({
       ...prev,
+      jobType,
       selectedModels: profile.selectedModels || [],
       parameterRanges: profile.parameterRanges || prev.parameterRanges,
       predictionTargets: profile.predictionTargets || [],
@@ -328,12 +358,15 @@ const JobWizard: React.FC<JobWizardProps> = ({
       metricsConfig: profile.metricsConfig || prev.metricsConfig,
       predictionHorizon: profile.predictionHorizon || 3,
     }));
+    // Fetch models for the profile's job type
+    fetchModels(jobType);
     setShowLoadProfileDialog(false);
   };
 
   const saveProfile = async () => {
     if (!newProfileName.trim()) return;
     await onSaveProfile(newProfileName.trim(), {
+      jobType: state.jobType,
       selectedModels: state.selectedModels,
       parameterRanges: state.parameterRanges,
       predictionTargets: state.predictionTargets,
@@ -461,6 +494,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          jobType: state.jobType,
           datasetId: state.selectedDatasetId,
           selectedModels: state.selectedModels,
           parameterRanges: state.parameterRanges,
@@ -546,6 +580,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 saveProfile={saveProfile}
                 onDeleteProfile={onDeleteProfile}
                 calculateCombinations={calculateCombinations}
+                availableModels={availableModels}
+                modelsLoading={modelsLoading}
               />
             ) : (
               <Step2Summary
@@ -555,6 +591,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 previewLoading={previewLoading}
                 previewError={previewError}
                 calculateCombinations={calculateCombinations}
+                availableModels={availableModels}
               />
             )}
           </div>
@@ -646,6 +683,8 @@ interface Step1Props {
   saveProfile: () => void;
   onDeleteProfile: (id: number) => Promise<void>;
   calculateCombinations: () => number;
+  availableModels: Array<{id: string, name: string, description: string}>;
+  modelsLoading: boolean;
 }
 
 const Step1Settings: React.FC<Step1Props> = ({
@@ -670,8 +709,10 @@ const Step1Settings: React.FC<Step1Props> = ({
   saveProfile,
   onDeleteProfile,
   calculateCombinations,
+  availableModels,
+  modelsLoading,
 }) => {
-  const allModelsSelected = state.selectedModels.length === MODEL_TYPES.length;
+  const allModelsSelected = state.selectedModels.length === availableModels.length && availableModels.length > 0;
   const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString();
 
   return (
@@ -692,6 +733,57 @@ const Step1Settings: React.FC<Step1Props> = ({
           <Save size={14} />
           <span>Save Profile</span>
         </button>
+      </div>
+
+      {/* Job Type Selection */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Job Type
+        </label>
+        <div className="flex space-x-4">
+          <label
+            className={`flex-1 flex items-center justify-center space-x-2 p-4 rounded-lg border-2 cursor-pointer transition-colors ${
+              state.jobType === 'classification'
+                ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+            }`}
+          >
+            <input
+              type="radio"
+              name="jobType"
+              value="classification"
+              checked={state.jobType === 'classification'}
+              onChange={() => setState(prev => ({ ...prev, jobType: 'classification', selectedModels: [] }))}
+              className="sr-only"
+            />
+            <Target size={20} className={state.jobType === 'classification' ? 'text-green-600' : 'text-gray-400'} />
+            <div>
+              <div className="font-medium">Classification</div>
+              <div className="text-xs text-gray-500">Binary prediction (up/down, signal/no-signal)</div>
+            </div>
+          </label>
+          <label
+            className={`flex-1 flex items-center justify-center space-x-2 p-4 rounded-lg border-2 cursor-pointer transition-colors ${
+              state.jobType === 'regression'
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+            }`}
+          >
+            <input
+              type="radio"
+              name="jobType"
+              value="regression"
+              checked={state.jobType === 'regression'}
+              onChange={() => setState(prev => ({ ...prev, jobType: 'regression', selectedModels: [] }))}
+              className="sr-only"
+            />
+            <Activity size={20} className={state.jobType === 'regression' ? 'text-blue-600' : 'text-gray-400'} />
+            <div>
+              <div className="font-medium">Regression</div>
+              <div className="text-xs text-gray-500">Continuous value prediction (price, volatility)</div>
+            </div>
+          </label>
+        </div>
       </div>
 
       {/* Dataset Selection */}
@@ -786,40 +878,61 @@ const Step1Settings: React.FC<Step1Props> = ({
       {/* Model Types */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Select Model Types</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Select Model Types
+            <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
+              state.jobType === 'classification'
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+            }`}>
+              {state.jobType === 'classification' ? 'Classification' : 'Regression'}
+            </span>
+          </label>
           <label className="flex items-center space-x-2 cursor-pointer">
             <input
               type="checkbox"
               checked={allModelsSelected}
               onChange={handleAllModelsToggle}
+              disabled={modelsLoading}
               className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
             />
             <span className="text-sm text-gray-600 dark:text-gray-400">All Models</span>
           </label>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          {MODEL_TYPES.map((model) => (
-            <label
-              key={model.id}
-              className={`flex items-start space-x-3 p-3 rounded-lg border transition-colors cursor-pointer ${
-                state.selectedModels.includes(model.id)
-                  ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={state.selectedModels.includes(model.id)}
-                onChange={() => handleModelToggle(model.id)}
-                className="mt-1 w-4 h-4 text-green-600 border-gray-300 rounded"
-              />
-              <div>
-                <div className="font-medium text-sm">{model.name}</div>
-                <span className="text-xs text-gray-500">{model.description}</span>
-              </div>
-            </label>
-          ))}
-        </div>
+        {modelsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="animate-spin text-gray-400" size={24} />
+            <span className="ml-2 text-gray-500">Loading models...</span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            {availableModels.map((model) => (
+              <label
+                key={model.id}
+                className={`flex items-start space-x-3 p-3 rounded-lg border transition-colors cursor-pointer ${
+                  state.selectedModels.includes(model.id)
+                    ? state.jobType === 'classification'
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                      : 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={state.selectedModels.includes(model.id)}
+                  onChange={() => handleModelToggle(model.id)}
+                  className={`mt-1 w-4 h-4 border-gray-300 rounded ${
+                    state.jobType === 'classification' ? 'text-green-600' : 'text-blue-600'
+                  }`}
+                />
+                <div>
+                  <div className="font-medium text-sm">{model.name}</div>
+                  <span className="text-xs text-gray-500">{model.description}</span>
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Prediction Targets */}
@@ -946,21 +1059,32 @@ const Step1Settings: React.FC<Step1Props> = ({
 
           {/* Model-specific behavior explanation */}
           <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
-            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2 font-medium">How models handle prediction horizon:</div>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
-                <div className="font-medium text-purple-600 dark:text-purple-400 mb-1">LSTM / GRU</div>
-                <p className="text-gray-600 dark:text-gray-300">
-                  Target shifted by {state.predictionHorizon} bars. Model predicts <strong>single value</strong> at bar +{state.predictionHorizon}.
-                </p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
-                <div className="font-medium text-green-600 dark:text-green-400 mb-1">N-BEATS / TCN / Transformer / TFT</div>
-                <p className="text-gray-600 dark:text-gray-300">
-                  Multi-step output. Model predicts <strong>{state.predictionHorizon} values</strong> (bars +1 to +{state.predictionHorizon}) in one pass.
-                </p>
-              </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2 font-medium">
+              How {state.jobType} models handle prediction horizon:
             </div>
+            {state.jobType === 'classification' ? (
+              <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600 text-xs">
+                <div className="font-medium text-green-600 dark:text-green-400 mb-1">Classification Models (tsai)</div>
+                <p className="text-gray-600 dark:text-gray-300">
+                  Target shifted by {state.predictionHorizon} bars. Model predicts <strong>probability of positive class</strong> at bar +{state.predictionHorizon}.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
+                  <div className="font-medium text-purple-600 dark:text-purple-400 mb-1">LSTM / GRU</div>
+                  <p className="text-gray-600 dark:text-gray-300">
+                    Target shifted by {state.predictionHorizon} bars. Predicts <strong>single value</strong> at bar +{state.predictionHorizon}.
+                  </p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
+                  <div className="font-medium text-blue-600 dark:text-blue-400 mb-1">N-BEATS / TCN / Transformer / TFT</div>
+                  <p className="text-gray-600 dark:text-gray-300">
+                    Multi-step output. Predicts <strong>{state.predictionHorizon} values</strong> (bars +1 to +{state.predictionHorizon}) in one pass.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1042,46 +1166,82 @@ const Step1Settings: React.FC<Step1Props> = ({
       <div>
         <div className="flex items-center space-x-2 mb-3">
           <Zap size={16} className="text-gray-400" />
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Optimization Metrics</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Optimization Metric
+          </label>
         </div>
 
-        {/* Classification Metric */}
-        <div className="mb-4">
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Classification Targets</label>
-          <div className="flex flex-wrap gap-2">
-            {CLASSIFICATION_METRICS.map((metric) => (
-              <label
-                key={metric.id}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                  state.metricsConfig.classificationMetric === metric.id
-                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
-                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-                }`}
-                title={metric.description}
-              >
-                <input
-                  type="radio"
-                  name="classificationMetric"
-                  checked={state.metricsConfig.classificationMetric === metric.id}
-                  onChange={() => setState(prev => ({
-                    ...prev,
-                    metricsConfig: {
-                      ...prev.metricsConfig,
-                      classificationMetric: metric.id,
-                      optimizeMetric: metric.id // Keep optimizeMetric for backward compatibility
-                    }
-                  }))}
-                  className="sr-only"
-                />
-                <span>{metric.name}</span>
-              </label>
-            ))}
-          </div>
-        </div>
+        {state.jobType === 'classification' ? (
+          <>
+            {/* Classification Metric */}
+            <div className="flex flex-wrap gap-2">
+              {CLASSIFICATION_METRICS.map((metric) => (
+                <label
+                  key={metric.id}
+                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                    state.metricsConfig.classificationMetric === metric.id
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
+                      : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                  }`}
+                  title={metric.description}
+                >
+                  <input
+                    type="radio"
+                    name="optimizeMetric"
+                    checked={state.metricsConfig.classificationMetric === metric.id}
+                    onChange={() => setState(prev => ({
+                      ...prev,
+                      metricsConfig: {
+                        ...prev.metricsConfig,
+                        classificationMetric: metric.id,
+                        optimizeMetric: metric.id
+                      }
+                    }))}
+                    className="sr-only"
+                  />
+                  <span>{metric.name}</span>
+                </label>
+              ))}
+            </div>
 
-        {/* Regression Metric */}
-        <div>
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Regression Targets</label>
+            {/* Loss Function - Only for Classification */}
+            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Training Loss Function</label>
+              <div className="flex flex-wrap gap-2">
+                {LOSS_FUNCTIONS.filter(l => l.id !== 'mse').map((loss) => (
+                  <label
+                    key={loss.id}
+                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                      state.metricsConfig.lossFunction === loss.id
+                        ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700'
+                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                    }`}
+                    title={loss.description}
+                  >
+                    <input
+                      type="radio"
+                      name="lossFunction"
+                      checked={state.metricsConfig.lossFunction === loss.id}
+                      onChange={() => setState(prev => ({
+                        ...prev,
+                        metricsConfig: {
+                          ...prev.metricsConfig,
+                          lossFunction: loss.id
+                        }
+                      }))}
+                      className="sr-only"
+                    />
+                    <span>{loss.name}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Focal Loss is recommended for imbalanced classification (when positive samples are rare)
+              </p>
+            </div>
+          </>
+        ) : (
+          /* Regression Metric */
           <div className="flex flex-wrap gap-2">
             {REGRESSION_METRICS.map((metric) => (
               <label
@@ -1095,13 +1255,14 @@ const Step1Settings: React.FC<Step1Props> = ({
               >
                 <input
                   type="radio"
-                  name="regressionMetric"
+                  name="optimizeMetric"
                   checked={state.metricsConfig.regressionMetric === metric.id}
                   onChange={() => setState(prev => ({
                     ...prev,
                     metricsConfig: {
                       ...prev.metricsConfig,
-                      regressionMetric: metric.id
+                      regressionMetric: metric.id,
+                      optimizeMetric: metric.id
                     }
                   }))}
                   className="sr-only"
@@ -1110,43 +1271,7 @@ const Step1Settings: React.FC<Step1Props> = ({
               </label>
             ))}
           </div>
-        </div>
-
-        {/* Loss Function */}
-        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Training Loss Function</label>
-          <div className="flex flex-wrap gap-2">
-            {LOSS_FUNCTIONS.map((loss) => (
-              <label
-                key={loss.id}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                  state.metricsConfig.lossFunction === loss.id
-                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700'
-                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-                }`}
-                title={loss.description}
-              >
-                <input
-                  type="radio"
-                  name="lossFunction"
-                  checked={state.metricsConfig.lossFunction === loss.id}
-                  onChange={() => setState(prev => ({
-                    ...prev,
-                    metricsConfig: {
-                      ...prev.metricsConfig,
-                      lossFunction: loss.id
-                    }
-                  }))}
-                  className="sr-only"
-                />
-                <span>{loss.name}</span>
-              </label>
-            ))}
-          </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            Focal Loss is recommended for imbalanced classification (when positive samples are rare)
-          </p>
-        </div>
+        )}
       </div>
 
       {/* Summary */}
@@ -1230,6 +1355,7 @@ interface Step2Props {
   previewLoading: boolean;
   previewError: string | null;
   calculateCombinations: () => number;
+  availableModels: Array<{id: string, name: string, description: string}>;
 }
 
 const Step2Summary: React.FC<Step2Props> = ({
@@ -1239,12 +1365,23 @@ const Step2Summary: React.FC<Step2Props> = ({
   previewLoading,
   previewError,
   calculateCombinations,
+  availableModels,
 }) => {
   const hasWarnings = previewData?.targets.some(t => t.warnings.length > 0);
 
   return (
     <div className="space-y-6">
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Job Summary</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Job Summary</h3>
+        {/* Job Type Badge */}
+        <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+          state.jobType === 'classification'
+            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+            : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+        }`}>
+          {state.jobType === 'classification' ? 'Classification' : 'Regression'}
+        </span>
+      </div>
 
       {/* Dataset */}
       <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
@@ -1270,10 +1407,14 @@ const Step2Summary: React.FC<Step2Props> = ({
         </h4>
         <div className="flex flex-wrap gap-2">
           {state.selectedModels.map((modelId) => {
-            const model = MODEL_TYPES.find(m => m.id === modelId);
+            const model = availableModels.find(m => m.id === modelId);
             return (
-              <span key={modelId} className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-full text-sm">
-                {model?.name || modelId}
+              <span key={modelId} className={`px-3 py-1 rounded-full text-sm ${
+                state.jobType === 'classification'
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                  : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+              }`}>
+                {model?.name || modelId.toUpperCase()}
               </span>
             );
           })}
@@ -1356,10 +1497,18 @@ const Step2Summary: React.FC<Step2Props> = ({
           <div><span className="text-gray-500">Generations:</span> <span className="font-medium">{state.geneticConfig.generations}</span></div>
           <div><span className="text-gray-500">Epochs:</span> <span className="font-medium">{state.geneticConfig.trainingEpochs}</span></div>
         </div>
-        <div className="grid grid-cols-4 gap-4 text-sm">
-          <div><span className="text-gray-500">Class. Metric:</span> <span className="font-medium">{state.metricsConfig.classificationMetric || 'f1_score'}</span></div>
-          <div><span className="text-gray-500">Reg. Metric:</span> <span className="font-medium">{state.metricsConfig.regressionMetric || 'rmse'}</span></div>
-          <div><span className="text-gray-500">Loss Function:</span> <span className="font-medium">{state.metricsConfig.lossFunction || 'focal_loss'}</span></div>
+        <div className={`grid ${state.jobType === 'classification' ? 'grid-cols-4' : 'grid-cols-3'} gap-4 text-sm`}>
+          <div>
+            <span className="text-gray-500">Optimize:</span>{' '}
+            <span className="font-medium">
+              {state.jobType === 'classification'
+                ? (state.metricsConfig.classificationMetric || 'f1_score')
+                : (state.metricsConfig.regressionMetric || 'rmse')}
+            </span>
+          </div>
+          {state.jobType === 'classification' && (
+            <div><span className="text-gray-500">Loss:</span> <span className="font-medium">{state.metricsConfig.lossFunction || 'focal_loss'}</span></div>
+          )}
           <div><span className="text-gray-500">Horizon:</span> <span className="font-medium">{state.predictionHorizon} bars</span></div>
         </div>
       </div>
