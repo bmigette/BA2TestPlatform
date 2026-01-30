@@ -1751,9 +1751,10 @@ const Step3Summary: React.FC<Step3Props> = ({
         suggestedThresholdMax = Math.min(0.7, suggestedThresholdMin + 0.3);
       }
 
-      // Only update if current selection is invalid or not set
-      const currentLossValid = availableLossFunctions.some(l => l.id === state.metricsConfig.lossFunction);
-      const shouldUpdateLoss = !currentLossValid || state.metricsConfig.lossFunction !== recommendedLoss;
+      // Only update if current selection is invalid or threshold not set
+      const currentLossFunctions = state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction || 'focal_loss'];
+      const allLossesValid = currentLossFunctions.every(l => availableLossFunctions.some(a => a.id === l));
+      const shouldUpdateLoss = !allLossesValid;
       const shouldUpdateThreshold = state.metricsConfig.thresholdMin === undefined;
 
       if (shouldUpdateLoss || shouldUpdateThreshold) {
@@ -1761,7 +1762,11 @@ const Step3Summary: React.FC<Step3Props> = ({
           ...prev,
           metricsConfig: {
             ...prev.metricsConfig,
-            ...(shouldUpdateLoss ? { lossFunction: recommendedLoss } : {}),
+            ...(shouldUpdateLoss ? {
+              lossFunction: recommendedLoss,
+              lossFunctions: [recommendedLoss],
+              optimizeLossFunction: false,
+            } : {}),
             ...(shouldUpdateThreshold ? {
               thresholdMin: suggestedThresholdMin,
               thresholdMax: suggestedThresholdMax,
