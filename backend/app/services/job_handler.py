@@ -964,13 +964,15 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                 target_column = None
                 for pt in prediction_targets:
                     pt_type = pt.get('type')
-                    pt_config = pt.get('config', {}) or {}
+                    # Support both old format (config) and new format (indicatorParams)
+                    pt_config = pt.get('config') or pt.get('indicatorParams') or {}
 
                     if pt_type == 'trend_reversal':
                         # ZigZag-based trend reversal
-                        zigzag_pct = pt_config.get('zigzagPercent')
+                        # Support both zigzagPercent and deviationPct field names
+                        zigzag_pct = pt_config.get('zigzagPercent') or pt_config.get('deviationPct')
                         if zigzag_pct is None:
-                            return {'status': 'failed', 'error': 'trend_reversal target requires zigzagPercent in config'}
+                            return {'status': 'failed', 'error': f'trend_reversal target requires zigzagPercent or deviationPct in config/indicatorParams. Got: {pt}'}
                         col_name = f"zigzag_{zigzag_pct}pct_reversal"
                         combined_df = trend_service.calculate_zigzag_reversals(
                             combined_df,
@@ -985,7 +987,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]
                         # Simple directional target
                         horizon = pt_config.get('horizon')
                         if horizon is None:
-                            return {'status': 'failed', 'error': 'directional target requires horizon in config'}
+                            return {'status': 'failed', 'error': f'directional target requires horizon in config. Got: {pt}'}
                         col_name = f"direction_{horizon}bar"
                         combined_df[col_name] = (combined_df['Close'].shift(-horizon) > combined_df['Close']).astype(int)
                         if target_column is None:
