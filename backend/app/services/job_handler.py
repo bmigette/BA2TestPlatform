@@ -1927,7 +1927,7 @@ def train_classification_optimization(
     optimizer = GeneticOptimizer(
         param_ranges=ga_param_ranges,
         population_size=population_size,
-        generations=generations,
+        n_generations=generations,
         crossover_prob=genetic_config['crossoverProb'],
         mutation_prob=genetic_config['mutationProb'],
         elitism_percent=genetic_config['elitismPercent'],
