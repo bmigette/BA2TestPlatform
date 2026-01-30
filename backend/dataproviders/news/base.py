@@ -231,7 +231,8 @@ class MarketNewsInterface(ABC):
                 try:
                     resolved_url = future.result()
                     if resolved_url:
-                        articles[idx]['url'] = resolved_url
+                        # Store resolved URL separately, keep original for cache indexing
+                        articles[idx]['resolved_url'] = resolved_url
                         articles[idx]['finnhub_url_resolved'] = True
                         resolved_count += 1
                 except Exception as e:
@@ -269,7 +270,8 @@ class MarketNewsInterface(ABC):
         needs_enrichment = []
         for i, article in enumerate(articles):
             summary = article.get('summary', '') or ''
-            url = article.get('url', '')
+            # Use resolved_url for content fetching if available (for Finnhub redirects)
+            url = article.get('resolved_url') or article.get('url', '')
             if len(summary) < min_summary_length and url:
                 # Skip unresolved Finnhub API URLs (they can't be scraped)
                 if 'finnhub.io/api/' in url:
