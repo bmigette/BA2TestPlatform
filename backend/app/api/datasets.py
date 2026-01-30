@@ -1359,12 +1359,44 @@ async def regenerate_dataset(
     # PHASE 2: Long-running operations WITHOUT holding DB session
     # =========================================================================
     try:
+        # Log regeneration options for debugging
+        logger.info(f"Regeneration options: OHLCV={regen_options.regenerate_ohlcv}, "
+                   f"TA={regen_options.regenerate_technical}, "
+                   f"Sentiment={regen_options.regenerate_sentiment}, "
+                   f"Fundamentals={regen_options.regenerate_fundamentals}, "
+                   f"Macro={regen_options.regenerate_macro}")
+
+        # Calculate warmup period needed for indicators (same logic as create_dataset)
+        max_period = 0
+        if technical_indicators:
+            for ind in technical_indicators:
+                period = ind.get('period', 0)
+                slow = ind.get('slow', 0)  # For MACD
+                max_period = max(max_period, period, slow)
+
+        # Calculate warmup days based on timeframe
+        bars_per_day = {
+            '1m': 390, '5m': 78, '15m': 26, '30m': 13,
+            '1h': 7, '4h': 2, '1d': 1, '1w': 0.2, '1mo': 0.05
+        }.get(timeframe, 1)
+
+        warmup_bars_needed = max_period + 50 if max_period > 0 else 0
+        warmup_days = int(warmup_bars_needed / max(bars_per_day, 0.1) * 1.5) if warmup_bars_needed > 0 else 0
+
+        # Store original requested start date for filtering later
+        requested_start_date = start_date
+
+        # Adjust fetch start date to include warmup period
+        fetch_start_date = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
+        if warmup_days > 0:
+            logger.info(f"Warmup: fetching {warmup_days} extra days for {max_period}-period indicators")
+
         # Check if we need to fetch fresh OHLCV or load from existing file
         if regen_options.regenerate_ohlcv:
             # Fetch fresh OHLC data
             provider_name = gen_config.get("data_provider", "yfinance")
             provider = get_ohlcv_provider(provider_name)
-            logger.info(f"Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
+            logger.info(f"Fetching data from {fetch_start_date.date()} to {end_date.date()} using {provider_name}")
 
             interval_map = {
                 "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -1374,7 +1406,7 @@ async def regenerate_dataset(
 
             data_points = provider.get_data(
                 symbol=ticker,
-                start_date=start_date,
+                start_date=fetch_start_date,
                 end_date=end_date,
                 interval=interval
             )
@@ -1590,6 +1622,22 @@ async def regenerate_dataset(
 
             except Exception as e:
                 logger.error(f"Error fetching fundamentals: {e}")
+
+        # Filter out warmup rows (keep only data from requested start date onwards)
+        if warmup_days > 0 and regen_options.regenerate_ohlcv:
+            original_len = len(df)
+            # Convert requested_start_date to comparable format
+            if hasattr(requested_start_date, 'date'):
+                filter_date = requested_start_date.date()
+            else:
+                filter_date = requested_start_date
+
+            # Ensure df['Date'] is datetime for comparison
+            if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+                df['Date'] = pd.to_datetime(df['Date'])
+
+            df = df[df['Date'].dt.date >= filter_date].reset_index(drop=True)
+            logger.info(f"Filtered warmup rows: {original_len} -> {len(df)} rows (removed {original_len - len(df)} warmup rows)")
 
         # Save to file
         save_path = Path(file_path)
