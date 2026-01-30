@@ -9,6 +9,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
 } from 'recharts';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface EpochMetric {
   epoch: number;
@@ -162,6 +163,13 @@ const JobDetails: React.FC = () => {
   const [savingModel, setSavingModel] = useState<number | null>(null);
   const [savingRetrainResult, setSavingRetrainResult] = useState(false);
   const [newModelName, setNewModelName] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
 
   const fetchJob = useCallback(async () => {
     if (!id) return;
@@ -359,14 +367,21 @@ const JobDetails: React.FC = () => {
     }
   };
 
-  const handleCancel = async () => {
-    if (!confirm('Are you sure you want to cancel this job?')) return;
-    try {
-      await fetch(`http://localhost:8000/api/jobs/${id}/cancel`, { method: 'POST' });
-      fetchJob();
-    } catch (err) {
-      console.error('Failed to cancel job:', err);
-    }
+  const handleCancel = () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Cancel Job',
+      message: 'Are you sure you want to cancel this job?',
+      variant: 'warning',
+      onConfirm: async () => {
+        try {
+          await fetch(`http://localhost:8000/api/jobs/${id}/cancel`, { method: 'POST' });
+          fetchJob();
+        } catch (err) {
+          console.error('Failed to cancel job:', err);
+        }
+      },
+    });
   };
 
   const toggleGeneration = (gen: number) => {
@@ -1384,6 +1399,16 @@ const JobDetails: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+      />
     </div>
   );
 };

@@ -21,6 +21,7 @@ import {
   ChevronUp,
   ChevronDown
 } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface Model {
   id: string;
@@ -64,6 +65,13 @@ const Models: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [sortField, setSortField] = useState<SortField>('date');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
 
   useEffect(() => {
     fetchModels();
@@ -84,18 +92,24 @@ const Models: React.FC = () => {
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent, modelId: string) => {
+  const handleDelete = (e: React.MouseEvent, modelId: string) => {
     e.stopPropagation();
-    if (!confirm('Are you sure you want to delete this model?')) return;
-
-    try {
-      const res = await fetch(`${API_BASE}/models/${modelId}`, { method: 'DELETE' });
-      if (res.ok) {
-        setModels(prev => prev.filter(m => m.id !== modelId));
-      }
-    } catch (err) {
-      alert('Failed to delete model');
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Model',
+      message: 'Are you sure you want to delete this model?',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`${API_BASE}/models/${modelId}`, { method: 'DELETE' });
+          if (res.ok) {
+            setModels(prev => prev.filter(m => m.id !== modelId));
+          }
+        } catch (err) {
+          alert('Failed to delete model');
+        }
+      },
+    });
   };
 
   const handleExport = async (e: React.MouseEvent, modelId: string) => {
@@ -503,6 +517,17 @@ const Models: React.FC = () => {
           </table>
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+        confirmText="Delete"
+      />
     </div>
   );
 };

@@ -288,6 +288,109 @@ const JobWizard: React.FC<JobWizardProps> = ({
     }
   }, [isOpen, state.jobType, fetchModels]);
 
+  const getTargetLabel = useCallback((config: Record<string, unknown> | undefined): string => {
+    if (!config || !config.type) {
+      return 'Unknown target';
+    }
+    switch (config.type) {
+      case 'price_based':
+        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} bars)`;
+      case 'directional':
+        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} bars)`;
+      case 'triple_barrier':
+        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} bars)`;
+      case 'trend_reversal':
+        return `${String(config.indicator || 'Unknown').toUpperCase()} ${config.direction || ''} reversal`;
+      case 'volatility':
+        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} bars)`;
+      default:
+        return `Target: ${String(config.type)}`;
+    }
+  }, []);
+
+  const fetchPreview = useCallback(async () => {
+    if (!state.selectedDatasetId || state.predictionTargets.length === 0) return;
+
+    setPreviewLoading(true);
+    setPreviewError(null);
+
+    try {
+      // Use the new calculate-targets endpoint with target configs
+      const response = await fetch(`http://localhost:8000/api/datasets/${state.selectedDatasetId}/calculate-targets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targets: state.predictionTargets,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch preview');
+      }
+
+      const data = await response.json();
+
+      // Calculate train/test split for each target based on the data array
+      const totalRows = data.total_rows || data.targets?.[0]?.stats?.totalRows || 0;
+      const trainRows = Math.floor(totalRows * state.trainTestSplit / 100);
+      const testRows = totalRows - trainRows;
+
+      // Convert to preview format with proper train/test splits
+      const previewResponse: PreviewResponse = {
+        dataset_id: state.selectedDatasetId,
+        dataset_rows: totalRows,
+        train_rows: trainRows,
+        test_rows: testRows,
+        targets: (data.targets || []).map((t: any) => {
+          // Split the data array by train/test boundary
+          const targetData = t.data || [];
+          const trainData = targetData.slice(0, trainRows);
+          const testData = targetData.slice(trainRows);
+
+          // Count positives in train portion (value === 1 for binary classification)
+          const trainPositive = trainData.filter((d: any) => d.value === 1).length;
+          const trainNegative = trainData.length - trainPositive;
+          const trainPositivePct = trainData.length > 0 ? parseFloat((trainPositive / trainData.length * 100).toFixed(2)) : 0;
+
+          // Count positives in test portion
+          const testPositive = testData.filter((d: any) => d.value === 1).length;
+          const testNegative = testData.length - testPositive;
+          const testPositivePct = testData.length > 0 ? parseFloat((testPositive / testData.length * 100).toFixed(2)) : 0;
+
+          // Generate warnings
+          const warnings: string[] = [];
+          if (trainPositive === 0) warnings.push('No positive samples in training data');
+          if (testPositive === 0) warnings.push('No positive samples in test data');
+          if (trainPositivePct < 1) warnings.push('Very low positive rate in training data');
+
+          return {
+            name: t.columnName,
+            label: getTargetLabel(t.config),
+            train_positive: trainPositive,
+            train_negative: trainNegative,
+            train_positive_pct: trainPositivePct,
+            test_positive: testPositive,
+            test_negative: testNegative,
+            test_positive_pct: testPositivePct,
+            warnings,
+          };
+        }),
+      };
+      setPreviewData(previewResponse);
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : 'Failed to load preview');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [state.selectedDatasetId, state.predictionTargets, state.trainTestSplit, getTargetLabel]);
+
+  // Refetch preview when prediction targets change (e.g., from loading a profile)
+  useEffect(() => {
+    if (currentStep === 3 && state.predictionTargets.length > 0 && state.selectedDatasetId) {
+      fetchPreview();
+    }
+  }, [currentStep, state.predictionTargets, state.selectedDatasetId, fetchPreview]);
+
   if (!isOpen) return null;
 
   const selectedDataset = datasets.find(d => d.id === state.selectedDatasetId);
@@ -442,109 +545,6 @@ const JobWizard: React.FC<JobWizardProps> = ({
     setProfileToDelete(null);
     setShowDeleteConfirmDialog(false);
   };
-
-  const getTargetLabel = useCallback((config: Record<string, unknown> | undefined): string => {
-    if (!config || !config.type) {
-      return 'Unknown target';
-    }
-    switch (config.type) {
-      case 'price_based':
-        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} bars)`;
-      case 'directional':
-        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} bars)`;
-      case 'triple_barrier':
-        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} bars)`;
-      case 'trend_reversal':
-        return `${String(config.indicator || 'Unknown').toUpperCase()} ${config.direction || ''} reversal`;
-      case 'volatility':
-        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} bars)`;
-      default:
-        return `Target: ${String(config.type)}`;
-    }
-  }, []);
-
-  const fetchPreview = useCallback(async () => {
-    if (!state.selectedDatasetId || state.predictionTargets.length === 0) return;
-
-    setPreviewLoading(true);
-    setPreviewError(null);
-
-    try {
-      // Use the new calculate-targets endpoint with target configs
-      const response = await fetch(`http://localhost:8000/api/datasets/${state.selectedDatasetId}/calculate-targets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targets: state.predictionTargets,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch preview');
-      }
-
-      const data = await response.json();
-
-      // Calculate train/test split for each target based on the data array
-      const totalRows = data.total_rows || data.targets?.[0]?.stats?.totalRows || 0;
-      const trainRows = Math.floor(totalRows * state.trainTestSplit / 100);
-      const testRows = totalRows - trainRows;
-
-      // Convert to preview format with proper train/test splits
-      const previewResponse: PreviewResponse = {
-        dataset_id: state.selectedDatasetId,
-        dataset_rows: totalRows,
-        train_rows: trainRows,
-        test_rows: testRows,
-        targets: (data.targets || []).map((t: any) => {
-          // Split the data array by train/test boundary
-          const targetData = t.data || [];
-          const trainData = targetData.slice(0, trainRows);
-          const testData = targetData.slice(trainRows);
-
-          // Count positives in train portion (value === 1 for binary classification)
-          const trainPositive = trainData.filter((d: any) => d.value === 1).length;
-          const trainNegative = trainData.length - trainPositive;
-          const trainPositivePct = trainData.length > 0 ? parseFloat((trainPositive / trainData.length * 100).toFixed(2)) : 0;
-
-          // Count positives in test portion
-          const testPositive = testData.filter((d: any) => d.value === 1).length;
-          const testNegative = testData.length - testPositive;
-          const testPositivePct = testData.length > 0 ? parseFloat((testPositive / testData.length * 100).toFixed(2)) : 0;
-
-          // Generate warnings
-          const warnings: string[] = [];
-          if (trainPositive === 0) warnings.push('No positive samples in training data');
-          if (testPositive === 0) warnings.push('No positive samples in test data');
-          if (trainPositivePct < 1) warnings.push('Very low positive rate in training data');
-
-          return {
-            name: t.columnName,
-            label: getTargetLabel(t.config),
-            train_positive: trainPositive,
-            train_negative: trainNegative,
-            train_positive_pct: trainPositivePct,
-            test_positive: testPositive,
-            test_negative: testNegative,
-            test_positive_pct: testPositivePct,
-            warnings,
-          };
-        }),
-      };
-      setPreviewData(previewResponse);
-    } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : 'Failed to load preview');
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [state.selectedDatasetId, state.predictionTargets, state.trainTestSplit, getTargetLabel]);
-
-  // Refetch preview when prediction targets change (e.g., from loading a profile)
-  useEffect(() => {
-    if (currentStep === 3 && state.predictionTargets.length > 0 && state.selectedDatasetId) {
-      fetchPreview();
-    }
-  }, [currentStep, state.predictionTargets, state.selectedDatasetId, fetchPreview]);
 
   const handleNext = async () => {
     if (currentStep === 1) {

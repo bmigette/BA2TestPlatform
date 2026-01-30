@@ -25,6 +25,7 @@ import {
   X
 } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
+import ConfirmDialog from '../components/ConfirmDialog';
 import {
   Line,
   XAxis,
@@ -189,6 +190,13 @@ const Backtesting: React.FC = () => {
   const [saveStrategyDescription, setSaveStrategyDescription] = useState('');
   const [savingStrategy, setSavingStrategy] = useState(false);
   const [showLoadDropdown, setShowLoadDropdown] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
 
   useEffect(() => {
     fetchData();
@@ -290,18 +298,24 @@ const Backtesting: React.FC = () => {
     }
   };
 
-  const deleteBacktest = async (id: string) => {
-    if (!confirm('Delete this backtest?')) return;
-
-    try {
-      await fetch(`${API_BASE}/backtests/${id}`, { method: 'DELETE' });
-      setBacktests(prev => prev.filter(b => b.id !== id));
-      if (selectedBacktest?.id === id) {
-        setSelectedBacktest(null);
-      }
-    } catch (err) {
-      setError('Failed to delete backtest');
-    }
+  const deleteBacktest = (id: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Backtest',
+      message: 'Are you sure you want to delete this backtest?',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          await fetch(`${API_BASE}/backtests/${id}`, { method: 'DELETE' });
+          setBacktests(prev => prev.filter(b => b.id !== id));
+          if (selectedBacktest?.id === id) {
+            setSelectedBacktest(null);
+          }
+        } catch (err) {
+          setError('Failed to delete backtest');
+        }
+      },
+    });
   };
 
   const exportBacktest = async (id: string) => {
@@ -393,16 +407,22 @@ const Backtesting: React.FC = () => {
     setShowLoadDropdown(false);
   };
 
-  const deleteStrategy = async (strategyId: string, e: React.MouseEvent) => {
+  const deleteStrategy = (strategyId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Delete this saved strategy?')) return;
-
-    try {
-      await fetch(`${API_BASE}/backtests/strategies/${strategyId}`, { method: 'DELETE' });
-      setSavedStrategies(prev => prev.filter(s => s.id !== strategyId));
-    } catch (err) {
-      setError('Failed to delete strategy');
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Strategy',
+      message: 'Are you sure you want to delete this saved strategy?',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          await fetch(`${API_BASE}/backtests/strategies/${strategyId}`, { method: 'DELETE' });
+          setSavedStrategies(prev => prev.filter(s => s.id !== strategyId));
+        } catch (err) {
+          setError('Failed to delete strategy');
+        }
+      },
+    });
   };
 
   if (loading) {
@@ -1233,6 +1253,17 @@ const Backtesting: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+        confirmText="Delete"
+      />
     </div>
   );
 };

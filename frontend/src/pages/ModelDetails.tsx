@@ -21,6 +21,7 @@ import {
   Database
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface HyperParameters {
   layers: number;
@@ -113,6 +114,13 @@ const ModelDetails: React.FC = () => {
   });
   const [datasets, setDatasets] = useState<Array<{id: number, name: string, ticker: string, start_date: string, end_date: string}>>([]);
   const [submittingRetrain, setSubmittingRetrain] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
 
   useEffect(() => {
     fetchModelDetails();
@@ -213,18 +221,24 @@ const ModelDetails: React.FC = () => {
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Are you sure you want to delete this model?')) return;
-
-    setDeleting(true);
-    try {
-      const res = await fetch(`${API_BASE}/models/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        navigate('/models');
-      }
-    } finally {
-      setDeleting(false);
-    }
+  const handleDelete = () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Model',
+      message: 'Are you sure you want to delete this model?',
+      variant: 'danger',
+      onConfirm: async () => {
+        setDeleting(true);
+        try {
+          const res = await fetch(`${API_BASE}/models/${id}`, { method: 'DELETE' });
+          if (res.ok) {
+            navigate('/models');
+          }
+        } finally {
+          setDeleting(false);
+        }
+      },
+    });
   };
 
   const handleClone = async () => {
@@ -872,6 +886,17 @@ const ModelDetails: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        variant={confirmDialog.variant}
+        confirmText="Delete"
+      />
     </div>
   );
 };
