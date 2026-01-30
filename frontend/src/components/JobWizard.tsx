@@ -1065,13 +1065,15 @@ const Step1Settings: React.FC<Step1Props> = ({
           {/* Model-specific behavior explanation */}
           <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
             <div className="text-xs text-gray-500 dark:text-gray-400 mb-2 font-medium">
-              How {state.jobType} models handle prediction horizon:
+              How {state.jobType} models use prediction horizon:
             </div>
             {state.jobType === 'classification' ? (
               <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600 text-xs">
                 <div className="font-medium text-green-600 dark:text-green-400 mb-1">Classification Models (tsai)</div>
                 <p className="text-gray-600 dark:text-gray-300">
-                  Target shifted by {state.predictionHorizon} bars. Model predicts <strong>probability of positive class</strong> at bar +{state.predictionHorizon}.
+                  <strong>Input:</strong> Bars T-23 to T (24-bar lookback window)<br/>
+                  <strong>Target:</strong> Class label at bar T+{state.predictionHorizon} (shifted by prediction horizon)<br/>
+                  <strong>Output:</strong> Probability that target condition is true at bar T+{state.predictionHorizon}
                 </p>
               </div>
             ) : (
@@ -1079,13 +1081,15 @@ const Step1Settings: React.FC<Step1Props> = ({
                 <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
                   <div className="font-medium text-purple-600 dark:text-purple-400 mb-1">LSTM / GRU</div>
                   <p className="text-gray-600 dark:text-gray-300">
-                    Target shifted by {state.predictionHorizon} bars. Predicts <strong>single value</strong> at bar +{state.predictionHorizon}.
+                    <strong>Input:</strong> Bars T-23 to T<br/>
+                    <strong>Output:</strong> Single value at T+{state.predictionHorizon}
                   </p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded p-2 border border-gray-200 dark:border-gray-600">
                   <div className="font-medium text-blue-600 dark:text-blue-400 mb-1">N-BEATS / TCN / Transformer / TFT</div>
                   <p className="text-gray-600 dark:text-gray-300">
-                    Multi-step output. Predicts <strong>{state.predictionHorizon} values</strong> (bars +1 to +{state.predictionHorizon}) in one pass.
+                    <strong>Input:</strong> Bars T-23 to T<br/>
+                    <strong>Output:</strong> {state.predictionHorizon} values (T+1 to T+{state.predictionHorizon})
                   </p>
                 </div>
               </div>

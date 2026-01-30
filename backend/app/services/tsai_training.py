@@ -70,6 +70,7 @@ class TSAITrainingService(ITrainingService):
         feature_columns: List[str],
         timeframe: str = 'daily',
         seq_len: int = 24,
+        prediction_horizon: int = 0,
         fit_scaler: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -84,10 +85,15 @@ class TSAITrainingService(ITrainingService):
             feature_columns: List of feature column names
             timeframe: Data timeframe (not used for tsai but kept for interface)
             seq_len: Sequence length for sliding window
+            prediction_horizon: How many bars ahead to predict (0 = predict at end of sequence)
             fit_scaler: Whether to fit the scaler (True for train, False for test)
 
         Returns:
             Tuple of (X, y) numpy arrays
+
+        Example with seq_len=24, prediction_horizon=3:
+            Input: Bars T-23 to T (24 bars)
+            Target: Class label at bar T+3
         """
         if not TSAI_AVAILABLE:
             raise RuntimeError("tsai library not available")
@@ -113,10 +119,10 @@ class TSAITrainingService(ITrainingService):
         else:
             X_data = df[feature_columns].values.astype(np.float32)
 
-        # Create sliding window sequences
-        X, y = self._create_sequences(X_data, y_data, seq_len)
+        # Create sliding window sequences with prediction horizon
+        X, y = self._create_sequences(X_data, y_data, seq_len, prediction_horizon)
 
-        logger.info(f"Prepared data: X shape {X.shape}, y shape {y.shape}, normalized={self.normalize}")
+        logger.info(f"Prepared data: X shape {X.shape}, y shape {y.shape}, horizon={prediction_horizon}, normalized={self.normalize}")
         return X, y
 
     def prepare_data_split(
@@ -126,7 +132,8 @@ class TSAITrainingService(ITrainingService):
         target_column: str,
         feature_columns: List[str],
         timeframe: str = 'daily',
-        seq_len: int = 24
+        seq_len: int = 24,
+        prediction_horizon: int = 0
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Prepare and split data into train/test sets.
@@ -142,6 +149,7 @@ class TSAITrainingService(ITrainingService):
             feature_columns: List of feature column names
             timeframe: Data timeframe
             seq_len: Sequence length for sliding window
+            prediction_horizon: How many bars ahead to predict (0 = predict at end of sequence)
 
         Returns:
             Tuple of (X_train, X_test, y_train, y_test)
@@ -156,25 +164,49 @@ class TSAITrainingService(ITrainingService):
 
         # Prepare train data (fit scaler)
         X_train, y_train = self.prepare_data(
-            df_train, target_column, feature_columns, timeframe, seq_len, fit_scaler=True
+            df_train, target_column, feature_columns, timeframe, seq_len, prediction_horizon, fit_scaler=True
         )
 
         # Prepare test data (use fitted scaler)
         X_test, y_test = self.prepare_data(
-            df_test, target_column, feature_columns, timeframe, seq_len, fit_scaler=False
+            df_test, target_column, feature_columns, timeframe, seq_len, prediction_horizon, fit_scaler=False
         )
 
-        logger.info(f"Split data: train={len(X_train)}, test={len(X_test)}")
+        logger.info(f"Split data: train={len(X_train)}, test={len(X_test)}, horizon={prediction_horizon}")
         return X_train, X_test, y_train, y_test
 
     def _create_sequences(
         self,
         X: np.ndarray,
         y: np.ndarray,
-        seq_len: int
+        seq_len: int,
+        prediction_horizon: int = 0
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Create sliding window sequences from data."""
-        n_samples = len(X) - seq_len + 1
+        """Create sliding window sequences from data.
+
+        Args:
+            X: Feature array of shape (n_rows, n_features)
+            y: Target array of shape (n_rows,)
+            seq_len: Length of input sequence (lookback window)
+            prediction_horizon: How many bars ahead to predict (0 = predict at end of sequence)
+
+        Returns:
+            X_seq: Sequences of shape (n_samples, n_features, seq_len)
+            y_seq: Targets of shape (n_samples,)
+
+        Example with seq_len=24, prediction_horizon=3:
+            Input: Bars T-23 to T (24 bars)
+            Target: Class label at bar T+3
+        """
+        # Account for prediction_horizon when calculating valid samples
+        # We need seq_len bars for input, plus prediction_horizon bars for the target
+        n_samples = len(X) - seq_len - prediction_horizon + 1
+
+        if n_samples <= 0:
+            raise ValueError(
+                f"Not enough data: need at least {seq_len + prediction_horizon} rows, got {len(X)}"
+            )
+
         n_features = X.shape[1]
 
         # Shape: (samples, features, seq_len) for tsai
@@ -184,7 +216,9 @@ class TSAITrainingService(ITrainingService):
         for i in range(n_samples):
             # Transpose to get (features, seq_len)
             X_seq[i] = X[i:i+seq_len].T
-            y_seq[i] = y[i + seq_len - 1]  # Target at end of sequence
+            # Target is prediction_horizon bars AFTER the end of the input sequence
+            # End of sequence is at index i+seq_len-1, so target is at i+seq_len-1+prediction_horizon
+            y_seq[i] = y[i + seq_len - 1 + prediction_horizon]
 
         return X_seq, y_seq
 

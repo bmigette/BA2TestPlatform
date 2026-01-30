@@ -98,10 +98,23 @@ class TestTSAITrainingService:
         X = np.random.randn(100, 5).astype(np.float32)
         y = np.random.randint(0, 2, 100).astype(np.int64)
 
-        X_seq, y_seq = training_service._create_sequences(X, y, seq_len=10)
+        # Test with no prediction horizon (default behavior)
+        X_seq, y_seq = training_service._create_sequences(X, y, seq_len=10, prediction_horizon=0)
 
-        assert X_seq.shape == (91, 5, 10)
+        assert X_seq.shape == (91, 5, 10)  # 100 - 10 - 0 + 1 = 91
         assert y_seq.shape == (91,)
+
+    def test_sequence_creation_with_horizon(self, training_service):
+        """Test sliding window sequence creation with prediction horizon."""
+        X = np.random.randn(100, 5).astype(np.float32)
+        y = np.random.randint(0, 2, 100).astype(np.int64)
+
+        # Test with prediction horizon of 3 bars
+        X_seq, y_seq = training_service._create_sequences(X, y, seq_len=10, prediction_horizon=3)
+
+        # With horizon=3: n_samples = 100 - 10 - 3 + 1 = 88
+        assert X_seq.shape == (88, 5, 10)
+        assert y_seq.shape == (88,)
 
 
 class TestTrainingWithRealData:
