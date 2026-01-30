@@ -1586,43 +1586,45 @@ const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
         </div>
 
         {state.jobType === 'classification' ? (
-          <div className="flex flex-wrap gap-2">
-            {CLASSIFICATION_METRICS.map((metric) => (
-              <label
-                key={metric.id}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                  state.metricsConfig.classificationMetric === metric.id
-                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
-                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-                }`}
-                title={metric.description}
-              >
-                <input
-                  type="radio"
-                  name="optimizeMetric"
-                  checked={state.metricsConfig.classificationMetric === metric.id}
-                  onChange={() => setState(prev => ({
-                    ...prev,
-                    metricsConfig: {
-                      ...prev.metricsConfig,
-                      classificationMetric: metric.id,
-                      optimizeMetric: metric.id
-                    }
-                  }))}
-                  className="sr-only"
-                  tabIndex={-1}
-                />
-                <span>{metric.name}</span>
-              </label>
-            ))}
-          </div>
-          {/* Metric guidance text */}
-          {state.metricsConfig.classificationMetric && METRIC_GUIDANCE[state.metricsConfig.classificationMetric] && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 flex items-center space-x-1">
-              <Info size={12} />
-              <span>{METRIC_GUIDANCE[state.metricsConfig.classificationMetric]}</span>
-            </p>
-          )}
+          <>
+            <div className="flex flex-wrap gap-2">
+              {CLASSIFICATION_METRICS.map((metric) => (
+                <label
+                  key={metric.id}
+                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
+                    state.metricsConfig.classificationMetric === metric.id
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700'
+                      : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                  }`}
+                  title={metric.description}
+                >
+                  <input
+                    type="radio"
+                    name="optimizeMetric"
+                    checked={state.metricsConfig.classificationMetric === metric.id}
+                    onChange={() => setState(prev => ({
+                      ...prev,
+                      metricsConfig: {
+                        ...prev.metricsConfig,
+                        classificationMetric: metric.id,
+                        optimizeMetric: metric.id
+                      }
+                    }))}
+                    className="sr-only"
+                    tabIndex={-1}
+                  />
+                  <span>{metric.name}</span>
+                </label>
+              ))}
+            </div>
+            {/* Metric guidance text */}
+            {state.metricsConfig.classificationMetric && METRIC_GUIDANCE[state.metricsConfig.classificationMetric] && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 flex items-center space-x-1">
+                <Info size={12} />
+                <span>{METRIC_GUIDANCE[state.metricsConfig.classificationMetric]}</span>
+              </p>
+            )}
+          </>
         ) : (
           <div className="flex flex-wrap gap-2">
             {REGRESSION_METRICS.map((metric) => (
@@ -1727,9 +1729,10 @@ const Step3Summary: React.FC<Step3Props> = ({
 
       // Calculate smart threshold defaults based on metric and class imbalance
       const metric = state.metricsConfig.classificationMetric || 'f1_score';
-      const positiveRatio = previewData.positiveCount && previewData.totalCount
-        ? previewData.positiveCount / previewData.totalCount
-        : 0.1;
+      // Calculate positive ratio from targets
+      const totalPositive = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0);
+      const totalSamples = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0);
+      const positiveRatio = totalSamples > 0 ? totalPositive / totalSamples : 0.1;
 
       let suggestedThresholdMin: number;
       let suggestedThresholdMax: number;
@@ -1889,6 +1892,7 @@ const Step3Summary: React.FC<Step3Props> = ({
 
       {/* Training Loss Function - Classification Only */}
       {state.jobType === 'classification' && previewData && (
+        <>
         <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
           <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
             <Zap size={16} />
@@ -2014,7 +2018,9 @@ const Step3Summary: React.FC<Step3Props> = ({
           </h4>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
             Smart defaults for {state.metricsConfig.classificationMetric || 'F1'} with{' '}
-            {previewData ? `${((previewData.positiveCount / previewData.totalCount) * 100).toFixed(1)}%` : '~10%'} positive class
+            {previewData?.targets?.length > 0
+              ? `${(previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length).toFixed(1)}%`
+              : '~10%'} positive class
           </p>
           <div className="grid grid-cols-3 gap-4">
             <div>
@@ -2068,9 +2074,10 @@ const Step3Summary: React.FC<Step3Props> = ({
             onClick={() => {
               // Recalculate suggested thresholds
               const metric = state.metricsConfig.classificationMetric || 'f1_score';
-              const positiveRatio = previewData?.positiveCount && previewData?.totalCount
-                ? previewData.positiveCount / previewData.totalCount
-                : 0.1;
+              // Calculate positive ratio from targets
+              const totalPos = previewData?.targets?.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0) || 0;
+              const totalSamp = previewData?.targets?.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0) || 0;
+              const positiveRatio = totalSamp > 0 ? totalPos / totalSamp : 0.1;
               let min: number, max: number;
               if (metric === 'recall') {
                 min = 0.1; max = 0.4;
@@ -2090,6 +2097,7 @@ const Step3Summary: React.FC<Step3Props> = ({
             Reset to suggested
           </button>
         </div>
+        </>
       )}
 
       {/* Genetic Algorithm */}
