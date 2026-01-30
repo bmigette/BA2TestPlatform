@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Database, Cpu, Target, Trash2, Split, Save, FolderOpen, Play, AlertTriangle, ChevronRight, ChevronLeft, Loader2, Activity, Zap, Info } from 'lucide-react';
+import { X, Database, Cpu, Target, Trash2, Split, Save, FolderOpen, Play, AlertTriangle, ChevronRight, ChevronLeft, Loader2, Activity, Zap, Info, Layers } from 'lucide-react';
 import type { TargetConfig } from '../types/targets';
 
 interface Dataset {
@@ -119,10 +119,30 @@ const REGRESSION_METRICS = [
 ];
 
 const LOSS_FUNCTIONS = [
-  { id: 'focal_loss', name: 'Focal Loss', description: 'Best for imbalanced classification - reduces weight on easy examples (Recommended)' },
-  { id: 'weighted_cross_entropy', name: 'Weighted BCE', description: 'Binary cross-entropy with class weights based on positive/negative ratio' },
-  { id: 'cross_entropy', name: 'Cross Entropy', description: 'Standard cross-entropy loss - NOT recommended for imbalanced data' },
-  { id: 'mse', name: 'MSE', description: 'Mean squared error - for regression tasks only' },
+  {
+    id: 'focal_loss',
+    name: 'Focal Loss',
+    description: 'Best for imbalanced classification - reduces weight on easy examples',
+    shiftBehavior: 'FocalLossFlat with softmax (c_out=2)',
+    multistepBehavior: 'FocalLossFlat with sigmoid (c_out=N)',
+    forImbalanced: true,
+  },
+  {
+    id: 'weighted_cross_entropy',
+    name: 'Weighted BCE/CE',
+    description: 'Cross-entropy with class weights based on positive/negative ratio',
+    shiftBehavior: 'CrossEntropyLossFlat with class weights',
+    multistepBehavior: 'BCEWithLogitsLoss with pos_weight',
+    forImbalanced: true,
+  },
+  {
+    id: 'cross_entropy',
+    name: 'Cross Entropy',
+    description: 'Standard cross-entropy loss - best for balanced data',
+    shiftBehavior: 'CrossEntropyLossFlat (softmax)',
+    multistepBehavior: 'BCEWithLogitsLoss (sigmoid)',
+    forImbalanced: false,
+  },
 ];
 
 interface TrainingDateRange {
@@ -132,6 +152,7 @@ interface TrainingDateRange {
 
 const getDefaultState = () => ({
   jobType: 'classification' as 'classification' | 'regression',
+  predictionModes: ['shift'] as ('shift' | 'multistep')[],
   selectedDatasetId: null as number | null,
   selectedModels: [] as string[],
   parameterRanges: {
@@ -357,6 +378,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
       geneticConfig: profile.geneticConfig || prev.geneticConfig,
       metricsConfig: profile.metricsConfig || prev.metricsConfig,
       predictionHorizon: profile.predictionHorizon || 3,
+      predictionModes: (profile as any).predictionModes || ['shift'],
     }));
     // Fetch models for the profile's job type
     fetchModels(jobType);
@@ -374,6 +396,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
       geneticConfig: state.geneticConfig,
       metricsConfig: state.metricsConfig,
       predictionHorizon: state.predictionHorizon,
+      predictionModes: state.predictionModes,
     });
     setNewProfileName('');
     setShowSaveProfileDialog(false);
@@ -503,6 +526,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
           parameterRanges: state.parameterRanges,
           predictionTargets: state.predictionTargets,
           predictionHorizon: state.predictionHorizon,
+          predictionModes: state.predictionModes,
           trainTestSplit: state.trainTestSplit,
           geneticConfig: state.geneticConfig,
           metricsConfig: state.metricsConfig,
@@ -589,6 +613,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
             ) : (
               <Step2Summary
                 state={state}
+                setState={setState}
                 selectedDataset={selectedDataset}
                 previewData={previewData}
                 previewLoading={previewLoading}
@@ -1098,6 +1123,80 @@ const Step1Settings: React.FC<Step1Props> = ({
         </div>
       </div>
 
+      {/* Prediction Mode (Classification only) */}
+      {state.jobType === 'classification' && (
+        <div>
+          <div className="flex items-center space-x-2 mb-3">
+            <Layers size={16} className="text-gray-400" />
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Prediction Mode
+            </label>
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            How the model makes predictions. Select both to let genetic algorithm optimize.
+          </p>
+          <div className="space-y-2">
+            <label className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+              state.predictionModes.includes('shift')
+                ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+            }`}>
+              <input
+                type="checkbox"
+                checked={state.predictionModes.includes('shift')}
+                onChange={() => {
+                  setState(prev => {
+                    const modes = prev.predictionModes.includes('shift')
+                      ? prev.predictionModes.filter(m => m !== 'shift')
+                      : [...prev.predictionModes, 'shift'] as ('shift' | 'multistep')[];
+                    return { ...prev, predictionModes: modes.length > 0 ? modes : ['shift'] };
+                  });
+                }}
+                className="mt-1 w-4 h-4 text-green-600"
+              />
+              <div>
+                <div className="font-medium text-sm">Shift Mode</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  <strong>Single point prediction.</strong> Input: bars T-23 to T. Output: class at T+{state.predictionHorizon}.<br/>
+                  Best when you only need one future prediction. Binary classification (c_out=2).
+                </div>
+              </div>
+            </label>
+            <label className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+              state.predictionModes.includes('multistep')
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+            }`}>
+              <input
+                type="checkbox"
+                checked={state.predictionModes.includes('multistep')}
+                onChange={() => {
+                  setState(prev => {
+                    const modes = prev.predictionModes.includes('multistep')
+                      ? prev.predictionModes.filter(m => m !== 'multistep')
+                      : [...prev.predictionModes, 'multistep'] as ('shift' | 'multistep')[];
+                    return { ...prev, predictionModes: modes.length > 0 ? modes : ['shift'] };
+                  });
+                }}
+                className="mt-1 w-4 h-4 text-blue-600"
+              />
+              <div>
+                <div className="font-medium text-sm">Multi-Step Mode</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  <strong>Multiple point predictions.</strong> Input: bars T-23 to T. Output: classes at T+1, T+2, ..., T+{state.predictionHorizon}.<br/>
+                  Captures temporal dependencies. Multi-label classification (c_out={state.predictionHorizon}).
+                </div>
+              </div>
+            </label>
+          </div>
+          {state.predictionModes.length === 2 && (
+            <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">
+              Both modes selected: genetic algorithm will find the best mode for your data.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Train/Test Split */}
       <div>
         <div className="flex items-center space-x-2 mb-3">
@@ -1214,42 +1313,6 @@ const Step1Settings: React.FC<Step1Props> = ({
               ))}
             </div>
 
-            {/* Loss Function - Only for Classification */}
-            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
-              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Training Loss Function</label>
-              <div className="flex flex-wrap gap-2">
-                {LOSS_FUNCTIONS.filter(l => l.id !== 'mse').map((loss) => (
-                  <label
-                    key={loss.id}
-                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border cursor-pointer text-sm ${
-                      state.metricsConfig.lossFunction === loss.id
-                        ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700'
-                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
-                    }`}
-                    title={loss.description}
-                  >
-                    <input
-                      type="radio"
-                      name="lossFunction"
-                      checked={state.metricsConfig.lossFunction === loss.id}
-                      onChange={() => setState(prev => ({
-                        ...prev,
-                        metricsConfig: {
-                          ...prev.metricsConfig,
-                          lossFunction: loss.id
-                        }
-                      }))}
-                      className="sr-only"
-                      tabIndex={-1}
-                    />
-                    <span>{loss.name}</span>
-                  </label>
-                ))}
-              </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                Focal Loss is recommended for imbalanced classification (when positive samples are rare)
-              </p>
-            </div>
           </>
         ) : (
           /* Regression Metric */
@@ -1362,6 +1425,7 @@ const Step1Settings: React.FC<Step1Props> = ({
 // Step 2: Summary Component
 interface Step2Props {
   state: ReturnType<typeof getDefaultState>;
+  setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
   selectedDataset: Dataset | undefined;
   previewData: PreviewResponse | null;
   previewLoading: boolean;
@@ -1372,6 +1436,7 @@ interface Step2Props {
 
 const Step2Summary: React.FC<Step2Props> = ({
   state,
+  setState,
   selectedDataset,
   previewData,
   previewLoading,
@@ -1380,6 +1445,25 @@ const Step2Summary: React.FC<Step2Props> = ({
   availableModels,
 }) => {
   const hasWarnings = previewData?.targets.some(t => t.warnings.length > 0);
+
+  // Calculate overall imbalance from preview data
+  const isImbalanced = previewData?.targets.some(t => t.train_positive_pct < 20 || t.train_positive_pct > 80) ?? false;
+  const avgPositivePct = previewData?.targets.length
+    ? previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length
+    : 50;
+
+  // Auto-select loss function based on imbalance (only on first render with data)
+  React.useEffect(() => {
+    if (previewData && state.jobType === 'classification') {
+      const recommendedLoss = isImbalanced ? 'focal_loss' : 'cross_entropy';
+      if (state.metricsConfig.lossFunction !== recommendedLoss) {
+        setState(prev => ({
+          ...prev,
+          metricsConfig: { ...prev.metricsConfig, lossFunction: recommendedLoss }
+        }));
+      }
+    }
+  }, [previewData, isImbalanced]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
@@ -1497,6 +1581,91 @@ const Step2Summary: React.FC<Step2Props> = ({
           <div className="text-gray-500 text-sm">No preview data</div>
         )}
       </div>
+
+      {/* Training Loss Function - Classification Only */}
+      {state.jobType === 'classification' && previewData && (
+        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
+            <Zap size={16} />
+            <span>Training Loss Function</span>
+            {isImbalanced && (
+              <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full text-xs">
+                Imbalanced data detected
+              </span>
+            )}
+          </h4>
+
+          {/* Data balance indicator */}
+          <div className="mb-4 p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-600 dark:text-gray-400">Average positive rate:</span>
+              <span className={`font-medium ${
+                avgPositivePct < 20 || avgPositivePct > 80
+                  ? 'text-amber-600'
+                  : 'text-green-600'
+              }`}>
+                {avgPositivePct.toFixed(1)}%
+              </span>
+            </div>
+            <div className="mt-2 text-xs text-gray-500">
+              {isImbalanced
+                ? 'Your data is imbalanced. Focal Loss or Weighted BCE are recommended to handle rare positive samples.'
+                : 'Your data appears balanced. Standard Cross Entropy should work well.'}
+            </div>
+          </div>
+
+          {/* Loss function options */}
+          <div className="space-y-2">
+            {LOSS_FUNCTIONS.map((loss) => (
+              <label
+                key={loss.id}
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                  state.metricsConfig.lossFunction === loss.id
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="lossFunction"
+                  checked={state.metricsConfig.lossFunction === loss.id}
+                  onChange={() => setState(prev => ({
+                    ...prev,
+                    metricsConfig: { ...prev.metricsConfig, lossFunction: loss.id }
+                  }))}
+                  className="mt-1 w-4 h-4 text-purple-600"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-medium text-sm">{loss.name}</span>
+                    {loss.forImbalanced && isImbalanced && (
+                      <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
+                        Recommended
+                      </span>
+                    )}
+                    {!loss.forImbalanced && !isImbalanced && (
+                      <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
+                        Recommended
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">{loss.description}</p>
+                  {state.predictionModes.length > 0 && (
+                    <div className="mt-2 text-xs text-gray-400 space-y-0.5">
+                      {state.predictionModes.includes('shift') && (
+                        <div><span className="text-green-600 dark:text-green-400">Shift:</span> {loss.shiftBehavior}</div>
+                      )}
+                      {state.predictionModes.includes('multistep') && (
+                        <div><span className="text-blue-600 dark:text-blue-400">Multi-step:</span> {loss.multistepBehavior}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Genetic Algorithm */}
       <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
