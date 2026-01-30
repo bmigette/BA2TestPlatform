@@ -42,6 +42,15 @@ class DatasetDuplicate(BaseModel):
     new_name: Optional[str] = Field(None, description="New name for duplicate")
 
 
+class DatasetRegenerate(BaseModel):
+    """Schema for partial dataset regeneration"""
+    regenerate_ohlcv: bool = Field(True, description="Re-fetch OHLCV data from provider")
+    regenerate_technical: bool = Field(True, description="Recalculate technical indicators")
+    regenerate_sentiment: bool = Field(True, description="Re-fetch and recalculate sentiment/news data")
+    regenerate_fundamentals: bool = Field(True, description="Re-fetch fundamentals data")
+    regenerate_macro: bool = Field(True, description="Re-fetch macro economic data")
+
+
 class DatasetResponse(BaseModel):
     """Schema for dataset response"""
     id: int

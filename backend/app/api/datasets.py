@@ -16,7 +16,7 @@ import concurrent.futures
 
 from app.models.database import get_db, SessionLocal
 from app.models.dataset import Dataset, DatasetStatus
-from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate
+from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate, DatasetRegenerate
 from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
@@ -1295,23 +1295,28 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_db)):
 @router.post("/{dataset_id}/regenerate", response_model=DatasetResponse)
 async def regenerate_dataset(
     dataset_id: int,
+    regen_options: Optional[DatasetRegenerate] = None,
     db: Session = Depends(get_db)
 ):
     """
-    Regenerate a dataset by re-fetching data from the provider.
+    Regenerate a dataset, optionally selecting which components to regenerate.
 
     This endpoint can be used to:
-    - Retry a failed dataset generation
+    - Retry a failed dataset generation (full regeneration)
     - Refresh data for an existing dataset
-    - Reset a dataset that's stuck in BUILDING status
+    - Partially regenerate (e.g., recalculate TA/macro without re-fetching news)
 
     Args:
         dataset_id: Dataset ID to regenerate
+        regen_options: Optional partial regeneration settings (default: regenerate all)
         db: Database session
 
     Returns:
         Regenerated dataset
     """
+    # Default to regenerating everything if no options provided
+    if regen_options is None:
+        regen_options = DatasetRegenerate()
     # =========================================================================
     # PHASE 1: Read config from DB and set status to BUILDING
     # =========================================================================
@@ -1354,58 +1359,105 @@ async def regenerate_dataset(
     # PHASE 2: Long-running operations WITHOUT holding DB session
     # =========================================================================
     try:
-        # Fetch OHLC data
-        provider_name = gen_config.get("data_provider", "yfinance")
-        provider = get_ohlcv_provider(provider_name)
-        logger.info(f"Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
+        # Check if we need to fetch fresh OHLCV or load from existing file
+        if regen_options.regenerate_ohlcv:
+            # Fetch fresh OHLC data
+            provider_name = gen_config.get("data_provider", "yfinance")
+            provider = get_ohlcv_provider(provider_name)
+            logger.info(f"Fetching data from {start_date.date()} to {end_date.date()} using {provider_name}")
 
-        interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
-        }
-        interval = interval_map.get(timeframe, "1d")
+            interval_map = {
+                "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+            }
+            interval = interval_map.get(timeframe, "1d")
 
-        data_points = provider.get_data(
-            symbol=ticker,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval
-        )
-
-        if not data_points:
-            # Update status to ERROR using fresh session
-            with SessionLocal() as error_db:
-                error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
-                if error_dataset:
-                    error_dataset.status = DatasetStatus.ERROR.value
-                    error_dataset.error_message = f"No data available for {ticker}"
-                    error_db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"No data available for {ticker}"
+            data_points = provider.get_data(
+                symbol=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval
             )
 
-        # Convert to DataFrame first
-        df = pd.DataFrame([{
-            'Date': dp.timestamp,
-            'Open': dp.open,
-            'High': dp.high,
-            'Low': dp.low,
-            'Close': dp.close,
-            'Volume': dp.volume
-        } for dp in data_points])
-        df = df.sort_values('Date').reset_index(drop=True)
-        logger.info(f"Fetched {len(df)} OHLC data points")
+            if not data_points:
+                # Update status to ERROR using fresh session
+                with SessionLocal() as error_db:
+                    error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
+                    if error_dataset:
+                        error_dataset.status = DatasetStatus.ERROR.value
+                        error_dataset.error_message = f"No data available for {ticker}"
+                        error_db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"No data available for {ticker}"
+                )
 
-        # Validate that fetched data covers the requested date range (with 5-day tolerance for weekends/holidays)
+            # Convert to DataFrame - OHLCV only
+            df = pd.DataFrame([{
+                'Date': dp.timestamp,
+                'Open': dp.open,
+                'High': dp.high,
+                'Low': dp.low,
+                'Close': dp.close,
+                'Volume': dp.volume
+            } for dp in data_points])
+            df = df.sort_values('Date').reset_index(drop=True)
+            logger.info(f"Fetched {len(df)} OHLC data points")
+        else:
+            # Load existing CSV and extract OHLCV columns for reprocessing
+            existing_path = Path(file_path)
+            if not existing_path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot do partial regeneration: dataset file not found at {file_path}"
+                )
+
+            existing_df = pd.read_csv(existing_path)
+            existing_df['Date'] = pd.to_datetime(existing_df['Date'])
+
+            # Start with OHLCV columns
+            ohlcv_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+            df = existing_df[ohlcv_cols].copy()
+
+            # Preserve columns from components we're NOT regenerating
+            preserved_cols = []
+
+            # Preserve sentiment columns if not regenerating sentiment
+            if not regen_options.regenerate_sentiment:
+                sentiment_cols = [c for c in existing_df.columns if c.startswith('news_')]
+                for col in sentiment_cols:
+                    df[col] = existing_df[col]
+                    preserved_cols.append(col)
+
+            # Preserve fundamental columns if not regenerating fundamentals
+            if not regen_options.regenerate_fundamentals:
+                fundamental_cols = [c for c in existing_df.columns if c.startswith(('bs_', 'is_', 'cf_', 'earn_', 'fundamental_'))]
+                for col in fundamental_cols:
+                    df[col] = existing_df[col]
+                    preserved_cols.append(col)
+
+            # Preserve macro columns if not regenerating macro
+            if not regen_options.regenerate_macro:
+                macro_cols = [c for c in existing_df.columns if c.startswith('macro_')]
+                for col in macro_cols:
+                    df[col] = existing_df[col]
+                    preserved_cols.append(col)
+
+            if preserved_cols:
+                logger.info(f"Preserved {len(preserved_cols)} columns from existing dataset: {preserved_cols[:5]}{'...' if len(preserved_cols) > 5 else ''}")
+
+            logger.info(f"Loaded {len(df)} rows from existing dataset (OHLCV + preserved columns, will recalculate selected components)")
+
+        # Validate that fetched data covers the requested date range (only for fresh OHLCV fetch)
         # Use date comparison to avoid timezone issues
-        data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
-        data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
-        req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
-        req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
-        tolerance_days = 5
+        if regen_options.regenerate_ohlcv:
+            data_start_date = df['Date'].min().date() if hasattr(df['Date'].min(), 'date') else df['Date'].min()
+            data_end_date = df['Date'].max().date() if hasattr(df['Date'].max(), 'date') else df['Date'].max()
+            req_start_date = start_date.date() if hasattr(start_date, 'date') else start_date
+            req_end_date = end_date.date() if hasattr(end_date, 'date') else end_date
+            tolerance_days = 5
 
-        if (data_start_date - req_start_date).days > tolerance_days:
+        if regen_options.regenerate_ohlcv and (data_start_date - req_start_date).days > tolerance_days:
             with SessionLocal() as error_db:
                 error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
                 if error_dataset:
@@ -1417,7 +1469,7 @@ async def regenerate_dataset(
                 detail=f"Data starts at {data_start_date}, but requested start date was {req_start_date}. Data may not be available for this range."
             )
 
-        if (req_end_date - data_end_date).days > tolerance_days:
+        if regen_options.regenerate_ohlcv and (req_end_date - data_end_date).days > tolerance_days:
             with SessionLocal() as error_db:
                 error_dataset = error_db.query(Dataset).filter(Dataset.id == dataset_id).first()
                 if error_dataset:
@@ -1429,8 +1481,8 @@ async def regenerate_dataset(
                 detail=f"Data ends at {data_end_date}, but requested end date was {req_end_date}. Data may not be available for this range."
             )
 
-        # Apply technical indicators if configured
-        if technical_indicators:
+        # Apply technical indicators if configured and regenerate_technical is True
+        if technical_indicators and regen_options.regenerate_technical:
             logger.info(f"Applying {len(technical_indicators)} technical indicators...")
             try:
                 indicators_dict = {}
@@ -1444,8 +1496,8 @@ async def regenerate_dataset(
             except Exception as e:
                 logger.error(f"Error applying technical indicators: {e}")
 
-        # Fetch and add sentiment features if configured
-        if sentiment_config and sentiment_config.get('enabled'):
+        # Fetch and add sentiment features if configured and regenerate_sentiment is True
+        if sentiment_config and sentiment_config.get('enabled') and regen_options.regenerate_sentiment:
             logger.info("Fetching sentiment data...")
             try:
                 sentiment_service = SentimentService()
@@ -1491,8 +1543,8 @@ async def regenerate_dataset(
             except Exception as e:
                 logger.error(f"Error fetching sentiment: {e}")
 
-        # Fetch and add fundamentals if configured
-        if fundamentals_config and fundamentals_config.get('enabled'):
+        # Fetch and add fundamentals if configured and regenerate_fundamentals is True
+        if fundamentals_config and fundamentals_config.get('enabled') and regen_options.regenerate_fundamentals:
             logger.info("Fetching fundamentals data...")
             try:
                 statement_types = fundamentals_config.get('statement_types')
@@ -1520,9 +1572,9 @@ async def regenerate_dataset(
                             if value is not None:
                                 df[f'fundamental_{key}'] = value
 
-                # Fetch macro indicators if configured
+                # Fetch macro indicators if configured and regenerate_macro is True
                 macro_indicators = fundamentals_config.get('macro_indicators', [])
-                if macro_indicators:
+                if macro_indicators and regen_options.regenerate_macro:
                     logger.info(f"Fetching macro indicators: {macro_indicators}")
                     try:
                         macro_service = MacroService()
