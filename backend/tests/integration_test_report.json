@@ -1,0 +1,94 @@
+{
+  "timestamp": "2026-01-30T09:08:47.387984",
+  "classification": {
+    "lstm": {
+      "status": "success",
+      "f1_score": 0.0,
+      "accuracy": 0.9883720930232558,
+      "metrics": {
+        "f1_score": 0.0,
+        "accuracy": 0.9883720930232558,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mcc": 0.0,
+        "auc_roc": 0.2735294117647059,
+        "true_negatives": 170,
+        "false_positives": 0,
+        "false_negatives": 2,
+        "true_positives": 0
+      }
+    },
+    "gru": {
+      "status": "success",
+      "f1_score": 0.0,
+      "accuracy": 0.9883720930232558,
+      "metrics": {
+        "f1_score": 0.0,
+        "accuracy": 0.9883720930232558,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mcc": 0.0,
+        "auc_roc": 0.49411764705882355,
+        "true_negatives": 170,
+        "false_positives": 0,
+        "false_negatives": 2,
+        "true_positives": 0
+      }
+    },
+    "inception": {
+      "status": "success",
+      "f1_score": 0.0,
+      "accuracy": 0.9883720930232558,
+      "metrics": {
+        "f1_score": 0.0,
+        "accuracy": 0.9883720930232558,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mcc": 0.0,
+        "auc_roc": 0.6499999999999999,
+        "true_negatives": 170,
+        "false_positives": 0,
+        "false_negatives": 2,
+        "true_positives": 0
+      }
+    },
+    "resnet": {
+      "status": "success",
+      "f1_score": 0.0,
+      "accuracy": 0.9883720930232558,
+      "metrics": {
+        "f1_score": 0.0,
+        "accuracy": 0.9883720930232558,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mcc": 0.0,
+        "auc_roc": 0.7147058823529411,
+        "true_negatives": 170,
+        "false_positives": 0,
+        "false_negatives": 2,
+        "true_positives": 0
+      }
+    }
+  },
+  "regression": {
+    "lstm": {
+      "status": "success",
+      "mse": 0.008716723881661892
+    },
+    "nbeats": {
+      "status": "partial",
+      "error": "For the given forecasting horizon `n=100`, the provided `past_covariates` at series sequence index `0` do not extend far enough into the future. As `n > output_chunk_length` the `past_covariates` must end at or after time step `802`, whereas now the end is at time step `703`."
+    }
+  },
+  "summary": {
+    "data_rows": 881,
+    "target_columns": [
+      "reversal_zigzag_bullish",
+      "reversal_zigzag_bearish"
+    ],
+    "classification_models_tested": 4,
+    "classification_models_passed": 4,
+    "regression_models_tested": 2,
+    "regression_models_passed": 1
+  }
+}
