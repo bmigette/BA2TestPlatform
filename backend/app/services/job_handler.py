@@ -1757,6 +1757,19 @@ def train_classification_optimization(
     best_metrics = [{}]
     best_params = [{}]
 
+    # Initialize training state for UI
+    update_job_training_state(
+        task_id,
+        current_generation=0,
+        total_generations=generations,
+        current_individual=0,
+        population_size=population_size,
+        current_epoch=0,
+        total_epochs=training_epochs,
+        error_count=0,
+        success_count=0
+    )
+
     def check_cancelled() -> bool:
         task_queue = get_task_queue()
         status = task_queue.get_task_status(task_id)
@@ -1776,6 +1789,19 @@ def train_classification_optimization(
         # Get model type from params
         model_type_idx = int(params.get('model_type_idx', 0))
         model_type = selected_models[model_type_idx % len(selected_models)]
+
+        # Update individual progress for UI
+        update_job_training_state(
+            task_id,
+            current_generation=gen,
+            total_generations=generations,
+            current_individual=progress_state['current_individual'],
+            population_size=population_size,
+            current_model_type=model_type,
+            current_epoch=0,
+            total_epochs=training_epochs,
+            reset_epoch_history=True
+        )
 
         # Get prediction mode from params (if multiple modes)
         mode_idx = int(params.get('prediction_mode_idx', 0))
@@ -1819,6 +1845,18 @@ def train_classification_optimization(
                 prediction_mode=mode
             )
 
+            # Create epoch callback for training progress
+            def epoch_cb(epoch: int, metrics: Dict[str, float] = None):
+                update_job_training_state(
+                    task_id,
+                    current_epoch=epoch + 1,  # epoch is 0-indexed
+                    total_epochs=training_epochs,
+                    current_individual=progress_state['current_individual'],
+                    population_size=population_size,
+                    current_model_type=model_type,
+                    epoch_metrics=metrics
+                )
+
             # Train
             result = training_service.train_model(
                 model,
@@ -1827,7 +1865,8 @@ def train_classification_optimization(
                 epochs=training_epochs,
                 learning_rate=learning_rate,
                 loss_fn=loss_fn,
-                prediction_mode=mode
+                prediction_mode=mode,
+                epoch_callback=epoch_cb
             )
 
             if result['status'] != 'success':
@@ -1888,6 +1927,18 @@ def train_classification_optimization(
     def generation_callback(gen: int, best_fitness: float, pop_fitness: list):
         progress_state['current_generation'] = gen
         progress_state['current_individual'] = 0
+        # Update job training state for UI
+        update_job_training_state(
+            task_id,
+            current_generation=gen,
+            total_generations=generations,
+            current_individual=0,
+            population_size=population_size,
+            best_fitness=progress_state['best_fitness'],
+            error_count=progress_state['error_count'],
+            success_count=progress_state['success_count'],
+            reset_epoch_history=True
+        )
 
     # Build parameter ranges for genetic algorithm - all required (no defaults)
     required_param_keys = ['layerSizeMin', 'layerSizeMax', 'layersMin', 'layersMax',

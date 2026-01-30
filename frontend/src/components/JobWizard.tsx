@@ -478,6 +478,16 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
   const loadProfile = (profile: JobProfile) => {
     const jobType = profile.jobType || 'classification';  // Default for old profiles
+    const selectedTargetSetIds = profile.selectedTargetSetIds || [];
+
+    // Reload targets from current target sets (not from profile) to get up-to-date target configs
+    // This fixes the issue where profile targets may have stale/stripped fields
+    const freshTargets = selectedTargetSetIds.length > 0
+      ? targetSets
+          .filter(ts => selectedTargetSetIds.includes(ts.id))
+          .flatMap(ts => ts.targets as unknown as Record<string, unknown>[])
+      : profile.predictionTargets || [];
+
     setState(prev => ({
       ...prev,
       jobType,
@@ -489,8 +499,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
         // Ensure seqLen has a value (old profiles may not have it)
         seqLen: profile.parameterRanges?.seqLen ?? prev.parameterRanges.seqLen ?? 24,
       },
-      predictionTargets: profile.predictionTargets || [],
-      selectedTargetSetIds: profile.selectedTargetSetIds || [],
+      predictionTargets: freshTargets,
+      selectedTargetSetIds,
       trainTestSplit: profile.trainTestSplit || 80,
       // Merge geneticConfig to preserve defaults for fields not in old profiles
       geneticConfig: {
