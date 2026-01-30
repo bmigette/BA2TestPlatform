@@ -1670,9 +1670,12 @@ def train_classification_optimization(
             'error': 'tsai library not available for classification'
         }
 
+    # Get normalization buffer from parameter ranges (default 35% if not specified for old configs)
+    normalization_buffer = parameter_ranges.get('normalizationBuffer', 35) / 100.0  # Convert % to decimal
+
     # Initialize services
     model_service = TSAIModelService()
-    training_service = TSAITrainingService()
+    training_service = TSAITrainingService(buffer_pct=normalization_buffer)
 
     # Get genetic config - required parameters (no defaults)
     population_size = genetic_config.get('populationSize')

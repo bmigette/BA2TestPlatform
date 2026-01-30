@@ -27,6 +27,7 @@ interface ParameterRanges {
   dropoutMax: number;
   dropoutStep: number;
   seqLen?: number;  // Sequence length for classification models
+  normalizationBuffer?: number;  // Buffer % for normalization (default 35%)
 }
 
 interface GeneticConfig {
@@ -172,6 +173,7 @@ const getDefaultState = () => ({
     dropoutMax: 0.5,
     dropoutStep: 0.1,
     seqLen: 24,
+    normalizationBuffer: 35,
   } as ParameterRanges,
   geneticConfig: {
     populationSize: 20,
@@ -1307,6 +1309,36 @@ const Step1Settings: React.FC<Step1Props> = ({
           </div>
           <p className="text-xs text-gray-500 mt-1">
             Number of consecutive time bars the model uses as input. Higher values capture longer patterns but require more data.
+          </p>
+        </div>
+      )}
+
+      {/* Normalization Buffer (for classification) */}
+      {state.jobType === 'classification' && (
+        <div>
+          <div className="flex items-center space-x-2 mb-3">
+            <Activity size={16} className="text-gray-400" />
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Normalization Buffer
+            </label>
+          </div>
+          <div className="flex items-center space-x-4">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={state.parameterRanges.normalizationBuffer ?? 35}
+              onChange={(e) => setState(prev => ({
+                ...prev,
+                parameterRanges: { ...prev.parameterRanges, normalizationBuffer: Number(e.target.value) }
+              }))}
+              className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            />
+            <span className="text-sm text-gray-500">%</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Extra headroom above/below observed min/max for price normalization. Allows live data to exceed training range without clipping. Default 35%.
           </p>
         </div>
       )}
