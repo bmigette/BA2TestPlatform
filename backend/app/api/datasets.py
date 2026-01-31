@@ -357,6 +357,8 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
                             df = df.rename(columns={indicator: f'macro_{indicator}'})
                             if f'{indicator}_yoy_change' in df.columns:
                                 df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+                            if f'{indicator}_days_since' in df.columns:
+                                df = df.rename(columns={f'{indicator}_days_since': f'macro_{indicator}_days_since'})
             except Exception as e:
                 logger.error(f"[Thread] Error fetching fundamentals: {e}")
 
@@ -1720,6 +1722,8 @@ async def regenerate_dataset(
                                 df = df.rename(columns={indicator: f'macro_{indicator}'})
                                 if f'{indicator}_yoy_change' in df.columns:
                                     df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+                                if f'{indicator}_days_since' in df.columns:
+                                    df = df.rename(columns={f'{indicator}_days_since': f'macro_{indicator}_days_since'})
                         logger.info(f"Added macro columns for: {macro_indicators}")
                     except Exception as e:
                         logger.warning(f"Error fetching macro data: {e}")

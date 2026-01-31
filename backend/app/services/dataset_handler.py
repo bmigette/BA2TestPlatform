@@ -388,6 +388,8 @@ def handle_dataset_regeneration(task_id: str, payload: Dict[str, Any]) -> Dict[s
                                 df = df.rename(columns={indicator: f'macro_{indicator}'})
                                 if f'{indicator}_yoy_change' in df.columns:
                                     df = df.rename(columns={f'{indicator}_yoy_change': f'macro_{indicator}_yoy_change'})
+                                if f'{indicator}_days_since' in df.columns:
+                                    df = df.rename(columns={f'{indicator}_days_since': f'macro_{indicator}_days_since'})
                         update_dataset_progress(
                             dataset_id,
                             f"Added macro indicators: {', '.join(macro_indicators)}",

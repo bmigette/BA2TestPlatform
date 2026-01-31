@@ -253,14 +253,25 @@ class MacroService:
             yoy_periods = self.MACRO_INDICATORS.get(indicator, {}).get('yoy_periods', 12)
             macro_df[yoy_col] = macro_df[indicator].pct_change(periods=yoy_periods, fill_method=None) * 100
 
+            # Add a column for the macro report date to calculate days_since
+            macro_date_col = f'{indicator}_report_date'
+            macro_df[macro_date_col] = macro_df['Date']
+
             # Use merge_asof to get the most recent macro value for each OHLC row
             # This is the correct way to align less-frequent data with more-frequent data
             result_df = pd.merge_asof(
                 result_df,
-                macro_df[['Date', indicator, yoy_col]],
+                macro_df[['Date', indicator, yoy_col, macro_date_col]],
                 on='Date',
                 direction='backward'  # Get the most recent macro value at or before each OHLC date
             )
+
+            # Calculate days since last macro report
+            days_since_col = f'{indicator}_days_since'
+            result_df[days_since_col] = (result_df['Date'] - result_df[macro_date_col]).dt.days
+
+            # Drop the report date column (keep only days_since)
+            result_df = result_df.drop(columns=[macro_date_col])
 
             logger.debug(f"Merged {indicator}: {result_df[indicator].notna().sum()} non-null values")
 
