@@ -67,6 +67,7 @@ interface FundamentalsConfig {
 }
 
 interface WizardData {
+  name: string;  // Custom dataset name/title
   ticker: string;
   timeframe: string;
   startDate: string;
@@ -102,9 +103,16 @@ const INDICATOR_TYPES = [
   { type: 'bbands', name: 'Bollinger Bands', hasPeriod: true, defaultPeriod: 20 },
   { type: 'atr', name: 'ATR (Average True Range)', hasPeriod: true, defaultPeriod: 14 },
   { type: 'stochastic', name: 'Stochastic Oscillator', hasPeriod: false },
+  { type: 'adx', name: 'ADX (Average Directional Index)', hasPeriod: true, defaultPeriod: 14 },
+  { type: 'sar', name: 'Parabolic SAR', hasPeriod: false },
+  { type: 'zigzag', name: 'ZigZag', hasPeriod: false },
+  { type: 'donchian', name: 'Donchian Channels', hasPeriod: true, defaultPeriod: 20 },
+  { type: 'obv', name: 'OBV (On-Balance Volume)', hasPeriod: false },
+  { type: 'pivot_points', name: 'Pivot Points', hasPeriod: false },
 ];
 
 const getDefaultWizardData = (): WizardData => ({
+  name: '',  // Will auto-generate from ticker if empty
   ticker: '',
   timeframe: '1d',
   startDate: '',
@@ -173,6 +181,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       };
 
       setWizardData({
+        name: mode === 'duplicate' ? '' : (initialData.name || ''),  // Clear name for duplicate
         ticker: mode === 'duplicate' ? '' : initialData.ticker,  // Clear ticker for duplicate
         timeframe: initialData.timeframe,
         startDate,
@@ -435,6 +444,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            name: wizardData.name || undefined,  // Custom name, or undefined to auto-generate
             ticker: wizardData.ticker,
             timeframe: wizardData.timeframe,
             start_date: wizardData.startDate || undefined,
@@ -452,6 +462,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            name: wizardData.name || undefined,  // Custom name, or undefined to auto-generate
             ticker: wizardData.ticker,
             timeframe: wizardData.timeframe,
             start_date: wizardData.startDate || undefined,
@@ -548,6 +559,20 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         {tickerError && (
           <p className="text-xs text-red-500 mt-1">{tickerError}</p>
         )}
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+          Dataset Name
+        </label>
+        <input
+          type="text"
+          value={wizardData.name}
+          onChange={(e) => setWizardData({ ...wizardData, name: e.target.value })}
+          placeholder={wizardData.ticker ? `${wizardData.ticker}_${wizardData.timeframe}` : 'Auto-generated from ticker'}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+        />
+        <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">Leave empty to auto-generate from ticker and timeframe</p>
       </div>
 
       <div>

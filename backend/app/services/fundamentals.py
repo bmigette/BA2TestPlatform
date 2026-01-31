@@ -525,6 +525,29 @@ class FundamentalsService:
 
                     result_df[col_name] = result_df['Date'].apply(get_date)
 
+                # Add days_since columns for each lookback period
+                for q_idx in range(lookback_statements):
+                    col_name = f'{prefix}_q{q_idx}_days_since'
+
+                    def get_days_since(row_date, q_idx=q_idx):
+                        available_periods = get_periods_for_date(row_date)
+                        if q_idx < len(available_periods):
+                            fiscal_date_str = available_periods[q_idx].get('fiscal_date')
+                            if fiscal_date_str:
+                                try:
+                                    fiscal_date = pd.to_datetime(fiscal_date_str)
+                                    if hasattr(fiscal_date, 'tzinfo') and fiscal_date.tzinfo is not None:
+                                        fiscal_date = fiscal_date.replace(tzinfo=None)
+                                    row_date_naive = row_date
+                                    if hasattr(row_date, 'tzinfo') and row_date.tzinfo is not None:
+                                        row_date_naive = row_date.replace(tzinfo=None)
+                                    return (row_date_naive - fiscal_date).days
+                                except:
+                                    pass
+                        return np.nan
+
+                    result_df[col_name] = result_df['Date'].apply(get_days_since)
+
             except Exception as e:
                 logger.error(f"Error fetching {stmt_type} for {ticker}: {e}")
                 # Add NaN columns on error
