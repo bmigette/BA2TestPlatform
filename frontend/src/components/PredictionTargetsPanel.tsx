@@ -29,14 +29,26 @@ type TabType = 'price_based' | 'directional' | 'triple_barrier' | 'trend_reversa
 
 interface PredictionTargetsPanelProps {
   datasetId: number;
+  datasetTimeframe?: string;  // Dataset's base timeframe for multi-TF targets
   onTargetsCalculated: (targets: CalculatedTarget[]) => void;
   onSaveSet: (targets: TargetConfig[]) => void;
   onLoadSet: () => void;
   loadedTargets?: TargetConfig[];  // External targets to load
 }
 
+// Supported timeframes for multi-timeframe targets
+const TIMEFRAME_OPTIONS = [
+  { value: '', label: 'Same as dataset' },
+  { value: '15m', label: '15 Minutes' },
+  { value: '30m', label: '30 Minutes' },
+  { value: '1h', label: '1 Hour' },
+  { value: '4h', label: '4 Hours' },
+  { value: '1d', label: '1 Day' },
+];
+
 const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
   datasetId,
+  datasetTimeframe,
   onTargetsCalculated,
   onSaveSet,
   onLoadSet,
@@ -53,23 +65,27 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
     profitPct: 10,
     maxDrawdownPct: 5,
     timeBars: 14,
+    timeBarsUnit: 'bars' as 'bars' | 'days',
   });
 
   const [directionalForm, setDirectionalForm] = useState({
     direction: 'up' as 'up' | 'down',
     horizon: 5,
+    horizonUnit: 'bars' as 'bars' | 'days',
   });
 
   const [tripleBarrierForm, setTripleBarrierForm] = useState({
     profitPct: 3,
     stopPct: 2,
     maxBars: 10,
+    maxBarsUnit: 'bars' as 'bars' | 'days',
   });
 
   const [trendReversalForm, setTrendReversalForm] = useState({
     indicator: 'rsi' as 'rsi' | 'macd' | 'sar' | 'zigzag' | 'donchian' | 'adx' | 'stochastic',
     direction: 'bullish' as 'bullish' | 'bearish',
     threshold: 30,
+    timeframe: '',  // Empty = use dataset's timeframe
     // RSI params
     rsiPeriod: 14,
     // MACD params
@@ -92,6 +108,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
 
   const [volatilityForm, setVolatilityForm] = useState({
     horizon: 5,
+    horizonUnit: 'bars' as 'bars' | 'days',
     method: 'std' as 'std' | 'range' | 'atr',
   });
 
@@ -202,6 +219,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           profitPct: priceBasedForm.profitPct,
           maxDrawdownPct: priceBasedForm.maxDrawdownPct,
           timeBars: priceBasedForm.timeBars,
+          timeBarsUnit: priceBasedForm.timeBarsUnit,
         } as PriceBasedTarget;
         color = getNextColor();
         break;
@@ -212,6 +230,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           category: 'binary_classification',
           direction: directionalForm.direction,
           horizon: directionalForm.horizon,
+          horizonUnit: directionalForm.horizonUnit,
         } as DirectionalTarget;
         color = getNextColor();
         break;
@@ -223,6 +242,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           profitPct: tripleBarrierForm.profitPct,
           stopPct: tripleBarrierForm.stopPct,
           maxBars: tripleBarrierForm.maxBars,
+          maxBarsUnit: tripleBarrierForm.maxBarsUnit,
         } as TripleBarrierTarget;
         color = getNextColor();
         break;
@@ -263,6 +283,8 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           indicatorParams,
           threshold: trendReversalForm.threshold,
           direction: trendReversalForm.direction,
+          // Include timeframe if set (different from dataset)
+          ...(trendReversalForm.timeframe ? { timeframe: trendReversalForm.timeframe } : {}),
         } as TrendReversalTarget;
         color = getNextColor();
         break;
@@ -272,6 +294,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
           type: 'volatility',
           category: 'regression',
           horizon: volatilityForm.horizon,
+          horizonUnit: volatilityForm.horizonUnit,
           method: volatilityForm.method,
         } as VolatilityTarget;
         color = getNextColor();
@@ -373,7 +396,8 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
       }
       case 'trend_reversal': {
         const c = config as TrendReversalTarget;
-        return `${c.indicator.toUpperCase()} ${c.direction}`;
+        const tfSuffix = c.timeframe ? ` @${c.timeframe}` : '';
+        return `${c.indicator.toUpperCase()} ${c.direction}${tfSuffix}`;
       }
       case 'volatility': {
         const c = config as VolatilityTarget;
@@ -490,14 +514,24 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Time Window (bars)</label>
-              <input
-                type="number"
-                min="1"
-                value={priceBasedForm.timeBars}
-                onChange={(e) => setPriceBasedForm({ ...priceBasedForm, timeBars: parseInt(e.target.value) || 1 })}
-                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-              />
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Time Window</label>
+              <div className="flex gap-1">
+                <input
+                  type="number"
+                  min="1"
+                  value={priceBasedForm.timeBars}
+                  onChange={(e) => setPriceBasedForm({ ...priceBasedForm, timeBars: parseInt(e.target.value) || 1 })}
+                  className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                />
+                <select
+                  value={priceBasedForm.timeBarsUnit}
+                  onChange={(e) => setPriceBasedForm({ ...priceBasedForm, timeBarsUnit: e.target.value as 'bars' | 'days' })}
+                  className="px-2 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                >
+                  <option value="bars">bars</option>
+                  <option value="days">days</option>
+                </select>
+              </div>
             </div>
           </div>
         )}
@@ -516,17 +550,27 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Horizon (bars)</label>
-              <input
-                type="number"
-                min="1"
-                value={directionalForm.horizon}
-                onChange={(e) => setDirectionalForm({ ...directionalForm, horizon: parseInt(e.target.value) || 1 })}
-                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-              />
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Horizon</label>
+              <div className="flex gap-1">
+                <input
+                  type="number"
+                  min="1"
+                  value={directionalForm.horizon}
+                  onChange={(e) => setDirectionalForm({ ...directionalForm, horizon: parseInt(e.target.value) || 1 })}
+                  className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                />
+                <select
+                  value={directionalForm.horizonUnit}
+                  onChange={(e) => setDirectionalForm({ ...directionalForm, horizonUnit: e.target.value as 'bars' | 'days' })}
+                  className="px-2 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                >
+                  <option value="bars">bars</option>
+                  <option value="days">days</option>
+                </select>
+              </div>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Predicts if price will be {directionalForm.direction === 'up' ? 'higher' : 'lower'} in {directionalForm.horizon} bars
+              Predicts if price will be {directionalForm.direction === 'up' ? 'higher' : 'lower'} in {directionalForm.horizon} {directionalForm.horizonUnit}
             </p>
           </div>
         )}
@@ -556,14 +600,24 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Max Bars (timeout)</label>
-              <input
-                type="number"
-                min="1"
-                value={tripleBarrierForm.maxBars}
-                onChange={(e) => setTripleBarrierForm({ ...tripleBarrierForm, maxBars: parseInt(e.target.value) || 1 })}
-                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-              />
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Max Timeout</label>
+              <div className="flex gap-1">
+                <input
+                  type="number"
+                  min="1"
+                  value={tripleBarrierForm.maxBars}
+                  onChange={(e) => setTripleBarrierForm({ ...tripleBarrierForm, maxBars: parseInt(e.target.value) || 1 })}
+                  className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                />
+                <select
+                  value={tripleBarrierForm.maxBarsUnit}
+                  onChange={(e) => setTripleBarrierForm({ ...tripleBarrierForm, maxBarsUnit: e.target.value as 'bars' | 'days' })}
+                  className="px-2 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                >
+                  <option value="bars">bars</option>
+                  <option value="days">days</option>
+                </select>
+              </div>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
               3 classes: Profit hit, Stop hit, or Timeout
@@ -599,6 +653,23 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
                 >
                   <option value="bullish">Bullish (Buy)</option>
                   <option value="bearish">Bearish (Sell)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Timeframe
+                  {datasetTimeframe && <span className="text-gray-400 ml-1">(dataset: {datasetTimeframe})</span>}
+                </label>
+                <select
+                  value={trendReversalForm.timeframe}
+                  onChange={(e) => setTrendReversalForm({ ...trendReversalForm, timeframe: e.target.value })}
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                >
+                  {TIMEFRAME_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
                 </select>
               </div>
               {trendReversalForm.indicator === 'rsi' && (
@@ -803,17 +874,27 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Horizon (bars)</label>
-              <input
-                type="number"
-                min="1"
-                value={volatilityForm.horizon}
-                onChange={(e) => setVolatilityForm({ ...volatilityForm, horizon: parseInt(e.target.value) || 1 })}
-                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
-              />
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Horizon</label>
+              <div className="flex gap-1">
+                <input
+                  type="number"
+                  min="1"
+                  value={volatilityForm.horizon}
+                  onChange={(e) => setVolatilityForm({ ...volatilityForm, horizon: parseInt(e.target.value) || 1 })}
+                  className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                />
+                <select
+                  value={volatilityForm.horizonUnit}
+                  onChange={(e) => setVolatilityForm({ ...volatilityForm, horizonUnit: e.target.value as 'bars' | 'days' })}
+                  className="px-2 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
+                >
+                  <option value="bars">bars</option>
+                  <option value="days">days</option>
+                </select>
+              </div>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Regression target: predicts volatility over next {volatilityForm.horizon} bars
+              Regression target: predicts volatility over next {volatilityForm.horizon} {volatilityForm.horizonUnit}
             </p>
           </div>
         )}

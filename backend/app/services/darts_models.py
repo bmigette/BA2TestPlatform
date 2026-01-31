@@ -669,6 +669,37 @@ class DartsModelService(IModelService):
         return scaled
 
 
+# Bars per day for each timeframe (trading hours ~6.5h/day for stocks)
+BARS_PER_DAY = {
+    '1m': 390,    # 6.5h * 60
+    '5m': 78,     # 6.5h * 12
+    '15m': 26,    # 6.5h * 4
+    '30m': 13,    # 6.5h * 2
+    '1h': 7,      # ~6.5h (rounded)
+    '2h': 3,      # ~3
+    '4h': 2,      # ~2 (might span multiple days)
+    '1d': 1,
+    'D1': 1,
+    '1w': 0.2,    # 1/5 (5 trading days per week)
+    'W1': 0.2,
+}
+
+
+def days_to_bars(days: int, timeframe: str) -> int:
+    """
+    Convert days to bars based on timeframe.
+
+    Args:
+        days: Number of days
+        timeframe: Dataset timeframe (e.g., '1h', '15m', '1d')
+
+    Returns:
+        Number of bars equivalent to the specified days
+    """
+    bars_per_day = BARS_PER_DAY.get(timeframe, 1)
+    return max(1, round(days * bars_per_day))
+
+
 class PredictionTargetService:
     """
     Service for calculating prediction targets for ML training.
@@ -1132,64 +1163,116 @@ class PredictionTargetService:
     def calculate_all_targets(
         self,
         df: pd.DataFrame,
-        targets_config: List[Dict[str, Any]]
+        targets_config: List[Dict[str, Any]],
+        dataset_timeframe: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Calculate all target types and return with statistics.
 
+        Supports multi-timeframe targets: if a target has a 'timeframe' field
+        different from the dataset's base timeframe, the indicator will be
+        calculated on the higher timeframe and aligned back to the base.
+
         Args:
             df: DataFrame with OHLC columns
-            targets_config: List of target configurations
+            targets_config: List of target configurations, each may have:
+                - timeframe: Optional[str] - Calculate target on this timeframe
+            dataset_timeframe: Base timeframe of the dataset (e.g., '15m', '1h')
 
         Returns:
             List of calculated targets with data and stats
         """
+        from app.services.indicators import (
+            resample_ohlcv_to_timeframe,
+            align_higher_timeframe_to_lower
+        )
+
         results = []
         df = df.copy().sort_values('Date').reset_index(drop=True)
 
         for config in targets_config:
             target_type = config.get('type', '')
+            target_timeframe = config.get('timeframe')
+            use_multi_timeframe = False
+            working_df = df
+
+            # Check if we need to calculate on a different timeframe
+            if target_timeframe and dataset_timeframe and target_timeframe != dataset_timeframe:
+                try:
+                    working_df = resample_ohlcv_to_timeframe(
+                        df, target_timeframe, source_timeframe=dataset_timeframe
+                    )
+                    use_multi_timeframe = True
+                    logger.info(f"Resampled to {target_timeframe} for {target_type} target: {len(df)} -> {len(working_df)} bars")
+                except ValueError as e:
+                    logger.warning(f"Cannot resample to {target_timeframe}: {e}. Using base timeframe.")
+                    working_df = df
+
+            # Determine timeframe for days-to-bars conversion
+            effective_timeframe = target_timeframe if use_multi_timeframe else (dataset_timeframe or '1h')
 
             try:
                 if target_type == 'price_based':
                     direction = config.get('direction')
                     profit_pct = config.get('profitPct')
                     max_dd = config.get('maxDrawdownPct')
-                    days = config.get('timeBars')
+                    time_value = config.get('timeBars')
+                    time_unit = config.get('timeBarsUnit', 'bars')
                     if direction is None:
                         raise ValueError("price_based target requires 'direction' field")
                     if profit_pct is None:
                         raise ValueError("price_based target requires 'profitPct' field")
                     if max_dd is None:
                         raise ValueError("price_based target requires 'maxDrawdownPct' field")
-                    if days is None:
+                    if time_value is None:
                         raise ValueError("price_based target requires 'timeBars' field")
-                    series = self._calculate_single_target(df, profit_pct, max_dd, days, direction)
-                    col_name = f"price_{direction}_{profit_pct}pct_{max_dd}dd_{days}d"
+                    # Convert days to bars if needed
+                    if time_unit == 'days':
+                        bars = days_to_bars(time_value, effective_timeframe)
+                        logger.info(f"Converted {time_value} days to {bars} bars for {effective_timeframe}")
+                    else:
+                        bars = time_value
+                    series = self._calculate_single_target(working_df, profit_pct, max_dd, bars, direction)
+                    unit_label = f"{time_value}d" if time_unit == 'days' else f"{bars}b"
+                    col_name = f"price_{direction}_{profit_pct}pct_{max_dd}dd_{unit_label}"
                     category = 'binary_classification'
 
                 elif target_type == 'directional':
                     direction = config.get('direction')
-                    horizon = config.get('horizon')
+                    horizon_value = config.get('horizon')
+                    horizon_unit = config.get('horizonUnit', 'bars')
                     if direction is None:
                         raise ValueError("directional target requires 'direction' field")
-                    if horizon is None:
+                    if horizon_value is None:
                         raise ValueError("directional target requires 'horizon' field")
-                    series = self.calculate_directional(df, horizon, direction)
+                    # Convert days to bars if needed
+                    if horizon_unit == 'days':
+                        horizon = days_to_bars(horizon_value, effective_timeframe)
+                        logger.info(f"Converted {horizon_value} days to {horizon} bars for {effective_timeframe}")
+                    else:
+                        horizon = horizon_value
+                    series = self.calculate_directional(working_df, horizon, direction)
                     col_name = series.name
                     category = 'binary_classification'
 
                 elif target_type == 'triple_barrier':
                     profit_pct = config.get('profitPct')
                     stop_pct = config.get('stopPct')
-                    max_bars = config.get('maxBars')
+                    max_bars_value = config.get('maxBars')
+                    max_bars_unit = config.get('maxBarsUnit', 'bars')
                     if profit_pct is None:
                         raise ValueError("triple_barrier target requires 'profitPct' field")
                     if stop_pct is None:
                         raise ValueError("triple_barrier target requires 'stopPct' field")
-                    if max_bars is None:
+                    if max_bars_value is None:
                         raise ValueError("triple_barrier target requires 'maxBars' field")
-                    series = self.calculate_triple_barrier(df, profit_pct, stop_pct, max_bars)
+                    # Convert days to bars if needed
+                    if max_bars_unit == 'days':
+                        max_bars = days_to_bars(max_bars_value, effective_timeframe)
+                        logger.info(f"Converted {max_bars_value} days to {max_bars} bars for {effective_timeframe}")
+                    else:
+                        max_bars = max_bars_value
+                    series = self.calculate_triple_barrier(working_df, profit_pct, stop_pct, max_bars)
                     col_name = series.name
                     category = 'multiclass_classification'
 
@@ -1206,24 +1289,45 @@ class PredictionTargetService:
                         raise ValueError("trend_reversal target requires 'threshold' field")
                     if direction is None:
                         raise ValueError("trend_reversal target requires 'direction' field")
-                    series = self.calculate_trend_reversal(df, indicator, params, threshold, direction)
+                    series = self.calculate_trend_reversal(working_df, indicator, params, threshold, direction)
                     col_name = series.name
                     category = 'binary_classification'
 
                 elif target_type == 'volatility':
-                    horizon = config.get('horizon')
+                    horizon_value = config.get('horizon')
+                    horizon_unit = config.get('horizonUnit', 'bars')
                     method = config.get('method')
-                    if horizon is None:
+                    if horizon_value is None:
                         raise ValueError("volatility target requires 'horizon' field")
                     if method is None:
                         raise ValueError("volatility target requires 'method' field")
-                    series = self.calculate_volatility(df, horizon, method)
+                    # Convert days to bars if needed
+                    if horizon_unit == 'days':
+                        horizon = days_to_bars(horizon_value, effective_timeframe)
+                        logger.info(f"Converted {horizon_value} days to {horizon} bars for {effective_timeframe}")
+                    else:
+                        horizon = horizon_value
+                    series = self.calculate_volatility(working_df, horizon, method)
                     col_name = series.name
                     category = 'regression'
 
                 else:
                     logger.warning(f"Unknown target type: {target_type}")
                     continue
+
+                # If multi-timeframe, align result back to original timeframe
+                if use_multi_timeframe:
+                    # Build dataframe with the result for alignment
+                    higher_tf_data = working_df[['Date']].copy()
+                    higher_tf_data['_target'] = series.values
+
+                    # Align back to original timeframe
+                    aligned = align_higher_timeframe_to_lower(df, higher_tf_data, ['_target'])
+                    series = pd.Series(aligned['_target'].values, index=df.index)
+
+                    # Add timeframe suffix to column name
+                    col_name = f"{col_name}_{target_timeframe}"
+                    logger.info(f"Aligned {target_type} target from {target_timeframe} to base timeframe")
 
                 # Calculate statistics
                 valid_mask = ~pd.isna(series)

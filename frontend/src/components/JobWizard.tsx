@@ -1250,6 +1250,20 @@ const Step1Settings: React.FC<Step1Props> = ({
             </div>
           </div>
         )}
+
+        {/* Timeframe-aware target warning */}
+        {state.predictionTargets.length > 0 && state.predictionTargets.some(t => !(t as Record<string, unknown>).timeframe) && (
+          <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-600 rounded-lg">
+            <div className="flex items-start space-x-2">
+              <Info size={16} className="text-blue-500 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+              <div className="text-sm text-blue-700 dark:text-blue-300">
+                <strong>Multi-timeframe targets:</strong> Some targets don't have an explicit timeframe set.
+                These will use the dataset's base timeframe ({datasets.find(d => d.id === state.selectedDatasetId)?.timeframe || 'unknown'}).
+                To use a different timeframe for indicators, edit the target in the Dataset Visualization page.
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Prediction Horizon */}

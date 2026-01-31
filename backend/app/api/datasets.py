@@ -1114,6 +1114,9 @@ async def calculate_indicators(
     Used for live visualization and prediction target experimentation.
     Returns calculated indicator values without modifying the dataset.
 
+    Supports multi-timeframe indicators: calculate on a higher timeframe
+    and align to the dataset's base timeframe.
+
     Args:
         dataset_id: Dataset ID
         request_body: {
@@ -1122,7 +1125,10 @@ async def calculate_indicators(
                 {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
                 {"type": "sar", "af_start": 0.02, "af_max": 0.2},
                 {"type": "zigzag", "deviation_pct": 5.0}
-            ]
+            ],
+            timeframe: Optional[str] - If specified, calculate indicators on this
+                       higher timeframe and align to dataset's base timeframe.
+                       E.g., "1h" for 1h indicators on a 15m dataset.
         }
         db: Database session
 
@@ -1155,6 +1161,7 @@ async def calculate_indicators(
 
         # Parse request
         indicators = request_body.get('indicators', [])
+        target_timeframe = request_body.get('timeframe')
 
         if not indicators:
             return {
@@ -1164,7 +1171,19 @@ async def calculate_indicators(
 
         # Calculate indicators
         indicator_service = IndicatorService()
-        results = indicator_service.calculate_indicators(df, indicators)
+
+        if target_timeframe and target_timeframe != dataset.timeframe:
+            # Multi-timeframe calculation: resample, calculate, align back
+            logger.info(f"Calculating indicators on {target_timeframe} timeframe (dataset is {dataset.timeframe})")
+            results = indicator_service.calculate_indicators_multi_timeframe(
+                df,
+                indicators,
+                target_timeframe,
+                source_timeframe=dataset.timeframe
+            )
+        else:
+            # Same timeframe: calculate directly
+            results = indicator_service.calculate_indicators(df, indicators)
 
         # Convert to list of dicts for JSON response
         # Use ISO format for dates to match preview endpoint (important for JS timestamp parsing)
@@ -1188,6 +1207,7 @@ async def calculate_indicators(
         return {
             "dataset_id": dataset_id,
             "indicators": list(results.keys()),
+            "timeframe_used": target_timeframe or dataset.timeframe,
             "data": data
         }
 
@@ -1257,13 +1277,17 @@ async def calculate_prediction_targets_v2(
                 "targets": []
             }
 
-        # Calculate targets
+        # Calculate targets with dataset's timeframe for multi-timeframe support
         target_service = PredictionTargetService()
-        results = target_service.calculate_all_targets(df, targets)
+        results = target_service.calculate_all_targets(
+            df, targets,
+            dataset_timeframe=dataset.timeframe
+        )
 
         return {
             "dataset_id": dataset_id,
             "total_rows": len(df),
+            "dataset_timeframe": dataset.timeframe,
             "targets": results
         }
 

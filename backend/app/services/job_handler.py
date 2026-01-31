@@ -1147,6 +1147,10 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
         combined_df = combined_df.sort_values('Date').reset_index(drop=True)
         update_job_progress(task_id, 10, f"Loaded {len(combined_df)} rows from {len(dataset_ids)} dataset(s)")
 
+        # Get dataset timeframe for multi-timeframe target support
+        dataset_timeframe = dataset_infos[0].get('timeframe', '1h') if dataset_infos else '1h'
+        logger.info(f"Dataset timeframe: {dataset_timeframe}")
+
         # Calculate prediction targets
         if prediction_targets:
             update_job_progress(task_id, 15, "Calculating prediction targets...")
@@ -1169,17 +1173,46 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                     threshold = pt.get('threshold', 30)
                     indicator = pt.get('indicator', 'zigzag')
 
+                    # Check for multi-timeframe target
+                    target_timeframe = pt.get('timeframe')
+                    use_multi_tf = target_timeframe and target_timeframe != dataset_timeframe
+
+                    # Prepare working_df for multi-timeframe (if applicable)
+                    working_df = combined_df
+                    if use_multi_tf:
+                        try:
+                            from app.services.indicators import resample_ohlcv_to_timeframe, align_higher_timeframe_to_lower
+                            working_df = resample_ohlcv_to_timeframe(
+                                combined_df, target_timeframe, source_timeframe=dataset_timeframe
+                            )
+                            logger.info(f"Resampled to {target_timeframe} for target: {len(combined_df)} -> {len(working_df)} bars")
+                        except ValueError as e:
+                            logger.warning(f"Cannot resample to {target_timeframe}: {e}. Using base timeframe.")
+                            use_multi_tf = False
+                            working_df = combined_df
+
                     if pt_type == 'trend_reversal':
                         # Use calculate_trend_reversal from PredictionTargetService
                         col_name = f"{indicator}_{direction}_reversal"
+                        if use_multi_tf:
+                            col_name = f"{col_name}_{target_timeframe}"
                         try:
                             target_series = target_service.calculate_trend_reversal(
-                                combined_df,
+                                working_df,
                                 indicator=indicator,
                                 indicator_params=pt_config,
                                 threshold=threshold,
                                 direction=direction
                             )
+
+                            # Align back to original timeframe if multi-timeframe
+                            if use_multi_tf:
+                                higher_tf_data = working_df[['Date']].copy()
+                                higher_tf_data['_target'] = target_series.values
+                                aligned = align_higher_timeframe_to_lower(combined_df, higher_tf_data, ['_target'])
+                                target_series = pd.Series(aligned['_target'].values, index=combined_df.index)
+                                logger.info(f"Aligned {col_name} from {target_timeframe} to {dataset_timeframe}")
+
                             combined_df[col_name] = target_series
                             if target_column is None:
                                 target_column = col_name
@@ -1193,6 +1226,9 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                         if horizon is None:
                             return {'status': 'failed', 'error': f'directional target requires horizon in config. Got: {pt}'}
                         col_name = f"direction_{horizon}bar"
+                        if use_multi_tf:
+                            col_name = f"{col_name}_{target_timeframe}"
+                        # Directional is calculated on base timeframe (uses shift), no resampling needed
                         combined_df[col_name] = (combined_df['Close'].shift(-horizon) > combined_df['Close']).astype(int)
                         if target_column is None:
                             target_column = col_name

@@ -15,6 +15,8 @@ export interface BaseTargetConfig {
   includeValues?: boolean;      // Include indicator values as features (for indicator-based targets)
   valueLookback?: number;       // How many bars of lagged values to include (default 5)
   includeBarsSince?: boolean;   // Include bars-since-last-signal counter feature
+  // Timeframe-aware targets - use a different timeframe than the dataset's base timeframe
+  timeframe?: string;           // Optional: target calculation timeframe (e.g., "1h" for 1h indicator on 30m dataset)
 }
 
 // Price-based target (existing)
@@ -25,14 +27,19 @@ export interface PriceBasedTarget extends BaseTargetConfig {
   profitPct: number;
   maxDrawdownPct: number;
   timeBars: number;
+  timeBarsUnit?: HorizonUnit; // 'bars' (default) or 'days'
 }
+
+// Horizon unit type - bars or days
+export type HorizonUnit = 'bars' | 'days';
 
 // Directional movement target
 export interface DirectionalTarget extends BaseTargetConfig {
   type: 'directional';
   category: 'binary_classification';
   direction: 'up' | 'down';
-  horizon: number; // bars ahead
+  horizon: number; // value ahead
+  horizonUnit?: HorizonUnit; // 'bars' (default) or 'days'
 }
 
 // Triple-barrier target
@@ -42,6 +49,7 @@ export interface TripleBarrierTarget extends BaseTargetConfig {
   profitPct: number;
   stopPct: number;
   maxBars: number;
+  maxBarsUnit?: HorizonUnit; // 'bars' (default) or 'days'
 }
 
 // Trend reversal target (binary - single direction)
@@ -68,7 +76,8 @@ export interface UnifiedTrendTarget extends BaseTargetConfig {
 export interface VolatilityTarget extends BaseTargetConfig {
   type: 'volatility';
   category: 'regression';
-  horizon: number; // bars ahead
+  horizon: number; // value ahead
+  horizonUnit?: HorizonUnit; // 'bars' (default) or 'days'
   method: 'std' | 'range' | 'atr';
 }
 
@@ -237,6 +246,37 @@ export const DEFAULT_INDICATOR_PARAMS = {
   adx: { period: 14 },
   stochastic: { kPeriod: 14, dPeriod: 3 },
 } as const;
+
+// Supported timeframes for multi-timeframe targets
+export const SUPPORTED_TIMEFRAMES = [
+  { value: '15m', label: '15 Minutes' },
+  { value: '30m', label: '30 Minutes' },
+  { value: '1h', label: '1 Hour' },
+  { value: '4h', label: '4 Hours' },
+  { value: '1d', label: '1 Day' },
+] as const;
+
+// Bars per day for each timeframe (trading hours ~6.5h/day for stocks, 24h for crypto)
+// Using approximate values for stock market (6.5h trading day)
+export const BARS_PER_DAY: Record<string, number> = {
+  '1m': 390,    // 6.5h * 60
+  '5m': 78,     // 6.5h * 12
+  '15m': 26,    // 6.5h * 4
+  '30m': 13,    // 6.5h * 2
+  '1h': 7,      // ~6.5h (rounded)
+  '2h': 3,      // ~3
+  '4h': 2,      // ~2 (might span multiple days)
+  '1d': 1,
+  'D1': 1,
+  '1w': 0.2,    // 1/5 (5 trading days per week)
+  'W1': 0.2,
+};
+
+// Convert days to bars based on timeframe
+export function daysToBar(days: number, timeframe: string): number {
+  const barsPerDay = BARS_PER_DAY[timeframe] || 1;
+  return Math.round(days * barsPerDay);
+}
 
 // Metric options by category
 export const METRICS_BY_CATEGORY = {
