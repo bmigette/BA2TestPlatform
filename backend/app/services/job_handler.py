@@ -1159,9 +1159,10 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
             first_target = prediction_targets[0] if prediction_targets else {}
             target_type = first_target.get('type')
 
-            if target_type and target_type != 'price_based':
-                # New target format (trend_reversal, directional, etc.)
-                # Use PredictionTargetService which has calculate_trend_reversal
+            if target_type:
+                # New target format (trend_reversal, directional, price_based, triple_barrier, volatility)
+                # Use PredictionTargetService
+                from app.services.darts_models import days_to_bars
                 target_service = PredictionTargetService()
 
                 target_column = None
@@ -1222,17 +1223,144 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
 
                     elif pt_type == 'directional':
                         # Simple directional target
-                        horizon = pt_config.get('horizon')
+                        horizon = pt.get('horizon') or pt_config.get('horizon')
+                        horizon_unit = pt.get('horizonUnit', 'bars')
                         if horizon is None:
-                            return {'status': 'failed', 'error': f'directional target requires horizon in config. Got: {pt}'}
-                        col_name = f"direction_{horizon}bar"
+                            return {'status': 'failed', 'error': f'directional target requires horizon. Got: {pt}'}
+                        # Convert days to bars if needed
+                        if horizon_unit == 'days':
+                            horizon = days_to_bars(horizon, dataset_timeframe)
+                        dir_label = 'up' if direction in ['up', 'bullish'] else 'down'
+                        col_name = f"direction_{dir_label}_{horizon}bar"
                         if use_multi_tf:
                             col_name = f"{col_name}_{target_timeframe}"
                         # Directional is calculated on base timeframe (uses shift), no resampling needed
-                        combined_df[col_name] = (combined_df['Close'].shift(-horizon) > combined_df['Close']).astype(int)
+                        if direction in ['up', 'bullish']:
+                            combined_df[col_name] = (combined_df['Close'].shift(-horizon) > combined_df['Close']).astype(int)
+                        else:
+                            combined_df[col_name] = (combined_df['Close'].shift(-horizon) < combined_df['Close']).astype(int)
                         if target_column is None:
                             target_column = col_name
                         logger.info(f"Created directional target: {col_name}")
+
+                    elif pt_type == 'price_based':
+                        # Price-based target with profit target, max drawdown, and time window
+                        profit_pct = pt.get('profitPct')
+                        max_dd_pct = pt.get('maxDrawdownPct')
+                        time_bars = pt.get('timeBars')
+                        time_unit = pt.get('timeBarsUnit', 'bars')
+                        dir_label = pt.get('direction', 'up')
+
+                        if profit_pct is None or max_dd_pct is None or time_bars is None:
+                            return {'status': 'failed', 'error': f'price_based target requires profitPct, maxDrawdownPct, and timeBars. Got: {pt}'}
+
+                        # Convert days to bars if needed
+                        if time_unit == 'days':
+                            time_bars = days_to_bars(time_bars, dataset_timeframe)
+
+                        col_name = f"price_{dir_label}_{profit_pct}pct_{max_dd_pct}dd_{time_bars}b"
+                        try:
+                            target_series = target_service.calculate_prediction_targets(
+                                combined_df,
+                                [{
+                                    'profit_pct': profit_pct,
+                                    'max_dd': max_dd_pct,
+                                    'days': time_bars,  # Now in bars
+                                    'direction': dir_label
+                                }]
+                            )
+                            # The service adds columns directly, extract the one we need
+                            expected_col = f"price_{dir_label}_{profit_pct}pct_{max_dd_pct}dd_{time_bars}d"
+                            if expected_col in target_series.columns:
+                                combined_df[col_name] = target_series[expected_col]
+                            else:
+                                # Find the matching column
+                                for c in target_series.columns:
+                                    if c.startswith(f"price_{dir_label}"):
+                                        combined_df[col_name] = target_series[c]
+                                        break
+                            if target_column is None:
+                                target_column = col_name
+                            positive_count = int(combined_df[col_name].sum()) if col_name in combined_df.columns else 0
+                            logger.info(f"Created price_based target: {col_name}, positives: {positive_count}")
+                        except Exception as e:
+                            return {'status': 'failed', 'error': f'Failed to calculate price_based target: {e}'}
+
+                    elif pt_type == 'triple_barrier':
+                        # Triple barrier target: profit, stop, timeout
+                        profit_pct = pt.get('profitPct')
+                        stop_pct = pt.get('stopPct')
+                        max_bars = pt.get('maxBars')
+                        max_bars_unit = pt.get('maxBarsUnit', 'bars')
+
+                        if profit_pct is None or stop_pct is None or max_bars is None:
+                            return {'status': 'failed', 'error': f'triple_barrier target requires profitPct, stopPct, and maxBars. Got: {pt}'}
+
+                        # Convert days to bars if needed
+                        if max_bars_unit == 'days':
+                            max_bars = days_to_bars(max_bars, dataset_timeframe)
+
+                        col_name = f"triple_barrier_{profit_pct}p_{stop_pct}s_{max_bars}b"
+                        try:
+                            # Calculate triple barrier labels: 0=stop, 1=timeout, 2=profit
+                            labels = []
+                            close_prices = combined_df['Close'].values
+                            for i in range(len(close_prices)):
+                                if i + max_bars >= len(close_prices):
+                                    labels.append(np.nan)
+                                    continue
+                                entry_price = close_prices[i]
+                                profit_level = entry_price * (1 + profit_pct / 100)
+                                stop_level = entry_price * (1 - stop_pct / 100)
+                                label = 1  # Default: timeout
+                                for j in range(1, max_bars + 1):
+                                    future_price = close_prices[i + j]
+                                    if future_price >= profit_level:
+                                        label = 2  # Profit hit
+                                        break
+                                    elif future_price <= stop_level:
+                                        label = 0  # Stop hit
+                                        break
+                                labels.append(label)
+                            combined_df[col_name] = labels
+                            if target_column is None:
+                                target_column = col_name
+                            logger.info(f"Created triple_barrier target: {col_name}")
+                        except Exception as e:
+                            return {'status': 'failed', 'error': f'Failed to calculate triple_barrier target: {e}'}
+
+                    elif pt_type == 'volatility':
+                        # Volatility regression target
+                        horizon = pt.get('horizon', 5)
+                        horizon_unit = pt.get('horizonUnit', 'bars')
+                        method = pt.get('method', 'std')
+
+                        # Convert days to bars if needed
+                        if horizon_unit == 'days':
+                            horizon = days_to_bars(horizon, dataset_timeframe)
+
+                        col_name = f"volatility_{method}_{horizon}b"
+                        try:
+                            if method == 'std':
+                                combined_df[col_name] = combined_df['Close'].pct_change().rolling(horizon).std().shift(-horizon)
+                            elif method == 'range':
+                                combined_df[col_name] = ((combined_df['High'].rolling(horizon).max() - combined_df['Low'].rolling(horizon).min()) / combined_df['Close']).shift(-horizon)
+                            elif method == 'atr':
+                                tr = np.maximum(
+                                    combined_df['High'] - combined_df['Low'],
+                                    np.maximum(
+                                        abs(combined_df['High'] - combined_df['Close'].shift(1)),
+                                        abs(combined_df['Low'] - combined_df['Close'].shift(1))
+                                    )
+                                )
+                                combined_df[col_name] = tr.rolling(horizon).mean().shift(-horizon)
+                            else:
+                                return {'status': 'failed', 'error': f'Unknown volatility method: {method}'}
+                            if target_column is None:
+                                target_column = col_name
+                            logger.info(f"Created volatility target: {col_name}")
+                        except Exception as e:
+                            return {'status': 'failed', 'error': f'Failed to calculate volatility target: {e}'}
 
                     else:
                         return {'status': 'failed', 'error': f'Unknown target type: {pt_type}'}
