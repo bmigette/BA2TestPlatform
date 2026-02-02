@@ -261,8 +261,11 @@ def run_backtest(
     pred_start_idx = seq_len - 1
     pred_dates = pred_df['Date'].iloc[pred_start_idx:pred_start_idx + len(predictions)].values
 
-    # Create prediction lookup by date
+    # predictions is now 2D: (samples, n_classes) for all modes
+    # Create prediction lookup by date - stores full probability array per date
     pred_lookup = dict(zip(pred_dates, predictions))
+    n_classes = predictions.shape[1] if len(predictions.shape) > 1 else 1
+    logger.info(f"Predictions shape: {predictions.shape}, n_classes={n_classes}")
 
     # Run simulation
     equity = initial_capital
@@ -281,9 +284,9 @@ def run_backtest(
         current_date = row['Date']
         current_price = row['Close']
 
-        # Get prediction for this bar
-        prob = pred_lookup.get(current_date, None)
-        if prob is None:
+        # Get prediction for this bar (now a probability array for all classes)
+        probs = pred_lookup.get(current_date, None)
+        if probs is None:
             # No prediction available for this bar
             for pos in open_positions:
                 pos.bars_held += 1
@@ -294,14 +297,15 @@ def run_backtest(
         sell_positions = [p for p in open_positions if p.direction == 'sell']
 
         # Build context for condition evaluation
-        predicted_class = 1 if prob >= threshold else 0
+        # probs is now an array of probabilities for each class
+        predicted_class = int(np.argmax(probs))
+        max_prob = float(np.max(probs))
+
         context = {
             'model:prediction': predicted_class,
-            'model:probability': prob,
-            'model:probability_0': 1 - prob,
-            'model:probability_1': prob,
-            'model:class_0': 1 if predicted_class == 0 else 0,
-            'model:class_1': 1 if predicted_class == 1 else 0,
+            'model:predicted_class': predicted_class,
+            'model:probability': max_prob,  # Probability of predicted class
+            'model:max_probability': max_prob,
             'Open': row.get('Open', current_price),
             'High': row.get('High', current_price),
             'Low': row.get('Low', current_price),
@@ -312,6 +316,11 @@ def run_backtest(
             'position:sell_count': len(sell_positions),
             'position:total_count': len(open_positions),
         }
+
+        # Add probability and class indicator for each class
+        for class_idx in range(len(probs)):
+            context[f'model:probability_{class_idx}'] = float(probs[class_idx])
+            context[f'model:class_{class_idx}'] = 1 if predicted_class == class_idx else 0
 
         # Add any additional columns from exec_df
         for col in exec_df.columns:
