@@ -552,7 +552,8 @@ def save_generation_model(
     fitness: float,
     params: Dict[str, Any],
     metrics: Dict[str, Any],
-    training_service: Any
+    training_service: Any,
+    training_history: Optional[List[Dict[str, Any]]] = None
 ) -> Optional[str]:
     """
     Save a model from a generation.
@@ -567,6 +568,7 @@ def save_generation_model(
         params: Model parameters
         metrics: Evaluation metrics
         training_service: TrainingService instance for saving
+        training_history: Epoch-by-epoch training history for visualization
 
     Returns:
         Path to saved model or None if failed
@@ -591,7 +593,8 @@ def save_generation_model(
             'fitness': fitness,
             'params': params,
             'metrics': metrics,
-            'normalization_params': normalization_params  # For inference consistency
+            'normalization_params': normalization_params,  # For inference consistency
+            'training_history': training_history or []  # Epoch-by-epoch history for visualization
         }
 
         # Note: Callbacks are now serializable (EpochProgressCallback implements
@@ -942,6 +945,7 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                 loss_function = None
                 threshold = None
                 feature_columns = None
+                training_history = []
                 if meta_files:
                     try:
                         with open(meta_files[0], 'r') as f:
@@ -958,6 +962,7 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                             loss_function = meta.get('loss_function')
                             threshold = meta.get('threshold')
                             feature_columns = meta.get('feature_columns')
+                            training_history = meta.get('training_history', [])
                     except Exception:
                         pass
 
@@ -977,7 +982,8 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                     'prediction_mode': prediction_mode,
                     'loss_function': loss_function,
                     'threshold': threshold,
-                    'feature_columns': feature_columns
+                    'feature_columns': feature_columns,
+                    'training_history': training_history
                 })
 
         return sorted(elite_models, key=lambda x: x['rank'])
@@ -2397,6 +2403,9 @@ def train_classification_optimization(
             # Save individual model for elite selection later
             import json
             import torch
+            # Capture training history before it gets reset (must be before any other training starts)
+            training_history = get_epoch_history(task_id)
+
             models_dir = get_job_models_dir(task_id)
             model_filename = f"gen{gen:03d}_ind{individual_num:03d}_{model_type}_f{fitness:.4f}"
             model_save_path = models_dir / f"{model_filename}.pt"
@@ -2420,15 +2429,14 @@ def train_classification_optimization(
                     'c_out': c_out,
                     'metrics': metrics,
                     # Save feature columns used during training for prediction
-                    'feature_columns': feature_columns
+                    'feature_columns': feature_columns,
+                    # Save training history for visualization after model is saved to inventory
+                    'training_history': training_history
                 }
                 with open(meta_save_path, 'w') as f:
                     json.dump(metadata, f, indent=2, default=str)
             except Exception as save_err:
                 logger.warning(f"Failed to save individual model: {save_err}")
-
-            # Capture training history before it gets reset
-            training_history = get_epoch_history(task_id)
 
             # Record individual
             individual_record = {
@@ -2949,7 +2957,8 @@ def train_unified_optimization(
                 fitness=fitness,
                 params=model_params,
                 metrics=eval_result,
-                training_service=training_service
+                training_service=training_service,
+                training_history=training_history
             )
             if save_result is None:
                 # Model save failed - increment error counter
