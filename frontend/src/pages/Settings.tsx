@@ -561,7 +561,7 @@ const Settings: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <h3 className="font-medium text-gray-900 dark:text-gray-100">{collection.name}</h3>
                           {collection.is_default && (
-                            <span className="px-2 py-0.5 text-xs bg-purple-100 text-purple-800 rounded">
+                            <span className="px-2 py-0.5 text-xs bg-purple-100 dark:bg-purple-800 text-purple-800 dark:text-purple-100 rounded">
                               Default
                             </span>
                           )}
