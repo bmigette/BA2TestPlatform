@@ -142,7 +142,7 @@ const Settings: React.FC = () => {
       const response = await fetch(`${API_BASE}/strategies`);
       if (!response.ok) throw new Error('Failed to fetch strategies');
       const data = await response.json();
-      setStrategies(data || []);
+      setStrategies(data.strategies || []);
     } catch (err) {
       console.error('Failed to fetch strategies:', err);
     } finally {
