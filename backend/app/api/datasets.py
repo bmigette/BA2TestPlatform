@@ -63,6 +63,34 @@ DEFAULT_INDICATORS = {
     "stoch": {"type": "stochastic", "k_period": 14, "d_period": 3, "smooth_k": 3}
 }
 
+
+def apply_technical_indicators(df: pd.DataFrame, indicators: list) -> pd.DataFrame:
+    """
+    Apply technical indicators to a DataFrame.
+
+    Converts indicator list format to dict format expected by TechnicalIndicators
+    and calculates all indicators.
+
+    Args:
+        df: DataFrame with OHLCV columns
+        indicators: List of indicator configs, e.g.:
+            [{"type": "sma", "name": "SMA 20", "period": 20}, ...]
+
+    Returns:
+        DataFrame with indicator columns added
+    """
+    if not indicators:
+        return df
+
+    indicators_dict = {}
+    for ind in indicators:
+        ind_type = ind.get('type', ind.get('name', 'unknown'))
+        ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
+        indicators_dict[ind_name] = ind
+
+    return TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+
+
 router = APIRouter()
 
 # Thread pool for background dataset generation (increased to 5 for parallel operations)
@@ -287,12 +315,7 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
         if technical_indicators:
             logger.info(f"[Thread] Applying {len(technical_indicators)} technical indicators...")
             try:
-                indicators_dict = {}
-                for ind in technical_indicators:
-                    ind_type = ind.get('type', ind.get('name', 'unknown'))
-                    ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
-                    indicators_dict[ind_name] = ind
-                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                df = apply_technical_indicators(df, technical_indicators)
                 logger.info(f"[Thread] Added technical indicators. {len(df.columns)} columns")
             except Exception as e:
                 logger.error(f"[Thread] Error applying indicators: {e}")
@@ -539,12 +562,7 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
         if technical_indicators and regen_options.regenerate_technical:
             logger.info(f"[Thread] Applying {len(technical_indicators)} technical indicators...")
             try:
-                indicators_dict = {}
-                for ind in technical_indicators:
-                    ind_type = ind.get('type', ind.get('name', 'unknown'))
-                    ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
-                    indicators_dict[ind_name] = ind
-                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                df = apply_technical_indicators(df, technical_indicators)
                 logger.info(f"[Thread] Added technical indicators. {len(df.columns)} columns")
             except Exception as e:
                 logger.error(f"[Thread] Error applying indicators: {e}")
@@ -1880,12 +1898,7 @@ async def duplicate_dataset(
         if technical_indicators:
             logger.info(f"[Duplicate] Applying {len(technical_indicators)} technical indicators...")
             try:
-                indicators_dict = {}
-                for ind in technical_indicators:
-                    ind_type = ind.get('type', ind.get('name', 'unknown'))
-                    ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
-                    indicators_dict[ind_name] = ind
-                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+                df = apply_technical_indicators(df, technical_indicators)
                 logger.info(f"[Duplicate] Added technical indicators. {len(df.columns)} columns")
             except Exception as e:
                 logger.error(f"[Duplicate] Error applying indicators: {e}")
