@@ -651,9 +651,9 @@ class TSAITrainingService(ITrainingService):
             **kwargs: Additional options
 
         Returns:
-            Predictions (probabilities for positive class)
-            - Shift mode: 1D array of probabilities
-            - Multi-step mode: 2D array of probabilities (samples, horizons)
+            Predictions (probabilities for all classes)
+            - Shift mode: 2D array of probabilities (samples, 2) for [class_0, class_1]
+            - Multi-step mode: 2D array of probabilities (samples, n_horizons)
         """
         if not TSAI_AVAILABLE:
             raise RuntimeError("tsai not available")
@@ -680,9 +680,11 @@ class TSAITrainingService(ITrainingService):
             outputs = model(X_tensor)
 
             if prediction_mode == 'multistep':
+                # Multi-label: sigmoid for each output
                 probs = torch.sigmoid(outputs).cpu().numpy()
             else:
-                probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
+                # Classification: softmax to get probabilities for all classes
+                probs = torch.softmax(outputs, dim=1).cpu().numpy()
         return probs
 
     def save_model(self, learner: Any, name: str, metadata: Dict = None) -> str:

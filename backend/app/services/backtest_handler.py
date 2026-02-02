@@ -261,8 +261,11 @@ def run_backtest(
     pred_start_idx = seq_len - 1
     pred_dates = pred_df['Date'].iloc[pred_start_idx:pred_start_idx + len(predictions)].values
 
-    # Create prediction lookup by date
+    # predictions is now 2D: (samples, n_classes) for all modes
+    # Create prediction lookup by date - stores full probability array per date
     pred_lookup = dict(zip(pred_dates, predictions))
+    n_classes = predictions.shape[1] if len(predictions.shape) > 1 else 1
+    logger.info(f"Predictions shape: {predictions.shape}, n_classes={n_classes}")
 
     # Run simulation
     equity = initial_capital
@@ -274,15 +277,16 @@ def run_backtest(
 
     # Create confirmation tracker for condition history
     confirmation_tracker = ConfirmationTracker()
+    logged_context_fields = False
 
     for idx in range(len(exec_df)):
         row = exec_df.iloc[idx]
         current_date = row['Date']
         current_price = row['Close']
 
-        # Get prediction for this bar
-        prob = pred_lookup.get(current_date, None)
-        if prob is None:
+        # Get prediction for this bar (now a probability array for all classes)
+        probs = pred_lookup.get(current_date, None)
+        if probs is None:
             # No prediction available for this bar
             for pos in open_positions:
                 pos.bars_held += 1
@@ -293,11 +297,15 @@ def run_backtest(
         sell_positions = [p for p in open_positions if p.direction == 'sell']
 
         # Build context for condition evaluation
+        # probs is now an array of probabilities for each class
+        predicted_class = int(np.argmax(probs))
+        max_prob = float(np.max(probs))
+
         context = {
-            'model:prediction': 1 if prob >= threshold else 0,
-            'model:probability': prob,
-            'model:probability_0': 1 - prob,
-            'model:probability_1': prob,
+            'model:prediction': predicted_class,
+            'model:predicted_class': predicted_class,
+            'model:probability': max_prob,  # Probability of predicted class
+            'model:max_probability': max_prob,
             'Open': row.get('Open', current_price),
             'High': row.get('High', current_price),
             'Low': row.get('Low', current_price),
@@ -309,10 +317,22 @@ def run_backtest(
             'position:total_count': len(open_positions),
         }
 
+        # Add probability and class indicator for each class
+        for class_idx in range(len(probs)):
+            context[f'model:probability_{class_idx}'] = float(probs[class_idx])
+            context[f'model:class_{class_idx}'] = 1 if predicted_class == class_idx else 0
+
         # Add any additional columns from exec_df
         for col in exec_df.columns:
             if col not in context and col != 'Date':
                 context[col] = row[col]
+
+        # Log available context fields once
+        if not logged_context_fields:
+            logger.info(f"Available context fields: {sorted(context.keys())}")
+            logger.info(f"Buy entry conditions: {buy_entry_conditions}")
+            logger.info(f"Sell entry conditions: {sell_entry_conditions}")
+            logged_context_fields = True
 
         # Check exit conditions for each open position
         positions_to_close = []
@@ -332,7 +352,7 @@ def run_backtest(
             # Check each exit rule
             for exit_rule in exit_conditions:
                 conditions = exit_rule.get('conditions', {})
-                if evaluate_condition_tree(conditions, pos_context, confirmation_tracker):
+                if evaluate_condition_tree(conditions, pos_context, confirmation_tracker, label=f"Exit-{pos.direction}"):
                     positions_to_close.append(i)
                     break
 
@@ -365,7 +385,7 @@ def run_backtest(
 
         # Check entry conditions (users can add position:total_count == 0 to limit entries)
         # Check buy entry
-        if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context, confirmation_tracker):
+        if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context, confirmation_tracker, label="BuyEntry"):
             entry_price = current_price * (1 + slippage / 100)
             size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
             if size > 0:
@@ -377,7 +397,7 @@ def run_backtest(
                 ))
 
         # Check sell entry
-        elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker):
+        elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker, label="SellEntry"):
             entry_price = current_price * (1 - slippage / 100)
             size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
             if size > 0:
