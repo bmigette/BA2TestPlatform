@@ -293,11 +293,14 @@ def run_backtest(
         sell_positions = [p for p in open_positions if p.direction == 'sell']
 
         # Build context for condition evaluation
+        predicted_class = 1 if prob >= threshold else 0
         context = {
-            'model:prediction': 1 if prob >= threshold else 0,
+            'model:prediction': predicted_class,
             'model:probability': prob,
             'model:probability_0': 1 - prob,
             'model:probability_1': prob,
+            'model:class_0': 1 if predicted_class == 0 else 0,
+            'model:class_1': 1 if predicted_class == 1 else 0,
             'Open': row.get('Open', current_price),
             'High': row.get('High', current_price),
             'Low': row.get('Low', current_price),
