@@ -31,6 +31,8 @@ export interface AvailableField {
   fieldType: string;
   description: string;
   category?: string;
+  label?: string;       // Display label (e.g., "Probability (Direction 3bar >1%)")
+  isBoolean?: boolean;  // If true, show is true/is false operators only
 }
 
 // Helper to check if a tree node is a group
@@ -68,14 +70,15 @@ export function createEmptyGroup(operator: 'AND' | 'OR' = 'AND'): ConditionGroup
 
 // Default available fields (when model not selected)
 const defaultFields: AvailableField[] = [
-  { field: 'position:in_position', fieldType: 'position', description: 'Currently in a position (1=yes, 0=no)', category: 'Position' },
-  { field: 'position:position_pnl', fieldType: 'position', description: 'Current position P&L %', category: 'Position' },
-  { field: 'position:bars_in_position', fieldType: 'position', description: 'Bars since entry', category: 'Position' },
-  { field: 'time:hour', fieldType: 'time', description: 'Hour of day (0-23)', category: 'Time' },
-  { field: 'time:day_of_week', fieldType: 'time', description: 'Day of week (0=Mon, 6=Sun)', category: 'Time' },
-  { field: 'price:change_pct', fieldType: 'price', description: 'Price change % from previous bar', category: 'Price' },
+  { field: 'position:in_position', fieldType: 'position', description: 'Currently in a position', category: 'Position', label: 'In Position', isBoolean: true },
+  { field: 'position:position_pnl', fieldType: 'position', description: 'Current position P&L %', category: 'Position', label: 'Position P&L %' },
+  { field: 'position:bars_in_position', fieldType: 'position', description: 'Bars since entry', category: 'Position', label: 'Bars in Position' },
+  { field: 'time:hour', fieldType: 'time', description: 'Hour of day (0-23)', category: 'Time', label: 'Hour of Day' },
+  { field: 'time:day_of_week', fieldType: 'time', description: 'Day of week (0=Mon, 6=Sun)', category: 'Time', label: 'Day of Week' },
+  { field: 'price:change_pct', fieldType: 'price', description: 'Price change % from previous bar', category: 'Price', label: 'Price Change %' },
 ];
 
+// Comparison operators for numeric fields
 const comparisonOperators = [
   { value: 'gt', label: '>' },
   { value: 'gte', label: '>=' },
@@ -84,6 +87,12 @@ const comparisonOperators = [
   { value: 'eq', label: '==' },
   { value: 'neq', label: '!=' },
   { value: 'between', label: 'between' },
+];
+
+// Operators for boolean fields
+const booleanOperators = [
+  { value: 'is_true', label: 'is true' },
+  { value: 'is_false', label: 'is false' },
 ];
 
 interface ConditionBuilderProps {
@@ -256,9 +265,21 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   // Handle single condition
   const condition = value as ConditionNode;
   const selectedField = allFields.find((f) => f.field === condition.field);
+  const isBoolean = selectedField?.isBoolean ?? false;
+  const operators = isBoolean ? booleanOperators : comparisonOperators;
 
   const updateField = (field: string, fieldType: string) => {
-    onChange({ ...condition, field, fieldType });
+    const newField = allFields.find((f) => f.field === field);
+    const newCondition = { ...condition, field, fieldType };
+    // Switch to appropriate default operator when changing field type
+    if (newField?.isBoolean && !['is_true', 'is_false'].includes(condition.comparison)) {
+      newCondition.comparison = 'is_true';
+      newCondition.value = 1;
+    } else if (!newField?.isBoolean && ['is_true', 'is_false'].includes(condition.comparison)) {
+      newCondition.comparison = 'gt';
+      newCondition.value = 0.5;
+    }
+    onChange(newCondition);
   };
 
   const updateComparison = (comparison: string) => {
@@ -268,6 +289,12 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
       newCondition.value = [0, 1];
     } else if (comparison !== 'between' && Array.isArray(condition.value)) {
       newCondition.value = condition.value[0];
+    }
+    // Set value for boolean operators
+    if (comparison === 'is_true') {
+      newCondition.value = 1;
+    } else if (comparison === 'is_false') {
+      newCondition.value = 0;
     }
     onChange(newCondition);
   };
@@ -294,14 +321,14 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             const field = allFields.find((f) => f.field === e.target.value);
             updateField(e.target.value, field?.fieldType || 'model_probability');
           }}
-          className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 min-w-[160px]"
+          className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 min-w-[180px]"
         >
           <option value="">Select field...</option>
           {Object.entries(groupedFields).map(([category, fields]) => (
             <optgroup key={category} label={category}>
               {fields.map((field) => (
                 <option key={field.field} value={field.field}>
-                  {field.field}
+                  {field.label || field.field}
                 </option>
               ))}
             </optgroup>
@@ -316,7 +343,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
           onChange={(e) => updateComparison(e.target.value)}
           className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
         >
-          {comparisonOperators.map((op) => (
+          {operators.map((op) => (
             <option key={op.value} value={op.value}>
               {op.label}
             </option>
@@ -324,8 +351,8 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
         </select>
       </div>
 
-      {/* Value Input */}
-      {condition.comparison === 'between' ? (
+      {/* Value Input - hide for boolean operators */}
+      {!isBoolean && condition.comparison === 'between' ? (
         <div className="flex items-center gap-1">
           <input
             type="number"
@@ -353,7 +380,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             className="w-20 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
           />
         </div>
-      ) : (
+      ) : !isBoolean ? (
         <input
           type="number"
           step="0.01"
@@ -361,7 +388,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
           onChange={(e) => updateValue(parseFloat(e.target.value))}
           className="w-24 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
         />
-      )}
+      ) : null}
 
       {/* Optimization Toggle */}
       {showOptimization && (

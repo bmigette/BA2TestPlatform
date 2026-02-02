@@ -20,7 +20,11 @@ class Strategy(Base):
     required_fields = Column(JSON, nullable=True)
 
     # Condition trees (JSON)
-    entry_conditions = Column(JSON, nullable=False)
+    # Deprecated - kept for backwards compatibility
+    entry_conditions = Column(JSON, nullable=True)
+    # New separate buy/sell conditions
+    buy_entry_conditions = Column(JSON, nullable=True)
+    sell_entry_conditions = Column(JSON, nullable=True)
     exit_conditions = Column(JSON, nullable=True)
 
     # Initial TP/SL with optimization ranges
@@ -50,7 +54,10 @@ class Strategy(Base):
             "name": self.name,
             "description": self.description,
             "requiredFields": self.required_fields or [],
+            # Include both old and new fields for backwards compatibility
             "entryConditions": self.entry_conditions,
+            "buyEntryConditions": self.buy_entry_conditions,
+            "sellEntryConditions": self.sell_entry_conditions,
             "exitConditions": self.exit_conditions or [],
             "initialTpPercent": self.initial_tp_percent,
             "initialTpOptimize": self.initial_tp_optimize,

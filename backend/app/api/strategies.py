@@ -53,7 +53,11 @@ class ExitCondition(BaseModel):
 class StrategyCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    entry_conditions: dict
+    # Old single entry conditions (deprecated, for backwards compat)
+    entry_conditions: Optional[dict] = None
+    # New separate buy/sell entry conditions
+    buy_entry_conditions: Optional[dict] = None
+    sell_entry_conditions: Optional[dict] = None
     exit_conditions: Optional[List[dict]] = None
     initial_tp_percent: float = 5.0
     initial_tp_optimize: bool = False
@@ -71,6 +75,8 @@ class StrategyUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     entry_conditions: Optional[dict] = None
+    buy_entry_conditions: Optional[dict] = None
+    sell_entry_conditions: Optional[dict] = None
     exit_conditions: Optional[List[dict]] = None
     initial_tp_percent: Optional[float] = None
     initial_tp_optimize: Optional[bool] = None
@@ -84,7 +90,12 @@ class StrategyUpdate(BaseModel):
     initial_sl_step: Optional[float] = None
 
 
-def extract_required_fields(entry_conditions: dict, exit_conditions: list) -> List[str]:
+def extract_required_fields(
+    buy_entry_conditions: dict = None,
+    sell_entry_conditions: dict = None,
+    exit_conditions: list = None,
+    entry_conditions: dict = None  # Legacy
+) -> List[str]:
     """Extract all model prediction fields used in conditions."""
     fields = set()
 
@@ -99,7 +110,10 @@ def extract_required_fields(entry_conditions: dict, exit_conditions: list) -> Li
                 for c in cond["conditions"]:
                     traverse_conditions(c)
 
-    traverse_conditions(entry_conditions)
+    # Traverse all condition sources
+    traverse_conditions(buy_entry_conditions)
+    traverse_conditions(sell_entry_conditions)
+    traverse_conditions(entry_conditions)  # Legacy support
     for exit_cond in (exit_conditions or []):
         traverse_conditions(exit_cond.get("conditions"))
 
@@ -132,8 +146,10 @@ async def create_strategy(
 ):
     """Create a new strategy."""
     required_fields = extract_required_fields(
-        strategy.entry_conditions,
-        strategy.exit_conditions
+        buy_entry_conditions=strategy.buy_entry_conditions,
+        sell_entry_conditions=strategy.sell_entry_conditions,
+        exit_conditions=strategy.exit_conditions,
+        entry_conditions=strategy.entry_conditions
     )
 
     db_strategy = Strategy(
@@ -141,6 +157,8 @@ async def create_strategy(
         description=strategy.description,
         required_fields=required_fields,
         entry_conditions=strategy.entry_conditions,
+        buy_entry_conditions=strategy.buy_entry_conditions,
+        sell_entry_conditions=strategy.sell_entry_conditions,
         exit_conditions=strategy.exit_conditions or [],
         initial_tp_percent=strategy.initial_tp_percent,
         initial_tp_optimize=strategy.initial_tp_optimize,
@@ -225,11 +243,15 @@ async def update_strategy(
 
     update_data = update.model_dump(exclude_unset=True)
 
-    # Recalculate required fields if conditions changed
-    if "entry_conditions" in update_data or "exit_conditions" in update_data:
-        entry = update_data.get("entry_conditions", strategy.entry_conditions)
-        exit = update_data.get("exit_conditions", strategy.exit_conditions)
-        update_data["required_fields"] = extract_required_fields(entry, exit)
+    # Recalculate required fields if any conditions changed
+    conditions_keys = ["entry_conditions", "buy_entry_conditions", "sell_entry_conditions", "exit_conditions"]
+    if any(k in update_data for k in conditions_keys):
+        update_data["required_fields"] = extract_required_fields(
+            buy_entry_conditions=update_data.get("buy_entry_conditions", strategy.buy_entry_conditions),
+            sell_entry_conditions=update_data.get("sell_entry_conditions", strategy.sell_entry_conditions),
+            exit_conditions=update_data.get("exit_conditions", strategy.exit_conditions),
+            entry_conditions=update_data.get("entry_conditions", strategy.entry_conditions)
+        )
 
     for key, value in update_data.items():
         setattr(strategy, key, value)

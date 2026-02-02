@@ -24,7 +24,6 @@ import {
   FolderOpen,
   X,
   Database,
-  GitBranch,
   Layers
 } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
@@ -80,7 +79,9 @@ interface Strategy {
   name: string;
   description: string | null;
   requiredFields: string[];
-  entryConditions: ConditionTree;
+  entryConditions?: ConditionTree;  // Deprecated, for backwards compatibility
+  buyEntryConditions?: ConditionTree;
+  sellEntryConditions?: ConditionTree;
   exitConditions: ExitConditionSet[];
   initialTpPercent: number;
   initialTpOptimize: boolean;
@@ -171,7 +172,8 @@ const Backtesting: React.FC = () => {
   // Strategy configuration
   const [selectedStrategyId, setSelectedStrategyId] = useState<number | ''>('');
   const [useNewStrategy, setUseNewStrategy] = useState(true);
-  const [entryConditions, setEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
+  const [buyEntryConditions, setBuyEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
+  const [sellEntryConditions, setSellEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
   const [exitConditions, setExitConditions] = useState<ExitConditionSet[]>([]);
   const [initialTpPercent, setInitialTpPercent] = useState(5.0);
   const [initialSlPercent, setInitialSlPercent] = useState(2.0);
@@ -196,7 +198,7 @@ const Backtesting: React.FC = () => {
 
   // UI state
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showConditionBuilder, setShowConditionBuilder] = useState(false);
+  const [showConditionModal, setShowConditionModal] = useState<'buy' | 'sell' | 'exit' | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -338,7 +340,8 @@ const Backtesting: React.FC = () => {
 
       if (useNewStrategy) {
         strategyParams = {
-          entryConditions,
+          buyEntryConditions,
+          sellEntryConditions,
           exitConditions: exitConditions.map(ec => ({
             id: ec.id,
             name: ec.name,
@@ -501,7 +504,8 @@ const Backtesting: React.FC = () => {
         body: JSON.stringify({
           name: saveStrategyName,
           description: saveStrategyDescription || null,
-          entry_conditions: entryConditions,
+          buy_entry_conditions: buyEntryConditions,
+          sell_entry_conditions: sellEntryConditions,
           exit_conditions: exitConditions.map(ec => ({
             id: ec.id,
             name: ec.name,
@@ -543,11 +547,21 @@ const Backtesting: React.FC = () => {
   };
 
   const loadStrategy = (strategy: Strategy) => {
-    // Load entry conditions - ensure it's a valid group
-    if (strategy.entryConditions && isConditionGroup(strategy.entryConditions)) {
-      setEntryConditions(strategy.entryConditions);
+    // Load buy entry conditions - ensure it's a valid group
+    if (strategy.buyEntryConditions && isConditionGroup(strategy.buyEntryConditions)) {
+      setBuyEntryConditions(strategy.buyEntryConditions);
+    } else if (strategy.entryConditions && isConditionGroup(strategy.entryConditions)) {
+      // Backwards compatibility: load old entryConditions as buyEntryConditions
+      setBuyEntryConditions(strategy.entryConditions);
     } else {
-      setEntryConditions(createEmptyGroup('AND'));
+      setBuyEntryConditions(createEmptyGroup('AND'));
+    }
+
+    // Load sell entry conditions
+    if (strategy.sellEntryConditions && isConditionGroup(strategy.sellEntryConditions)) {
+      setSellEntryConditions(strategy.sellEntryConditions);
+    } else {
+      setSellEntryConditions(createEmptyGroup('AND'));
     }
 
     // Load exit conditions
@@ -782,60 +796,48 @@ const Backtesting: React.FC = () => {
                 )}
               </div>
 
-              {/* Condition Builder Toggle */}
+              {/* Entry/Exit Condition Buttons */}
               {useNewStrategy && (
-                <button
-                  onClick={() => setShowConditionBuilder(!showConditionBuilder)}
-                  className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 w-full justify-between p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
-                >
-                  <span className="flex items-center gap-2">
-                    <GitBranch className="w-4 h-4" />
-                    Entry/Exit Conditions
-                  </span>
-                  {showConditionBuilder ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </button>
+                <div className="space-y-2 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                  <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    Strategy Conditions
+                  </h4>
+                  <button
+                    onClick={() => setShowConditionModal('buy')}
+                    className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-800"
+                  >
+                    <TrendingUp className="w-4 h-4 text-green-600" />
+                    <span className="flex-1 text-left">Buy Entry Conditions</span>
+                    <span className="text-xs text-gray-500">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                  </button>
+                  <button
+                    onClick={() => setShowConditionModal('sell')}
+                    className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg border border-red-200 dark:border-red-800"
+                  >
+                    <TrendingDown className="w-4 h-4 text-red-600" />
+                    <span className="flex-1 text-left">Sell Entry Conditions</span>
+                    <span className="text-xs text-gray-500">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                  </button>
+                  <button
+                    onClick={() => setShowConditionModal('exit')}
+                    className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
+                  >
+                    <Target className="w-4 h-4 text-orange-500" />
+                    <span className="flex-1 text-left">Exit Conditions</span>
+                    <span className="text-xs text-gray-500">{exitConditions.length} rule{exitConditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                  </button>
+                </div>
               )}
 
-              {/* Condition Builder */}
-              {useNewStrategy && showConditionBuilder && (
-                <div className="space-y-4 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-                  {/* Entry Conditions */}
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-                      <Target className="w-4 h-4 text-green-500" />
-                      Entry Conditions
-                    </h4>
-                    <ConditionBuilder
-                      value={entryConditions}
-                      onChange={(val) => {
-                        if (isConditionGroup(val)) {
-                          setEntryConditions(val);
-                        }
-                      }}
-                      availableFields={availableFields}
-                      showOptimization={true}
-                    />
-                  </div>
-
-                  {/* Exit Conditions */}
-                  <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-                      <Target className="w-4 h-4 text-red-500" />
-                      Exit Conditions
-                    </h4>
-                    <ExitConditionsBuilder
-                      value={exitConditions}
-                      onChange={setExitConditions}
-                      availableFields={availableFields}
-                      showOptimization={true}
-                    />
-                  </div>
-
-                  {/* Initial TP/SL */}
-                  <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Initial Take Profit / Stop Loss
-                    </h4>
+              {/* Initial TP/SL */}
+              {useNewStrategy && (
+                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Initial Take Profit / Stop Loss
+                  </h4>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit %</label>
@@ -938,7 +940,6 @@ const Backtesting: React.FC = () => {
                         )}
                       </div>
                     </div>
-                  </div>
                 </div>
               )}
 
@@ -1470,10 +1471,10 @@ const Backtesting: React.FC = () => {
                 <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-sm">
                   <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Current Configuration:</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-400">
-                    <span>Entry conditions: {entryConditions.conditions.length}</span>
+                    <span>Buy conditions: {buyEntryConditions.conditions.length}</span>
+                    <span>Sell conditions: {sellEntryConditions.conditions.length}</span>
                     <span>Exit rules: {exitConditions.length}</span>
-                    <span>Take Profit: {initialTpPercent}%</span>
-                    <span>Stop Loss: {initialSlPercent}%</span>
+                    <span>TP: {initialTpPercent}% / SL: {initialSlPercent}%</span>
                   </div>
                 </div>
               </div>
@@ -1501,6 +1502,109 @@ const Backtesting: React.FC = () => {
                       Save
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Condition Builder Modal */}
+      {showConditionModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+            onClick={() => setShowConditionModal(null)}
+          />
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full max-h-[80vh] flex flex-col">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  {showConditionModal === 'buy' && (
+                    <>
+                      <TrendingUp className="w-5 h-5 text-green-500" />
+                      Buy Entry Conditions
+                    </>
+                  )}
+                  {showConditionModal === 'sell' && (
+                    <>
+                      <TrendingDown className="w-5 h-5 text-red-500" />
+                      Sell Entry Conditions
+                    </>
+                  )}
+                  {showConditionModal === 'exit' && (
+                    <>
+                      <Target className="w-5 h-5 text-orange-500" />
+                      Exit Conditions
+                    </>
+                  )}
+                </h3>
+                <button
+                  onClick={() => setShowConditionModal(null)}
+                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 overflow-y-auto flex-1">
+                {showConditionModal === 'buy' && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      Define conditions for opening a long (buy) position. All conditions in a group must be met.
+                    </p>
+                    <ConditionBuilder
+                      value={buyEntryConditions}
+                      onChange={(val) => {
+                        if (isConditionGroup(val)) {
+                          setBuyEntryConditions(val);
+                        }
+                      }}
+                      availableFields={availableFields}
+                      showOptimization={true}
+                    />
+                  </div>
+                )}
+
+                {showConditionModal === 'sell' && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      Define conditions for opening a short (sell) position. All conditions in a group must be met.
+                    </p>
+                    <ConditionBuilder
+                      value={sellEntryConditions}
+                      onChange={(val) => {
+                        if (isConditionGroup(val)) {
+                          setSellEntryConditions(val);
+                        }
+                      }}
+                      availableFields={availableFields}
+                      showOptimization={true}
+                    />
+                  </div>
+                )}
+
+                {showConditionModal === 'exit' && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      Define conditions for closing positions. Each rule can trigger a close or adjust TP/SL.
+                    </p>
+                    <ExitConditionsBuilder
+                      value={exitConditions}
+                      onChange={setExitConditions}
+                      availableFields={availableFields}
+                      showOptimization={true}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end p-4 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => setShowConditionModal(null)}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+                >
+                  Done
                 </button>
               </div>
             </div>

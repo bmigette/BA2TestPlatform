@@ -349,14 +349,48 @@ async def get_prediction_fields(
 
     fields = []
     if model.prediction_targets:
-        for target in model.prediction_targets:
+        for idx, target in enumerate(model.prediction_targets):
             if isinstance(target, dict):
                 target_type = target.get("type", "")
                 if target_type:
+                    # Build a descriptive label from target config
+                    horizon = target.get("horizon", 1)
+                    threshold = target.get("threshold")
+                    indicator = target.get("indicator")
+
+                    # Create a readable label
+                    if target_type == "directional":
+                        label = f"Direction {horizon}bar"
+                        if threshold:
+                            label += f" >{threshold}%"
+                    elif target_type == "trend_reversal":
+                        label = f"Trend ({indicator or 'zigzag'})"
+                    elif target_type == "price_based":
+                        direction = target.get("direction", "up")
+                        label = f"Price {direction} {horizon}bar"
+                        if threshold:
+                            label += f" >{threshold}%"
+                    else:
+                        label = target_type
+
+                    # Add probability field
                     fields.append({
-                        "field": target_type,
+                        "field": f"model:probability_{idx}",
                         "fieldType": "model_probability",
-                        "description": f"Probability of {target_type}"
+                        "description": f"Probability output for target: {label}",
+                        "label": f"Probability ({label})",
+                        "category": "Model",
+                        "isBoolean": False
+                    })
+
+                    # Add class prediction field
+                    fields.append({
+                        "field": f"model:class_{idx}",
+                        "fieldType": "model_class",
+                        "description": f"Predicted class (0 or 1) for target: {label}",
+                        "label": f"Prediction ({label})",
+                        "category": "Model",
+                        "isBoolean": True
                     })
 
     return {
