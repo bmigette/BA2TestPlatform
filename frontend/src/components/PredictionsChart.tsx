@@ -28,12 +28,14 @@ export interface PredictionsChartProps {
   predictions: PredictionPoint[];
   height?: number;
   showOnlyTransitions?: boolean; // Only show markers where prediction changes or at signal points
+  showOnlyClass?: number | null; // Only show markers for this predicted class (null = show all)
 }
 
 const PredictionsChart: React.FC<PredictionsChartProps> = ({
   predictions,
   height = 500,
   showOnlyTransitions = true,
+  showOnlyClass = 1, // Default to only showing "up" predictions (class 1)
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -125,6 +127,9 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
           if (p.predictedClass === prevPredicted) return;
         }
 
+        // Filter by class if specified
+        if (showOnlyClass !== null && p.predictedClass !== showOnlyClass) return;
+
         // Determine marker properties based on prediction correctness
         const isUpPrediction = p.predictedClass === 1;
         const isCorrect = p.correct;
@@ -176,7 +181,7 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
       console.error('PredictionsChart error:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [predictions, height, showOnlyTransitions]);
+  }, [predictions, height, showOnlyTransitions, showOnlyClass]);
 
   if (error) {
     return (
