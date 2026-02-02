@@ -421,13 +421,12 @@ def handle_dataset_regeneration(task_id: str, payload: Dict[str, Any]) -> Dict[s
                         f"Creating statement features ({', '.join(statement_types)})...",
                         task_id
                     )
-                    logger.info(f"[Task {task_id}] Creating statement features: types={statement_types}, lookback={lookback_statements}")
+                    logger.info(f"[Task {task_id}] Creating statement features: types={statement_types}")
 
-                    df = FundamentalsService.create_statement_features(
+                    df = FundamentalsService.create_statement_features_v2(
                         df=df,
                         ticker=ticker,
                         statement_types=statement_types,
-                        lookback_statements=lookback_statements,
                         providers=providers,
                         frequency='quarterly'
                     )

@@ -315,12 +315,10 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
             try:
                 statement_types = fundamentals_config.get('statement_types')
                 if statement_types:
-                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
                     providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
-                    df = FundamentalsService.create_statement_features(
+                    df = FundamentalsService.create_statement_features_v2(
                         df=df, ticker=ticker, statement_types=statement_types,
-                        lookback_statements=lookback_statements, providers=providers,
-                        frequency='quarterly'
+                        providers=providers, frequency='quarterly'
                     )
                 else:
                     fundamentals = FundamentalsService.get_fundamental_data(ticker)
@@ -553,11 +551,9 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
                     logger.info("[Thread] Fetching fundamentals data...")
                     statement_types = fundamentals_config.get('statement_types')
                     if statement_types:
-                        lookback_statements = fundamentals_config.get('lookback_statements', 2)
                         providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
-                        df = FundamentalsService.create_statement_features(
+                        df = FundamentalsService.create_statement_features_v2(
                             df, ticker, statement_types,
-                            lookback_statements=lookback_statements,
                             providers=providers
                         )
                         logger.info(f"[Thread] Added statement features for: {statement_types}")
