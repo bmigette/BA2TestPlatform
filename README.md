@@ -174,9 +174,21 @@ API keys for enhanced data:
 
 ### 3. Initialize Database
 
+For a fresh installation:
 ```bash
 cd backend
 ./venv/bin/python -c "from app.models.database import init_db; init_db()"
+```
+
+For an existing database, run migrations to apply schema updates:
+```bash
+cd backend
+./venv/bin/python scripts/migrate_db.py
+```
+
+Check migration status:
+```bash
+./venv/bin/python scripts/migrate_db.py --status
 ```
 
 ### 4. Start Backend
