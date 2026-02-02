@@ -2160,13 +2160,16 @@ def train_classification_optimization(
         for mode in prediction_modes:
             cache_key = (mode, current_seq_len)
             try:
+                # NOTE: Target column is already pre-shifted during dataset generation
+                # (e.g., directional target uses shift(-horizon) to look ahead)
+                # So we pass prediction_horizon=0 here to avoid double-shifting
                 X_train, X_test, y_train, y_test = training_service.prepare_data_split(
                     full_df,
                     train_ratio=train_ratio,
                     target_column=target_column,
                     feature_columns=feature_columns,
                     seq_len=current_seq_len,
-                    prediction_horizon=prediction_horizon,
+                    prediction_horizon=0,  # Target already pre-shifted
                     prediction_mode=mode
                 )
                 c_out = 2 if mode == 'shift' else prediction_horizon
@@ -2630,11 +2633,20 @@ def train_unified_optimization(
     # Prepare data for BOTH model types
     # RNN models: use shifted target column for the furthest horizon
     # Multi-step models: use original target column
+    #
+    # NOTE: If prediction_horizon=0, targets are assumed to be pre-shifted (the look-ahead
+    # is already built into the target column). In this case:
+    # - RNN models: use original target (no shift) with output_chunk_length=1
+    # - Multi-step models: use original target with output_chunk_length=1
     try:
-        # Create shifted target column for RNN models
+        # Create shifted target column for RNN models (skip if prediction_horizon=0)
         rnn_df = full_df.copy()
-        rnn_target_column = f"{target_column}_h{prediction_horizon}"
-        rnn_df[rnn_target_column] = rnn_df[target_column].shift(-prediction_horizon)
+        if prediction_horizon > 0:
+            rnn_target_column = f"{target_column}_h{prediction_horizon}"
+            rnn_df[rnn_target_column] = rnn_df[target_column].shift(-prediction_horizon)
+        else:
+            # No shift needed - target already has built-in look-ahead
+            rnn_target_column = target_column
 
         # Prepare RNN data (shifted target, will use output_chunk_length=1)
         rnn_train_series, rnn_test_series, rnn_train_cov, rnn_test_cov = training_service.prepare_data_split(
@@ -2672,7 +2684,9 @@ def train_unified_optimization(
                 'train_covariates': ms_train_cov,
                 'test_covariates': ms_test_cov,
                 'target_column': target_column,
-                'output_chunk_length': prediction_horizon
+                # output_chunk_length must be >= 1; when prediction_horizon=0,
+                # target already has built-in look-ahead so use 1
+                'output_chunk_length': max(1, prediction_horizon)
             }
         }
 
