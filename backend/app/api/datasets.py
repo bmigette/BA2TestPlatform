@@ -21,6 +21,7 @@ from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
 from app.services.sentiment import SentimentService
+from app.services.indicators import IndicatorService
 from app.services.dataset_handler import add_time_features
 from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
 from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
@@ -136,11 +137,12 @@ def calculate_regen_flags(old_config: Dict[str, Any], new_config: Dict[str, Any]
     if not flags.regenerate_ohlcv and (old_start != new_start or old_end != new_end):
         flags.regenerate_technical = True
 
-    # Indicator changes
+    # Indicator changes - also regenerate OHLCV to get warmup data for new indicators
     old_indicators = old_config.get('technical_indicators', [])
     new_indicators = new_config.get('technical_indicators', [])
     if old_indicators != new_indicators:
         flags.regenerate_technical = True
+        flags.regenerate_ohlcv = True  # Need warmup data for new indicators
 
     # Sentiment config changes
     old_sentiment = old_config.get('sentiment_config', {})
@@ -1822,6 +1824,27 @@ async def duplicate_dataset(
         start_date = datetime.strptime(gen_config.get("original_start_date"), "%Y-%m-%d") if gen_config.get("original_start_date") else original.start_date
         end_date = datetime.strptime(gen_config.get("original_end_date"), "%Y-%m-%d") if gen_config.get("original_end_date") else original.end_date
 
+        # Calculate warmup period needed for indicators
+        technical_indicators = original.technical_indicators or []
+        max_period = 0
+        if technical_indicators:
+            for ind in technical_indicators:
+                period = ind.get('period', 0)
+                slow = ind.get('slow', 0)
+                max_period = max(max_period, period, slow)
+
+        bars_per_day = {
+            '1m': 390, '5m': 78, '15m': 26, '30m': 13,
+            '1h': 7, '4h': 2, '1d': 1, '1w': 0.2, '1mo': 0.05
+        }.get(original.timeframe, 1)
+
+        warmup_bars_needed = max_period + 50 if max_period > 0 else 0
+        warmup_days = int(warmup_bars_needed / max(bars_per_day, 0.1) * 1.5) if warmup_bars_needed > 0 else 0
+        fetch_start_date = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
+
+        if warmup_days > 0:
+            logger.info(f"[Duplicate] Warmup: fetching {warmup_days} extra days for {max_period}-period indicators")
+
         # Convert timeframe to interval
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
@@ -1831,7 +1854,7 @@ async def duplicate_dataset(
 
         data_points = provider.get_data(
             symbol=new_ticker,
-            start_date=start_date,
+            start_date=fetch_start_date,
             end_date=end_date,
             interval=interval
         )
@@ -1855,6 +1878,21 @@ async def duplicate_dataset(
 
         # Add time-based features (day_of_week, hour_of_day)
         df = add_time_features(df)
+
+        # Apply technical indicators if configured
+        if technical_indicators:
+            logger.info(f"[Duplicate] Applying {len(technical_indicators)} technical indicators...")
+            try:
+                indicator_service = IndicatorService()
+                df = indicator_service.calculate_indicators(df, technical_indicators)
+                logger.info(f"[Duplicate] Added technical indicators. {len(df.columns)} columns")
+            except Exception as e:
+                logger.error(f"[Duplicate] Error applying indicators: {e}")
+
+        # Trim to requested date range (remove warmup period)
+        if warmup_days > 0:
+            df = df[df['Date'] >= pd.Timestamp(start_date)].reset_index(drop=True)
+            logger.info(f"[Duplicate] Trimmed to {len(df)} rows after removing warmup period")
 
         # Save to new file
         datasets_dir = Path("datasets")
