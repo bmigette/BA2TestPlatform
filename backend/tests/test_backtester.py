@@ -34,10 +34,14 @@ def test_db():
     db = SessionLocal()
     yield db
 
-    # Cleanup
+    # Cleanup - close session and dispose engine to release file locks (Windows)
     db.close()
+    engine.dispose()
     if os.path.exists(TEST_DB_PATH):
-        os.remove(TEST_DB_PATH)
+        try:
+            os.remove(TEST_DB_PATH)
+        except PermissionError:
+            pass  # Windows may still hold lock briefly
 
 
 @pytest.fixture(scope="module")
@@ -55,6 +59,9 @@ def sample_dataset(test_db):
     """Create a sample dataset for testing."""
     from app.models import Dataset
 
+    # Use the actual test data file path
+    test_data_path = os.path.join(os.path.dirname(__file__), "data", "AAPL_1h_test.csv")
+
     dataset = Dataset(
         name="Test Dataset AAPL",
         ticker="AAPL",
@@ -63,7 +70,7 @@ def sample_dataset(test_db):
         end_date=datetime(2024, 6, 30),
         rows_count=4320,
         status="ready",
-        file_path="datasets/test_aapl.csv"
+        file_path=test_data_path
     )
     test_db.add(dataset)
     test_db.commit()
