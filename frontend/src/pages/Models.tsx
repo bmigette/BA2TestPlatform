@@ -148,7 +148,19 @@ const Models: React.FC = () => {
 
   // Get unique values for filters
   const modelTypes = ['all', ...Array.from(new Set(models.map(m => m.modelType)))];
-  const datasetIds = ['all', ...Array.from(new Set(models.map(m => String(m.datasetId))))];
+
+  // Build dataset ID to name map and get unique datasets
+  const datasetMap = new Map<string, string>();
+  models.forEach(m => {
+    const id = String(m.datasetId);
+    if (!datasetMap.has(id)) {
+      datasetMap.set(id, m.datasetName || `Dataset #${m.datasetId}`);
+    }
+  });
+  const datasetOptions = [
+    { id: 'all', name: 'All Datasets' },
+    ...Array.from(datasetMap.entries()).map(([id, name]) => ({ id, name }))
+  ];
 
   // Filter and sort models
   const filteredModels = models
@@ -271,9 +283,9 @@ const Models: React.FC = () => {
               onChange={(e) => setFilterDataset(e.target.value)}
               className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500"
             >
-              {datasetIds.map(id => (
-                <option key={id} value={id}>
-                  {id === 'all' ? 'All Datasets' : `Dataset #${id}`}
+              {datasetOptions.map(opt => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.name}
                 </option>
               ))}
             </select>

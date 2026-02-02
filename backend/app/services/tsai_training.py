@@ -602,6 +602,11 @@ class TSAITrainingService(ITrainingService):
                 metrics['false_positives'] = int(cm[0, 1]) if cm.shape[1] > 1 else 0
                 metrics['false_negatives'] = int(cm[1, 0]) if cm.shape[0] > 1 else 0
                 metrics['true_positives'] = int(cm[1, 1]) if cm.shape[0] > 1 and cm.shape[1] > 1 else 0
+                # Store confusion matrix array for UI display [[TN, FP], [FN, TP]]
+                metrics['confusion_matrix'] = [
+                    [int(cm[0, 0]), int(cm[0, 1]) if cm.shape[1] > 1 else 0],
+                    [int(cm[1, 0]) if cm.shape[0] > 1 else 0, int(cm[1, 1]) if cm.shape[0] > 1 and cm.shape[1] > 1 else 0]
+                ]
 
             logger.info(f"Assessment metrics: {metrics}")
             return metrics

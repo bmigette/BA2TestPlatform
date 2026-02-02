@@ -245,7 +245,7 @@ const Dashboard: React.FC = () => {
                     {getActivityIcon(item)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{item.title}</p>
+                    <p className="text-sm font-medium truncate text-gray-800 dark:text-gray-100">{item.title}</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
                       {formatTimestamp(item.timestamp)}
                     </p>
