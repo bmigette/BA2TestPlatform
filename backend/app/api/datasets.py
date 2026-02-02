@@ -22,7 +22,13 @@ from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
 from app.services.sentiment import SentimentService
 from app.services.indicators import IndicatorService
-from app.services.dataset_handler import add_time_features
+from app.services.dataset_handler import (
+    add_time_features,
+    apply_technical_indicators,
+    calculate_warmup_period,
+    INTERVAL_MAP,
+    BARS_PER_DAY,
+)
 from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
 from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
 
@@ -62,34 +68,6 @@ DEFAULT_INDICATORS = {
     "atr_14": {"type": "atr", "period": 14},
     "stoch": {"type": "stochastic", "k_period": 14, "d_period": 3, "smooth_k": 3}
 }
-
-
-def apply_technical_indicators(df: pd.DataFrame, indicators: list) -> pd.DataFrame:
-    """
-    Apply technical indicators to a DataFrame.
-
-    Converts indicator list format to dict format expected by TechnicalIndicators
-    and calculates all indicators.
-
-    Args:
-        df: DataFrame with OHLCV columns
-        indicators: List of indicator configs, e.g.:
-            [{"type": "sma", "name": "SMA 20", "period": 20}, ...]
-
-    Returns:
-        DataFrame with indicator columns added
-    """
-    if not indicators:
-        return df
-
-    indicators_dict = {}
-    for ind in indicators:
-        ind_type = ind.get('type', ind.get('name', 'unknown'))
-        ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
-        indicators_dict[ind_name] = ind
-
-    return TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
-
 
 router = APIRouter()
 
@@ -228,31 +206,10 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
         file_path = Path(db_dataset.file_path)
 
         # Convert timeframe to interval format
-        interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
-        }
-        interval = interval_map.get(timeframe, "1d")
+        interval = INTERVAL_MAP.get(timeframe, "1d")
 
         # Calculate warmup period needed for indicators
-        # Find max period from all indicators to determine how many extra bars we need
-        max_period = 0
-        for ind in technical_indicators:
-            period = ind.get('period', 0)
-            slow = ind.get('slow', 0)  # For MACD
-            max_period = max(max_period, period, slow)
-
-        # Calculate warmup days based on timeframe
-        # For intraday, consider market hours only (~6.5 hours/day for US stocks)
-        bars_per_day = {
-            '1m': 390, '5m': 78, '15m': 26, '30m': 13,
-            '1h': 7, '4h': 2, '1d': 1, '1w': 0.2, '1mo': 0.05
-        }.get(timeframe, 1)
-
-        # Calculate how many extra days to fetch
-        # Need max_period bars for warmup, plus buffer for weekends/holidays/gaps
-        warmup_bars_needed = max_period + 50 if max_period > 0 else 0
-        warmup_days = int(warmup_bars_needed / max(bars_per_day, 0.1) * 1.5) if warmup_bars_needed > 0 else 0
+        warmup_bars, warmup_days = calculate_warmup_period(technical_indicators, timeframe)
 
         # Store original requested start date for filtering later
         requested_start_date = start_date
@@ -260,7 +217,7 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
         # Adjust fetch start date to include warmup period
         fetch_start_date = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
         if warmup_days > 0:
-            logger.info(f"[Thread] Warmup: fetching {warmup_days} extra days for {max_period}-period indicators")
+            logger.info(f"[Thread] Warmup: fetching {warmup_days} extra days for {warmup_bars}-bar indicators")
 
         # Fetch OHLC data
         provider = get_ohlcv_provider(provider_name)
@@ -456,25 +413,12 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
         end_date = regen_config['end_date']
 
         # Calculate warmup period needed for indicators
-        max_period = 0
-        if technical_indicators:
-            for ind in technical_indicators:
-                period = ind.get('period', 0)
-                slow = ind.get('slow', 0)
-                max_period = max(max_period, period, slow)
-
-        bars_per_day = {
-            '1m': 390, '5m': 78, '15m': 26, '30m': 13,
-            '1h': 7, '4h': 2, '1d': 1, '1w': 0.2, '1mo': 0.05
-        }.get(timeframe, 1)
-
-        warmup_bars_needed = max_period + 50 if max_period > 0 else 0
-        warmup_days = int(warmup_bars_needed / max(bars_per_day, 0.1) * 1.5) if warmup_bars_needed > 0 else 0
+        warmup_bars, warmup_days = calculate_warmup_period(technical_indicators or [], timeframe)
         requested_start_date = start_date
         fetch_start_date = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
 
         if warmup_days > 0:
-            logger.info(f"[Thread] Warmup: fetching {warmup_days} extra days for {max_period}-period indicators")
+            logger.info(f"[Thread] Warmup: fetching {warmup_days} extra days for {warmup_bars}-bar indicators")
 
         # Fetch or load data based on regen_options
         if regen_options.regenerate_ohlcv:
@@ -482,11 +426,7 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
             provider = get_ohlcv_provider(provider_name)
             logger.info(f"[Thread] Fetching data from {fetch_start_date.date()} to {end_date.date()} using {provider_name}")
 
-            interval_map = {
-                "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-                "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
-            }
-            interval = interval_map.get(timeframe, "1d")
+            interval = INTERVAL_MAP.get(timeframe, "1d")
 
             data_points = provider.get_data(
                 symbol=ticker,
@@ -1841,31 +1781,14 @@ async def duplicate_dataset(
 
         # Calculate warmup period needed for indicators
         technical_indicators = original.technical_indicators or []
-        max_period = 0
-        if technical_indicators:
-            for ind in technical_indicators:
-                period = ind.get('period', 0)
-                slow = ind.get('slow', 0)
-                max_period = max(max_period, period, slow)
-
-        bars_per_day = {
-            '1m': 390, '5m': 78, '15m': 26, '30m': 13,
-            '1h': 7, '4h': 2, '1d': 1, '1w': 0.2, '1mo': 0.05
-        }.get(original.timeframe, 1)
-
-        warmup_bars_needed = max_period + 50 if max_period > 0 else 0
-        warmup_days = int(warmup_bars_needed / max(bars_per_day, 0.1) * 1.5) if warmup_bars_needed > 0 else 0
+        warmup_bars, warmup_days = calculate_warmup_period(technical_indicators, original.timeframe)
         fetch_start_date = start_date - timedelta(days=warmup_days) if warmup_days > 0 else start_date
 
         if warmup_days > 0:
-            logger.info(f"[Duplicate] Warmup: fetching {warmup_days} extra days for {max_period}-period indicators")
+            logger.info(f"[Duplicate] Warmup: fetching {warmup_days} extra days for {warmup_bars}-bar indicators")
 
         # Convert timeframe to interval
-        interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
-        }
-        interval = interval_map.get(original.timeframe, "1d")
+        interval = INTERVAL_MAP.get(original.timeframe, "1d")
 
         data_points = provider.get_data(
             symbol=new_ticker,
@@ -2088,11 +2011,7 @@ async def update_dataset(
     # Phase 2: Fetch OHLCV data (NO DB connection held)
     try:
         provider = get_ohlcv_provider(provider_name)
-        interval_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
-        }
-        interval = interval_map.get(new_timeframe, "1d")
+        interval = INTERVAL_MAP.get(new_timeframe, "1d")
 
         logger.info(f"Fetching data for {new_ticker} from {start_date.date()} to {end_date.date()} using {provider_name}")
 

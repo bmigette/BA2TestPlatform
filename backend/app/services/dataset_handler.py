@@ -23,6 +23,92 @@ from app.services.task_queue import get_task_queue
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Shared Constants
+# ============================================================================
+
+# Bars per day for each timeframe (trading hours ~6.5h/day for stocks)
+BARS_PER_DAY = {
+    '1m': 390,    # 6.5h * 60
+    '5m': 78,     # 6.5h * 12
+    '15m': 26,    # 6.5h * 4
+    '30m': 13,    # 6.5h * 2
+    '1h': 7,      # ~6.5h (rounded)
+    '2h': 3,      # ~3
+    '4h': 2,      # ~2 (might span multiple days)
+    '1d': 1,
+    'D1': 1,
+    '1w': 0.2,    # 1/5 (5 trading days per week)
+    'W1': 0.2,
+    '1mo': 0.05,  # ~1/20 trading days per month
+}
+
+# Timeframe to provider interval mapping
+INTERVAL_MAP = {
+    "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1wk", "1mo": "1mo"
+}
+
+
+# ============================================================================
+# Shared Helper Functions
+# ============================================================================
+
+def calculate_warmup_period(indicators: list, timeframe: str) -> tuple[int, int]:
+    """
+    Calculate warmup period needed for indicators.
+
+    Args:
+        indicators: List of indicator configs with 'period' and/or 'slow' fields
+        timeframe: Dataset timeframe (e.g., '1h', '15m')
+
+    Returns:
+        Tuple of (warmup_bars, warmup_days)
+    """
+    max_period = 0
+    if indicators:
+        for ind in indicators:
+            period = ind.get('period', 0)
+            slow = ind.get('slow', 0)
+            max_period = max(max_period, period, slow)
+
+    if max_period == 0:
+        return 0, 0
+
+    bars_per_day = BARS_PER_DAY.get(timeframe, 1)
+    warmup_bars = max_period + 50  # Extra buffer for data gaps
+    warmup_days = int(warmup_bars / max(bars_per_day, 0.1) * 1.5)  # 1.5x for weekends/holidays
+
+    return warmup_bars, warmup_days
+
+
+def apply_technical_indicators(df: pd.DataFrame, indicators: list) -> pd.DataFrame:
+    """
+    Apply technical indicators to a DataFrame.
+
+    Converts indicator list format to dict format expected by TechnicalIndicators
+    and calculates all indicators.
+
+    Args:
+        df: DataFrame with OHLCV columns
+        indicators: List of indicator configs, e.g.:
+            [{"type": "sma", "name": "SMA 20", "period": 20}, ...]
+
+    Returns:
+        DataFrame with indicator columns added
+    """
+    if not indicators:
+        return df
+
+    indicators_dict = {}
+    for ind in indicators:
+        ind_type = ind.get('type', ind.get('name', 'unknown'))
+        ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
+        indicators_dict[ind_name] = ind
+
+    return TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
+
+
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add time-based features to OHLCV DataFrame.
