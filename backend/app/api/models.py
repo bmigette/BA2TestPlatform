@@ -337,6 +337,34 @@ async def delete_model(model_id: str, db: Session = Depends(get_db)):
     raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
 
+@router.get("/{model_id}/prediction-fields")
+async def get_prediction_fields(
+    model_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get model's prediction target fields for condition builder."""
+    model = db.query(TrainedModel).filter(TrainedModel.model_id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+
+    fields = []
+    if model.prediction_targets:
+        for target in model.prediction_targets:
+            if isinstance(target, dict):
+                target_type = target.get("type", "")
+                if target_type:
+                    fields.append({
+                        "field": target_type,
+                        "fieldType": "model_probability",
+                        "description": f"Probability of {target_type}"
+                    })
+
+    return {
+        "modelId": model_id,
+        "fields": fields
+    }
+
+
 @router.post("/{model_id}/export")
 async def export_model(model_id: str, format: str = "pytorch", db: Session = Depends(get_db)):
     """Export a model in the specified format."""
