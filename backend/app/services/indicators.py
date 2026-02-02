@@ -3,14 +3,141 @@ Technical Indicator Service
 
 Provides calculations for technical indicators used in prediction targets
 and chart visualization.
+
+Supports multi-timeframe indicators: calculate indicators on a higher timeframe
+(e.g., 1h) and align to lower timeframe data (e.g., 15m).
 """
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Timeframe to pandas resample offset mapping
+TIMEFRAME_RESAMPLE_MAP = {
+    '1m': '1min',
+    '5m': '5min',
+    '15m': '15min',
+    '30m': '30min',
+    '1h': '1h',
+    '2h': '2h',
+    '4h': '4h',
+    '1d': '1D',
+    'D1': '1D',
+    '1w': '1W',
+    'W1': '1W',
+}
+
+# Timeframe order for comparison (lower index = higher frequency)
+TIMEFRAME_ORDER = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', 'D1', '1w', 'W1']
+
+
+def get_timeframe_order(tf: str) -> int:
+    """Get the order index of a timeframe (lower = higher frequency)."""
+    tf_normalized = tf.lower().replace(' ', '')
+    for i, t in enumerate(TIMEFRAME_ORDER):
+        if t.lower() == tf_normalized:
+            return i
+    # Default to hourly if unknown
+    return TIMEFRAME_ORDER.index('1h')
+
+
+def resample_ohlcv_to_timeframe(
+    df: pd.DataFrame,
+    target_timeframe: str,
+    source_timeframe: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Resample OHLCV data to a higher timeframe.
+
+    Args:
+        df: DataFrame with Date and OHLC columns
+        target_timeframe: Target timeframe (e.g., '1h', '4h', '1d')
+        source_timeframe: Optional source timeframe for validation
+
+    Returns:
+        Resampled DataFrame with Date, Open, High, Low, Close, Volume
+    """
+    if target_timeframe not in TIMEFRAME_RESAMPLE_MAP:
+        raise ValueError(f"Unknown target timeframe: {target_timeframe}. Supported: {list(TIMEFRAME_RESAMPLE_MAP.keys())}")
+
+    # Validate that target timeframe is higher than source
+    if source_timeframe:
+        source_order = get_timeframe_order(source_timeframe)
+        target_order = get_timeframe_order(target_timeframe)
+        if target_order < source_order:
+            raise ValueError(f"Cannot resample from {source_timeframe} to lower timeframe {target_timeframe}")
+
+    df = df.copy()
+
+    # Ensure Date is datetime and set as index
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+
+    # Get pandas offset string
+    offset = TIMEFRAME_RESAMPLE_MAP[target_timeframe]
+
+    # Resample OHLCV data
+    resampled = df.resample(offset).agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum' if 'Volume' in df.columns else 'first'
+    }).dropna()
+
+    # Reset index to get Date column back
+    resampled = resampled.reset_index()
+    resampled = resampled.rename(columns={'index': 'Date'})
+
+    logger.debug(f"Resampled {len(df)} rows to {len(resampled)} rows at {target_timeframe}")
+
+    return resampled
+
+
+def align_higher_timeframe_to_lower(
+    lower_tf_df: pd.DataFrame,
+    higher_tf_data: pd.DataFrame,
+    value_columns: list
+) -> pd.DataFrame:
+    """
+    Align higher timeframe data to lower timeframe using forward-fill merge.
+
+    Each bar in the lower timeframe gets the most recent value from the
+    higher timeframe bar that contains it.
+
+    Args:
+        lower_tf_df: Lower timeframe DataFrame with Date column
+        higher_tf_data: Higher timeframe DataFrame with Date and value columns
+        value_columns: List of column names to align
+
+    Returns:
+        Lower timeframe DataFrame with aligned higher timeframe values
+    """
+    result = lower_tf_df.copy()
+    result['Date'] = pd.to_datetime(result['Date'])
+
+    higher_tf_data = higher_tf_data.copy()
+    higher_tf_data['Date'] = pd.to_datetime(higher_tf_data['Date'])
+
+    # Sort both by date for merge_asof
+    result = result.sort_values('Date').reset_index(drop=True)
+    higher_tf_data = higher_tf_data.sort_values('Date').reset_index(drop=True)
+
+    # Use merge_asof to align higher TF data to lower TF
+    # direction='backward' means get the most recent higher TF value at or before each lower TF bar
+    cols_to_merge = ['Date'] + value_columns
+    result = pd.merge_asof(
+        result,
+        higher_tf_data[cols_to_merge],
+        on='Date',
+        direction='backward'
+    )
+
+    return result
 
 
 class IndicatorService:
@@ -711,4 +838,62 @@ class IndicatorService:
                 logger.error(f"Error calculating {ind_type}: {e}")
                 raise
 
+        return results
+
+    def calculate_indicators_multi_timeframe(
+        self,
+        df: pd.DataFrame,
+        indicators: list,
+        target_timeframe: str,
+        source_timeframe: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Calculate indicators on a higher timeframe and align to base timeframe.
+
+        This is used for multi-timeframe targets where you want, e.g., a 1h ZigZag
+        indicator calculated and then aligned to 15m data.
+
+        Args:
+            df: Base DataFrame with Date and OHLC columns
+            indicators: List of indicator configs
+            target_timeframe: Timeframe to calculate indicators on (e.g., '1h')
+            source_timeframe: Optional source timeframe of the data
+
+        Returns:
+            Dict with indicator names as keys and Series (aligned to df) as values
+        """
+        # Resample to target timeframe
+        resampled_df = resample_ohlcv_to_timeframe(df, target_timeframe, source_timeframe)
+
+        if len(resampled_df) < 5:
+            logger.warning(f"Not enough data after resampling to {target_timeframe}: {len(resampled_df)} bars")
+            return {}
+
+        # Calculate indicators on resampled data
+        indicator_results = self.calculate_indicators(resampled_df, indicators)
+
+        # Build a DataFrame with the indicator results for alignment
+        indicator_df = resampled_df[['Date']].copy()
+        for name, series in indicator_results.items():
+            indicator_df[name] = series.values
+
+        # Align back to original timeframe
+        aligned_df = align_higher_timeframe_to_lower(
+            df,
+            indicator_df,
+            list(indicator_results.keys())
+        )
+
+        # Extract aligned results as series
+        results = {}
+        for name in indicator_results.keys():
+            # Prefix with timeframe for clarity
+            tf_name = f"{name}_{target_timeframe}"
+            results[tf_name] = pd.Series(
+                aligned_df[name].values,
+                index=df.index,
+                name=tf_name
+            )
+
+        logger.info(f"Calculated {len(results)} indicators on {target_timeframe} timeframe")
         return results

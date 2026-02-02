@@ -39,6 +39,13 @@ interface IndicatorConfig {
   k_period?: number;
   d_period?: number;
   smooth_k?: number;
+  // SAR parameters
+  af_start?: number;
+  af_max?: number;
+  // ZigZag parameters
+  deviation_pct?: number;
+  // Pivot Points parameters
+  method?: string;
 }
 
 interface IndicatorCollection {
@@ -203,6 +210,13 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
   const [newIndicatorType, setNewIndicatorType] = useState('sma');
   const [newIndicatorTimeframe, setNewIndicatorTimeframe] = useState('1d');
   const [newIndicatorPeriod, setNewIndicatorPeriod] = useState(20);
+  // SAR parameters
+  const [sarAfStart, setSarAfStart] = useState(0.02);
+  const [sarAfMax, setSarAfMax] = useState(0.2);
+  // ZigZag parameters
+  const [zigzagDeviation, setZigzagDeviation] = useState(5.0);
+  // Pivot Points parameters
+  const [pivotMethod, setPivotMethod] = useState('standard');
 
   // Collections state
   const [collections, setCollections] = useState<IndicatorCollection[]>([]);
@@ -284,6 +298,13 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       newIndicator.k_period = 14;
       newIndicator.d_period = 3;
       newIndicator.smooth_k = 3;
+    } else if (newIndicatorType === 'sar') {
+      newIndicator.af_start = sarAfStart;
+      newIndicator.af_max = sarAfMax;
+    } else if (newIndicatorType === 'zigzag') {
+      newIndicator.deviation_pct = zigzagDeviation;
+    } else if (newIndicatorType === 'pivot_points') {
+      newIndicator.method = pivotMethod;
     }
 
     setWizardData({
@@ -817,6 +838,70 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               )}
             </div>
           </div>
+
+          {/* SAR parameters */}
+          {newIndicatorType === 'sar' && (
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">AF Start</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max="0.5"
+                  value={sarAfStart}
+                  onChange={(e) => setSarAfStart(parseFloat(e.target.value) || 0.02)}
+                  className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">AF Max</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.1"
+                  max="1.0"
+                  value={sarAfMax}
+                  onChange={(e) => setSarAfMax(parseFloat(e.target.value) || 0.2)}
+                  className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ZigZag parameters */}
+          {newIndicatorType === 'zigzag' && (
+            <div className="mt-2">
+              <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Deviation %</label>
+              <input
+                type="number"
+                step="0.5"
+                min="0.5"
+                max="20"
+                value={zigzagDeviation}
+                onChange={(e) => setZigzagDeviation(parseFloat(e.target.value) || 5.0)}
+                className="w-32 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
+              />
+            </div>
+          )}
+
+          {/* Pivot Points parameters */}
+          {newIndicatorType === 'pivot_points' && (
+            <div className="mt-2">
+              <label className="block text-xs text-gray-500 dark:text-gray-300 mb-1">Method</label>
+              <select
+                value={pivotMethod}
+                onChange={(e) => setPivotMethod(e.target.value)}
+                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm dark:bg-gray-700 dark:text-gray-100"
+              >
+                <option value="standard">Standard</option>
+                <option value="fibonacci">Fibonacci</option>
+                <option value="woodie">Woodie</option>
+                <option value="camarilla">Camarilla</option>
+              </select>
+            </div>
+          )}
+
           <button
             onClick={addIndicator}
             className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600"

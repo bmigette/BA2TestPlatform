@@ -1211,6 +1211,7 @@ const DatasetDetails: React.FC = () => {
         <div className="mt-6 mb-6">
           <PredictionTargetsPanel
             datasetId={dataset.id}
+            datasetTimeframe={dataset.timeframe}
             onTargetsCalculated={handleTargetsCalculated}
             onSaveSet={handleSaveTargetSet}
             onLoadSet={handleLoadTargetSet}
