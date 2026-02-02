@@ -468,6 +468,50 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
             original_cols = set(df.columns)
             logger.info(f"[Thread] Loaded {len(df)} rows with {len(original_cols)} columns from existing dataset")
 
+            # If regenerating technical indicators, we need warmup data
+            # Fetch OHLCV for warmup period if not already present
+            if regen_options.regenerate_technical and warmup_days > 0:
+                data_start = df['Date'].min()
+                # Check if we need to fetch warmup data
+                if data_start >= pd.Timestamp(fetch_start_date):
+                    logger.info(f"[Thread] Fetching warmup OHLCV from {fetch_start_date.date()} to {data_start.date()}")
+                    provider_name = gen_config.get("data_provider", "yfinance")
+                    provider = get_ohlcv_provider(provider_name)
+                    interval = INTERVAL_MAP.get(timeframe, "1d")
+
+                    warmup_data = provider.get_data(
+                        symbol=ticker,
+                        start_date=fetch_start_date,
+                        end_date=data_start,
+                        interval=interval
+                    )
+
+                    if warmup_data:
+                        warmup_df = pd.DataFrame([{
+                            'Date': dp.timestamp,
+                            'Open': dp.open,
+                            'High': dp.high,
+                            'Low': dp.low,
+                            'Close': dp.close,
+                            'Volume': dp.volume
+                        } for dp in warmup_data])
+                        warmup_df['Date'] = pd.to_datetime(warmup_df['Date'])
+                        warmup_df = warmup_df.sort_values('Date').reset_index(drop=True)
+                        warmup_df = add_time_features(warmup_df)
+
+                        # Remove any overlap with existing data
+                        warmup_df = warmup_df[warmup_df['Date'] < data_start]
+
+                        if len(warmup_df) > 0:
+                            # Prepend warmup data (only OHLCV columns)
+                            ohlcv_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'day_of_week', 'hour_of_day']
+                            existing_ohlcv_cols = [c for c in ohlcv_cols if c in df.columns]
+                            warmup_df = warmup_df[[c for c in existing_ohlcv_cols if c in warmup_df.columns]]
+
+                            # Prepend warmup rows
+                            df = pd.concat([warmup_df, df], ignore_index=True)
+                            logger.info(f"[Thread] Added {len(warmup_df)} warmup rows, total {len(df)} rows")
+
             # Define column patterns for each regeneration type
             ohlcv_time_cols = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'day_of_week', 'hour_of_day'}
             sentiment_prefixes = ('news_',)
@@ -587,8 +631,8 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
             except Exception as e:
                 logger.error(f"[Thread] Error fetching fundamentals: {e}")
 
-        # Filter out warmup rows
-        if warmup_days > 0 and regen_options.regenerate_ohlcv:
+        # Filter out warmup rows (applies when OHLCV regenerated OR when warmup fetched for TA)
+        if warmup_days > 0 and (regen_options.regenerate_ohlcv or regen_options.regenerate_technical):
             original_len = len(df)
             df['Date'] = pd.to_datetime(df['Date'])
             requested_start_ts = pd.to_datetime(requested_start_date)
