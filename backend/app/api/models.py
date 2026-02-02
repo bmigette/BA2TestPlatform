@@ -580,21 +580,21 @@ async def run_model_predictions(
                        if col not in ['Date', target_column]
                        and not col.startswith('target_')]
 
-    # Determine model type and load accordingly
+    # Determine model type from database (not file extension)
+    # tsai models: lstm, gru, tcn, inception, resnet, xception, omniscale, minirocket, patchtst, lstm_fcn, tst
+    # darts models: nbeats, tft, tcn_darts, nhits, tide, lstm_darts, gru_darts
     file_path_obj = Path(file_path)
-    is_tsai_model = file_path_obj.suffix == '.pkl'
+    model_type = model.get('modelType', '').lower()
+    tsai_models = {'lstm', 'gru', 'tcn', 'inception', 'resnet', 'xception',
+                   'omniscale', 'minirocket', 'patchtst', 'lstm_fcn', 'tst'}
+    is_tsai_model = model_type in tsai_models or file_path_obj.suffix == '.pkl'
 
     try:
         if is_tsai_model:
             # Load tsai model
-            from tsai.all import load_learner
             import torch
-
-            learner = load_learner(file_path)
-            model_obj = learner.model
-
-            # Prepare data using tsai training service pattern
             from app.services.tsai_training import TSAITrainingService
+            from app.services.tsai_models import TSAIModelService
             from app.services.data_preparation import DataPreparationService
 
             training_service = TSAITrainingService(normalize=True)
@@ -610,7 +610,7 @@ async def run_model_predictions(
                     training_service.data_prep = DataPreparationService()
                     training_service.data_prep.load_params_from_file(str(norm_file))
 
-            # Prepare data (fit_scaler=False to use loaded params)
+            # Prepare data first to get dimensions
             X, y = training_service.prepare_data(
                 df=df,
                 target_column=target_column,
@@ -620,6 +620,31 @@ async def run_model_predictions(
                 prediction_mode=prediction_mode,
                 fit_scaler=False if training_service.data_prep else True
             )
+
+            # Load model based on file type
+            if file_path_obj.suffix == '.pkl':
+                # Full learner export
+                from tsai.all import load_learner
+                learner = load_learner(file_path)
+                model_obj = learner.model
+            else:
+                # State dict (.pt file) - need to recreate model architecture
+                c_in = X.shape[1]  # number of features
+                c_out = hyperparameters.get('c_out', 2)  # number of classes
+                model_params = hyperparameters.get('modelParams', {})
+
+                model_service = TSAIModelService()
+                model_obj = model_service.create_model(
+                    model_type=model_type,
+                    params=model_params,
+                    c_in=c_in,
+                    c_out=c_out,
+                    seq_len=seq_len
+                )
+
+                # Load state dict
+                state_dict = torch.load(file_path, map_location='cpu', weights_only=True)
+                model_obj.load_state_dict(state_dict)
 
             # Run inference
             probs = training_service.predict(

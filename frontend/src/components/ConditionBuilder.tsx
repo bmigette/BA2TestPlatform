@@ -71,6 +71,8 @@ export function createEmptyGroup(operator: 'AND' | 'OR' = 'AND'): ConditionGroup
 // Default available fields (when model not selected)
 const defaultFields: AvailableField[] = [
   { field: 'position:in_position', fieldType: 'position', description: 'Currently in a position', category: 'Position', label: 'In Position', isBoolean: true },
+  { field: 'position:is_buy', fieldType: 'position', description: 'Position is a long/buy trade', category: 'Position', label: 'Is Buy Position', isBoolean: true },
+  { field: 'position:is_sell', fieldType: 'position', description: 'Position is a short/sell trade', category: 'Position', label: 'Is Sell Position', isBoolean: true },
   { field: 'position:position_pnl', fieldType: 'position', description: 'Current position P&L %', category: 'Position', label: 'Position P&L %' },
   { field: 'position:bars_in_position', fieldType: 'position', description: 'Bars since entry', category: 'Position', label: 'Bars in Position' },
   { field: 'time:hour', fieldType: 'time', description: 'Hour of day (0-23)', category: 'Time', label: 'Hour of Day' },

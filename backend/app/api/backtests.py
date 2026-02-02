@@ -114,8 +114,17 @@ async def create_backtest(
 
     logger.info(f"Created backtest: {db_backtest.name} (id={db_backtest.id})")
 
-    # TODO: Queue backtest execution in background
-    # For now, return pending status
+    # Queue backtest execution in background
+    from app.services.task_queue import get_task_queue
+    task_queue = get_task_queue()
+    task_id = task_queue.queue_task(
+        task_type='backtest',
+        name=f'Backtest: {db_backtest.name}',
+        payload={'backtest_id': db_backtest.id},
+        description=f'Running backtest on model {backtest.model_id}'
+    )
+
+    logger.info(f"Queued backtest task: {task_id}")
 
     return db_backtest.to_dict()
 
@@ -157,6 +166,11 @@ async def export_backtest(
     db: Session = Depends(get_db)
 ):
     """Export backtest results."""
+    import json
+    import csv
+    from pathlib import Path
+    import io
+
     backtest = db.query(Backtest).filter(Backtest.id == backtest_id).first()
     if not backtest:
         raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
@@ -164,15 +178,68 @@ async def export_backtest(
     if backtest.status != "completed":
         raise HTTPException(status_code=400, detail="Cannot export incomplete backtest")
 
-    # TODO: Implement actual export
-    export_path = f"exports/backtest_{backtest_id}.{format}"
+    # Ensure exports directory exists
+    exports_dir = Path("exports")
+    exports_dir.mkdir(exist_ok=True)
+
+    # Build export data
+    export_data = {
+        "backtest": {
+            "id": backtest.id,
+            "name": backtest.name,
+            "model_id": backtest.model_id,
+            "start_date": backtest.start_date.isoformat() if backtest.start_date else None,
+            "end_date": backtest.end_date.isoformat() if backtest.end_date else None,
+            "initial_capital": backtest.initial_capital,
+            "final_equity": backtest.final_equity,
+            "total_return": backtest.total_return,
+            "sharpe_ratio": backtest.sharpe_ratio,
+            "max_drawdown": backtest.max_drawdown,
+            "win_rate": backtest.win_rate,
+            "profit_factor": backtest.profit_factor,
+            "total_trades": backtest.total_trades,
+            "winning_trades": backtest.winning_trades,
+            "losing_trades": backtest.losing_trades,
+        },
+        "trades": backtest.trades or [],
+        "equity_curve": backtest.equity_curve or [],
+    }
+
+    if format == "json":
+        export_path = exports_dir / f"backtest_{backtest_id}.json"
+        with open(export_path, 'w') as f:
+            json.dump(export_data, f, indent=2)
+    elif format == "csv":
+        # Export trades as CSV
+        trades_path = exports_dir / f"backtest_{backtest_id}_trades.csv"
+        equity_path = exports_dir / f"backtest_{backtest_id}_equity.csv"
+
+        # Write trades
+        trades = backtest.trades or []
+        if trades:
+            with open(trades_path, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=trades[0].keys())
+                writer.writeheader()
+                writer.writerows(trades)
+
+        # Write equity curve
+        equity_curve = backtest.equity_curve or []
+        if equity_curve:
+            with open(equity_path, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=equity_curve[0].keys())
+                writer.writeheader()
+                writer.writerows(equity_curve)
+
+        export_path = trades_path  # Return trades path as main export
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Use 'csv' or 'json'")
 
     logger.info(f"Exported backtest {backtest_id} to {export_path}")
 
     return {
         "message": "Backtest exported successfully",
         "format": format,
-        "path": export_path,
+        "path": str(export_path),
         "trades": backtest.total_trades or 0
     }
 

@@ -51,6 +51,32 @@ except ImportError as e:
 from app.services.model_interface import IModelService
 
 
+# PatchTST is designed for forecasting - wrap it for classification
+class PatchTSTClassifier:
+    """Wrapper to use PatchTST for classification tasks."""
+
+    def __new__(cls, c_in, c_out, seq_len, **kwargs):
+        """Create a PatchTST model with classification head."""
+        import torch.nn as nn
+
+        class _PatchTSTClassifier(nn.Module):
+            def __init__(self, c_in, c_out, seq_len, **kwargs):
+                super().__init__()
+                # PatchTST outputs (batch, c_in, seq_len) for forecasting
+                # We need (batch, c_out) for classification
+                self.backbone = PatchTST(c_in=c_in, c_out=c_in, seq_len=seq_len, **kwargs)
+                self.pool = nn.AdaptiveAvgPool1d(1)
+                self.head = nn.Linear(c_in, c_out)
+
+            def forward(self, x):
+                out = self.backbone(x)  # (batch, c_in, seq_len)
+                out = self.pool(out).squeeze(-1)  # (batch, c_in)
+                out = self.head(out)  # (batch, c_out)
+                return out
+
+        return _PatchTSTClassifier(c_in, c_out, seq_len, **kwargs)
+
+
 # Model class registry - maps model type to class (no eval)
 MODEL_CLASSES = {}
 if TSAI_AVAILABLE:
@@ -63,7 +89,7 @@ if TSAI_AVAILABLE:
         'xception': XceptionTime,
         'omniscale': OmniScaleCNN,
         'minirocket': MiniRocket,
-        'patchtst': PatchTST,
+        'patchtst': PatchTSTClassifier,  # Use classifier wrapper
         'lstm_fcn': LSTM_FCN,
         'tst': TST,
     }
