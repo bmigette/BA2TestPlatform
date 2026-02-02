@@ -17,6 +17,43 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from pathlib import Path
 import time
+import json
+import math
+
+
+class NaNSafeJSONEncoder(json.JSONEncoder):
+    """JSON encoder that handles NaN and Inf values by converting them to None."""
+
+    def default(self, obj):
+        return super().default(obj)
+
+    def encode(self, obj):
+        return super().encode(self._sanitize(obj))
+
+    def _sanitize(self, obj):
+        """Recursively sanitize NaN/Inf values in nested structures."""
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        elif isinstance(obj, dict):
+            return {k: self._sanitize(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._sanitize(item) for item in obj]
+        return obj
+
+
+class NaNSafeJSONResponse(JSONResponse):
+    """JSON response that handles NaN and Inf values."""
+
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            cls=NaNSafeJSONEncoder,
+            separators=(",", ":"),
+        ).encode("utf-8")
 
 # Import and initialize logging configuration
 from app.logging_config import setup_logging, get_logger
@@ -68,13 +105,14 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
-# Create FastAPI app
+# Create FastAPI app with NaN-safe JSON response
 app = FastAPI(
     title="Deep Learning Financial Forecasting Platform",
     description="Train and evaluate deep learning models for financial forecasting",
     version="0.1.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    default_response_class=NaNSafeJSONResponse
 )
 
 # Configure CORS

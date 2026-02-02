@@ -2366,6 +2366,12 @@ def train_classification_optimization(
                 threshold=current_threshold
             )
 
+            # Check if assessment failed (e.g., NaN predictions)
+            if metrics.get('error'):
+                logger.warning(f"Assessment failed: {metrics.get('error')}")
+                progress_state['error_count'] += 1
+                return 0.0
+
             fitness = metrics.get(optimize_metric, 0.0)
 
             # Track best
