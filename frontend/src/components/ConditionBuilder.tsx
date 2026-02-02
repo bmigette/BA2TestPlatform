@@ -12,7 +12,9 @@ export interface ConditionNode {
   valueMin?: number;
   valueMax?: number;
   valueStep?: number;
-  confirmationBars?: number;
+  // Confirmation: condition must be true X times in Y bars
+  confirmationRequired?: number;  // X times
+  confirmationBars?: number;      // in last Y bars
   confirmationBarsMin?: number;
   confirmationBarsMax?: number;
   confirmationBarsStep?: number;
@@ -73,6 +75,9 @@ const defaultFields: AvailableField[] = [
   { field: 'position:in_position', fieldType: 'position', description: 'Currently in a position', category: 'Position', label: 'In Position', isBoolean: true },
   { field: 'position:is_buy', fieldType: 'position', description: 'Position is a long/buy trade', category: 'Position', label: 'Is Buy Position', isBoolean: true },
   { field: 'position:is_sell', fieldType: 'position', description: 'Position is a short/sell trade', category: 'Position', label: 'Is Sell Position', isBoolean: true },
+  { field: 'position:buy_count', fieldType: 'position', description: 'Number of open buy positions', category: 'Position', label: 'Buy Position Count' },
+  { field: 'position:sell_count', fieldType: 'position', description: 'Number of open sell positions', category: 'Position', label: 'Sell Position Count' },
+  { field: 'position:total_count', fieldType: 'position', description: 'Total number of open positions', category: 'Position', label: 'Total Position Count' },
   { field: 'position:position_pnl', fieldType: 'position', description: 'Current position P&L %', category: 'Position', label: 'Position P&L %' },
   { field: 'position:bars_in_position', fieldType: 'position', description: 'Bars since entry', category: 'Position', label: 'Bars in Position' },
   { field: 'time:hour', fieldType: 'time', description: 'Hour of day (0-23)', category: 'Time', label: 'Hour of Day' },
@@ -458,6 +463,32 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
           </div>
         </div>
       )}
+
+      {/* Confirmation Section */}
+      <div className="w-full flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+        <span className="text-xs text-gray-500 dark:text-gray-400">Confirm:</span>
+        <div className="flex items-center gap-1">
+          <label className="text-xs text-gray-500">True</label>
+          <input
+            type="number"
+            min="1"
+            value={condition.confirmationRequired ?? 1}
+            onChange={(e) => onChange({...condition, confirmationRequired: parseInt(e.target.value) || 1})}
+            className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+          />
+        </div>
+        <span className="text-xs text-gray-500">times in last</span>
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            min="1"
+            value={condition.confirmationBars ?? 1}
+            onChange={(e) => onChange({...condition, confirmationBars: parseInt(e.target.value) || 1})}
+            className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+          />
+          <label className="text-xs text-gray-500">bars</label>
+        </div>
+      </div>
 
       {/* Field Description */}
       {selectedField && (

@@ -5,6 +5,7 @@ from app.services.strategy_executor import (
     StrategyExecutor,
     evaluate_condition,
     evaluate_comparison,
+    ConfirmationTracker,
     ExitActionType
 )
 
@@ -118,3 +119,146 @@ class TestStrategyExecutor:
         assert action is not None
         assert action.action == ExitActionType.ADJUST_SL
         assert action.value == 0
+
+
+class TestConfirmationTracker:
+    """Tests for ConfirmationTracker confirmation logic."""
+
+    def test_basic_confirmation_pass(self):
+        """Test that confirmation passes when condition met required times."""
+        tracker = ConfirmationTracker()
+
+        # Need 2 times in 3 bars
+        # Bar 1: True -> count=1 (not enough)
+        assert tracker.update_and_check("cond1", True, 2, 3) is False
+        # Bar 2: True -> count=2 (passed)
+        assert tracker.update_and_check("cond1", True, 2, 3) is True
+        # Bar 3: False -> count=2 (still passed, 2 Trues in last 3)
+        assert tracker.update_and_check("cond1", False, 2, 3) is True
+
+    def test_confirmation_fail(self):
+        """Test that confirmation fails when not enough true values."""
+        tracker = ConfirmationTracker()
+
+        # Need 3 times in 3 bars (must all be true)
+        assert tracker.update_and_check("cond1", True, 3, 3) is False
+        assert tracker.update_and_check("cond1", False, 3, 3) is False
+        assert tracker.update_and_check("cond1", True, 3, 3) is False
+
+    def test_sliding_window(self):
+        """Test that old values slide out of the window."""
+        tracker = ConfirmationTracker()
+
+        # Need 2 times in 3 bars
+        tracker.update_and_check("cond1", True, 2, 3)   # [T]
+        tracker.update_and_check("cond1", True, 2, 3)   # [T, T] -> passes
+        tracker.update_and_check("cond1", False, 2, 3)  # [T, T, F] -> still passes
+
+        # Now the first True slides out
+        result = tracker.update_and_check("cond1", False, 2, 3)  # [T, F, F] -> count=1
+        assert result is False
+
+        result = tracker.update_and_check("cond1", False, 2, 3)  # [F, F, F] -> count=0
+        assert result is False
+
+    def test_multiple_conditions(self):
+        """Test that different conditions are tracked independently."""
+        tracker = ConfirmationTracker()
+
+        tracker.update_and_check("cond1", True, 2, 2)
+        tracker.update_and_check("cond2", False, 1, 2)
+
+        # cond1 should pass (1 True, need 2 in 2)
+        assert tracker.update_and_check("cond1", True, 2, 2) is True
+        # cond2 should fail (0 True, need 1 in 2)
+        assert tracker.update_and_check("cond2", False, 1, 2) is False
+
+    def test_reset_clears_all_history(self):
+        """Test that reset clears all condition history."""
+        tracker = ConfirmationTracker()
+
+        tracker.update_and_check("cond1", True, 2, 2)
+        tracker.update_and_check("cond1", True, 2, 2)  # Now passes
+
+        tracker.reset()
+
+        # After reset, history is gone, so need to build up again
+        assert tracker.update_and_check("cond1", True, 2, 2) is False
+
+    def test_exact_threshold(self):
+        """Test exact boundary conditions."""
+        tracker = ConfirmationTracker()
+
+        # Need exactly 1 time in 1 bar
+        assert tracker.update_and_check("cond1", True, 1, 1) is True
+        assert tracker.update_and_check("cond1", False, 1, 1) is False
+
+    def test_lookback_change(self):
+        """Test that changing lookback_bars adjusts the window."""
+        tracker = ConfirmationTracker()
+
+        # Start with lookback of 2
+        tracker.update_and_check("cond1", True, 1, 2)
+        tracker.update_and_check("cond1", True, 1, 2)
+
+        # Now use lookback of 4 - should expand the window
+        result = tracker.update_and_check("cond1", False, 1, 4)
+        assert result is True  # Still have True values in expanded window
+
+
+class TestEvaluateConditionWithConfirmation:
+    """Tests for evaluate_condition with confirmation logic."""
+
+    def test_condition_with_confirmation(self):
+        """Test condition evaluation with confirmation tracker."""
+        tracker = ConfirmationTracker()
+
+        condition = {
+            "id": "test_cond",
+            "field": "price",
+            "comparison": ">",
+            "value": 100,
+            "confirmationRequired": 2,
+            "confirmationBars": 3
+        }
+
+        context = {"price": 150}  # Condition is true
+
+        # First time - not enough history
+        assert evaluate_condition(condition, context, tracker) is False
+        # Second time - now have 2 trues
+        assert evaluate_condition(condition, context, tracker) is True
+
+    def test_condition_without_confirmation(self):
+        """Test that conditions without confirmation work normally."""
+        tracker = ConfirmationTracker()
+
+        condition = {
+            "field": "price",
+            "comparison": ">",
+            "value": 100
+        }
+
+        context = {"price": 150}
+        # Should pass immediately without confirmation
+        assert evaluate_condition(condition, context, tracker) is True
+
+    def test_condition_with_snake_case_confirmation(self):
+        """Test condition with snake_case confirmation fields."""
+        tracker = ConfirmationTracker()
+
+        condition = {
+            "id": "test_cond",
+            "field": "price",
+            "comparison": ">",
+            "value": 100,
+            "confirmation_required": 2,
+            "confirmation_bars": 3
+        }
+
+        context = {"price": 150}
+
+        # First time - not enough history
+        assert evaluate_condition(condition, context, tracker) is False
+        # Second time - now have 2 trues
+        assert evaluate_condition(condition, context, tracker) is True
