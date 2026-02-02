@@ -1505,7 +1505,15 @@ async def save_elite_to_inventory(
             "learningRate": params.get('learning_rate', 0.001),
             "dropout": params.get('dropout', 0.1),
             "batchSize": params.get('batch_size', 32),
-            "epochs": job.get('geneticConfig', {}).get('trainingEpochs', 10)
+            "epochs": job.get('geneticConfig', {}).get('trainingEpochs', 10),
+            # Critical for model loading - get from _meta.json via elite_model
+            "c_in": elite_model.get('c_in'),
+            "c_out": elite_model.get('c_out'),
+            "seqLen": elite_model.get('seq_len') or job.get('parameterRanges', {}).get('seqLen'),
+            # Model-specific params for recreation
+            "modelParams": params,
+            # Feature columns used during training - critical for prediction
+            "featureColumns": elite_model.get('feature_columns')
         },
         "trainingHistory": elite_model.get('training_history', []),
         "performanceMetrics": {
