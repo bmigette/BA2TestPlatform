@@ -63,11 +63,12 @@ def ffill_sparse_indicators(df: pd.DataFrame) -> pd.DataFrame:
         if any(pattern in col_lower for pattern in SPARSE_INDICATOR_PATTERNS):
             nan_count_before = df[col].isna().sum()
             if nan_count_before > 0:
-                df[col] = df[col].ffill()
+                # Forward-fill first, then backward-fill for leading NaNs
+                df[col] = df[col].ffill().bfill()
                 nan_count_after = df[col].isna().sum()
                 if nan_count_before != nan_count_after:
                     ffilled_cols.append(col)
-                    logger.debug(f"Forward-filled {col}: {nan_count_before} -> {nan_count_after} NaNs")
+                    logger.debug(f"Filled {col}: {nan_count_before} -> {nan_count_after} NaNs")
 
     if ffilled_cols:
         logger.info(f"Forward-filled {len(ffilled_cols)} sparse indicator(s): {ffilled_cols}")
