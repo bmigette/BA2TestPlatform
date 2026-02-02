@@ -669,20 +669,8 @@ class DartsModelService(IModelService):
         return scaled
 
 
-# Bars per day for each timeframe (trading hours ~6.5h/day for stocks)
-BARS_PER_DAY = {
-    '1m': 390,    # 6.5h * 60
-    '5m': 78,     # 6.5h * 12
-    '15m': 26,    # 6.5h * 4
-    '30m': 13,    # 6.5h * 2
-    '1h': 7,      # ~6.5h (rounded)
-    '2h': 3,      # ~3
-    '4h': 2,      # ~2 (might span multiple days)
-    '1d': 1,
-    'D1': 1,
-    '1w': 0.2,    # 1/5 (5 trading days per week)
-    'W1': 0.2,
-}
+# Import BARS_PER_DAY from central location to avoid duplication
+from app.services.dataset_handler import BARS_PER_DAY
 
 
 def days_to_bars(days: int, timeframe: str) -> int:
