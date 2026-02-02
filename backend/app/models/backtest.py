@@ -48,7 +48,10 @@ class Backtest(Base):
     win_rate = Column(Float, nullable=True)
     profit_factor = Column(Float, nullable=True)
     total_trades = Column(Integer, nullable=True)
+    winning_trades = Column(Integer, nullable=True)
+    losing_trades = Column(Integer, nullable=True)
     avg_trade_duration = Column(Float, nullable=True)
+    final_equity = Column(Float, nullable=True)
     best_trade = Column(Float, nullable=True)
     worst_trade = Column(Float, nullable=True)
 
@@ -91,7 +94,10 @@ class Backtest(Base):
             "winRate": self.win_rate,
             "profitFactor": self.profit_factor,
             "totalTrades": self.total_trades,
+            "winningTrades": self.winning_trades,
+            "losingTrades": self.losing_trades,
             "avgTradeDuration": self.avg_trade_duration,
+            "finalEquity": self.final_equity,
             "bestTrade": self.best_trade,
             "worstTrade": self.worst_trade,
             "errorMessage": self.error_message,
