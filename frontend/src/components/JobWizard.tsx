@@ -324,16 +324,24 @@ const JobWizard: React.FC<JobWizardProps> = ({
       return 'Unknown target';
     }
     switch (config.type) {
-      case 'price_based':
-        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} bars)`;
-      case 'directional':
-        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} bars)`;
-      case 'triple_barrier':
-        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} bars)`;
+      case 'price_based': {
+        const unit = config.timeBarsUnit === 'days' ? 'days' : 'bars';
+        return `Price ${config.direction === 'up' ? '▲' : '▼'} ${config.profitPct || 0}% (${config.timeBars || 0} ${unit})`;
+      }
+      case 'directional': {
+        const unit = config.horizonUnit === 'days' ? 'days' : 'bars';
+        return `Direction ${config.direction === 'up' ? '▲' : '▼'} (${config.horizon || 0} ${unit})`;
+      }
+      case 'triple_barrier': {
+        const unit = config.maxBarsUnit === 'days' ? 'days' : 'bars';
+        return `Triple Barrier TP:${config.profitPct || 0}% SL:${config.stopPct || 0}% (${config.maxBars || 0} ${unit})`;
+      }
       case 'trend_reversal':
         return `${String(config.indicator || 'Unknown').toUpperCase()} ${config.direction || ''} reversal`;
-      case 'volatility':
-        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} bars)`;
+      case 'volatility': {
+        const unit = config.horizonUnit === 'days' ? 'days' : 'bars';
+        return `Volatility (${config.method || 'unknown'}, ${config.horizon || 0} ${unit})`;
+      }
       default:
         return `Target: ${String(config.type)}`;
     }

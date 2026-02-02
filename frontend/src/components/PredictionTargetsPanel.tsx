@@ -384,15 +384,18 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
     switch (config.type) {
       case 'price_based': {
         const c = config as PriceBasedTarget;
-        return `Price ${c.direction} ${c.profitPct}%/${c.maxDrawdownPct}%DD/${c.timeBars}b`;
+        const unit = c.timeBarsUnit === 'days' ? 'd' : 'b';
+        return `Price ${c.direction} ${c.profitPct}%/${c.maxDrawdownPct}%DD/${c.timeBars}${unit}`;
       }
       case 'directional': {
         const c = config as DirectionalTarget;
-        return `Directional ${c.direction} ${c.horizon}b`;
+        const unit = c.horizonUnit === 'days' ? 'd' : 'b';
+        return `Directional ${c.direction} ${c.horizon}${unit}`;
       }
       case 'triple_barrier': {
         const c = config as TripleBarrierTarget;
-        return `Barrier ${c.profitPct}%P/${c.stopPct}%S/${c.maxBars}b`;
+        const unit = c.maxBarsUnit === 'days' ? 'd' : 'b';
+        return `Barrier ${c.profitPct}%P/${c.stopPct}%S/${c.maxBars}${unit}`;
       }
       case 'trend_reversal': {
         const c = config as TrendReversalTarget;
@@ -401,7 +404,8 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
       }
       case 'volatility': {
         const c = config as VolatilityTarget;
-        return `Volatility ${c.method} ${c.horizon}b`;
+        const unit = c.horizonUnit === 'days' ? 'd' : 'b';
+        return `Volatility ${c.method} ${c.horizon}${unit}`;
       }
       default:
         return 'Unknown';
