@@ -155,10 +155,11 @@ def evaluate_condition(
     # Get field value from context
     field_value = context.get(field)
     if field_value is None:
-        logger.debug(f"Field {field} not found in context")
+        logger.debug(f"Field {field} not found in context. Available: {list(context.keys())}")
         return False
 
     raw_result = evaluate_comparison(field_value, comparison, value)
+    logger.debug(f"Condition: {field}={field_value} {comparison} {value} -> {raw_result}")
 
     # Check if confirmation is required
     confirmation_required = condition.get('confirmationRequired') or condition.get('confirmation_required')
@@ -179,12 +180,16 @@ def evaluate_condition(
 def evaluate_condition_tree(
     conditions: dict,
     context: Dict[str, Any],
-    confirmation_tracker: Optional['ConfirmationTracker'] = None
+    confirmation_tracker: Optional['ConfirmationTracker'] = None,
+    label: str = ""
 ) -> bool:
     """Evaluate the full condition tree."""
     if not conditions:
+        logger.debug(f"[{label}] No conditions defined, returning False")
         return False
-    return evaluate_condition(conditions, context, confirmation_tracker)
+    result = evaluate_condition(conditions, context, confirmation_tracker)
+    logger.debug(f"[{label}] Condition tree result: {result}")
+    return result
 
 
 class StrategyExecutor:

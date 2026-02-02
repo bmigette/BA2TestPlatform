@@ -274,6 +274,7 @@ def run_backtest(
 
     # Create confirmation tracker for condition history
     confirmation_tracker = ConfirmationTracker()
+    logged_context_fields = False
 
     for idx in range(len(exec_df)):
         row = exec_df.iloc[idx]
@@ -317,6 +318,13 @@ def run_backtest(
             if col not in context and col != 'Date':
                 context[col] = row[col]
 
+        # Log available context fields once
+        if not logged_context_fields:
+            logger.info(f"Available context fields: {sorted(context.keys())}")
+            logger.info(f"Buy entry conditions: {buy_entry_conditions}")
+            logger.info(f"Sell entry conditions: {sell_entry_conditions}")
+            logged_context_fields = True
+
         # Check exit conditions for each open position
         positions_to_close = []
         for i, pos in enumerate(open_positions):
@@ -335,7 +343,7 @@ def run_backtest(
             # Check each exit rule
             for exit_rule in exit_conditions:
                 conditions = exit_rule.get('conditions', {})
-                if evaluate_condition_tree(conditions, pos_context, confirmation_tracker):
+                if evaluate_condition_tree(conditions, pos_context, confirmation_tracker, label=f"Exit-{pos.direction}"):
                     positions_to_close.append(i)
                     break
 
@@ -368,7 +376,7 @@ def run_backtest(
 
         # Check entry conditions (users can add position:total_count == 0 to limit entries)
         # Check buy entry
-        if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context, confirmation_tracker):
+        if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context, confirmation_tracker, label="BuyEntry"):
             entry_price = current_price * (1 + slippage / 100)
             size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
             if size > 0:
@@ -380,7 +388,7 @@ def run_backtest(
                 ))
 
         # Check sell entry
-        elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker):
+        elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker, label="SellEntry"):
             entry_price = current_price * (1 - slippage / 100)
             size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
             if size > 0:
