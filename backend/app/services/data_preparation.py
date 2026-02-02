@@ -33,6 +33,8 @@ class DataPreparationService:
         """
         self.buffer_pct = buffer_pct
         self.normalization_params: Dict[str, Dict[str, Any]] = {}
+        self.dropped_columns: List[str] = []  # Zero-variance columns excluded from features
+        self.valid_columns: List[str] = []  # Columns with variance, in order
 
     def fit_transform(
         self,
@@ -69,16 +71,14 @@ class DataPreparationService:
                 range_val = max_val - min_val
 
                 if range_val == 0:
-                    logger.warning(f"Column {col} has zero range, using standard normalization")
-                    result[col] = 0.5
+                    # Zero-variance column - drop from features (no predictive value)
+                    self.dropped_columns.append(col)
                     self.normalization_params[col] = {
                         "method": "minmax_buffered",
                         "observed_min": float(min_val),
                         "observed_max": float(max_val),
-                        "buffered_min": float(min_val),
-                        "buffered_max": float(max_val),
-                        "buffer_pct": self.buffer_pct,
-                        "zero_range": True
+                        "dropped": True,
+                        "drop_reason": "zero_variance"
                     }
                     continue
 
@@ -152,6 +152,16 @@ class DataPreparationService:
         if method in ["log_returns", "pct_change"]:
             result = result.dropna()
 
+        # Track valid columns (those with variance, in order)
+        self.valid_columns = [col for col in columns if col not in self.dropped_columns]
+
+        # Log warning about dropped columns
+        if self.dropped_columns:
+            logger.warning(
+                f"Dropped {len(self.dropped_columns)} zero-variance columns from features: "
+                f"{self.dropped_columns}"
+            )
+
         return result
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -178,6 +188,10 @@ class DataPreparationService:
             method = params["method"]
 
             if method == "minmax_buffered":
+                # Skip dropped columns (zero-variance)
+                if params.get("dropped", False):
+                    continue
+
                 buffered_min = params["buffered_min"]
                 buffered_max = params["buffered_max"]
                 result[col] = (df[col] - buffered_min) / (buffered_max - buffered_min)
@@ -272,9 +286,11 @@ class DataPreparationService:
             Dictionary with all normalization parameters
         """
         return {
-            "version": "1.0",
+            "version": "1.1",
             "buffer_pct": self.buffer_pct,
             "columns": self.normalization_params,
+            "valid_columns": self.valid_columns,  # Feature columns with variance, in order
+            "dropped_columns": self.dropped_columns,  # Zero-variance columns excluded
             "created_at": datetime.now().isoformat(),
             "usage": {
                 "python": "prep_service.load_params(this_json); normalized = prep_service.transform(live_df)",
@@ -291,7 +307,12 @@ class DataPreparationService:
         """
         self.buffer_pct = params.get("buffer_pct", 0.35)
         self.normalization_params = params.get("columns", {})
-        logger.info(f"Loaded normalization params for {len(self.normalization_params)} columns")
+        self.valid_columns = params.get("valid_columns", [])
+        self.dropped_columns = params.get("dropped_columns", [])
+        logger.info(
+            f"Loaded normalization params: {len(self.valid_columns)} valid columns, "
+            f"{len(self.dropped_columns)} dropped columns"
+        )
 
     def save_params(self, filepath: str) -> None:
         """
@@ -358,3 +379,21 @@ class DataPreparationService:
             return (mean - 3 * std, mean + 3 * std)
 
         return None
+
+    def get_valid_columns(self) -> List[str]:
+        """
+        Get list of valid feature columns (those with variance).
+
+        Returns:
+            List of column names in order, excluding dropped zero-variance columns
+        """
+        return self.valid_columns.copy()
+
+    def get_dropped_columns(self) -> List[str]:
+        """
+        Get list of dropped zero-variance columns.
+
+        Returns:
+            List of column names that were dropped due to zero variance
+        """
+        return self.dropped_columns.copy()

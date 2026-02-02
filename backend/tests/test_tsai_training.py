@@ -138,6 +138,41 @@ class TestTSAITrainingService:
         assert X_seq.shape == (90, 5, 10)
         assert y_seq.shape == (90, 1)
 
+    def test_zero_variance_columns_dropped_no_nan(self, training_service):
+        """Test that zero-variance columns are dropped and no NaN in output."""
+        # Create dataset with zero-variance columns (like YoY change in short dataset)
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'price': np.random.uniform(100, 200, 200),
+            'volume': np.random.uniform(1e6, 1e7, 200),
+            'constant_yoy': np.full(200, 0.05),  # Zero variance
+            'constant_pe': np.full(200, 25.0),   # Zero variance
+            'target': np.random.randint(0, 2, 200),
+        })
+
+        feature_cols = ['price', 'volume', 'constant_yoy', 'constant_pe']
+
+        X_train, X_test, y_train, y_test = training_service.prepare_data_split(
+            df, train_ratio=0.8,
+            target_column='target',
+            feature_columns=feature_cols,
+            seq_len=10
+        )
+
+        # Check no NaN values
+        assert np.isnan(X_train).sum() == 0, "X_train contains NaN values"
+        assert np.isnan(X_test).sum() == 0, "X_test contains NaN values"
+
+        # Check valid columns exclude zero-variance
+        valid_cols = training_service.data_prep.get_valid_columns()
+        assert 'price' in valid_cols
+        assert 'volume' in valid_cols
+        assert 'constant_yoy' not in valid_cols
+        assert 'constant_pe' not in valid_cols
+
+        # Feature dimension should be 2 (dropped 2 constant columns)
+        assert X_train.shape[1] == 2, f"Expected 2 features, got {X_train.shape[1]}"
+
 
 class TestTrainingWithRealData:
     """Integration tests with real AAPL data."""

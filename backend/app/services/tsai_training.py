@@ -123,7 +123,12 @@ class TSAITrainingService(ITrainingService):
                 df_normalized = self.data_prep.fit_transform(df, feature_columns, method="minmax_buffered")
                 logger.warning("Scaler not fitted, fitting on current data")
 
-            X_data = df_normalized[feature_columns].values.astype(np.float32)
+            # Use valid columns only (excludes zero-variance columns)
+            valid_cols = self.data_prep.get_valid_columns()
+            if not valid_cols:
+                # Fallback for backward compatibility
+                valid_cols = feature_columns
+            X_data = df_normalized[valid_cols].values.astype(np.float32)
         else:
             X_data = df[feature_columns].values.astype(np.float32)
 
