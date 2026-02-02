@@ -10,6 +10,9 @@ from .training_checkpoint import TrainingCheckpoint
 from .news_cache import NewsCache
 from .target_set import TargetSet
 from .model import TrainedModel
+from .backtest import Backtest
+from .strategy import Strategy
+from .strategy_optimization import StrategyOptimization
 
 __all__ = [
     "Base", "engine", "SessionLocal", "get_db",
@@ -21,5 +24,8 @@ __all__ = [
     "TrainingCheckpoint",
     "NewsCache",
     "TargetSet",
-    "TrainedModel"
+    "TrainedModel",
+    "Backtest",
+    "Strategy",
+    "StrategyOptimization"
 ]
