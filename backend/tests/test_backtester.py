@@ -12,24 +12,23 @@ from datetime import datetime, timedelta
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Test database configuration
+# Test database configuration - MUST be set before any app imports
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "test_backtester.db")
+
+# Remove existing test db and set environment variable BEFORE any app imports
+if os.path.exists(TEST_DB_PATH):
+    os.remove(TEST_DB_PATH)
+os.environ['DATABASE_URL'] = f"sqlite:///{TEST_DB_PATH}"
 
 
 @pytest.fixture(scope="module")
 def test_db():
     """Set up test database for the module."""
-    # Remove existing test db
-    if os.path.exists(TEST_DB_PATH):
-        os.remove(TEST_DB_PATH)
-
-    # Set environment variable for test database BEFORE imports
-    os.environ['DATABASE_URL'] = f"sqlite:///{TEST_DB_PATH}"
-
-    # Import after setting env var
+    # Environment variable already set at module level before any imports
+    # Import database components
     from app.models.database import engine, Base, SessionLocal
 
-    # Create tables
+    # Create tables (includes new buy/sell columns)
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()

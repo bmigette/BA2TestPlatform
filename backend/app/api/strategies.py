@@ -91,12 +91,27 @@ class StrategyUpdate(BaseModel):
 
 
 def extract_required_fields(
+    first_arg=None,
+    second_arg=None,
+    *,
     buy_entry_conditions: dict = None,
     sell_entry_conditions: dict = None,
     exit_conditions: list = None,
-    entry_conditions: dict = None  # Legacy
+    entry_conditions: dict = None
 ) -> List[str]:
-    """Extract all model prediction fields used in conditions."""
+    """Extract all model prediction fields used in conditions.
+
+    Supports both old signature: extract_required_fields(entry_conditions, exit_conditions)
+    and new signature with keyword args for buy/sell split.
+    """
+    # Handle backwards compatibility with old positional signature
+    # Old: extract_required_fields(entry_conditions_dict, exit_conditions_list)
+    if first_arg is not None:
+        if isinstance(first_arg, dict):
+            entry_conditions = first_arg
+        if isinstance(second_arg, list):
+            exit_conditions = second_arg
+
     fields = set()
 
     def traverse_conditions(cond):
@@ -113,7 +128,7 @@ def extract_required_fields(
     # Traverse all condition sources
     traverse_conditions(buy_entry_conditions)
     traverse_conditions(sell_entry_conditions)
-    traverse_conditions(entry_conditions)  # Legacy support
+    traverse_conditions(entry_conditions)
     for exit_cond in (exit_conditions or []):
         traverse_conditions(exit_cond.get("conditions"))
 
