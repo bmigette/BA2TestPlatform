@@ -4,6 +4,7 @@ Database Migration Script: Create Indicator Collections
 
 Creates new indicator collections with ALL available technical indicators.
 Creates both standard (conservative) and aggressive parameter versions.
+Each collection is created for multiple timeframes (30m, 1h, 4h).
 
 Run from backend directory:
     ./venv/bin/python scripts/create_indicator_collections.py
@@ -23,9 +24,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Timeframes to create collections for
+TIMEFRAMES = ['30m', '1h', '4h']
 
-def create_comprehensive_standard() -> dict:
-    """Create a comprehensive collection with all indicators using standard parameters."""
+
+def add_timeframe_to_indicators(indicators: list, timeframe: str) -> list:
+    """Add timeframe field to all indicators in the list."""
+    return [{**ind, "timeframe": timeframe} for ind in indicators]
+
+
+def get_standard_indicators() -> list:
+    """Get comprehensive list of indicators with standard parameters."""
     indicators = []
 
     # SMA variations
@@ -125,17 +134,11 @@ def create_comprehensive_standard() -> dict:
         "method": "standard",
     })
 
-    return {
-        "name": "All Indicators - Standard",
-        "description": "Comprehensive collection with all available indicators using standard/conservative parameters. "
-                      "Includes moving averages, momentum, volatility, trend, and volume indicators.",
-        "indicators": indicators,
-        "is_default": True,
-    }
+    return indicators
 
 
-def create_comprehensive_aggressive() -> dict:
-    """Create a comprehensive collection with all indicators using aggressive parameters."""
+def get_aggressive_indicators() -> list:
+    """Get comprehensive list of indicators with aggressive parameters."""
     indicators = []
 
     # SMA - shorter periods
@@ -146,8 +149,8 @@ def create_comprehensive_aggressive() -> dict:
             "period": period,
         })
 
-    # EMA - shorter periods
-    for period in [8, 13, 21, 34, 55]:  # Fibonacci-based
+    # EMA - shorter periods (Fibonacci-based)
+    for period in [8, 13, 21, 34, 55]:
         indicators.append({
             "type": "ema",
             "name": f"EMA {period}",
@@ -235,18 +238,12 @@ def create_comprehensive_aggressive() -> dict:
         "method": "fibonacci",
     })
 
-    return {
-        "name": "All Indicators - Aggressive",
-        "description": "Comprehensive collection with all indicators using aggressive parameters (faster signals). "
-                      "Shorter periods, tighter thresholds. Good for shorter timeframes or scalping strategies.",
-        "indicators": indicators,
-        "is_default": True,
-    }
+    return indicators
 
 
-def create_momentum_collection() -> dict:
-    """Create a collection focused on momentum indicators."""
-    indicators = [
+def get_momentum_indicators() -> list:
+    """Get momentum-focused indicators."""
+    return [
         {"type": "rsi", "name": "RSI 14", "period": 14},
         {"type": "rsi", "name": "RSI 7", "period": 7},
         {"type": "macd", "name": "MACD (12,26,9)", "fast": 12, "slow": 26, "signal": 9},
@@ -256,18 +253,10 @@ def create_momentum_collection() -> dict:
         {"type": "obv", "name": "OBV"},
     ]
 
-    return {
-        "name": "Momentum Indicators",
-        "description": "Momentum-focused indicators: RSI, MACD, Stochastic, ADX, and OBV. "
-                      "Best for identifying trend strength and overbought/oversold conditions.",
-        "indicators": indicators,
-        "is_default": False,
-    }
 
-
-def create_trend_collection() -> dict:
-    """Create a collection focused on trend-following indicators."""
-    indicators = [
+def get_trend_indicators() -> list:
+    """Get trend-following indicators."""
+    return [
         {"type": "sma", "name": "SMA 20", "period": 20},
         {"type": "sma", "name": "SMA 50", "period": 50},
         {"type": "sma", "name": "SMA 200", "period": 200},
@@ -280,18 +269,10 @@ def create_trend_collection() -> dict:
         {"type": "adx", "name": "ADX 14", "period": 14},
     ]
 
-    return {
-        "name": "Trend-Following Indicators",
-        "description": "Trend-following indicators: Moving averages, Parabolic SAR, ZigZag, Donchian Channels, and ADX. "
-                      "Best for identifying trend direction and reversals.",
-        "indicators": indicators,
-        "is_default": False,
-    }
 
-
-def create_volatility_collection() -> dict:
-    """Create a collection focused on volatility indicators."""
-    indicators = [
+def get_volatility_indicators() -> list:
+    """Get volatility-focused indicators."""
+    return [
         {"type": "atr", "name": "ATR 14", "period": 14},
         {"type": "atr", "name": "ATR 7", "period": 7},
         {"type": "bbands", "name": "Bollinger Bands (20,2)", "period": 20, "std_dev": 2.0},
@@ -300,18 +281,10 @@ def create_volatility_collection() -> dict:
         {"type": "donchian", "name": "Donchian 10", "period": 10},
     ]
 
-    return {
-        "name": "Volatility Indicators",
-        "description": "Volatility-focused indicators: ATR, Bollinger Bands, and Donchian Channels. "
-                      "Best for measuring price volatility and identifying breakout opportunities.",
-        "indicators": indicators,
-        "is_default": False,
-    }
 
-
-def create_minimal_collection() -> dict:
-    """Create a minimal collection with essential indicators only."""
-    indicators = [
+def get_essential_indicators() -> list:
+    """Get minimal essential indicators."""
+    return [
         {"type": "sma", "name": "SMA 20", "period": 20},
         {"type": "ema", "name": "EMA 20", "period": 20},
         {"type": "rsi", "name": "RSI 14", "period": 14},
@@ -319,13 +292,52 @@ def create_minimal_collection() -> dict:
         {"type": "atr", "name": "ATR 14", "period": 14},
     ]
 
-    return {
-        "name": "Essential Indicators",
-        "description": "Minimal set of essential indicators: SMA, EMA, RSI, MACD, and ATR. "
-                      "Good for quick dataset generation and avoiding feature bloat.",
-        "indicators": indicators,
-        "is_default": False,
-    }
+
+# Collection definitions: (name_template, description_template, indicator_getter, is_default)
+COLLECTION_DEFINITIONS = [
+    (
+        "All Indicators - Standard - {tf}",
+        "Comprehensive collection with all indicators using standard parameters at {tf} timeframe. "
+        "Includes moving averages, momentum, volatility, trend, and volume indicators.",
+        get_standard_indicators,
+        True,
+    ),
+    (
+        "All Indicators - Aggressive - {tf}",
+        "Comprehensive collection with aggressive parameters at {tf} timeframe. "
+        "Shorter periods, tighter thresholds. Good for scalping strategies.",
+        get_aggressive_indicators,
+        True,
+    ),
+    (
+        "Momentum Indicators - {tf}",
+        "Momentum-focused indicators at {tf}: RSI, MACD, Stochastic, ADX, OBV. "
+        "Best for identifying trend strength and overbought/oversold conditions.",
+        get_momentum_indicators,
+        False,
+    ),
+    (
+        "Trend-Following - {tf}",
+        "Trend-following indicators at {tf}: MAs, SAR, ZigZag, Donchian, ADX. "
+        "Best for identifying trend direction and reversals.",
+        get_trend_indicators,
+        False,
+    ),
+    (
+        "Volatility Indicators - {tf}",
+        "Volatility-focused indicators at {tf}: ATR, Bollinger Bands, Donchian. "
+        "Best for measuring price volatility and breakout opportunities.",
+        get_volatility_indicators,
+        False,
+    ),
+    (
+        "Essential Indicators - {tf}",
+        "Minimal set of essential indicators at {tf}: SMA, EMA, RSI, MACD, ATR. "
+        "Good for quick dataset generation and avoiding feature bloat.",
+        get_essential_indicators,
+        False,
+    ),
+]
 
 
 def main():
@@ -337,34 +349,34 @@ def main():
         existing_names = [c.name for c in db.query(IndicatorCollection).all()]
         logger.info(f"Found {len(existing_names)} existing indicator collections")
 
-        # Define collections to create
-        collections_to_create = [
-            create_comprehensive_standard(),
-            create_comprehensive_aggressive(),
-            create_momentum_collection(),
-            create_trend_collection(),
-            create_volatility_collection(),
-            create_minimal_collection(),
-        ]
-
         created_count = 0
         skipped_count = 0
 
-        for coll_data in collections_to_create:
-            if coll_data['name'] in existing_names:
-                logger.info(f"Skipping '{coll_data['name']}' - already exists")
-                skipped_count += 1
-                continue
+        # Create collections for each timeframe
+        for timeframe in TIMEFRAMES:
+            tf_upper = timeframe.upper()
 
-            collection = IndicatorCollection(
-                name=coll_data['name'],
-                description=coll_data['description'],
-                indicators=coll_data['indicators'],
-                is_default=coll_data.get('is_default', False),
-            )
-            db.add(collection)
-            logger.info(f"Created collection: '{coll_data['name']}' with {len(coll_data['indicators'])} indicators")
-            created_count += 1
+            for name_template, desc_template, indicator_getter, is_default in COLLECTION_DEFINITIONS:
+                collection_name = name_template.format(tf=tf_upper)
+
+                if collection_name in existing_names:
+                    logger.info(f"Skipping '{collection_name}' - already exists")
+                    skipped_count += 1
+                    continue
+
+                # Get base indicators and add timeframe
+                base_indicators = indicator_getter()
+                indicators_with_tf = add_timeframe_to_indicators(base_indicators, timeframe)
+
+                collection = IndicatorCollection(
+                    name=collection_name,
+                    description=desc_template.format(tf=tf_upper),
+                    indicators=indicators_with_tf,
+                    is_default=is_default,
+                )
+                db.add(collection)
+                logger.info(f"Created: '{collection_name}' with {len(indicators_with_tf)} indicators")
+                created_count += 1
 
         db.commit()
 
@@ -373,7 +385,7 @@ def main():
         logger.info(f"Skipped: {skipped_count} (already existed)")
 
         # List all collections
-        all_collections = db.query(IndicatorCollection).all()
+        all_collections = db.query(IndicatorCollection).order_by(IndicatorCollection.name).all()
         logger.info(f"\nAll indicator collections ({len(all_collections)}):")
         for coll in all_collections:
             default_marker = " [DEFAULT]" if coll.is_default else ""
