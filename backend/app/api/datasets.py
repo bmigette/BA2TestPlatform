@@ -541,13 +541,10 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
             try:
                 indicators_dict = {}
                 for ind in technical_indicators:
-                    key = f"{ind['type']}_{ind.get('timeframe', timeframe)}"
-                    if key not in indicators_dict:
-                        indicators_dict[key] = []
-                    indicators_dict[key].append(ind)
-
-                indicator_service = IndicatorService()
-                df = indicator_service.calculate_indicators(df, technical_indicators)
+                    ind_type = ind.get('type', ind.get('name', 'unknown'))
+                    ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
+                    indicators_dict[ind_name] = ind
+                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
                 logger.info(f"[Thread] Added technical indicators. {len(df.columns)} columns")
             except Exception as e:
                 logger.error(f"[Thread] Error applying indicators: {e}")
@@ -1883,8 +1880,12 @@ async def duplicate_dataset(
         if technical_indicators:
             logger.info(f"[Duplicate] Applying {len(technical_indicators)} technical indicators...")
             try:
-                indicator_service = IndicatorService()
-                df = indicator_service.calculate_indicators(df, technical_indicators)
+                indicators_dict = {}
+                for ind in technical_indicators:
+                    ind_type = ind.get('type', ind.get('name', 'unknown'))
+                    ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
+                    indicators_dict[ind_name] = ind
+                df = TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)
                 logger.info(f"[Duplicate] Added technical indicators. {len(df.columns)} columns")
             except Exception as e:
                 logger.error(f"[Duplicate] Error applying indicators: {e}")
