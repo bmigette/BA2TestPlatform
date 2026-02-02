@@ -1467,6 +1467,21 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
             prediction_horizon=prediction_horizon
         )
 
+        # Update job store with dataset statistics immediately (so UI can show them while training)
+        try:
+            from app.api.jobs import jobs_store
+            if task_id in jobs_store:
+                jobs_store[task_id]["trainRows"] = len(train_df)
+                jobs_store[task_id]["testRows"] = len(test_df)
+                jobs_store[task_id]["targetColumn"] = target_column
+                jobs_store[task_id]["trainPositives"] = train_positives
+                jobs_store[task_id]["testPositives"] = test_positives
+                jobs_store[task_id]["trainPositivesPct"] = round(train_positives / len(train_df) * 100, 2) if len(train_df) > 0 else 0
+                jobs_store[task_id]["testPositivesPct"] = round(test_positives / len(test_df) * 100, 2) if len(test_df) > 0 else 0
+                logger.info(f"Updated job store with dataset stats: train={len(train_df)}, test={len(test_df)}")
+        except Exception as e:
+            logger.warning(f"Failed to update job store with dataset stats: {e}")
+
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
 
