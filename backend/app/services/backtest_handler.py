@@ -90,10 +90,44 @@ def run_backtest(
     threshold = model.threshold or 0.5
     model_type = model.model_type.lower() if model.model_type else 'lstm'
 
-    # Prepare features for prediction first (need dimensions for model creation)
-    # Exclude non-feature columns
-    exclude_cols = {'Date', 'target', 'Open', 'High', 'Low', 'Close', 'Volume'}
-    feature_cols = [c for c in pred_df.columns if c not in exclude_cols]
+    # Try to load metadata early for feature_columns
+    import json
+    stored_feature_columns = hyperparameters.get('featureColumns')
+    file_path = model.file_path
+    file_path_obj = Path(file_path) if file_path else None
+
+    # If no stored feature_columns in hyperparameters, try metadata file
+    if not stored_feature_columns and file_path_obj and file_path_obj.exists():
+        meta_patterns = [
+            file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
+            file_path_obj.with_suffix('.json'),
+        ]
+        for meta_path in meta_patterns:
+            if meta_path.exists():
+                try:
+                    with open(meta_path, 'r') as f:
+                        meta = json.load(f)
+                    stored_feature_columns = meta.get('feature_columns')
+                    if stored_feature_columns:
+                        logger.info(f"Loaded feature_columns from {meta_path}: {len(stored_feature_columns)} features")
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to load metadata from {meta_path}: {e}")
+
+    # Get feature columns - prefer stored columns from training
+    if stored_feature_columns:
+        # Use only features that exist in current dataset
+        feature_cols = [col for col in stored_feature_columns if col in pred_df.columns]
+        if len(feature_cols) != len(stored_feature_columns):
+            missing = set(stored_feature_columns) - set(feature_cols)
+            logger.warning(f"Some training features not in dataset: {missing}")
+        if not feature_cols:
+            logger.error(f"None of the training features found in dataset")
+            return _empty_results(initial_capital)
+    else:
+        # Fall back to computing from dataset
+        exclude_cols = {'Date', 'target', 'Open', 'High', 'Low', 'Close', 'Volume'}
+        feature_cols = [c for c in pred_df.columns if c not in exclude_cols]
 
     if not feature_cols:
         logger.error("No feature columns found in prediction dataset")
@@ -136,9 +170,36 @@ def run_backtest(
             model_obj = learner.model
         else:
             # State dict (.pt file) - need to recreate model architecture
-            c_in = X.shape[1]  # number of features
-            c_out = hyperparameters.get('c_out', 2)  # number of classes
+            # Get c_in from metadata (stored during training) - NOT from current dataset
+            import json
+            c_in = hyperparameters.get('c_in')
+            c_out = hyperparameters.get('c_out', 2)
             model_params = hyperparameters.get('modelParams', {})
+
+            # If c_in not in DB hyperparameters, check for _meta.json file
+            if c_in is None:
+                meta_patterns = [
+                    file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
+                    file_path_obj.with_suffix('.json'),
+                ]
+                for meta_path in meta_patterns:
+                    if meta_path.exists():
+                        try:
+                            with open(meta_path, 'r') as f:
+                                meta = json.load(f)
+                            c_in = meta.get('c_in')
+                            if c_out == 2:
+                                c_out = meta.get('c_out', c_out)
+                            if not model_params:
+                                model_params = meta.get('params', {})
+                            logger.info(f"Loaded model metadata: c_in={c_in}, c_out={c_out}")
+                            break
+                        except Exception as e:
+                            logger.warning(f"Failed to load metadata from {meta_path}: {e}")
+
+            if c_in is None:
+                logger.error(f"Cannot determine c_in for model {file_path}")
+                return _empty_results(initial_capital)
 
             model_service = TSAIModelService()
             model_obj = model_service.create_model(

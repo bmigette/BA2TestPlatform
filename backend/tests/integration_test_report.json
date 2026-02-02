@@ -1,21 +1,31 @@
 {
-  "timestamp": "2026-01-30T13:37:23.035707",
+  "timestamp": "2026-02-02T17:06:47.642469",
   "classification": {
     "lstm": {
       "status": "success",
-      "f1_score": 0.0,
-      "accuracy": 0.551948051948052,
+      "f1_score": 0.6188340807174888,
+      "accuracy": 0.44805194805194803,
       "metrics": {
-        "f1_score": 0.0,
-        "accuracy": 0.551948051948052,
-        "precision": 0.0,
-        "recall": 0.0,
+        "f1_score": 0.6188340807174888,
+        "accuracy": 0.44805194805194803,
+        "precision": 0.44805194805194803,
+        "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.5114236999147486,
-        "true_negatives": 85,
-        "false_positives": 0,
-        "false_negatives": 69,
-        "true_positives": 0
+        "auc_roc": 0.4572890025575448,
+        "true_negatives": 0,
+        "false_positives": 85,
+        "false_negatives": 0,
+        "true_positives": 69,
+        "confusion_matrix": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            69
+          ]
+        ]
       }
     },
     "gru": {
@@ -28,11 +38,21 @@
         "precision": 0.0,
         "recall": 0.0,
         "mcc": 0.0,
-        "auc_roc": 0.4242114236999147,
+        "auc_roc": 0.44381926683716966,
         "true_negatives": 85,
         "false_positives": 0,
         "false_negatives": 69,
-        "true_positives": 0
+        "true_positives": 0,
+        "confusion_matrix": [
+          [
+            85,
+            0
+          ],
+          [
+            69,
+            0
+          ]
+        ]
       }
     },
     "tcn": {
@@ -45,28 +65,48 @@
         "precision": 0.44805194805194803,
         "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.6179880647911339,
+        "auc_roc": 0.5618073316283035,
         "true_negatives": 0,
         "false_positives": 85,
         "false_negatives": 0,
-        "true_positives": 69
+        "true_positives": 69,
+        "confusion_matrix": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            69
+          ]
+        ]
       }
     },
     "inception": {
       "status": "success",
-      "f1_score": 0.6188340807174888,
-      "accuracy": 0.44805194805194803,
+      "f1_score": 0.0,
+      "accuracy": 0.551948051948052,
       "metrics": {
-        "f1_score": 0.6188340807174888,
-        "accuracy": 0.44805194805194803,
-        "precision": 0.44805194805194803,
-        "recall": 1.0,
+        "f1_score": 0.0,
+        "accuracy": 0.551948051948052,
+        "precision": 0.0,
+        "recall": 0.0,
         "mcc": 0.0,
-        "auc_roc": 0.5382779198635977,
-        "true_negatives": 0,
-        "false_positives": 85,
-        "false_negatives": 0,
-        "true_positives": 69
+        "auc_roc": 0.5292412617220802,
+        "true_negatives": 85,
+        "false_positives": 0,
+        "false_negatives": 69,
+        "true_positives": 0,
+        "confusion_matrix": [
+          [
+            85,
+            0
+          ],
+          [
+            69,
+            0
+          ]
+        ]
       }
     },
     "resnet": {
@@ -79,11 +119,21 @@
         "precision": 0.44805194805194803,
         "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.5536231884057972,
+        "auc_roc": 0.5111679454390452,
         "true_negatives": 0,
         "false_positives": 85,
         "false_negatives": 0,
-        "true_positives": 69
+        "true_positives": 69,
+        "confusion_matrix": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            69
+          ]
+        ]
       }
     },
     "omniscale": {
@@ -96,11 +146,21 @@
         "precision": 0.44805194805194803,
         "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.5994884910485933,
+        "auc_roc": 0.5072463768115942,
         "true_negatives": 0,
         "false_positives": 85,
         "false_negatives": 0,
-        "true_positives": 69
+        "true_positives": 69,
+        "confusion_matrix": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            69
+          ]
+        ]
       }
     },
     "lstm_fcn": {
@@ -113,11 +173,21 @@
         "precision": 0.44805194805194803,
         "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.6199488491048593,
+        "auc_roc": 0.607843137254902,
         "true_negatives": 0,
         "false_positives": 85,
         "false_negatives": 0,
-        "true_positives": 69
+        "true_positives": 69,
+        "confusion_matrix": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            69
+          ]
+        ]
       }
     },
     "tst": {
@@ -130,11 +200,21 @@
         "precision": 0.44805194805194803,
         "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.5614663256606991,
+        "auc_roc": 0.47894288150042624,
         "true_negatives": 0,
         "false_positives": 85,
         "false_negatives": 0,
-        "true_positives": 69
+        "true_positives": 69,
+        "confusion_matrix": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            69
+          ]
+        ]
       }
     },
     "minirocket": {
@@ -147,11 +227,21 @@
         "precision": 0.0,
         "recall": 0.0,
         "mcc": 0.0,
-        "auc_roc": 0.5063938618925831,
+        "auc_roc": 0.5200341005967604,
         "true_negatives": 85,
         "false_positives": 0,
         "false_negatives": 69,
-        "true_positives": 0
+        "true_positives": 0,
+        "confusion_matrix": [
+          [
+            85,
+            0
+          ],
+          [
+            69,
+            0
+          ]
+        ]
       }
     },
     "xception": {
@@ -167,7 +257,7 @@
   "classification_h1": {
     "lstm": {
       "status": "success",
-      "f1_score": 0.0,
+      "f1_score": 0.6371681415929203,
       "horizon": 1
     },
     "inception": {
@@ -184,34 +274,34 @@
     },
     "inception": {
       "status": "success",
-      "f1_score": 0.6491228070175439,
+      "f1_score": 0.0,
       "horizon": 3
     }
   },
   "regression": {
     "lstm": {
       "status": "success",
-      "mse": 0.003403362352401018
+      "mse": 0.010111374780535698
     },
     "nbeats": {
       "status": "success",
-      "mse": 0.010010008700191975
+      "mse": 0.0020905674900859594
     },
     "tcn": {
       "status": "success",
-      "mse": 0.005482618231326342
+      "mse": 0.0008681417093612254
     },
     "gru": {
       "status": "success",
-      "mse": 0.015905044972896576
+      "mse": 1.3008198074260235e-08
     },
     "tft": {
       "status": "success",
-      "mse": 0.025124579668045044
+      "mse": 0.022072389721870422
     },
     "transformer": {
       "status": "success",
-      "mse": 0.0032311382237821817
+      "mse": 0.01207110658288002
     }
   },
   "summary": {

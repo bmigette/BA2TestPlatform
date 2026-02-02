@@ -934,6 +934,13 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                 params = {}
                 generation = None
                 individual = None
+                c_in = None
+                c_out = None
+                seq_len = None
+                prediction_mode = None
+                loss_function = None
+                threshold = None
+                feature_columns = None
                 if meta_files:
                     try:
                         with open(meta_files[0], 'r') as f:
@@ -942,6 +949,14 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                             params = meta.get('params', {})
                             generation = meta.get('generation')
                             individual = meta.get('individual')
+                            # Critical for model loading
+                            c_in = meta.get('c_in')
+                            c_out = meta.get('c_out')
+                            seq_len = meta.get('seq_len')
+                            prediction_mode = meta.get('prediction_mode')
+                            loss_function = meta.get('loss_function')
+                            threshold = meta.get('threshold')
+                            feature_columns = meta.get('feature_columns')
                     except Exception:
                         pass
 
@@ -954,7 +969,14 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                     'metrics': metrics,
                     'params': params,
                     'generation': generation,
-                    'individual': individual
+                    'individual': individual,
+                    'c_in': c_in,
+                    'c_out': c_out,
+                    'seq_len': seq_len,
+                    'prediction_mode': prediction_mode,
+                    'loss_function': loss_function,
+                    'threshold': threshold,
+                    'feature_columns': feature_columns
                 })
 
         return sorted(elite_models, key=lambda x: x['rank'])
@@ -1716,13 +1738,13 @@ def train_single_model(
         train_series, train_covariates = training_service.prepare_data(
             train_df,
             target_column=target_column,
-            feature_columns=feature_columns[:10],  # Limit features for stability
+            feature_columns=feature_columns,
             timeframe=timeframe
         )
         test_series, test_covariates = training_service.prepare_data(
             test_df,
             target_column=target_column,
-            feature_columns=feature_columns[:10],
+            feature_columns=feature_columns,
             timeframe=timeframe
         )
     except Exception as e:
@@ -2142,7 +2164,7 @@ def train_classification_optimization(
                     full_df,
                     train_ratio=train_ratio,
                     target_column=target_column,
-                    feature_columns=feature_columns[:20],  # Limit features
+                    feature_columns=feature_columns,
                     seq_len=current_seq_len,
                     prediction_horizon=prediction_horizon,
                     prediction_mode=mode
@@ -2386,7 +2408,9 @@ def train_classification_optimization(
                     'seq_len': actual_seq_len,
                     'c_in': X_train.shape[1],
                     'c_out': c_out,
-                    'metrics': metrics
+                    'metrics': metrics,
+                    # Save feature columns used during training for prediction
+                    'feature_columns': feature_columns
                 }
                 with open(meta_save_path, 'w') as f:
                     json.dump(metadata, f, indent=2, default=str)
@@ -2617,7 +2641,7 @@ def train_unified_optimization(
             rnn_df,
             train_ratio=train_ratio,
             target_column=rnn_target_column,
-            feature_columns=feature_columns[:10],
+            feature_columns=feature_columns,
             timeframe=timeframe
         )
         logger.info(f"RNN data prepared: train={len(rnn_train_series)}, test={len(rnn_test_series)} samples (target: {rnn_target_column})")
@@ -2627,7 +2651,7 @@ def train_unified_optimization(
             full_df,
             train_ratio=train_ratio,
             target_column=target_column,
-            feature_columns=feature_columns[:10],
+            feature_columns=feature_columns,
             timeframe=timeframe
         )
         logger.info(f"Multi-step data prepared: train={len(ms_train_series)}, test={len(ms_test_series)} samples (target: {target_column})")

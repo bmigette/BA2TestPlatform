@@ -575,10 +575,25 @@ async def run_model_predictions(
             detail="Could not identify target column in dataset"
         )
 
-    # Get feature columns (exclude Date and target)
-    feature_columns = [col for col in df.columns
-                       if col not in ['Date', target_column]
-                       and not col.startswith('target_')]
+    # Get feature columns - prefer stored columns from training, fall back to dataset columns
+    stored_feature_columns = hyperparameters.get('featureColumns')
+    if stored_feature_columns:
+        # Use only features that exist in current dataset
+        feature_columns = [col for col in stored_feature_columns if col in df.columns]
+        if len(feature_columns) != len(stored_feature_columns):
+            missing = set(stored_feature_columns) - set(feature_columns)
+            logger.warning(f"Some training features not in dataset: {missing}")
+        if not feature_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"None of the training features found in dataset. "
+                       f"Expected: {stored_feature_columns[:5]}..."
+            )
+    else:
+        # Fall back to computing from dataset (exclude Date and target)
+        feature_columns = [col for col in df.columns
+                           if col not in ['Date', target_column]
+                           and not col.startswith('target_')]
 
     # Determine model type from database (not file extension)
     # tsai models: lstm, gru, tcn, inception, resnet, xception, omniscale, minirocket, patchtst, lstm_fcn, tst
@@ -629,9 +644,40 @@ async def run_model_predictions(
                 model_obj = learner.model
             else:
                 # State dict (.pt file) - need to recreate model architecture
-                c_in = X.shape[1]  # number of features
-                c_out = hyperparameters.get('c_out', 2)  # number of classes
+                # Get c_in from metadata (stored during training) - NOT from current dataset
+                c_in = hyperparameters.get('c_in')
+                c_out = hyperparameters.get('c_out', 2)
                 model_params = hyperparameters.get('modelParams', {})
+
+                # If c_in not in DB hyperparameters, check for _meta.json file
+                if c_in is None:
+                    import json
+                    # Try both naming patterns for meta files
+                    meta_patterns = [
+                        file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
+                        file_path_obj.with_suffix('.json'),
+                    ]
+                    for meta_path in meta_patterns:
+                        if meta_path.exists():
+                            try:
+                                with open(meta_path, 'r') as f:
+                                    meta = json.load(f)
+                                c_in = meta.get('c_in')
+                                if c_out == 2:  # Default, might be overridden
+                                    c_out = meta.get('c_out', c_out)
+                                if not model_params:
+                                    model_params = meta.get('params', {})
+                                logger.info(f"Loaded model metadata from {meta_path}: c_in={c_in}, c_out={c_out}")
+                                break
+                            except Exception as e:
+                                logger.warning(f"Failed to load metadata from {meta_path}: {e}")
+
+                if c_in is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cannot determine model input dimensions (c_in). "
+                               f"Model metadata not found for {file_path}"
+                    )
 
                 model_service = TSAIModelService()
                 model_obj = model_service.create_model(
