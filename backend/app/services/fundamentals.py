@@ -724,6 +724,10 @@ class FundamentalsService:
                     # Sort by date
                     period_data.sort(key=lambda x: x['date'])
 
+                    # Find first available QoQ and YoY values for warmup
+                    first_qoq = next((p['qoq_change'] for p in period_data if p['qoq_change'] is not None), 0.0)
+                    first_yoy = next((p['yoy_change'] for p in period_data if p['yoy_change'] is not None), 0.0)
+
                     # For each row, find the most recent period before or on that date
                     def get_period_for_date(row_date):
                         if hasattr(row_date, 'tzinfo') and row_date.tzinfo is not None:
@@ -748,16 +752,18 @@ class FundamentalsService:
                             values.append(period_info['value'])
                             days = (row_date - period_info['date']).days
                             days_old.append(max(0, days))
-                            qoq_changes.append(period_info['qoq_change'])
-                            yoy_changes.append(period_info['yoy_change'])
+                            # Use first available change values if current is None
+                            qoq_changes.append(period_info['qoq_change'] if period_info['qoq_change'] is not None else first_qoq)
+                            yoy_changes.append(period_info['yoy_change'] if period_info['yoy_change'] is not None else first_yoy)
                         else:
                             # Warmup: use earliest known value, calculate days backward
                             earliest = period_data[0]
                             values.append(earliest['value'])
                             days = (earliest['date'] - row_date).days
                             days_old.append(max(0, days))  # How many days until this data exists
-                            qoq_changes.append(earliest['qoq_change'])
-                            yoy_changes.append(earliest['yoy_change'])
+                            # Use first available change values for warmup
+                            qoq_changes.append(first_qoq)
+                            yoy_changes.append(first_yoy)
 
                     result_df[col_name] = values
                     result_df[col_days] = days_old
