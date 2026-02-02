@@ -399,40 +399,83 @@
 
     <strategy_backtester>
       <backtesting_library>
-        - Use established Python library: Backtesting.py or VectorBT
+        - Use Backtesting.py library with multi-timeframe support via resample_apply
         - Rich interactive charts with profit/loss metrics
         - Interactive price action chart with entry/exit markers
+        - All data stored in database (no demo/mock data)
       </backtesting_library>
 
-      <backtest_strategy>
-        - Strategy based on model predictions
-        - Entry conditions:
-          * Model gives buy signal (threshold configurable)
-          * Custom technical indicator conditions
-          * Risk management rules
-        - Exit conditions:
-          * Model gives sell signal
-          * Take profit target hit
-          * Stop loss hit
-          * Time-based exit
-          * Trailing stop
-        - Refer to BA2TradePlatform trade actions/conditions for inspiration
-      </backtest_strategy>
+      <dual_dataset_support>
+        - Prediction dataset: Used for model inference (e.g., 1h bars)
+        - Execution dataset: Used for trade simulation (e.g., 1m bars)
+        - User explicitly selects both datasets
+        - Validation: same ticker and overlapping date ranges
+        - Model predictions computed on prediction timeframe
+        - Trade execution simulated on execution timeframe for realistic fills
+        - Support 1m timeframe for execution datasets (~390 bars/day)
+      </dual_dataset_support>
+
+      <model_selection>
+        - Filter models by training dataset by default
+        - Toggle: "Show all models for [timeframe]" expands to compatible models
+        - Display model prediction fields for strategy compatibility check
+      </model_selection>
+
+      <strategy_builder>
+        - Visual condition builder with AND/OR tree structure
+        - Conditions reference specific model prediction fields
+        - Field types:
+          * model_probability: Prediction probability 0-1 (e.g., price_up_10pct > 0.7)
+          * model_class: Predicted class (e.g., trend_class == 1)
+          * position: bars_in_trade, days_in_trade, position_pnl_pct
+          * time: hour_of_day, day_of_week, day_of_month
+        - Comparison operators: >, >=, <, <=, ==, !=, between
+        - Confirmation option: condition must be true X times in Y bars
+        - All numeric values support optimization ranges (min/max/step)
+        - "Optimize enabled" flag per condition for GA to toggle on/off
+      </strategy_builder>
+
+      <entry_conditions>
+        - Evaluated when no position open
+        - When triggered: create trade with initial TP% and SL%
+        - TP/SL expressed as percent from entry price
+        - TP/SL values are optimizable with ranges
+      </entry_conditions>
+
+      <exit_conditions>
+        - Evaluated every bar while position is open
+        - Each exit rule has conditions and an action
+        - Actions:
+          * close: Close position immediately
+          * adjust_tp: Set take profit to new percentage
+          * adjust_sl: Set stop loss to new percentage (0 = breakeven)
+        - Can use model prediction fields (dynamic exit based on new signals)
+        - Multiple exit rules evaluated in order, first match executes
+      </exit_conditions>
+
+      <strategy_persistence>
+        - Strategies saved in database
+        - Each strategy stores:
+          * Current values (for backtests)
+          * Original ranges (for re-optimization)
+        - required_fields auto-computed from conditions
+        - Field-signature matching: only show strategies compatible with model's prediction fields
+        - Load strategy for backtest or re-optimization
+      </strategy_persistence>
 
       <strategy_parameters>
-        - Position sizing: Fixed, percentage of capital, Kelly criterion
-        - Risk per trade (% of capital)
-        - Maximum concurrent positions
-        - Commission/slippage modeling
-        - Leverage (if applicable)
-        - Minimum prediction confidence threshold
+        - Position sizing: Fixed amount or percentage of capital
+        - Initial capital
+        - Commission percentage
+        - Slippage percentage
+        - Date range (within dataset bounds)
       </strategy_parameters>
 
       <backtest_visualization>
         - Equity curve over time
         - Drawdown chart
         - Trade markers on price chart (green=buy, red=sell)
-        - Trade list with details (entry/exit price, P&L, duration)
+        - Trade list with details (entry/exit price, P&L, duration, exit reason)
         - Performance metrics:
           * Total return
           * Sharpe ratio
@@ -445,14 +488,30 @@
 
       <genetic_optimization_backtest>
         - Optimize strategy parameters using genetic algorithm
-        - Parameters to optimize:
-          * Prediction confidence threshold
-          * Take profit / Stop loss levels
-          * Position sizing
-          * Indicator parameters
-        - Fitness function: Sharpe ratio, total return, or custom metric
-        - Avoid overfitting with walk-forward analysis
+        - Optimization scope:
+          * Condition enabled states (on/off)
+          * All numeric values with optimize=true
+          * TP/SL percentages
+          * Confirmation bar counts
+        - User defines AND/OR structure, GA optimizes values
+        - Fitness metric user-selectable:
+          * Sharpe ratio
+          * Total return
+          * Profit factor
+          * Win rate
+          * Max drawdown (minimize)
+        - Support genetic and brute-force optimization
+        - Save optimized strategy with best params + original ranges
       </genetic_optimization_backtest>
+
+      <backtest_workflow>
+        Step 1: Select prediction dataset and execution dataset
+        Step 2: Select model (filtered by dataset, toggle to show all)
+        Step 3: Select or create strategy (filtered by compatible fields)
+        Step 4: Configure backtest parameters (capital, dates, sizing)
+        Step 5: Run single backtest or optimize strategy
+        Step 6: View results, save strategy if desired
+      </backtest_workflow>
     </strategy_backtester>
 
     <user_interface>
@@ -647,9 +706,35 @@
         - accuracy, loss, val_accuracy, val_loss
       </models>
 
+      <strategies>
+        - id, name, description
+        - required_fields (JSON array) - auto-computed from conditions
+        - entry_conditions (JSON) - AND/OR tree with optimize flags
+        - exit_conditions (JSON) - list of condition/action rules
+        - initial_tp_percent, initial_tp_optimize, initial_tp_min/max/step
+        - initial_sl_percent, initial_sl_optimize, initial_sl_min/max/step
+        - created_at, updated_at
+      </strategies>
+
+      <strategy_optimizations>
+        - id, strategy_id (FK), backtest_id (FK)
+        - name, status (pending/running/completed/failed)
+        - fitness_metric (sharpe/return/profit_factor/win_rate/max_drawdown)
+        - optimization_type (genetic/brute_force)
+        - optimization_config (JSON) - GA params
+        - parameter_ranges (JSON) - snapshot of ranges
+        - best_params (JSON), best_fitness (float)
+        - all_results (JSON)
+        - progress (float), created_at, started_at, completed_at
+      </strategy_optimizations>
+
       <backtests>
         - id, model_id, name, start_date, end_date
-        - strategy_config (JSON), results (JSON)
+        - prediction_dataset_id (FK) - for model inference
+        - execution_dataset_id (FK) - for price action
+        - strategy_id (FK), strategy_params (JSON) - specific values used
+        - fitness_metric
+        - results (JSON), trades (JSON), equity_curve (JSON), drawdown_curve (JSON)
         - total_return, sharpe_ratio, max_drawdown
         - win_rate, profit_factor
         - created_at, updated_at
@@ -710,19 +795,36 @@
 
     <models>
       - GET /api/models - List all models
+        * Query params: datasetId (filter by training dataset), timeframe (filter by dataset timeframe), showAll (ignore filters)
       - GET /api/models/:id - Get model details
       - DELETE /api/models/:id - Delete model
       - POST /api/models/:id/export - Export model
       - GET /api/models/:id/predictions - Get model predictions on test data
+      - GET /api/models/:id/prediction-fields - Get model's prediction target fields for condition builder
     </models>
 
+    <strategies>
+      - GET /api/strategies - List all strategies
+        * Query params: search (filter by name)
+      - POST /api/strategies - Create new strategy
+      - GET /api/strategies/:id - Get strategy details
+      - PUT /api/strategies/:id - Update strategy
+      - DELETE /api/strategies/:id - Delete strategy
+      - GET /api/strategies/compatible/:modelId - Get strategies compatible with model's prediction fields
+    </strategies>
+
     <backtesting>
-      - GET /api/backtests - List backtests
-      - POST /api/backtests - Create and run backtest
-      - GET /api/backtests/:id - Get backtest results
+      - GET /api/backtests - List backtests (from database, no demo data)
+      - POST /api/backtests - Create and run single backtest
+        * Body: name, predictionDatasetId, executionDatasetId, modelId, strategyId, strategyParams, startDate, endDate, initialCapital, positionSizing, commission, slippage
+      - GET /api/backtests/:id - Get backtest results with full details
       - DELETE /api/backtests/:id - Delete backtest
       - POST /api/backtests/:id/export - Export backtest results
       - POST /api/backtests/compare - Compare multiple backtests
+      - POST /api/backtests/optimize - Run strategy optimization
+        * Body: name, predictionDatasetId, executionDatasetId, modelId, strategyId, fitnessMetric, optimizationType, optimizationConfig, startDate, endDate, initialCapital, etc.
+      - GET /api/backtests/optimize/:id - Get optimization progress and results
+      - GET /api/backtests/optimize/:id/progress - SSE stream for live optimization progress
     </backtesting>
 
     <profiles>
