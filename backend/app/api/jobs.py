@@ -1507,7 +1507,7 @@ async def save_elite_to_inventory(
             "batchSize": params.get('batch_size', 32),
             "epochs": job.get('geneticConfig', {}).get('trainingEpochs', 10)
         },
-        "trainingHistory": [],  # Could be populated from training logs
+        "trainingHistory": elite_model.get('training_history', []),
         "performanceMetrics": {
             "accuracy": metrics.get('accuracy', 0),
             "precision": metrics.get('precision', 0),
@@ -1827,7 +1827,7 @@ async def save_retrain_results(job_id: str, request: RetrainSaveRequest):
                 "jobId": job_id,
                 "status": "trained",
                 "hyperparameters": best_model['params'],
-                "trainingHistory": [],
+                "trainingHistory": best_model.get('training_history', []),
                 "performanceMetrics": {
                     "accuracy": best_model['metrics'].get('accuracy', 0),
                     "precision": best_model['metrics'].get('precision', 0),

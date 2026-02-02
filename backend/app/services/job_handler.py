@@ -458,6 +458,19 @@ def update_job_training_state(
         logger.warning(f"Failed to update job training state: {e}")
 
 
+def get_epoch_history(task_id: str) -> List[Dict[str, Any]]:
+    """Get the current epoch history for an individual (before it's reset)."""
+    try:
+        from app.api.jobs import jobs_store
+        if task_id in jobs_store:
+            job = jobs_store[task_id]
+            # Return a copy of the epoch history
+            return list(job.get("epochHistory", []))
+    except Exception as e:
+        logger.warning(f"Failed to get epoch history: {e}")
+    return []
+
+
 def add_individual_to_job(task_id: str, individual_record: Dict[str, Any]):
     """Add an evaluated individual to the job store for real-time UI access."""
     try:
@@ -1454,6 +1467,21 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
             prediction_horizon=prediction_horizon
         )
 
+        # Update job store with dataset statistics immediately (so UI can show them while training)
+        try:
+            from app.api.jobs import jobs_store
+            if task_id in jobs_store:
+                jobs_store[task_id]["trainRows"] = len(train_df)
+                jobs_store[task_id]["testRows"] = len(test_df)
+                jobs_store[task_id]["targetColumn"] = target_column
+                jobs_store[task_id]["trainPositives"] = train_positives
+                jobs_store[task_id]["testPositives"] = test_positives
+                jobs_store[task_id]["trainPositivesPct"] = round(train_positives / len(train_df) * 100, 2) if len(train_df) > 0 else 0
+                jobs_store[task_id]["testPositivesPct"] = round(test_positives / len(test_df) * 100, 2) if len(test_df) > 0 else 0
+                logger.info(f"Updated job store with dataset stats: train={len(train_df)}, test={len(test_df)}")
+        except Exception as e:
+            logger.warning(f"Failed to update job store with dataset stats: {e}")
+
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
 
@@ -2365,6 +2393,9 @@ def train_classification_optimization(
             except Exception as save_err:
                 logger.warning(f"Failed to save individual model: {save_err}")
 
+            # Capture training history before it gets reset
+            training_history = get_epoch_history(task_id)
+
             # Record individual
             individual_record = {
                 'generation': gen,
@@ -2376,7 +2407,8 @@ def train_classification_optimization(
                 'loss_function': current_loss_function,
                 'threshold': current_threshold,
                 'fitness': fitness,
-                'metrics': metrics
+                'metrics': metrics,
+                'training_history': training_history
             }
             progress_state['all_individuals'].append(individual_record)
 
@@ -2844,6 +2876,9 @@ def train_unified_optimization(
                 # Classification metrics (f1_score, accuracy, etc.) - higher is better
                 fitness = eval_result.get(optimize_metric, 0.0)
 
+            # Capture training history before it gets reset
+            training_history = get_epoch_history(task_id)
+
             # Track this individual for visualization
             individual_record = {
                 'generation': gen,
@@ -2851,7 +2886,8 @@ def train_unified_optimization(
                 'model_type': model_type,
                 'params': model_params,
                 'fitness': fitness,
-                'metrics': eval_result
+                'metrics': eval_result,
+                'training_history': training_history
             }
             progress_state['all_individuals'].append(individual_record)
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Play,
@@ -22,12 +22,25 @@ import {
   Filter,
   Save,
   FolderOpen,
-  X
+  X,
+  Database,
+  GitBranch,
+  Layers
 } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
 import ConfirmDialog from '../components/ConfirmDialog';
+import ConditionBuilder, {
+  ExitConditionsBuilder,
+  createEmptyGroup,
+  isConditionGroup
+} from '../components/ConditionBuilder';
+import type {
+  ConditionGroup,
+  ConditionTree,
+  ExitConditionSet,
+  AvailableField
+} from '../components/ConditionBuilder';
 import {
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -38,7 +51,8 @@ import {
   Area,
   ComposedChart,
   Bar,
-  ReferenceLine
+  ReferenceLine,
+  Line
 } from 'recharts';
 
 interface Model {
@@ -51,28 +65,35 @@ interface Model {
   };
 }
 
-interface StrategyConfig {
-  entryThreshold: number;
-  exitThreshold: number;
-  stopLossPercent: number;
-  takeProfitPercent: number;
-  trailingStop: boolean;
-  trailingStopPercent: number;
-  positionSizing: string;
-  positionSize: number;
-  maxPositions: number;
-  commission: number;
-  slippage: number;
+interface Dataset {
+  id: number;
+  name: string;
+  ticker: string;
+  timeframe: string;
+  startDate: string;
+  endDate: string;
+  rowsCount: number;
 }
 
-interface AdvancedOptions {
-  useMarginTrading: boolean;
-  leverage: number;
-  requireConfirmation: boolean;
-  confirmationBars: number;
-  cooldownBars: number;
-  allowShorts: boolean;
-  hedging: boolean;
+interface Strategy {
+  id: number;
+  name: string;
+  description: string | null;
+  requiredFields: string[];
+  entryConditions: ConditionTree;
+  exitConditions: ExitConditionSet[];
+  initialTpPercent: number;
+  initialTpOptimize: boolean;
+  initialTpMin: number | null;
+  initialTpMax: number | null;
+  initialTpStep: number | null;
+  initialSlPercent: number;
+  initialSlOptimize: boolean;
+  initialSlMin: number | null;
+  initialSlMax: number | null;
+  initialSlStep: number | null;
+  createdAt: string;
+  updatedAt: string | null;
 }
 
 interface Trade {
@@ -97,15 +118,22 @@ interface BacktestResults {
 }
 
 interface Backtest {
-  id: string;
+  id: number;
   name: string;
-  modelId: string;
-  modelName: string;
+  modelId: number;
+  predictionDatasetId: number;
+  executionDatasetId: number;
+  strategyId: number | null;
+  strategyParams: Record<string, unknown> | null;
   startDate: string;
   endDate: string;
+  initialCapital: number;
+  positionSizingType: string;
+  positionSizingValue: number;
+  commission: number;
+  slippage: number;
+  fitnessMetric: string | null;
   status: string;
-  strategyConfig: StrategyConfig;
-  advancedOptions: AdvancedOptions | null;
   totalReturn: number | null;
   sharpeRatio: number | null;
   maxDrawdown: number | null;
@@ -120,58 +148,55 @@ interface Backtest {
   completedAt: string | null;
 }
 
-interface SavedStrategy {
-  id: string;
-  name: string;
-  description: string | null;
-  strategyConfig: StrategyConfig;
-  advancedOptions: AdvancedOptions | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 const API_BASE = 'http://localhost:8000/api';
 
-const defaultStrategyConfig: StrategyConfig = {
-  entryThreshold: 0.6,
-  exitThreshold: 0.4,
-  stopLossPercent: 5.0,
-  takeProfitPercent: 10.0,
-  trailingStop: false,
-  trailingStopPercent: 2.0,
-  positionSizing: 'fixed',
-  positionSize: 1000,
-  maxPositions: 1,
-  commission: 0.1,
-  slippage: 0.05
-};
-
-const defaultAdvancedOptions: AdvancedOptions = {
-  useMarginTrading: false,
-  leverage: 1.0,
-  requireConfirmation: false,
-  confirmationBars: 2,
-  cooldownBars: 0,
-  allowShorts: false,
-  hedging: false
-};
-
 const Backtesting: React.FC = () => {
-  // useNavigate available if needed for routing
   const _navigate = useNavigate();
-  void _navigate; // Suppress unused warning
+  void _navigate;
 
   // State
   const [models, setModels] = useState<Model[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [backtests, setBacktests] = useState<Backtest[]>([]);
+
+  // Form state
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [predictionDatasetId, setPredictionDatasetId] = useState<number | ''>('');
+  const [executionDatasetId, setExecutionDatasetId] = useState<number | ''>('');
   const [backtestName, setBacktestName] = useState('');
   const [startDate, setStartDate] = useState('2025-01-01');
   const [endDate, setEndDate] = useState('2025-12-31');
-  const [strategyConfig, setStrategyConfig] = useState<StrategyConfig>(defaultStrategyConfig);
-  const [advancedOptions, setAdvancedOptions] = useState<AdvancedOptions>(defaultAdvancedOptions);
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Strategy configuration
+  const [selectedStrategyId, setSelectedStrategyId] = useState<number | ''>('');
+  const [useNewStrategy, setUseNewStrategy] = useState(true);
+  const [entryConditions, setEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
+  const [exitConditions, setExitConditions] = useState<ExitConditionSet[]>([]);
+  const [initialTpPercent, setInitialTpPercent] = useState(5.0);
+  const [initialSlPercent, setInitialSlPercent] = useState(2.0);
+  const [initialTpOptimize, setInitialTpOptimize] = useState(false);
+  const [initialSlOptimize, setInitialSlOptimize] = useState(false);
+  const [initialTpMin, setInitialTpMin] = useState(2.0);
+  const [initialTpMax, setInitialTpMax] = useState(15.0);
+  const [initialTpStep, setInitialTpStep] = useState(1.0);
+  const [initialSlMin, setInitialSlMin] = useState(1.0);
+  const [initialSlMax, setInitialSlMax] = useState(10.0);
+  const [initialSlStep, setInitialSlStep] = useState(0.5);
+
+  // Backtest settings
+  const [initialCapital, setInitialCapital] = useState(10000);
+  const [positionSizingType, setPositionSizingType] = useState('fixed');
+  const [positionSizingValue, setPositionSizingValue] = useState(1000);
+  const [commission, setCommission] = useState(0.1);
+  const [slippage, setSlippage] = useState(0.05);
+
+  // Available fields from model
+  const [availableFields, setAvailableFields] = useState<AvailableField[]>([]);
+
+  // UI state
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showConditionBuilder, setShowConditionBuilder] = useState(false);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,8 +208,7 @@ const Backtesting: React.FC = () => {
   const [tradeSortField, setTradeSortField] = useState<'pnl' | 'date' | 'duration'>('date');
   const [tradeSortAsc, setTradeSortAsc] = useState(false);
 
-  // Saved strategies
-  const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([]);
+  // Dialogs
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveStrategyName, setSaveStrategyName] = useState('');
   const [saveStrategyDescription, setSaveStrategyDescription] = useState('');
@@ -198,33 +222,75 @@ const Backtesting: React.FC = () => {
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
 
+  // Fetch initial data
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Fetch prediction fields when model changes
+  const fetchPredictionFields = useCallback(async (modelId: string) => {
+    if (!modelId) {
+      setAvailableFields([]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/models/${modelId}/prediction-fields`);
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableFields(data.fields || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch prediction fields:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedModel) {
+      fetchPredictionFields(selectedModel);
+    }
+  }, [selectedModel, fetchPredictionFields]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
 
-      // Fetch models
-      const modelsRes = await fetch(`${API_BASE}/models`);
+      // Fetch models, datasets, strategies, and backtests in parallel
+      const [modelsRes, datasetsRes, strategiesRes, backtestsRes] = await Promise.all([
+        fetch(`${API_BASE}/models`),
+        fetch(`${API_BASE}/datasets`),
+        fetch(`${API_BASE}/strategies`),
+        fetch(`${API_BASE}/backtests`)
+      ]);
+
       if (modelsRes.ok) {
         const data = await modelsRes.json();
         setModels(data.models || []);
       }
 
-      // Fetch backtests
-      const backtestsRes = await fetch(`${API_BASE}/backtests`);
+      if (datasetsRes.ok) {
+        const data = await datasetsRes.json();
+        // Transform snake_case to camelCase
+        const transformedDatasets = (data.datasets || []).map((d: Record<string, unknown>) => ({
+          id: d.id,
+          name: d.name,
+          ticker: d.ticker,
+          timeframe: d.timeframe,
+          startDate: d.start_date,
+          endDate: d.end_date,
+          rowsCount: d.rows_count
+        }));
+        setDatasets(transformedDatasets);
+      }
+
+      if (strategiesRes.ok) {
+        const data = await strategiesRes.json();
+        setStrategies(data.strategies || []);
+      }
+
       if (backtestsRes.ok) {
         const data = await backtestsRes.json();
         setBacktests(data.backtests || []);
-      }
-
-      // Fetch saved strategies
-      const strategiesRes = await fetch(`${API_BASE}/backtests/strategies/saved`);
-      if (strategiesRes.ok) {
-        const data = await strategiesRes.json();
-        setSavedStrategies(data.strategies || []);
       }
 
       setError(null);
@@ -241,6 +307,16 @@ const Backtesting: React.FC = () => {
       return;
     }
 
+    if (!predictionDatasetId) {
+      setError('Please select a prediction dataset');
+      return;
+    }
+
+    if (!executionDatasetId) {
+      setError('Please select an execution dataset');
+      return;
+    }
+
     if (!backtestName.trim()) {
       setError('Please enter a backtest name');
       return;
@@ -250,21 +326,72 @@ const Backtesting: React.FC = () => {
       setRunning(true);
       setError(null);
 
+      // Get model numeric ID
+      const model = models.find(m => m.id === selectedModel);
+      if (!model) {
+        throw new Error('Selected model not found');
+      }
+
+      // Build strategy params if using new strategy
+      let strategyParams = null;
+      let strategyId = null;
+
+      if (useNewStrategy) {
+        strategyParams = {
+          entryConditions,
+          exitConditions: exitConditions.map(ec => ({
+            id: ec.id,
+            name: ec.name,
+            conditions: ec.conditions,
+            action: ec.action,
+            actionValue: ec.actionValue,
+            actionValueOptimize: ec.actionValueOptimize,
+            actionValueMin: ec.actionValueMin,
+            actionValueMax: ec.actionValueMax,
+            actionValueStep: ec.actionValueStep
+          })),
+          initialTpPercent,
+          initialTpOptimize,
+          initialTpMin: initialTpOptimize ? initialTpMin : null,
+          initialTpMax: initialTpOptimize ? initialTpMax : null,
+          initialTpStep: initialTpOptimize ? initialTpStep : null,
+          initialSlPercent,
+          initialSlOptimize,
+          initialSlMin: initialSlOptimize ? initialSlMin : null,
+          initialSlMax: initialSlOptimize ? initialSlMax : null,
+          initialSlStep: initialSlOptimize ? initialSlStep : null
+        };
+      } else if (selectedStrategyId) {
+        strategyId = selectedStrategyId;
+      }
+
+      // Extract numeric model ID from the string ID
+      const modelIdMatch = selectedModel.match(/(\d+)/);
+      const modelIdNum = modelIdMatch ? parseInt(modelIdMatch[1]) : 0;
+
       const res = await fetch(`${API_BASE}/backtests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: backtestName,
-          modelId: selectedModel,
-          startDate,
-          endDate,
-          strategyConfig,
-          advancedOptions: showAdvanced ? advancedOptions : null
+          model_id: modelIdNum,
+          prediction_dataset_id: predictionDatasetId,
+          execution_dataset_id: executionDatasetId,
+          strategy_id: strategyId,
+          strategy_params: strategyParams,
+          start_date: startDate,
+          end_date: endDate,
+          initial_capital: initialCapital,
+          position_sizing_type: positionSizingType,
+          position_sizing_value: positionSizingValue,
+          commission,
+          slippage
         })
       });
 
       if (!res.ok) {
-        throw new Error('Failed to run backtest');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to run backtest');
       }
 
       const backtest = await res.json();
@@ -286,7 +413,7 @@ const Backtesting: React.FC = () => {
     }
   };
 
-  const viewBacktest = async (id: string) => {
+  const viewBacktest = async (id: number) => {
     try {
       const res = await fetch(`${API_BASE}/backtests/${id}`);
       if (res.ok) {
@@ -298,7 +425,7 @@ const Backtesting: React.FC = () => {
     }
   };
 
-  const deleteBacktest = (id: string) => {
+  const deleteBacktest = (id: number) => {
     setConfirmDialog({
       isOpen: true,
       title: 'Delete Backtest',
@@ -318,7 +445,7 @@ const Backtesting: React.FC = () => {
     });
   };
 
-  const exportBacktest = async (id: string) => {
+  const exportBacktest = async (id: number) => {
     try {
       const res = await fetch(`${API_BASE}/backtests/${id}/export?format=csv`, { method: 'POST' });
       if (res.ok) {
@@ -368,14 +495,34 @@ const Backtesting: React.FC = () => {
       setSavingStrategy(true);
       setError(null);
 
-      const res = await fetch(`${API_BASE}/backtests/strategies/save`, {
+      const res = await fetch(`${API_BASE}/strategies`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: saveStrategyName,
           description: saveStrategyDescription || null,
-          strategyConfig,
-          advancedOptions: showAdvanced ? advancedOptions : null
+          entry_conditions: entryConditions,
+          exit_conditions: exitConditions.map(ec => ({
+            id: ec.id,
+            name: ec.name,
+            conditions: ec.conditions,
+            action: ec.action,
+            action_value: ec.actionValue,
+            action_value_optimize: ec.actionValueOptimize,
+            action_value_min: ec.actionValueMin,
+            action_value_max: ec.actionValueMax,
+            action_value_step: ec.actionValueStep
+          })),
+          initial_tp_percent: initialTpPercent,
+          initial_tp_optimize: initialTpOptimize,
+          initial_tp_min: initialTpOptimize ? initialTpMin : null,
+          initial_tp_max: initialTpOptimize ? initialTpMax : null,
+          initial_tp_step: initialTpOptimize ? initialTpStep : null,
+          initial_sl_percent: initialSlPercent,
+          initial_sl_optimize: initialSlOptimize,
+          initial_sl_min: initialSlOptimize ? initialSlMin : null,
+          initial_sl_max: initialSlOptimize ? initialSlMax : null,
+          initial_sl_step: initialSlOptimize ? initialSlStep : null
         })
       });
 
@@ -384,7 +531,7 @@ const Backtesting: React.FC = () => {
       }
 
       const saved = await res.json();
-      setSavedStrategies(prev => [saved, ...prev]);
+      setStrategies(prev => [saved, ...prev]);
       setShowSaveDialog(false);
       setSaveStrategyName('');
       setSaveStrategyDescription('');
@@ -395,19 +542,34 @@ const Backtesting: React.FC = () => {
     }
   };
 
-  const loadStrategy = (strategy: SavedStrategy) => {
-    setStrategyConfig(strategy.strategyConfig);
-    if (strategy.advancedOptions) {
-      setAdvancedOptions(strategy.advancedOptions);
-      setShowAdvanced(true);
+  const loadStrategy = (strategy: Strategy) => {
+    // Load entry conditions - ensure it's a valid group
+    if (strategy.entryConditions && isConditionGroup(strategy.entryConditions)) {
+      setEntryConditions(strategy.entryConditions);
     } else {
-      setAdvancedOptions(defaultAdvancedOptions);
-      setShowAdvanced(false);
+      setEntryConditions(createEmptyGroup('AND'));
     }
+
+    // Load exit conditions
+    setExitConditions(strategy.exitConditions || []);
+
+    // Load TP/SL settings
+    setInitialTpPercent(strategy.initialTpPercent ?? 5.0);
+    setInitialTpOptimize(strategy.initialTpOptimize ?? false);
+    setInitialTpMin(strategy.initialTpMin ?? 2.0);
+    setInitialTpMax(strategy.initialTpMax ?? 15.0);
+    setInitialTpStep(strategy.initialTpStep ?? 1.0);
+    setInitialSlPercent(strategy.initialSlPercent ?? 2.0);
+    setInitialSlOptimize(strategy.initialSlOptimize ?? false);
+    setInitialSlMin(strategy.initialSlMin ?? 1.0);
+    setInitialSlMax(strategy.initialSlMax ?? 10.0);
+    setInitialSlStep(strategy.initialSlStep ?? 0.5);
+
     setShowLoadDropdown(false);
+    setUseNewStrategy(true);
   };
 
-  const deleteStrategy = (strategyId: string, e: React.MouseEvent) => {
+  const deleteStrategy = (strategyId: number, e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirmDialog({
       isOpen: true,
@@ -416,8 +578,8 @@ const Backtesting: React.FC = () => {
       variant: 'danger',
       onConfirm: async () => {
         try {
-          await fetch(`${API_BASE}/backtests/strategies/${strategyId}`, { method: 'DELETE' });
-          setSavedStrategies(prev => prev.filter(s => s.id !== strategyId));
+          await fetch(`${API_BASE}/strategies/${strategyId}`, { method: 'DELETE' });
+          setStrategies(prev => prev.filter(s => s.id !== strategyId));
         } catch (err) {
           setError('Failed to delete strategy');
         }
@@ -496,6 +658,59 @@ const Backtesting: React.FC = () => {
                 </select>
               </div>
 
+              {/* Dual Dataset Selection */}
+              <div className="space-y-3 border-t border-gray-200 dark:border-gray-700 pt-4">
+                <h3 className="text-sm font-semibold flex items-center gap-2 text-gray-900 dark:text-gray-100">
+                  <Database className="w-4 h-4 text-blue-500" />
+                  Dataset Selection
+                </h3>
+
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                    Prediction Dataset (for model signals)
+                  </label>
+                  <select
+                    value={predictionDatasetId}
+                    onChange={e => setPredictionDatasetId(e.target.value ? parseInt(e.target.value) : '')}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  >
+                    <option value="">-- Select prediction dataset --</option>
+                    {datasets.map(ds => (
+                      <option key={ds.id} value={ds.id}>
+                        {ds.name} ({ds.ticker} {ds.timeframe})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                    Execution Dataset (for price simulation)
+                  </label>
+                  <select
+                    value={executionDatasetId}
+                    onChange={e => setExecutionDatasetId(e.target.value ? parseInt(e.target.value) : '')}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  >
+                    <option value="">-- Select execution dataset --</option>
+                    {datasets.map(ds => (
+                      <option key={ds.id} value={ds.id}>
+                        {ds.name} ({ds.ticker} {ds.timeframe})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setExecutionDatasetId(predictionDatasetId)}
+                  disabled={!predictionDatasetId}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                >
+                  Use same dataset for both
+                </button>
+              </div>
+
               {/* Date Range */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -523,127 +738,316 @@ const Backtesting: React.FC = () => {
                 </div>
               </div>
 
-              {/* Strategy Parameters */}
+              {/* Strategy Selection */}
               <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
                 <h3 className="text-sm font-semibold mb-3 flex items-center gap-2 text-gray-900 dark:text-gray-100">
-                  <Target className="w-4 h-4 text-blue-500" />
-                  Strategy Parameters
+                  <Layers className="w-4 h-4 text-purple-500" />
+                  Strategy
                 </h3>
 
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Entry Threshold</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={strategyConfig.entryThreshold}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, entryThreshold: parseFloat(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Exit Threshold</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={strategyConfig.exitThreshold}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, exitThreshold: parseFloat(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Stop Loss %</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={strategyConfig.stopLossPercent}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, stopLossPercent: parseFloat(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit %</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={strategyConfig.takeProfitPercent}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, takeProfitPercent: parseFloat(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-4 mb-3">
+                  <label className="flex items-center gap-2 text-sm">
                     <input
-                      type="checkbox"
-                      id="trailingStop"
-                      checked={strategyConfig.trailingStop}
-                      onChange={e => setStrategyConfig({ ...strategyConfig, trailingStop: e.target.checked })}
-                      className="rounded"
+                      type="radio"
+                      checked={useNewStrategy}
+                      onChange={() => setUseNewStrategy(true)}
+                      className="text-blue-500"
                     />
-                    <label htmlFor="trailingStop" className="text-sm text-gray-600 dark:text-gray-400">
-                      Trailing Stop
-                    </label>
-                    {strategyConfig.trailingStop && (
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={strategyConfig.trailingStopPercent}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, trailingStopPercent: parseFloat(e.target.value) })}
-                        className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
+                    <span className="text-gray-700 dark:text-gray-300">New Strategy</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      checked={!useNewStrategy}
+                      onChange={() => setUseNewStrategy(false)}
+                      className="text-blue-500"
+                    />
+                    <span className="text-gray-700 dark:text-gray-300">Use Saved</span>
+                  </label>
+                </div>
+
+                {!useNewStrategy && (
+                  <select
+                    value={selectedStrategyId}
+                    onChange={e => setSelectedStrategyId(e.target.value ? parseInt(e.target.value) : '')}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  >
+                    <option value="">-- Select a saved strategy --</option>
+                    {strategies.map(strat => (
+                      <option key={strat.id} value={strat.id}>
+                        {strat.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Condition Builder Toggle */}
+              {useNewStrategy && (
+                <button
+                  onClick={() => setShowConditionBuilder(!showConditionBuilder)}
+                  className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 w-full justify-between p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
+                >
+                  <span className="flex items-center gap-2">
+                    <GitBranch className="w-4 h-4" />
+                    Entry/Exit Conditions
+                  </span>
+                  {showConditionBuilder ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+              )}
+
+              {/* Condition Builder */}
+              {useNewStrategy && showConditionBuilder && (
+                <div className="space-y-4 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                  {/* Entry Conditions */}
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                      <Target className="w-4 h-4 text-green-500" />
+                      Entry Conditions
+                    </h4>
+                    <ConditionBuilder
+                      value={entryConditions}
+                      onChange={(val) => {
+                        if (isConditionGroup(val)) {
+                          setEntryConditions(val);
+                        }
+                      }}
+                      availableFields={availableFields}
+                      showOptimization={true}
+                    />
+                  </div>
+
+                  {/* Exit Conditions */}
+                  <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                      <Target className="w-4 h-4 text-red-500" />
+                      Exit Conditions
+                    </h4>
+                    <ExitConditionsBuilder
+                      value={exitConditions}
+                      onChange={setExitConditions}
+                      availableFields={availableFields}
+                      showOptimization={true}
+                    />
+                  </div>
+
+                  {/* Initial TP/SL */}
+                  <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Initial Take Profit / Stop Loss
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit %</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={initialTpPercent}
+                            onChange={e => setInitialTpPercent(parseFloat(e.target.value))}
+                            className="flex-1 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          />
+                          <label className="flex items-center gap-1 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={initialTpOptimize}
+                              onChange={e => setInitialTpOptimize(e.target.checked)}
+                              className="rounded"
+                            />
+                            Opt
+                          </label>
+                        </div>
+                        {initialTpOptimize && (
+                          <div className="flex items-center gap-1 mt-1">
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={initialTpMin}
+                              onChange={e => setInitialTpMin(parseFloat(e.target.value))}
+                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Min"
+                            />
+                            <span className="text-xs text-gray-500">-</span>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={initialTpMax}
+                              onChange={e => setInitialTpMax(parseFloat(e.target.value))}
+                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Max"
+                            />
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={initialTpStep}
+                              onChange={e => setInitialTpStep(parseFloat(e.target.value))}
+                              className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Step"
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Stop Loss %</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={initialSlPercent}
+                            onChange={e => setInitialSlPercent(parseFloat(e.target.value))}
+                            className="flex-1 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          />
+                          <label className="flex items-center gap-1 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={initialSlOptimize}
+                              onChange={e => setInitialSlOptimize(e.target.checked)}
+                              className="rounded"
+                            />
+                            Opt
+                          </label>
+                        </div>
+                        {initialSlOptimize && (
+                          <div className="flex items-center gap-1 mt-1">
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={initialSlMin}
+                              onChange={e => setInitialSlMin(parseFloat(e.target.value))}
+                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Min"
+                            />
+                            <span className="text-xs text-gray-500">-</span>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={initialSlMax}
+                              onChange={e => setInitialSlMax(parseFloat(e.target.value))}
+                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Max"
+                            />
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={initialSlStep}
+                              onChange={e => setInitialSlStep(parseFloat(e.target.value))}
+                              className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Step"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Save/Load Strategy Buttons */}
+              {useNewStrategy && (
+                <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
+                  <Tooltip content="Save current strategy configuration for later use">
+                    <button
+                      onClick={() => setShowSaveDialog(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <Save className="w-4 h-4" />
+                      Save Strategy
+                    </button>
+                  </Tooltip>
+
+                  <div className="relative">
+                    <Tooltip content="Load a previously saved strategy configuration">
+                      <button
+                        onClick={() => setShowLoadDropdown(!showLoadDropdown)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        <FolderOpen className="w-4 h-4" />
+                        Load Strategy
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                    </Tooltip>
+
+                    {showLoadDropdown && (
+                      <div className="absolute z-10 left-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 max-h-60 overflow-y-auto">
+                        {strategies.length === 0 ? (
+                          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-3">No saved strategies</p>
+                        ) : (
+                          strategies.map(strat => (
+                            <div
+                              key={strat.id}
+                              onClick={() => loadStrategy(strat)}
+                              className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center justify-between"
+                            >
+                              <div>
+                                <p className="text-sm font-medium truncate text-gray-900 dark:text-gray-100">{strat.name}</p>
+                                {strat.description && (
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{strat.description}</p>
+                                )}
+                              </div>
+                              <button
+                                onClick={(e) => deleteStrategy(strat.id, e)}
+                                className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-red-500"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Advanced Options Toggle */}
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+              >
+                <Settings className="w-4 h-4" />
+                Backtest Settings
+                {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {/* Advanced Options */}
+              {showAdvanced && (
+                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Initial Capital</label>
+                    <input
+                      type="number"
+                      min="1000"
+                      step="1000"
+                      value={initialCapital}
+                      onChange={e => setInitialCapital(parseFloat(e.target.value))}
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    />
                   </div>
 
                   <div>
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Position Sizing</label>
                     <select
-                      value={strategyConfig.positionSizing}
-                      onChange={e => setStrategyConfig({ ...strategyConfig, positionSizing: e.target.value })}
+                      value={positionSizingType}
+                      onChange={e => setPositionSizingType(e.target.value)}
                       className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     >
                       <option value="fixed">Fixed Amount</option>
                       <option value="percent">Percent of Capital</option>
-                      <option value="kelly">Kelly Criterion</option>
                     </select>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                        {strategyConfig.positionSizing === 'percent' ? 'Position %' : 'Position Size'}
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step={strategyConfig.positionSizing === 'percent' ? '1' : '100'}
-                        value={strategyConfig.positionSize}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, positionSize: parseFloat(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Max Positions</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={strategyConfig.maxPositions}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, maxPositions: parseInt(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      {positionSizingType === 'percent' ? 'Position %' : 'Position Size ($)'}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step={positionSizingType === 'percent' ? '1' : '100'}
+                      value={positionSizingValue}
+                      onChange={e => setPositionSizingValue(parseFloat(e.target.value))}
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    />
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -653,8 +1057,8 @@ const Backtesting: React.FC = () => {
                         type="number"
                         min="0"
                         step="0.01"
-                        value={strategyConfig.commission}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, commission: parseFloat(e.target.value) })}
+                        value={commission}
+                        onChange={e => setCommission(parseFloat(e.target.value))}
                         className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                       />
                     </div>
@@ -664,163 +1068,11 @@ const Backtesting: React.FC = () => {
                         type="number"
                         min="0"
                         step="0.01"
-                        value={strategyConfig.slippage}
-                        onChange={e => setStrategyConfig({ ...strategyConfig, slippage: parseFloat(e.target.value) })}
+                        value={slippage}
+                        onChange={e => setSlippage(parseFloat(e.target.value))}
                         className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                       />
                     </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Save/Load Strategy Buttons */}
-              <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
-                <Tooltip content="Save current strategy configuration for later use">
-                  <button
-                    onClick={() => setShowSaveDialog(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                  >
-                    <Save className="w-4 h-4" />
-                    Save Strategy
-                  </button>
-                </Tooltip>
-
-                <div className="relative">
-                  <Tooltip content="Load a previously saved strategy configuration">
-                    <button
-                      onClick={() => setShowLoadDropdown(!showLoadDropdown)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                    >
-                      <FolderOpen className="w-4 h-4" />
-                      Load Strategy
-                      <ChevronDown className="w-3 h-3" />
-                    </button>
-                  </Tooltip>
-
-                  {showLoadDropdown && (
-                    <div className="absolute z-10 left-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 max-h-60 overflow-y-auto">
-                      {savedStrategies.length === 0 ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-400 text-center py-3">No saved strategies</p>
-                      ) : (
-                        savedStrategies.map(strat => (
-                          <div
-                            key={strat.id}
-                            onClick={() => loadStrategy(strat)}
-                            className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center justify-between"
-                          >
-                            <div>
-                              <p className="text-sm font-medium truncate">{strat.name}</p>
-                              {strat.description && (
-                                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{strat.description}</p>
-                              )}
-                            </div>
-                            <button
-                              onClick={(e) => deleteStrategy(strat.id, e)}
-                              className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-red-500"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Advanced Options Toggle */}
-              <button
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
-              >
-                <Settings className="w-4 h-4" />
-                Advanced Options
-                {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </button>
-
-              {/* Advanced Options */}
-              {showAdvanced && (
-                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="marginTrading"
-                      checked={advancedOptions.useMarginTrading}
-                      onChange={e => setAdvancedOptions({ ...advancedOptions, useMarginTrading: e.target.checked })}
-                      className="rounded"
-                    />
-                    <label htmlFor="marginTrading" className="text-sm text-gray-600 dark:text-gray-400">
-                      Margin Trading
-                    </label>
-                    {advancedOptions.useMarginTrading && (
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        step="0.5"
-                        value={advancedOptions.leverage}
-                        onChange={e => setAdvancedOptions({ ...advancedOptions, leverage: parseFloat(e.target.value) })}
-                        className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                        placeholder="Leverage"
-                      />
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="requireConfirmation"
-                      checked={advancedOptions.requireConfirmation}
-                      onChange={e => setAdvancedOptions({ ...advancedOptions, requireConfirmation: e.target.checked })}
-                      className="rounded"
-                    />
-                    <label htmlFor="requireConfirmation" className="text-sm text-gray-600 dark:text-gray-400">
-                      Require Signal Confirmation
-                    </label>
-                    {advancedOptions.requireConfirmation && (
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={advancedOptions.confirmationBars}
-                        onChange={e => setAdvancedOptions({ ...advancedOptions, confirmationBars: parseInt(e.target.value) })}
-                        className="w-16 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                        placeholder="Bars"
-                      />
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Cooldown Bars (after exit)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="20"
-                      value={advancedOptions.cooldownBars}
-                      onChange={e => setAdvancedOptions({ ...advancedOptions, cooldownBars: parseInt(e.target.value) })}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-                      <input
-                        type="checkbox"
-                        checked={advancedOptions.allowShorts}
-                        onChange={e => setAdvancedOptions({ ...advancedOptions, allowShorts: e.target.checked })}
-                        className="rounded"
-                      />
-                      Allow Shorts
-                    </label>
-                    <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-                      <input
-                        type="checkbox"
-                        checked={advancedOptions.hedging}
-                        onChange={e => setAdvancedOptions({ ...advancedOptions, hedging: e.target.checked })}
-                        className="rounded"
-                      />
-                      Hedging
-                    </label>
                   </div>
                 </div>
               )}
@@ -828,7 +1080,7 @@ const Backtesting: React.FC = () => {
               {/* Run Button */}
               <button
                 onClick={runBacktest}
-                disabled={running || !selectedModel}
+                disabled={running || !selectedModel || !predictionDatasetId || !executionDatasetId}
                 className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {running ? (
@@ -854,7 +1106,7 @@ const Backtesting: React.FC = () => {
             </h3>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {backtests.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-400 text-center py-4">No backtests yet</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No backtests yet</p>
               ) : (
                 backtests.map(bt => (
                   <div
@@ -867,7 +1119,7 @@ const Backtesting: React.FC = () => {
                     onClick={() => viewBacktest(bt.id)}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium text-sm truncate">{bt.name}</span>
+                      <span className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">{bt.name}</span>
                       <div className="flex items-center gap-1">
                         <button
                           onClick={e => { e.stopPropagation(); exportBacktest(bt.id); }}
@@ -885,14 +1137,18 @@ const Backtesting: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{bt.modelName}</p>
-                    <div className="flex items-center gap-3 text-xs">
-                      <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
-                      </span>
-                      <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
-                      <span className="text-gray-500">{bt.totalTrades} trades</span>
-                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      {bt.status === 'pending' ? 'Pending...' : bt.status === 'running' ? 'Running...' : `Model #${bt.modelId}`}
+                    </p>
+                    {bt.status === 'completed' && (
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
+                        </span>
+                        <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
+                        <span className="text-gray-500">{bt.totalTrades} trades</span>
+                      </div>
+                    )}
                   </div>
                 ))
               )}
@@ -989,7 +1245,7 @@ const Backtesting: React.FC = () => {
                     ].map(tab => (
                       <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id as any)}
+                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'price' | 'trades')}
                         className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors text-sm ${
                           activeTab === tab.id
                             ? 'border-blue-500 text-blue-600'
@@ -1066,8 +1322,8 @@ const Backtesting: React.FC = () => {
                           <Filter className="w-4 h-4 text-gray-500" />
                           <select
                             value={tradeFilter}
-                            onChange={e => setTradeFilter(e.target.value as any)}
-                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
+                            onChange={e => setTradeFilter(e.target.value as 'all' | 'profit' | 'loss')}
+                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                           >
                             <option value="all">All Trades</option>
                             <option value="profit">Profitable</option>
@@ -1078,8 +1334,8 @@ const Backtesting: React.FC = () => {
                           <span className="text-sm text-gray-500 dark:text-gray-400">Sort:</span>
                           <select
                             value={tradeSortField}
-                            onChange={e => setTradeSortField(e.target.value as any)}
-                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
+                            onChange={e => setTradeSortField(e.target.value as 'pnl' | 'date' | 'duration')}
+                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                           >
                             <option value="date">Date</option>
                             <option value="pnl">P&L</option>
@@ -1099,25 +1355,25 @@ const Backtesting: React.FC = () => {
                         <table className="w-full text-sm">
                           <thead className="bg-gray-50 dark:bg-gray-700/50 sticky top-0">
                             <tr>
-                              <th className="px-3 py-2 text-left">Entry</th>
-                              <th className="px-3 py-2 text-left">Exit</th>
-                              <th className="px-3 py-2 text-right">Entry $</th>
-                              <th className="px-3 py-2 text-right">Exit $</th>
-                              <th className="px-3 py-2 text-center">Dir</th>
-                              <th className="px-3 py-2 text-right">Size</th>
-                              <th className="px-3 py-2 text-right">P&L</th>
-                              <th className="px-3 py-2 text-right">P&L %</th>
-                              <th className="px-3 py-2 text-center">Duration</th>
-                              <th className="px-3 py-2 text-center">Reason</th>
+                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Entry</th>
+                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Exit</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Entry $</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Exit $</th>
+                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Dir</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Size</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">P&L</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">P&L %</th>
+                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Duration</th>
+                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Reason</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                             {getFilteredTrades().map(trade => (
                               <tr key={trade.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
-                                <td className="px-3 py-2">{trade.entryDate}</td>
-                                <td className="px-3 py-2">{trade.exitDate}</td>
-                                <td className="px-3 py-2 text-right">${trade.entryPrice.toFixed(2)}</td>
-                                <td className="px-3 py-2 text-right">${trade.exitPrice.toFixed(2)}</td>
+                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.entryDate}</td>
+                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.exitDate}</td>
+                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.entryPrice.toFixed(2)}</td>
+                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.exitPrice.toFixed(2)}</td>
                                 <td className="px-3 py-2 text-center">
                                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                                     trade.direction === 'long'
@@ -1127,16 +1383,16 @@ const Backtesting: React.FC = () => {
                                     {trade.direction}
                                   </span>
                                 </td>
-                                <td className="px-3 py-2 text-right">{trade.size}</td>
+                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">{trade.size}</td>
                                 <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                   {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
                                 </td>
                                 <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                   {trade.pnl >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
                                 </td>
-                                <td className="px-3 py-2 text-center">{trade.duration} bars</td>
+                                <td className="px-3 py-2 text-center text-gray-900 dark:text-gray-100">{trade.duration} bars</td>
                                 <td className="px-3 py-2 text-center">
-                                  <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-xs">
+                                  <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-xs text-gray-700 dark:text-gray-300">
                                     {trade.exitReason}
                                   </span>
                                 </td>
@@ -1214,12 +1470,10 @@ const Backtesting: React.FC = () => {
                 <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-sm">
                   <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Current Configuration:</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-400">
-                    <span>Entry: {strategyConfig.entryThreshold}</span>
-                    <span>Exit: {strategyConfig.exitThreshold}</span>
-                    <span>Stop Loss: {strategyConfig.stopLossPercent}%</span>
-                    <span>Take Profit: {strategyConfig.takeProfitPercent}%</span>
-                    <span>Position: {strategyConfig.positionSizing}</span>
-                    <span>Trailing: {strategyConfig.trailingStop ? 'Yes' : 'No'}</span>
+                    <span>Entry conditions: {entryConditions.conditions.length}</span>
+                    <span>Exit rules: {exitConditions.length}</span>
+                    <span>Take Profit: {initialTpPercent}%</span>
+                    <span>Stop Loss: {initialSlPercent}%</span>
                   </div>
                 </div>
               </div>

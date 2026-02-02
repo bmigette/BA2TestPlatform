@@ -18,7 +18,9 @@ import {
   Zap,
   RefreshCw,
   X,
-  Database
+  Database,
+  Eye,
+  Play
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -90,6 +92,37 @@ interface ConfusionMatrix {
   };
 }
 
+interface PredictionResult {
+  date: string;
+  close: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  actual: number | null;
+  probability: number;
+  predictedClass: number;
+  correct: boolean | null;
+}
+
+interface PredictionsResponse {
+  modelId: string;
+  datasetId: number;
+  targetColumn: string;
+  predictionHorizon: number;
+  predictionMode: string;
+  threshold: number;
+  summary: {
+    totalPredictions: number;
+    accuracy: number;
+    avgProbability: number;
+    predictedClass0: number;
+    predictedClass1: number;
+    actualClass0: number;
+    actualClass1: number;
+  };
+  predictions: PredictionResult[];
+}
+
 const API_BASE = 'http://localhost:8000/api';
 
 const ModelDetails: React.FC = () => {
@@ -100,7 +133,7 @@ const ModelDetails: React.FC = () => {
   const [confusionMatrix, setConfusionMatrix] = useState<ConfusionMatrix | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'training' | 'confusion'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'training' | 'confusion' | 'predictions'>('overview');
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showRetrainDialog, setShowRetrainDialog] = useState(false);
@@ -121,6 +154,9 @@ const ModelDetails: React.FC = () => {
     variant: 'danger' | 'warning' | 'info';
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
+  const [predictionsData, setPredictionsData] = useState<PredictionsResponse | null>(null);
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
+  const [predictionsError, setPredictionsError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchModelDetails();
@@ -253,6 +289,33 @@ const ModelDetails: React.FC = () => {
     }
   };
 
+  const handleRunPredictions = async () => {
+    if (!model) return;
+
+    setPredictionsLoading(true);
+    setPredictionsError(null);
+    try {
+      const res = await fetch(`${API_BASE}/models/${id}/run-predictions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setPredictionsData(data);
+      } else {
+        const error = await res.json();
+        setPredictionsError(error.detail || 'Failed to run predictions');
+      }
+    } catch (err) {
+      console.error('Predictions error:', err);
+      setPredictionsError('Failed to run predictions');
+    } finally {
+      setPredictionsLoading(false);
+    }
+  };
+
   const formatBytes = (bytes: number | null) => {
     if (!bytes) return 'N/A';
     if (bytes < 1024) return `${bytes} B`;
@@ -375,7 +438,8 @@ const ModelDetails: React.FC = () => {
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'training', label: 'Training History', icon: TrendingUp },
-            { id: 'confusion', label: 'Confusion Matrix', icon: BarChart3 }
+            { id: 'confusion', label: 'Confusion Matrix', icon: BarChart3 },
+            { id: 'predictions', label: 'View Predictions', icon: Eye }
           ].map(tab => (
             <button
               key={tab.id}
@@ -723,6 +787,238 @@ const ModelDetails: React.FC = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Predictions Tab */}
+      {activeTab === 'predictions' && (
+        <div className="space-y-6">
+          {/* Run Predictions Button */}
+          {!predictionsData && !predictionsLoading && (
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
+              <Eye className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+              <h3 className="text-lg font-semibold mb-2">View Model Predictions</h3>
+              <p className="text-gray-500 dark:text-gray-400 mb-6">
+                Run predictions on the training dataset to see how the model performs on each data point.
+              </p>
+              <button
+                onClick={handleRunPredictions}
+                className="flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 mx-auto"
+              >
+                <Play className="w-5 h-5" />
+                Run Predictions
+              </button>
+              {predictionsError && (
+                <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <p className="text-red-600 dark:text-red-400 text-sm">{predictionsError}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Loading State */}
+          {predictionsLoading && (
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
+              <Loader2 className="w-12 h-12 mx-auto text-blue-500 animate-spin mb-4" />
+              <p className="text-gray-500 dark:text-gray-400">Running predictions...</p>
+              <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">
+                This may take a moment for large datasets.
+              </p>
+            </div>
+          )}
+
+          {/* Predictions Results */}
+          {predictionsData && !predictionsLoading && (
+            <>
+              {/* Summary Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Total Predictions</p>
+                  <p className="text-2xl font-bold text-blue-600">{predictionsData.summary.totalPredictions}</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Accuracy</p>
+                  <p className="text-2xl font-bold text-green-600">{(predictionsData.summary.accuracy * 100).toFixed(1)}%</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Avg Probability</p>
+                  <p className="text-2xl font-bold text-purple-600">{(predictionsData.summary.avgProbability * 100).toFixed(1)}%</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Class Distribution</p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-red-600">
+                      {predictionsData.summary.predictedClass0} Down
+                    </span>
+                    <span className="text-gray-400">/</span>
+                    <span className="text-sm text-green-600">
+                      {predictionsData.summary.predictedClass1} Up
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Chart */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-blue-500" />
+                  Price with Predictions Overlay
+                </h3>
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={predictionsData.predictions.map(p => ({
+                        date: new Date(p.date).toLocaleDateString(),
+                        close: p.close,
+                        probability: p.probability * 100,
+                        actual: p.actual,
+                        predicted: p.predictedClass,
+                        correct: p.correct
+                      }))}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 10 }}
+                        interval="preserveStartEnd"
+                      />
+                      <YAxis
+                        yAxisId="price"
+                        orientation="left"
+                        label={{ value: 'Price', angle: -90, position: 'insideLeft' }}
+                      />
+                      <YAxis
+                        yAxisId="prob"
+                        orientation="right"
+                        domain={[0, 100]}
+                        label={{ value: 'Probability %', angle: 90, position: 'insideRight' }}
+                      />
+                      <Tooltip
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-3 rounded shadow-lg">
+                                <p className="text-sm font-medium">{data.date}</p>
+                                <p className="text-sm">Close: ${data.close?.toFixed(2)}</p>
+                                <p className="text-sm">Probability: {data.probability?.toFixed(1)}%</p>
+                                <p className="text-sm">
+                                  Predicted: <span className={data.predicted === 1 ? 'text-green-600' : 'text-red-600'}>
+                                    {data.predicted === 1 ? 'Up' : 'Down'}
+                                  </span>
+                                </p>
+                                <p className="text-sm">
+                                  Actual: <span className={data.actual === 1 ? 'text-green-600' : 'text-red-600'}>
+                                    {data.actual === 1 ? 'Up' : 'Down'}
+                                  </span>
+                                </p>
+                                <p className={`text-sm font-medium ${data.correct ? 'text-green-600' : 'text-red-600'}`}>
+                                  {data.correct ? 'Correct' : 'Incorrect'}
+                                </p>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <Legend />
+                      <Line
+                        yAxisId="price"
+                        type="monotone"
+                        dataKey="close"
+                        stroke="#3b82f6"
+                        name="Close Price"
+                        dot={false}
+                        strokeWidth={2}
+                      />
+                      <Line
+                        yAxisId="prob"
+                        type="monotone"
+                        dataKey="probability"
+                        stroke="#8b5cf6"
+                        name="Probability %"
+                        dot={false}
+                        strokeWidth={1}
+                        strokeDasharray="3 3"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Prediction Markers */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Target className="w-5 h-5 text-green-500" />
+                  Prediction Details
+                </h3>
+                <div className="overflow-x-auto max-h-96">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 dark:bg-gray-700">
+                      <tr>
+                        <th className="p-2 text-left">Date</th>
+                        <th className="p-2 text-right">Close</th>
+                        <th className="p-2 text-right">Probability</th>
+                        <th className="p-2 text-center">Predicted</th>
+                        <th className="p-2 text-center">Actual</th>
+                        <th className="p-2 text-center">Result</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {predictionsData.predictions.slice(0, 100).map((pred, idx) => (
+                        <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                          <td className="p-2">{new Date(pred.date).toLocaleDateString()}</td>
+                          <td className="p-2 text-right">${pred.close?.toFixed(2)}</td>
+                          <td className="p-2 text-right">{(pred.probability * 100).toFixed(1)}%</td>
+                          <td className="p-2 text-center">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              pred.predictedClass === 1
+                                ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300'
+                                : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+                            }`}>
+                              {pred.predictedClass === 1 ? 'Up' : 'Down'}
+                            </span>
+                          </td>
+                          <td className="p-2 text-center">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              pred.actual === 1
+                                ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300'
+                                : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+                            }`}>
+                              {pred.actual === 1 ? 'Up' : 'Down'}
+                            </span>
+                          </td>
+                          <td className="p-2 text-center">
+                            {pred.correct ? (
+                              <CheckCircle className="w-4 h-4 text-green-500 mx-auto" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 text-red-500 mx-auto" />
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {predictionsData.predictions.length > 100 && (
+                    <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-2">
+                      Showing first 100 of {predictionsData.predictions.length} predictions
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Re-run button */}
+              <div className="text-center">
+                <button
+                  onClick={handleRunPredictions}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg mx-auto"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Re-run Predictions
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

@@ -446,6 +446,246 @@ async def clone_model(model_id: str, db: Session = Depends(get_db)):
     return ModelResponse(**cloned)
 
 
+class RunPredictionsRequest(BaseModel):
+    """Request body for running predictions."""
+    dataset_id: Optional[int] = None  # Optional: use different dataset
+
+
+@router.post("/{model_id}/run-predictions")
+async def run_model_predictions(
+    model_id: str,
+    request: RunPredictionsRequest = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Run predictions on a dataset using a trained model.
+
+    Loads the model from file, prepares the dataset, and runs inference
+    to generate predictions with probabilities.
+
+    Returns:
+        Array of predictions with date, actual value, predicted probability, predicted class
+    """
+    import pandas as pd
+    import numpy as np
+    from pathlib import Path
+
+    # Get model from database
+    model = get_model_by_id(model_id, db)
+    if not model:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+
+    # Get file path
+    file_path = model.get('filePath')
+    if not file_path or not Path(file_path).exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model file not found: {file_path}"
+        )
+
+    # Determine dataset to use
+    dataset_id = model.get('datasetId')
+    if request and request.dataset_id:
+        dataset_id = request.dataset_id
+
+    if not dataset_id:
+        raise HTTPException(status_code=400, detail="No dataset associated with this model")
+
+    # Load dataset
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+
+    if not dataset.file_path or not Path(dataset.file_path).exists():
+        raise HTTPException(status_code=400, detail=f"Dataset file not found: {dataset.file_path}")
+
+    # Load dataset CSV
+    try:
+        df = pd.read_csv(dataset.file_path, parse_dates=['Date'])
+        df = df.sort_values('Date').reset_index(drop=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
+
+    # Get model configuration
+    prediction_targets = model.get('predictionTargets', [])
+    prediction_horizon = model.get('predictionHorizon', 3)
+    prediction_mode = model.get('predictionMode', 'shift')
+    threshold = model.get('threshold', 0.5)
+    hyperparameters = model.get('hyperparameters', {})
+    seq_len = hyperparameters.get('seqLen', 24)
+    normalization_params = model.get('normalizationParams')
+
+    # Determine target column - find it in the dataset
+    target_column = None
+    for target in prediction_targets:
+        target_type = target.get('type', '')
+        # Look for matching column in dataset
+        for col in df.columns:
+            if target_type.lower() in col.lower() or col.lower() in target_type.lower():
+                if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']:
+                    target_column = col
+                    break
+        if target_column:
+            break
+
+    # Fallback: look for common target column patterns
+    if not target_column:
+        for col in df.columns:
+            if any(x in col.lower() for x in ['target', 'signal', 'label', 'direction']):
+                target_column = col
+                break
+
+    if not target_column:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not identify target column in dataset"
+        )
+
+    # Get feature columns (exclude Date and target)
+    feature_columns = [col for col in df.columns
+                       if col not in ['Date', target_column]
+                       and not col.startswith('target_')]
+
+    # Determine model type and load accordingly
+    file_path_obj = Path(file_path)
+    is_tsai_model = file_path_obj.suffix == '.pkl'
+
+    try:
+        if is_tsai_model:
+            # Load tsai model
+            from tsai.all import load_learner
+            import torch
+
+            learner = load_learner(file_path)
+            model_obj = learner.model
+
+            # Prepare data using tsai training service pattern
+            from app.services.tsai_training import TSAITrainingService
+            from app.services.data_preparation import DataPreparationService
+
+            training_service = TSAITrainingService(normalize=True)
+
+            # Load normalization params if available
+            if normalization_params:
+                training_service.data_prep = DataPreparationService()
+                training_service.data_prep.load_params(normalization_params)
+            else:
+                # Check for .norm.json file
+                norm_file = file_path_obj.with_suffix('.norm.json')
+                if norm_file.exists():
+                    training_service.data_prep = DataPreparationService()
+                    training_service.data_prep.load_params_from_file(str(norm_file))
+
+            # Prepare data (fit_scaler=False to use loaded params)
+            X, y = training_service.prepare_data(
+                df=df,
+                target_column=target_column,
+                feature_columns=feature_columns,
+                seq_len=seq_len,
+                prediction_horizon=prediction_horizon,
+                prediction_mode=prediction_mode,
+                fit_scaler=False if training_service.data_prep else True
+            )
+
+            # Run inference
+            probs = training_service.predict(
+                model=model_obj,
+                data=X,
+                prediction_mode=prediction_mode
+            )
+
+            # Calculate predictions
+            if prediction_mode == 'multistep':
+                # Multi-step: average probabilities across horizons
+                avg_probs = np.mean(probs, axis=1)
+                predicted_classes = (avg_probs >= threshold).astype(int)
+            else:
+                predicted_classes = (probs >= threshold).astype(int)
+                avg_probs = probs
+
+            # Build results
+            # Note: sequences start at index 0 but represent predictions for index seq_len-1+prediction_horizon
+            start_idx = seq_len - 1 + prediction_horizon
+            predictions = []
+
+            for i in range(len(probs)):
+                data_idx = start_idx + i
+                if data_idx >= len(df):
+                    break
+
+                row = df.iloc[data_idx]
+                predictions.append({
+                    'date': row['Date'].isoformat() if hasattr(row['Date'], 'isoformat') else str(row['Date']),
+                    'close': float(row['Close']) if 'Close' in row else None,
+                    'open': float(row['Open']) if 'Open' in row else None,
+                    'high': float(row['High']) if 'High' in row else None,
+                    'low': float(row['Low']) if 'Low' in row else None,
+                    'actual': int(y[i]) if i < len(y) else None,
+                    'probability': float(avg_probs[i]),
+                    'predictedClass': int(predicted_classes[i]),
+                    'correct': int(predicted_classes[i]) == int(y[i]) if i < len(y) else None
+                })
+
+        else:
+            # Load Darts model
+            from app.services.darts_training import DartsTrainingService
+
+            training_service = DartsTrainingService()
+            darts_model = training_service.load_model(file_path)
+
+            # For Darts models, we would need different handling
+            # This is primarily for classification/tsai models
+            raise HTTPException(
+                status_code=501,
+                detail="Darts model predictions not yet implemented"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run predictions: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to run predictions: {str(e)}")
+
+    # Calculate summary statistics
+    if predictions:
+        correct_count = sum(1 for p in predictions if p.get('correct') is True)
+        total_with_actual = sum(1 for p in predictions if p.get('actual') is not None)
+        accuracy = correct_count / total_with_actual if total_with_actual > 0 else 0
+
+        class_0_count = sum(1 for p in predictions if p.get('predictedClass') == 0)
+        class_1_count = sum(1 for p in predictions if p.get('predictedClass') == 1)
+        actual_0_count = sum(1 for p in predictions if p.get('actual') == 0)
+        actual_1_count = sum(1 for p in predictions if p.get('actual') == 1)
+
+        avg_probability = np.mean([p['probability'] for p in predictions])
+    else:
+        accuracy = 0
+        class_0_count = class_1_count = 0
+        actual_0_count = actual_1_count = 0
+        avg_probability = 0
+
+    return {
+        "modelId": model_id,
+        "datasetId": dataset_id,
+        "targetColumn": target_column,
+        "predictionHorizon": prediction_horizon,
+        "predictionMode": prediction_mode,
+        "threshold": threshold,
+        "summary": {
+            "totalPredictions": len(predictions),
+            "accuracy": round(accuracy, 4),
+            "avgProbability": round(float(avg_probability), 4),
+            "predictedClass0": class_0_count,
+            "predictedClass1": class_1_count,
+            "actualClass0": actual_0_count,
+            "actualClass1": actual_1_count
+        },
+        "predictions": predictions
+    }
+
+
 @router.get("/{model_id}/predictions")
 async def get_model_predictions(model_id: str, limit: int = 100, db: Session = Depends(get_db)):
     """Get prediction visualization data for a model."""

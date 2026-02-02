@@ -220,7 +220,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   // Collections state
   const [collections, setCollections] = useState<IndicatorCollection[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
+  const [_selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const [saveCollectionName, setSaveCollectionName] = useState('');
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [showCollectionPicker, setShowCollectionPicker] = useState(false);
@@ -323,7 +323,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
     });
   };
 
-  const loadCollection = (collectionId: number) => {
+  const _loadCollection = (collectionId: number) => {
     const collection = collections.find(c => c.id === collectionId);
     if (!collection) return;
 
@@ -349,6 +349,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       setError(`${invalidCount} indicators were skipped because their timeframe is smaller than the dataset timeframe (${wizardData.timeframe})`);
     }
   };
+  // Suppress unused warning - function reserved for future use
+  void _loadCollection;
 
   const toggleCollectionExpanded = (collectionId: number) => {
     setExpandedCollections(prev => {
