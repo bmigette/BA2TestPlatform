@@ -886,7 +886,7 @@ const ModelDetails: React.FC = () => {
                 <PredictionsChart
                   predictions={predictionsData.predictions}
                   height={450}
-                  showOnlyTransitions={true}
+                  showOnlyTransitions={false}
                 />
               </div>
 
@@ -911,7 +911,7 @@ const ModelDetails: React.FC = () => {
                     <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                       {predictionsData.predictions.slice(0, 100).map((pred, idx) => (
                         <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                          <td className="p-2">{new Date(pred.date).toLocaleDateString()}</td>
+                          <td className="p-2">{new Date(pred.date).toLocaleString()}</td>
                           <td className="p-2 text-right">${pred.close?.toFixed(2)}</td>
                           <td className="p-2 text-right">{(pred.probability * 100).toFixed(1)}%</td>
                           <td className="p-2 text-center">
