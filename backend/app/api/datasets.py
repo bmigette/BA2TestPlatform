@@ -472,9 +472,12 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
             # Fetch OHLCV for warmup period if not already present
             if regen_options.regenerate_technical and warmup_days > 0:
                 data_start = df['Date'].min()
+                # Normalize to tz-naive for comparison
+                data_start_naive = data_start.tz_localize(None) if hasattr(data_start, 'tzinfo') and data_start.tzinfo else data_start
+                fetch_start_ts = pd.Timestamp(fetch_start_date)
                 # Check if we need to fetch warmup data
-                if data_start >= pd.Timestamp(fetch_start_date):
-                    logger.info(f"[Thread] Fetching warmup OHLCV from {fetch_start_date.date()} to {data_start.date()}")
+                if data_start_naive >= fetch_start_ts:
+                    logger.info(f"[Thread] Fetching warmup OHLCV from {fetch_start_date.date()} to {data_start_naive.date()}")
                     provider_name = gen_config.get("data_provider", "yfinance")
                     provider = get_ohlcv_provider(provider_name)
                     interval = INTERVAL_MAP.get(timeframe, "1d")
@@ -482,7 +485,7 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
                     warmup_data = provider.get_data(
                         symbol=ticker,
                         start_date=fetch_start_date,
-                        end_date=data_start,
+                        end_date=data_start_naive,
                         interval=interval
                     )
 
@@ -496,11 +499,17 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
                             'Volume': dp.volume
                         } for dp in warmup_data])
                         warmup_df['Date'] = pd.to_datetime(warmup_df['Date'])
+                        # Normalize timezone - strip tz if present for comparison with existing data
+                        if warmup_df['Date'].dt.tz is not None:
+                            warmup_df['Date'] = warmup_df['Date'].dt.tz_localize(None)
                         warmup_df = warmup_df.sort_values('Date').reset_index(drop=True)
                         warmup_df = add_time_features(warmup_df)
 
+                        # Ensure data_start is also tz-naive for comparison
+                        data_start_naive = data_start.tz_localize(None) if data_start.tzinfo else data_start
+
                         # Remove any overlap with existing data
-                        warmup_df = warmup_df[warmup_df['Date'] < data_start]
+                        warmup_df = warmup_df[warmup_df['Date'] < data_start_naive]
 
                         if len(warmup_df) > 0:
                             # Prepend warmup data (only OHLCV columns)
