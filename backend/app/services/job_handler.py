@@ -2188,13 +2188,16 @@ def train_classification_optimization(
                     prediction_mode=mode
                 )
                 c_out = 2 if mode == 'shift' else prediction_horizon
+                # Get the actual valid columns used after dropping zero-variance columns
+                valid_feature_columns = training_service.data_prep.get_valid_columns() if training_service.data_prep else feature_columns
                 data_by_mode_and_seqlen[cache_key] = {
                     'X_train': X_train, 'X_test': X_test,
                     'y_train': y_train, 'y_test': y_test,
                     'c_out': c_out,
-                    'seq_len': current_seq_len
+                    'seq_len': current_seq_len,
+                    'valid_feature_columns': valid_feature_columns  # Store the actual columns used
                 }
-                logger.info(f"Prepared {mode} data (seq_len={current_seq_len}): train={len(X_train)}, test={len(X_test)}, c_out={c_out}")
+                logger.info(f"Prepared {mode} data (seq_len={current_seq_len}): train={len(X_train)}, test={len(X_test)}, c_out={c_out}, features={len(valid_feature_columns)}")
             except Exception as e:
                 logger.error(f"Failed to prepare {mode} data (seq_len={current_seq_len}): {e}")
                 continue
@@ -2436,8 +2439,9 @@ def train_classification_optimization(
                     'c_in': X_train.shape[1],
                     'c_out': c_out,
                     'metrics': metrics,
-                    # Save feature columns used during training for prediction
-                    'feature_columns': feature_columns,
+                    # Save the ACTUAL feature columns used during training (after dropping zero-variance cols)
+                    # This must match c_in for inference to work correctly
+                    'feature_columns': mode_data.get('valid_feature_columns', feature_columns),
                     # Save training history for visualization after model is saved to inventory
                     'training_history': training_history
                 }

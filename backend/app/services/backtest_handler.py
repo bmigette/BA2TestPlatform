@@ -125,14 +125,25 @@ def run_backtest(
                     logger.debug(f"Metadata file not found: {meta_path}")
 
     # Get feature columns - prefer stored columns from training
+    c_in = hyperparameters.get('c_in')
+
     if stored_feature_columns:
-        logger.info(f"Using {len(stored_feature_columns)} stored feature columns from training")
+        logger.info(f"Using {len(stored_feature_columns)} stored feature columns from training (c_in={c_in})")
         # Use only features that exist in current dataset
         feature_cols = [col for col in stored_feature_columns if col in pred_df.columns]
+
+        # Validate that feature count matches c_in (model architecture)
+        if c_in and len(feature_cols) != c_in:
+            logger.warning(f"Feature count mismatch: featureColumns has {len(feature_cols)} but model expects c_in={c_in}. "
+                          f"Model may have been saved with incorrect featureColumns. Retrain to fix.")
+
         logger.info(f"After filtering for dataset columns: {len(feature_cols)} features (dataset has {len(pred_df.columns)} total columns)")
         if len(feature_cols) != len(stored_feature_columns):
             missing = set(stored_feature_columns) - set(feature_cols)
-            logger.warning(f"Some training features not in dataset: {missing}")
+            if len(missing) < 20:  # Only log if not too many
+                logger.warning(f"Some training features not in dataset: {missing}")
+            else:
+                logger.warning(f"Some training features not in dataset: {len(missing)} missing")
         if not feature_cols:
             logger.error(f"None of the training features found in dataset")
             return _empty_results(initial_capital)

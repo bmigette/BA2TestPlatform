@@ -577,15 +577,25 @@ async def run_model_predictions(
 
     # Get feature columns - prefer stored columns from training, fall back to dataset columns
     stored_feature_columns = hyperparameters.get('featureColumns')
+    c_in = hyperparameters.get('c_in')
     logger.info(f"Model {model_id}: featureColumns in hyperparams={stored_feature_columns is not None}, "
-                f"count={len(stored_feature_columns) if stored_feature_columns else 0}")
+                f"count={len(stored_feature_columns) if stored_feature_columns else 0}, c_in={c_in}")
     if stored_feature_columns:
         # Use only features that exist in current dataset
         feature_columns = [col for col in stored_feature_columns if col in df.columns]
+
+        # Validate that feature count matches c_in (model architecture)
+        if c_in and len(feature_columns) != c_in:
+            logger.warning(f"Feature count mismatch: featureColumns has {len(feature_columns)} but model expects c_in={c_in}. "
+                          f"Model may have been saved with incorrect featureColumns. Retrain to fix.")
+
         logger.info(f"Using {len(feature_columns)} of {len(stored_feature_columns)} stored feature columns")
         if len(feature_columns) != len(stored_feature_columns):
             missing = set(stored_feature_columns) - set(feature_columns)
-            logger.warning(f"Some training features not in dataset: {missing}")
+            if len(missing) < 20:
+                logger.warning(f"Some training features not in dataset: {missing}")
+            else:
+                logger.warning(f"Some training features not in dataset: {len(missing)} missing")
         if not feature_columns:
             raise HTTPException(
                 status_code=400,
