@@ -620,7 +620,15 @@ class FundamentalsService:
 
         min_date = result_df['Date'].min()
         max_date = result_df['Date'].max()
-        fetch_periods = 12  # Fetch enough for YoY calculations
+
+        # Calculate how many quarters the dataset spans, plus warmup
+        # We need: 4 quarters for YoY + quarters spanning the dataset + buffer
+        dataset_days = (max_date - min_date).days
+        dataset_quarters = max(1, dataset_days // 90)
+        warmup_quarters = 5  # 4 for YoY calculation + 1 buffer
+        fetch_periods = dataset_quarters + warmup_quarters + 4  # Extra buffer
+
+        logger.info(f"Fetching {fetch_periods} periods for {dataset_quarters} quarter dataset + {warmup_quarters} warmup")
 
         for stmt_type in valid_statement_types:
             prefix = STATEMENT_PREFIXES[stmt_type]
@@ -676,6 +684,10 @@ class FundamentalsService:
                     col_yoy = f'{prefix}_{field}_yoy_change'
 
                     # Create period lookup with values and changes
+                    # Earnings are typically announced 30-45 days after fiscal quarter end
+                    # Use 45 days delay for point-in-time correctness
+                    EARNINGS_ANNOUNCEMENT_DELAY_DAYS = 45
+
                     period_data = []
                     for i, period in enumerate(periods_sorted):
                         fiscal_date_str = period.get('fiscal_date')
@@ -686,6 +698,8 @@ class FundamentalsService:
                             fiscal_date = pd.to_datetime(fiscal_date_str)
                             if hasattr(fiscal_date, 'tzinfo') and fiscal_date.tzinfo is not None:
                                 fiscal_date = fiscal_date.replace(tzinfo=None)
+                            # Estimate announcement date (when data becomes available)
+                            available_date = fiscal_date + pd.Timedelta(days=EARNINGS_ANNOUNCEMENT_DELAY_DAYS)
                         except:
                             continue
 
@@ -708,7 +722,8 @@ class FundamentalsService:
                                 yoy_change = (value - prev_year_val) / abs(prev_year_val)
 
                         period_data.append({
-                            'date': fiscal_date,
+                            'date': available_date,  # Use estimated announcement date for point-in-time
+                            'fiscal_date': fiscal_date,
                             'value': value,
                             'qoq_change': qoq_change,
                             'yoy_change': yoy_change
@@ -750,7 +765,8 @@ class FundamentalsService:
                         period_info = get_period_for_date(row_date)
                         if period_info:
                             values.append(period_info['value'])
-                            days = (row_date - period_info['date']).days
+                            # days_old = days since fiscal quarter end (not announcement)
+                            days = (row_date - period_info['fiscal_date']).days
                             days_old.append(max(0, days))
                             # Use first available change values if current is None
                             qoq_changes.append(period_info['qoq_change'] if period_info['qoq_change'] is not None else first_qoq)
