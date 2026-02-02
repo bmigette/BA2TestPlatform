@@ -3,13 +3,15 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Clock, CheckCircle, AlertCircle, Loader2, Pause, Play,
   XCircle, Activity, Target, Zap, Timer, ChevronDown, ChevronRight,
-  Info, FileText, Cpu, MemoryStick, RefreshCw, Save, Trophy, Award, Download
+  Info, FileText, Cpu, MemoryStick, RefreshCw, Save, Trophy, Award, Download, Wifi, WifiOff
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
 } from 'recharts';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { useJobWebSocket } from '../hooks/useJobWebSocket';
+import type { JobProgressData } from '../hooks/useJobWebSocket';
 
 interface EpochMetric {
   epoch: number;
@@ -164,6 +166,10 @@ const JobDetails: React.FC = () => {
   const [resources, setResources] = useState<SystemResources | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Constants for memory management
+  const MAX_LOGS = 500;  // Limit logs to prevent memory bloat
+  const MAX_INDIVIDUALS_DISPLAY = 1000;  // Limit individuals in memory
   const [error, setError] = useState<string | null>(null);
   const [expandedGenerations, setExpandedGenerations] = useState<Set<number>>(new Set());
   const [showLogs, setShowLogs] = useState(false);
@@ -180,6 +186,7 @@ const JobDetails: React.FC = () => {
     variant: 'danger' | 'warning' | 'info';
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
+  const [shouldRefreshOnComplete, setShouldRefreshOnComplete] = useState(false);
 
   const fetchJob = useCallback(async () => {
     if (!id) return;
@@ -187,8 +194,14 @@ const JobDetails: React.FC = () => {
       const response = await fetch(`http://localhost:8000/api/jobs/${id}/progress`);
       if (!response.ok) throw new Error('Failed to fetch job');
       const data = await response.json();
+      // Limit allIndividuals to prevent memory bloat (full list available via individuals endpoint)
+      if (data.job?.allIndividuals && data.job.allIndividuals.length > MAX_INDIVIDUALS_DISPLAY) {
+        data.job.allIndividuals = data.job.allIndividuals.slice(-MAX_INDIVIDUALS_DISPLAY);
+      }
       setJob(data.job);
-      setLogs(data.logs || []);
+      // Limit logs to most recent to prevent memory accumulation
+      const allLogs = data.logs || [];
+      setLogs(allLogs.length > MAX_LOGS ? allLogs.slice(-MAX_LOGS) : allLogs);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load job');
     } finally {
@@ -215,6 +228,18 @@ const JobDetails: React.FC = () => {
       const response = await fetch(`http://localhost:8000/api/jobs/${id}/individuals`);
       if (response.ok) {
         const data: IndividualsData = await response.json();
+        // Limit individuals in memory - keep most recent generations
+        if (data.individuals && data.individuals.length > MAX_INDIVIDUALS_DISPLAY) {
+          // Sort by generation desc, individual desc to keep newest
+          data.individuals.sort((a, b) =>
+            b.generation !== a.generation ? b.generation - a.generation : b.individual - a.individual
+          );
+          data.individuals = data.individuals.slice(0, MAX_INDIVIDUALS_DISPLAY);
+          // Re-sort for display (generation asc)
+          data.individuals.sort((a, b) =>
+            a.generation !== b.generation ? a.generation - b.generation : a.individual - b.individual
+          );
+        }
         setIndividualsData(data);
       }
     } catch (err) {
@@ -246,6 +271,86 @@ const JobDetails: React.FC = () => {
       console.error('Failed to fetch elite models:', err);
     }
   }, [id]);
+
+  // WebSocket for real-time job updates
+  const handleWebSocketProgress = useCallback((data: JobProgressData) => {
+    // Update job state with all progress fields
+    setJob(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        status: (data.status as Job['status']) || prev.status,
+        progress: data.progress ?? prev.progress,
+        // Generation/Individual progress
+        currentGeneration: data.currentGeneration ?? prev.currentGeneration,
+        totalGenerations: data.totalGenerations ?? prev.totalGenerations,
+        currentIndividual: data.currentIndividual ?? prev.currentIndividual,
+        populationSize: data.populationSize ?? prev.populationSize,
+        // Epoch/Training progress
+        currentEpoch: data.currentEpoch ?? prev.currentEpoch,
+        totalEpochs: data.totalEpochs ?? prev.totalEpochs,
+        currentModelType: data.currentModelType ?? prev.currentModelType,
+        currentModelParams: data.currentModelParams ?? prev.currentModelParams,
+        // Metrics
+        bestFitness: data.bestFitness ?? prev.bestFitness,
+        // Error tracking
+        errorCount: data.errorCount ?? prev.errorCount,
+        successCount: data.successCount ?? prev.successCount,
+        // Individuals count
+        individualsCount: data.individualsCount ?? prev.individualsCount,
+        // GPU utilization
+        gpuUtilization: data.gpuUtilization ?? prev.gpuUtilization,
+        // Epoch history (for live chart)
+        epochHistory: data.epochHistory && data.epochHistory.length > 0
+          ? data.epochHistory
+          : prev.epochHistory,
+      };
+    });
+
+    // Update system resources if available
+    if (data.systemResources) {
+      setResources({
+        cpuPercent: data.systemResources.cpuPercent ?? 0,
+        memoryUsedMB: data.systemResources.memoryUsedMB ?? 0,
+        memoryTotalMB: data.systemResources.memoryTotalMB ?? 0,
+        memoryPercent: data.systemResources.memoryPercent ?? 0,
+        gpuUtilization: data.systemResources.gpuUtilization ?? null,
+        gpuMemoryUsedMB: data.systemResources.gpuMemoryUsedMB ?? null,
+        gpuMemoryTotalMB: data.systemResources.gpuMemoryTotalMB ?? null,
+      });
+    }
+  }, []);
+
+  const handleWebSocketLog = useCallback((message: string) => {
+    setLogs(prev => {
+      const newLogs = [...prev, message];
+      return newLogs.length > MAX_LOGS ? newLogs.slice(-MAX_LOGS) : newLogs;
+    });
+  }, []);
+
+  const handleWebSocketComplete = useCallback((_data: JobProgressData) => {
+    // Trigger a refresh on completion
+    setShouldRefreshOnComplete(true);
+  }, []);
+
+  // Handle refresh on job completion
+  useEffect(() => {
+    if (shouldRefreshOnComplete) {
+      setShouldRefreshOnComplete(false);
+      fetchJob();
+      fetchEliteModels();
+    }
+  }, [shouldRefreshOnComplete, fetchJob, fetchEliteModels]);
+
+  const { isConnected: wsConnected, error: wsError, reconnect: wsReconnect } = useJobWebSocket(
+    job?.status === 'running' || job?.status === 'paused' ? id || null : null,
+    {
+      onProgress: handleWebSocketProgress,
+      onLog: handleWebSocketLog,
+      onComplete: handleWebSocketComplete,
+      enabled: true,
+    }
+  );
 
   const handleSaveToInventory = async (rank: number, _modelType: string) => {
     if (!id) return;
@@ -312,28 +417,53 @@ const JobDetails: React.FC = () => {
     fetchEliteModels();
   }, [fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
 
-  // Auto-refresh for running jobs - fast refresh for resources and progress
+  // Auto-refresh for running jobs
+  // When WebSocket is connected, we get real-time job progress and system resources
+  // Only fallback polling when WS is disconnected
   useEffect(() => {
     if (job?.status === 'running' || job?.status === 'paused') {
-      // Fast refresh for job progress and resources (1.5s)
-      const fastInterval = setInterval(() => {
+      // Fallback polling when WebSocket is not connected
+      const fallbackInterval = wsConnected ? null : setInterval(() => {
         fetchJob();
         fetchResources();
-      }, 1500);
+      }, 2000);
 
       // Slower refresh for generations, individuals, and elite models (5s)
+      // These are not streamed via WebSocket
       const slowInterval = setInterval(() => {
         fetchGenerations();
         fetchIndividuals();
-        fetchEliteModels();  // Also refresh elite models during running
+        fetchEliteModels();
       }, 5000);
 
       return () => {
-        clearInterval(fastInterval);
+        if (fallbackInterval) clearInterval(fallbackInterval);
         clearInterval(slowInterval);
       };
     }
-  }, [job?.status, fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
+  }, [job?.status, wsConnected, fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
+
+  // Clear real-time data from job object when completed to free memory
+  // (generations/individuals endpoints still available for historical view)
+  useEffect(() => {
+    if (job?.status === 'completed' || job?.status === 'failed' || job?.status === 'cancelled') {
+      // Clear epoch history and allIndividuals from job to free memory
+      // These are only needed during live training
+      setJob(prev => {
+        if (!prev) return prev;
+        if (prev.epochHistory || prev.allIndividuals) {
+          return {
+            ...prev,
+            epochHistory: undefined,
+            allIndividuals: undefined,
+          };
+        }
+        return prev;
+      });
+      // Clear resources since job is no longer running
+      setResources(null);
+    }
+  }, [job?.status]);
 
   // Update elapsed time
   useEffect(() => {
@@ -487,6 +617,29 @@ const JobDetails: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center space-x-2">
+          {/* WebSocket connection indicator */}
+          {(job.status === 'running' || job.status === 'paused') && (
+            <div
+              className={`flex items-center space-x-1 px-2 py-1 rounded-full text-xs ${
+                wsConnected
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+              }`}
+              title={wsConnected ? 'Real-time updates active' : wsError || 'Connecting...'}
+            >
+              {wsConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
+              <span>{wsConnected ? 'Live' : 'Polling'}</span>
+              {!wsConnected && (
+                <button
+                  onClick={wsReconnect}
+                  className="ml-1 hover:text-yellow-900 dark:hover:text-yellow-300"
+                  title="Retry connection"
+                >
+                  <RefreshCw size={10} />
+                </button>
+              )}
+            </div>
+          )}
           <button
             onClick={() => { fetchJob(); fetchGenerations(); fetchIndividuals(); }}
             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
@@ -1117,17 +1270,28 @@ const JobDetails: React.FC = () => {
         </div>
       )}
 
-      {/* Elite Models Panel (for completed non-retrain jobs) */}
-      {job.status === 'completed' && !job.isRetrain && eliteModels.length > 0 && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow border-2 border-yellow-500">
+      {/* Elite Models Panel (shows during training and after completion for non-retrain jobs) */}
+      {!job.isRetrain && eliteModels.length > 0 && (
+        <div className={`bg-white dark:bg-gray-800 rounded-lg shadow border-2 ${
+          job.status === 'completed' ? 'border-yellow-500' : 'border-blue-400'
+        }`}>
           <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
             <div className="flex items-center space-x-2">
-              <Trophy size={20} className="text-yellow-500" />
+              <Trophy size={20} className={job.status === 'completed' ? 'text-yellow-500' : 'text-blue-400'} />
               <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300">
-                Best Trained Models ({eliteModels.length})
+                {job.status === 'completed' ? 'Best Trained Models' : 'Current Elite Models'} ({eliteModels.length})
               </h3>
+              {job.status === 'running' && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 animate-pulse">
+                  Live
+                </span>
+              )}
             </div>
-            <span className="text-xs text-gray-500">Save models to inventory for use in predictions</span>
+            <span className="text-xs text-gray-500">
+              {job.status === 'completed'
+                ? 'Save models to inventory for use in predictions'
+                : 'Save promising models early for testing'}
+            </span>
           </div>
           <div className="p-4 space-y-3">
             {eliteModels.map((model) => (
@@ -1184,14 +1348,19 @@ const JobDetails: React.FC = () => {
                   <button
                     onClick={() => handleSaveToInventory(model.rank, model.model_type)}
                     disabled={savingModel === model.rank}
-                    className="flex items-center space-x-1 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    className={`flex items-center space-x-1 px-3 py-1.5 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm ${
+                      job.status === 'running'
+                        ? 'bg-orange-500 hover:bg-orange-600'
+                        : 'bg-blue-500 hover:bg-blue-600'
+                    }`}
+                    title={job.status === 'running' ? 'Save current best - training still in progress' : 'Save to model inventory'}
                   >
                     {savingModel === model.rank ? (
                       <Loader2 size={14} className="animate-spin" />
                     ) : (
                       <Save size={14} />
                     )}
-                    <span>Save to Inventory</span>
+                    <span>{job.status === 'running' ? 'Save Early' : 'Save to Inventory'}</span>
                   </button>
                 </div>
                 {/* Parameters */}

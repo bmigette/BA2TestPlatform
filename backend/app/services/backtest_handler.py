@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.models.database import SessionLocal
 from app.models import Dataset, TrainedModel, Strategy, Backtest
-from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree
+from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 
@@ -244,6 +244,9 @@ def run_backtest(
 
     exit_conditions = exit_conditions or []
 
+    # Create confirmation tracker for condition history
+    confirmation_tracker = ConfirmationTracker()
+
     for idx in range(len(exec_df)):
         row = exec_df.iloc[idx]
         current_date = row['Date']
@@ -257,6 +260,10 @@ def run_backtest(
                 pos.bars_held += 1
             continue
 
+        # Count positions by direction
+        buy_positions = [p for p in open_positions if p.direction == 'buy']
+        sell_positions = [p for p in open_positions if p.direction == 'sell']
+
         # Build context for condition evaluation
         context = {
             'model:prediction': 1 if prob >= threshold else 0,
@@ -269,6 +276,9 @@ def run_backtest(
             'Close': current_price,
             'Volume': row.get('Volume', 0),
             'position:in_position': len(open_positions) > 0,
+            'position:buy_count': len(buy_positions),
+            'position:sell_count': len(sell_positions),
+            'position:total_count': len(open_positions),
         }
 
         # Add any additional columns from exec_df
@@ -294,7 +304,7 @@ def run_backtest(
             # Check each exit rule
             for exit_rule in exit_conditions:
                 conditions = exit_rule.get('conditions', {})
-                if evaluate_condition_tree(conditions, pos_context):
+                if evaluate_condition_tree(conditions, pos_context, confirmation_tracker):
                     positions_to_close.append(i)
                     break
 
@@ -325,31 +335,30 @@ def run_backtest(
             ))
             equity += pnl
 
-        # Check entry conditions
-        if len(open_positions) == 0:  # Only enter if no position
-            # Check buy entry
-            if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context):
-                entry_price = current_price * (1 + slippage / 100)
-                size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
-                if size > 0:
-                    open_positions.append(OpenPosition(
-                        entry_time=current_date,
-                        direction='buy',
-                        entry_price=entry_price,
-                        size=size
-                    ))
+        # Check entry conditions (users can add position:total_count == 0 to limit entries)
+        # Check buy entry
+        if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context, confirmation_tracker):
+            entry_price = current_price * (1 + slippage / 100)
+            size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
+            if size > 0:
+                open_positions.append(OpenPosition(
+                    entry_time=current_date,
+                    direction='buy',
+                    entry_price=entry_price,
+                    size=size
+                ))
 
-            # Check sell entry
-            elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context):
-                entry_price = current_price * (1 - slippage / 100)
-                size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
-                if size > 0:
-                    open_positions.append(OpenPosition(
-                        entry_time=current_date,
-                        direction='sell',
-                        entry_price=entry_price,
-                        size=size
-                    ))
+        # Check sell entry
+        elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker):
+            entry_price = current_price * (1 - slippage / 100)
+            size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
+            if size > 0:
+                open_positions.append(OpenPosition(
+                    entry_time=current_date,
+                    direction='sell',
+                    entry_price=entry_price,
+                    size=size
+                ))
 
         # Record equity
         equity_curve.append({

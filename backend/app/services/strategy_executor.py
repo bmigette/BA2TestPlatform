@@ -5,11 +5,58 @@ Evaluates strategy conditions against data to generate trade signals.
 """
 
 import logging
+from collections import deque
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+class ConfirmationTracker:
+    """Tracks condition history for confirmation logic."""
+
+    def __init__(self):
+        # Maps condition_id -> deque of last N boolean results
+        self._history: Dict[str, deque] = {}
+
+    def update_and_check(
+        self,
+        condition_id: str,
+        current_result: bool,
+        required_times: int,
+        lookback_bars: int
+    ) -> bool:
+        """
+        Update history and check if confirmation is met.
+
+        Args:
+            condition_id: Unique ID for this condition
+            current_result: Whether condition is true this bar
+            required_times: Must be true X times
+            lookback_bars: In the last Y bars
+
+        Returns:
+            True if condition met required_times in lookback_bars
+        """
+        if condition_id not in self._history:
+            self._history[condition_id] = deque(maxlen=lookback_bars)
+        else:
+            # Update maxlen if lookback_bars changed
+            old_history = self._history[condition_id]
+            if old_history.maxlen != lookback_bars:
+                self._history[condition_id] = deque(old_history, maxlen=lookback_bars)
+
+        history = self._history[condition_id]
+        history.append(current_result)
+
+        # Count True values in history
+        true_count = sum(1 for x in history if x)
+        return true_count >= required_times
+
+    def reset(self):
+        """Clear all history (call on position close if desired)."""
+        self._history.clear()
 
 
 class ExitActionType(Enum):
@@ -68,13 +115,18 @@ def evaluate_comparison(left: Any, operator: str, right: Any) -> bool:
         return False
 
 
-def evaluate_condition(condition: dict, context: Dict[str, Any]) -> bool:
+def evaluate_condition(
+    condition: dict,
+    context: Dict[str, Any],
+    confirmation_tracker: Optional['ConfirmationTracker'] = None
+) -> bool:
     """
     Evaluate a single condition against the context.
 
     Args:
         condition: Condition dict with field, comparison, value
         context: Dict with current values for all fields
+        confirmation_tracker: Optional tracker for confirmation logic
 
     Returns:
         True if condition is met, False otherwise
@@ -87,9 +139,9 @@ def evaluate_condition(condition: dict, context: Dict[str, Any]) -> bool:
             return True
 
         if operator == "AND":
-            return all(evaluate_condition(c, context) for c in sub_conditions)
+            return all(evaluate_condition(c, context, confirmation_tracker) for c in sub_conditions)
         else:  # OR
-            return any(evaluate_condition(c, context) for c in sub_conditions)
+            return any(evaluate_condition(c, context, confirmation_tracker) for c in sub_conditions)
 
     # Simple condition
     field = condition.get("field")
@@ -106,14 +158,33 @@ def evaluate_condition(condition: dict, context: Dict[str, Any]) -> bool:
         logger.debug(f"Field {field} not found in context")
         return False
 
-    return evaluate_comparison(field_value, comparison, value)
+    raw_result = evaluate_comparison(field_value, comparison, value)
+
+    # Check if confirmation is required
+    confirmation_required = condition.get('confirmationRequired') or condition.get('confirmation_required')
+    confirmation_bars = condition.get('confirmationBars') or condition.get('confirmation_bars')
+
+    if confirmation_required and confirmation_bars and confirmation_tracker:
+        condition_id = condition.get('id', str(hash(str(condition))))
+        return confirmation_tracker.update_and_check(
+            condition_id,
+            raw_result,
+            confirmation_required,
+            confirmation_bars
+        )
+
+    return raw_result
 
 
-def evaluate_condition_tree(conditions: dict, context: Dict[str, Any]) -> bool:
+def evaluate_condition_tree(
+    conditions: dict,
+    context: Dict[str, Any],
+    confirmation_tracker: Optional['ConfirmationTracker'] = None
+) -> bool:
     """Evaluate the full condition tree."""
     if not conditions:
         return False
-    return evaluate_condition(conditions, context)
+    return evaluate_condition(conditions, context, confirmation_tracker)
 
 
 class StrategyExecutor:

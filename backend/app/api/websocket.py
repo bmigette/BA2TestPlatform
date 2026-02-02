@@ -3,13 +3,57 @@ WebSocket API endpoints for real-time updates
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 import logging
 import asyncio
 import json
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+def get_system_resources() -> Optional[Dict]:
+    """Get current system resources (CPU, memory, GPU)."""
+    try:
+        import psutil
+
+        # CPU and Memory
+        cpu_percent = psutil.cpu_percent(interval=None)
+        memory = psutil.virtual_memory()
+
+        resources = {
+            "cpuPercent": cpu_percent,
+            "memoryUsedMB": memory.used / (1024 * 1024),
+            "memoryTotalMB": memory.total / (1024 * 1024),
+            "memoryPercent": memory.percent,
+            "gpuUtilization": None,
+            "gpuMemoryUsedMB": None,
+            "gpuMemoryTotalMB": None,
+        }
+
+        # Try to get GPU stats
+        try:
+            import torch
+            if torch.backends.mps.is_available():
+                # Apple Silicon MPS - limited stats available
+                resources["gpuUtilization"] = None  # MPS doesn't expose utilization
+            elif torch.cuda.is_available():
+                import pynvml
+                pynvml.nvmlInit()
+                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                resources["gpuUtilization"] = util.gpu
+                resources["gpuMemoryUsedMB"] = mem.used / (1024 * 1024)
+                resources["gpuMemoryTotalMB"] = mem.total / (1024 * 1024)
+                pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+        return resources
+    except Exception as e:
+        logger.warning(f"Failed to get system resources: {e}")
+        return None
 
 router = APIRouter()
 
@@ -113,7 +157,7 @@ async def websocket_job_progress(websocket: WebSocket, job_id: str):
         # Import here to avoid circular imports
         from app.api.jobs import jobs_store, job_progress_data
 
-        last_progress = -1
+        last_update_hash = ""
         last_log_count = 0
 
         # Keep connection alive and send updates
@@ -122,27 +166,54 @@ async def websocket_job_progress(websocket: WebSocket, job_id: str):
                 # Check for job updates
                 if job_id in jobs_store:
                     job = jobs_store[job_id]
-                    current_progress = job.get("progress", 0)
 
-                    # Send progress update if changed
-                    if current_progress != last_progress:
-                        await websocket.send_json({
-                            "type": "progress",
-                            "job_id": job_id,
-                            "status": job.get("status"),
-                            "progress": current_progress,
-                            "currentGeneration": job.get("currentGeneration", 0),
-                            "totalGenerations": job.get("totalGenerations", 50),
-                            "currentLoss": job.get("currentLoss"),
-                            "currentAccuracy": job.get("currentAccuracy"),
-                            "bestFitness": job.get("bestFitness"),
-                            "gpuUtilization": job.get("gpuUtilization"),
-                            "estimatedTimeRemaining": job.get("estimatedTimeRemaining"),
-                            "datasetProgress": job.get("datasetProgress"),
-                            "currentDatasetId": job.get("currentDatasetId"),
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        last_progress = current_progress
+                    # Get system resources
+                    resources = get_system_resources() or {}
+
+                    # Build comprehensive progress update with all fields
+                    progress_data = {
+                        "type": "progress",
+                        "job_id": job_id,
+                        "status": job.get("status"),
+                        "progress": job.get("progress", 0),
+                        # Generation/Individual progress
+                        "currentGeneration": job.get("currentGeneration", 0),
+                        "totalGenerations": job.get("totalGenerations", 50),
+                        "currentIndividual": job.get("currentIndividual", 0),
+                        "populationSize": job.get("populationSize", 20),
+                        # Epoch/Training progress
+                        "currentEpoch": job.get("currentEpoch"),
+                        "totalEpochs": job.get("totalEpochs"),
+                        "currentModelType": job.get("currentModelType"),
+                        "currentModelParams": job.get("currentModelParams"),
+                        # Metrics
+                        "currentLoss": job.get("currentLoss"),
+                        "currentAccuracy": job.get("currentAccuracy"),
+                        "bestFitness": job.get("bestFitness"),
+                        # Error tracking
+                        "errorCount": job.get("errorCount", 0),
+                        "successCount": job.get("successCount", 0),
+                        # Individuals count
+                        "individualsCount": job.get("individualsCount", 0),
+                        # System resources
+                        "systemResources": resources,
+                        "gpuUtilization": resources.get("gpuUtilization") or job.get("gpuUtilization"),
+                        "estimatedTimeRemaining": job.get("estimatedTimeRemaining"),
+                        # Dataset info
+                        "datasetProgress": job.get("datasetProgress"),
+                        "currentDatasetId": job.get("currentDatasetId"),
+                        # Epoch history (for live chart)
+                        "epochHistory": job.get("epochHistory", []),
+                        "timestamp": datetime.now().isoformat()
+                    }
+
+                    # Create a hash of key fields to detect changes
+                    update_key = f"{progress_data['progress']}_{progress_data['currentGeneration']}_{progress_data['currentIndividual']}_{progress_data['currentEpoch']}_{progress_data['status']}_{len(progress_data.get('epochHistory') or [])}"
+
+                    # Send progress update if anything changed
+                    if update_key != last_update_hash:
+                        await websocket.send_json(progress_data)
+                        last_update_hash = update_key
 
                     # Send new log entries
                     if job_id in job_progress_data:
