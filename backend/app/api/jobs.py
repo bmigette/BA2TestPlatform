@@ -33,6 +33,10 @@ _jobs_loaded_from_db = False
 # Training progress data (metrics over time)
 job_progress_data: Dict[str, Dict[str, Any]] = {}
 
+# Constants for memory management
+MAX_LOGS_PER_JOB = 1000  # Maximum logs to keep in memory per job
+MAX_INDIVIDUALS_IN_PROGRESS = 2000  # Maximum individuals to track in real-time
+
 
 class PredictionTarget(BaseModel):
     """Prediction target format supporting both legacy and new target types.
@@ -1018,13 +1022,19 @@ async def get_job_progress(job_id: str):
                 job_progress_data[job_id]["logs"].append(
                     f"[{datetime.now().isoformat()}] {progress_msg}"
                 )
+                # Trim logs if they exceed limit to prevent memory bloat
+                if len(job_progress_data[job_id]["logs"]) > MAX_LOGS_PER_JOB:
+                    job_progress_data[job_id]["logs"] = job_progress_data[job_id]["logs"][-MAX_LOGS_PER_JOB:]
 
     job = JobResponse(**jobs_store[job_id])
     progress_data = job_progress_data.get(job_id, {"metrics": [], "logs": []})
 
     # Convert metrics to TrainingMetrics objects
     metrics = [TrainingMetrics(**m) for m in progress_data.get("metrics", [])]
-    logs = progress_data.get("logs", [])
+
+    # Limit logs to prevent memory bloat on frontend (500 most recent)
+    all_logs = progress_data.get("logs", [])
+    logs = all_logs[-500:] if len(all_logs) > 500 else all_logs
 
     return JobProgressResponse(
         job=job,

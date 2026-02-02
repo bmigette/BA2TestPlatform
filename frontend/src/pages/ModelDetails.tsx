@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import ConfirmDialog from '../components/ConfirmDialog';
+import PredictionsChart from '../components/PredictionsChart';
 
 interface HyperParameters {
   layers: number;
@@ -858,92 +859,35 @@ const ModelDetails: React.FC = () => {
                 </div>
               </div>
 
-              {/* Chart */}
+              {/* Chart - TradingView style with prediction markers */}
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                   <TrendingUp className="w-5 h-5 text-blue-500" />
                   Price with Predictions Overlay
                 </h3>
-                <div className="h-96">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart
-                      data={predictionsData.predictions.map(p => ({
-                        date: new Date(p.date).toLocaleDateString(),
-                        close: p.close,
-                        probability: p.probability * 100,
-                        actual: p.actual,
-                        predicted: p.predictedClass,
-                        correct: p.correct
-                      }))}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="date"
-                        tick={{ fontSize: 10 }}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis
-                        yAxisId="price"
-                        orientation="left"
-                        label={{ value: 'Price', angle: -90, position: 'insideLeft' }}
-                      />
-                      <YAxis
-                        yAxisId="prob"
-                        orientation="right"
-                        domain={[0, 100]}
-                        label={{ value: 'Probability %', angle: 90, position: 'insideRight' }}
-                      />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (active && payload && payload.length) {
-                            const data = payload[0].payload;
-                            return (
-                              <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-3 rounded shadow-lg">
-                                <p className="text-sm font-medium">{data.date}</p>
-                                <p className="text-sm">Close: ${data.close?.toFixed(2)}</p>
-                                <p className="text-sm">Probability: {data.probability?.toFixed(1)}%</p>
-                                <p className="text-sm">
-                                  Predicted: <span className={data.predicted === 1 ? 'text-green-600' : 'text-red-600'}>
-                                    {data.predicted === 1 ? 'Up' : 'Down'}
-                                  </span>
-                                </p>
-                                <p className="text-sm">
-                                  Actual: <span className={data.actual === 1 ? 'text-green-600' : 'text-red-600'}>
-                                    {data.actual === 1 ? 'Up' : 'Down'}
-                                  </span>
-                                </p>
-                                <p className={`text-sm font-medium ${data.correct ? 'text-green-600' : 'text-red-600'}`}>
-                                  {data.correct ? 'Correct' : 'Incorrect'}
-                                </p>
-                              </div>
-                            );
-                          }
-                          return null;
-                        }}
-                      />
-                      <Legend />
-                      <Line
-                        yAxisId="price"
-                        type="monotone"
-                        dataKey="close"
-                        stroke="#3b82f6"
-                        name="Close Price"
-                        dot={false}
-                        strokeWidth={2}
-                      />
-                      <Line
-                        yAxisId="prob"
-                        type="monotone"
-                        dataKey="probability"
-                        stroke="#8b5cf6"
-                        name="Probability %"
-                        dot={false}
-                        strokeWidth={1}
-                        strokeDasharray="3 3"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                <div className="mb-2 flex items-center gap-4 text-xs text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 bg-green-500 rounded-full"></span>
+                    Correct Prediction
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 bg-red-500 rounded-full"></span>
+                    Incorrect Prediction
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="text-lg">&#x25B2;</span>
+                    Up Prediction
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="text-lg">&#x25BC;</span>
+                    Down Prediction
+                  </span>
                 </div>
+                <PredictionsChart
+                  predictions={predictionsData.predictions}
+                  height={450}
+                  showOnlyTransitions={true}
+                />
               </div>
 
               {/* Prediction Markers */}

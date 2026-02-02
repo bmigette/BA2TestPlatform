@@ -33,6 +33,7 @@ import ConditionBuilder, {
   createEmptyGroup,
   isConditionGroup
 } from '../components/ConditionBuilder';
+import BacktestChart from '../components/BacktestChart';
 import type {
   ConditionGroup,
   ConditionTree,
@@ -44,14 +45,10 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip as RechartsTooltip,
-  Legend,
   ResponsiveContainer,
   AreaChart,
   Area,
-  ComposedChart,
-  Bar,
   ReferenceLine,
-  Line
 } from 'recharts';
 
 interface Model {
@@ -98,13 +95,13 @@ interface Strategy {
 }
 
 interface Trade {
-  id: string;
+  id: string | number;
   entryDate: string;
   exitDate: string;
   entryPrice: number;
   exitPrice: number;
   size: number;
-  direction: string;
+  direction: 'long' | 'short';
   pnl: number;
   pnlPercent: number;
   duration: number;
@@ -145,6 +142,7 @@ interface Backtest {
   bestTrade: number | null;
   worstTrade: number | null;
   results: BacktestResults | null;
+  errorMessage: string | null;
   createdAt: string;
   completedAt: string | null;
 }
@@ -1134,9 +1132,17 @@ const Backtesting: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      {bt.status === 'pending' ? 'Pending...' : bt.status === 'running' ? 'Running...' : `Model #${bt.modelId}`}
+                    <p className={`text-xs mb-2 ${bt.status === 'failed' ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>
+                      {bt.status === 'pending' ? 'Pending...' :
+                       bt.status === 'running' ? 'Running...' :
+                       bt.status === 'failed' ? 'Failed' :
+                       `Model #${bt.modelId}`}
                     </p>
+                    {bt.status === 'failed' && bt.errorMessage && (
+                      <p className="text-xs text-red-400 mb-2 truncate" title={bt.errorMessage}>
+                        {bt.errorMessage}
+                      </p>
+                    )}
                     {bt.status === 'completed' && (
                       <div className="flex items-center gap-3 text-xs">
                         <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -1293,22 +1299,11 @@ const Backtesting: React.FC = () => {
                   )}
 
                   {activeTab === 'price' && selectedBacktest.results?.priceData && (
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={selectedBacktest.results.priceData.filter((_, i) => i % 5 === 0)}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="date" tickFormatter={d => d.slice(5)} />
-                          <YAxis yAxisId="price" domain={['dataMin - 5', 'dataMax + 5']} />
-                          <YAxis yAxisId="signal" orientation="right" domain={[-1, 1]} />
-                          <RechartsTooltip />
-                          <Legend />
-                          <Line yAxisId="price" type="monotone" dataKey="close" stroke="#3b82f6" name="Price" dot={false} />
-                          <Bar yAxisId="signal" dataKey="signal" name="Signal" fill="#8884d8" opacity={0.3} />
-                          <ReferenceLine yAxisId="signal" y={0.6} stroke="#22c55e" strokeDasharray="3 3" label="Buy" />
-                          <ReferenceLine yAxisId="signal" y={-0.6} stroke="#ef4444" strokeDasharray="3 3" label="Sell" />
-                        </ComposedChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <BacktestChart
+                      priceData={selectedBacktest.results.priceData}
+                      trades={selectedBacktest.results.trades || []}
+                      height={400}
+                    />
                   )}
 
                   {activeTab === 'trades' && selectedBacktest.results?.trades && (
