@@ -21,7 +21,7 @@ router = APIRouter()
 class BacktestCreate(BaseModel):
     """Request model for creating a backtest."""
     name: str
-    model_id: int
+    model_id: str  # String model ID like "mdl-abc123"
     prediction_dataset_id: int
     execution_dataset_id: int
     strategy_id: Optional[int] = None
@@ -61,8 +61,8 @@ async def create_backtest(
     db: Session = Depends(get_db)
 ):
     """Create and run a new backtest."""
-    # Validate model exists
-    model = db.query(TrainedModel).filter(TrainedModel.id == backtest.model_id).first()
+    # Validate model exists (lookup by model_id string, not integer id)
+    model = db.query(TrainedModel).filter(TrainedModel.model_id == backtest.model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail=f"Model {backtest.model_id} not found")
 
@@ -89,10 +89,10 @@ async def create_backtest(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
 
-    # Create backtest record
+    # Create backtest record (use integer id for database FK)
     db_backtest = Backtest(
         name=backtest.name,
-        model_id=backtest.model_id,
+        model_id=model.id,  # Use the integer database id
         prediction_dataset_id=backtest.prediction_dataset_id,
         execution_dataset_id=backtest.execution_dataset_id,
         strategy_id=backtest.strategy_id,

@@ -368,16 +368,12 @@ const Backtesting: React.FC = () => {
         strategyId = selectedStrategyId;
       }
 
-      // Extract numeric model ID from the string ID
-      const modelIdMatch = selectedModel.match(/(\d+)/);
-      const modelIdNum = modelIdMatch ? parseInt(modelIdMatch[1]) : 0;
-
       const res = await fetch(`${API_BASE}/backtests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: backtestName,
-          model_id: modelIdNum,
+          model_id: selectedModel,  // String model ID like "mdl-abc123"
           prediction_dataset_id: predictionDatasetId,
           execution_dataset_id: executionDatasetId,
           strategy_id: strategyId,
