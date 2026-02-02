@@ -577,12 +577,25 @@ async def run_model_predictions(
 
     # Get feature columns - prefer stored columns from training, fall back to dataset columns
     stored_feature_columns = hyperparameters.get('featureColumns')
+    c_in = hyperparameters.get('c_in')
+    logger.info(f"Model {model_id}: featureColumns in hyperparams={stored_feature_columns is not None}, "
+                f"count={len(stored_feature_columns) if stored_feature_columns else 0}, c_in={c_in}")
     if stored_feature_columns:
         # Use only features that exist in current dataset
         feature_columns = [col for col in stored_feature_columns if col in df.columns]
+
+        # Validate that feature count matches c_in (model architecture)
+        if c_in and len(feature_columns) != c_in:
+            logger.warning(f"Feature count mismatch: featureColumns has {len(feature_columns)} but model expects c_in={c_in}. "
+                          f"Model may have been saved with incorrect featureColumns. Retrain to fix.")
+
+        logger.info(f"Using {len(feature_columns)} of {len(stored_feature_columns)} stored feature columns")
         if len(feature_columns) != len(stored_feature_columns):
             missing = set(stored_feature_columns) - set(feature_columns)
-            logger.warning(f"Some training features not in dataset: {missing}")
+            if len(missing) < 20:
+                logger.warning(f"Some training features not in dataset: {missing}")
+            else:
+                logger.warning(f"Some training features not in dataset: {len(missing)} missing")
         if not feature_columns:
             raise HTTPException(
                 status_code=400,
@@ -594,6 +607,7 @@ async def run_model_predictions(
         feature_columns = [col for col in df.columns
                            if col not in ['Date', target_column]
                            and not col.startswith('target_')]
+        logger.warning(f"No stored featureColumns, falling back to {len(feature_columns)} dataset columns")
 
     # Determine model type from database (not file extension)
     # tsai models: lstm, gru, tcn, inception, resnet, xception, omniscale, minirocket, patchtst, lstm_fcn, tst
@@ -635,6 +649,7 @@ async def run_model_predictions(
                 prediction_mode=prediction_mode,
                 fit_scaler=False if training_service.data_prep else True
             )
+            logger.info(f"Prepared data: X shape={X.shape}, y shape={y.shape if hasattr(y, 'shape') else len(y)}")
 
             # Load model based on file type
             if file_path_obj.suffix == '.pkl':
@@ -698,6 +713,7 @@ async def run_model_predictions(
                 data=X,
                 prediction_mode=prediction_mode
             )
+            logger.info(f"Predictions: probs shape={probs.shape}, min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
 
             # Calculate predictions
             if prediction_mode == 'multistep':
