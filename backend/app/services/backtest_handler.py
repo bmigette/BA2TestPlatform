@@ -96,28 +96,40 @@ def run_backtest(
     file_path = model.file_path
     file_path_obj = Path(file_path) if file_path else None
 
+    logger.info(f"Model {model.model_id}: file_path={file_path}, featureColumns in hyperparams={stored_feature_columns is not None}, hyperparams keys={list(hyperparameters.keys()) if hyperparameters else 'None'}")
+
     # If no stored feature_columns in hyperparameters, try metadata file
-    if not stored_feature_columns and file_path_obj and file_path_obj.exists():
-        meta_patterns = [
-            file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
-            file_path_obj.with_suffix('.json'),
-        ]
-        for meta_path in meta_patterns:
-            if meta_path.exists():
-                try:
-                    with open(meta_path, 'r') as f:
-                        meta = json.load(f)
-                    stored_feature_columns = meta.get('feature_columns')
-                    if stored_feature_columns:
-                        logger.info(f"Loaded feature_columns from {meta_path}: {len(stored_feature_columns)} features")
-                        break
-                except Exception as e:
-                    logger.warning(f"Failed to load metadata from {meta_path}: {e}")
+    if not stored_feature_columns and file_path_obj:
+        if not file_path_obj.exists():
+            logger.warning(f"Model file does not exist: {file_path_obj}")
+        else:
+            meta_patterns = [
+                file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
+                file_path_obj.with_suffix('.json'),
+            ]
+            logger.debug(f"Trying metadata patterns: {[str(p) for p in meta_patterns]}")
+            for meta_path in meta_patterns:
+                if meta_path.exists():
+                    try:
+                        with open(meta_path, 'r') as f:
+                            meta = json.load(f)
+                        stored_feature_columns = meta.get('feature_columns')
+                        if stored_feature_columns:
+                            logger.info(f"Loaded feature_columns from {meta_path}: {len(stored_feature_columns)} features")
+                            break
+                        else:
+                            logger.warning(f"Metadata file {meta_path} exists but has no feature_columns key")
+                    except Exception as e:
+                        logger.warning(f"Failed to load metadata from {meta_path}: {e}")
+                else:
+                    logger.debug(f"Metadata file not found: {meta_path}")
 
     # Get feature columns - prefer stored columns from training
     if stored_feature_columns:
+        logger.info(f"Using {len(stored_feature_columns)} stored feature columns from training")
         # Use only features that exist in current dataset
         feature_cols = [col for col in stored_feature_columns if col in pred_df.columns]
+        logger.info(f"After filtering for dataset columns: {len(feature_cols)} features (dataset has {len(pred_df.columns)} total columns)")
         if len(feature_cols) != len(stored_feature_columns):
             missing = set(stored_feature_columns) - set(feature_cols)
             logger.warning(f"Some training features not in dataset: {missing}")
@@ -125,9 +137,13 @@ def run_backtest(
             logger.error(f"None of the training features found in dataset")
             return _empty_results(initial_capital)
     else:
-        # Fall back to computing from dataset
+        # Fall back to computing from dataset - WARN about this as it may cause issues
+        logger.warning(f"No stored feature_columns found for model {model.model_id}. "
+                      f"Falling back to computing features from dataset. "
+                      f"Tried hyperparameters.featureColumns and metadata file at {file_path_obj}")
         exclude_cols = {'Date', 'target', 'Open', 'High', 'Low', 'Close', 'Volume'}
         feature_cols = [c for c in pred_df.columns if c not in exclude_cols]
+        logger.info(f"Computed {len(feature_cols)} feature columns from dataset")
 
     if not feature_cols:
         logger.error("No feature columns found in prediction dataset")
@@ -149,6 +165,7 @@ def run_backtest(
 
     X = np.array([features[i:i+seq_len] for i in range(n_samples)])
     X = X.transpose(0, 2, 1)  # (samples, features, seq_len) for tsai
+    logger.info(f"Created input tensor X with shape {X.shape} (samples, features, seq_len)")
 
     # Load the trained model
     training_service = TSAITrainingService()

@@ -553,7 +553,8 @@ def save_generation_model(
     params: Dict[str, Any],
     metrics: Dict[str, Any],
     training_service: Any,
-    training_history: Optional[List[Dict[str, Any]]] = None
+    training_history: Optional[List[Dict[str, Any]]] = None,
+    feature_columns: Optional[List[str]] = None
 ) -> Optional[str]:
     """
     Save a model from a generation.
@@ -569,6 +570,7 @@ def save_generation_model(
         metrics: Evaluation metrics
         training_service: TrainingService instance for saving
         training_history: Epoch-by-epoch training history for visualization
+        feature_columns: List of feature column names used during training
 
     Returns:
         Path to saved model or None if failed
@@ -594,7 +596,8 @@ def save_generation_model(
             'params': params,
             'metrics': metrics,
             'normalization_params': normalization_params,  # For inference consistency
-            'training_history': training_history or []  # Epoch-by-epoch history for visualization
+            'training_history': training_history or [],  # Epoch-by-epoch history for visualization
+            'feature_columns': feature_columns or []  # Feature columns used during training
         }
 
         # Note: Callbacks are now serializable (EpochProgressCallback implements
@@ -929,10 +932,15 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                     fitness = 0.0
 
                 # Try to load metadata file
+                # First try direct path: elite_01_lstm_f0.9091_meta.json
                 meta_file = model_file.parent / f"{model_file.stem}_meta.json"
-                # Also try the pattern: elite_01_lstm_f0.9091_meta.json
+                # Also try the pattern: elite_01_lstm_f*_meta.json (for when fitness precision differs)
                 meta_pattern = f"elite_{name_parts[1]}_{model_type}_f*_meta.json"
                 meta_files = list(model_file.parent.glob(meta_pattern))
+
+                # Prioritize direct path if it exists
+                if meta_file.exists() and meta_file not in meta_files:
+                    meta_files.insert(0, meta_file)
 
                 metrics = {}
                 params = {}
@@ -2958,7 +2966,8 @@ def train_unified_optimization(
                 params=model_params,
                 metrics=eval_result,
                 training_service=training_service,
-                training_history=training_history
+                training_history=training_history,
+                feature_columns=feature_columns
             )
             if save_result is None:
                 # Model save failed - increment error counter
