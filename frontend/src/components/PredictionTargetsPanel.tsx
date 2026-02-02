@@ -558,9 +558,9 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
               <div className="flex gap-1">
                 <input
                   type="number"
-                  min="1"
+                  min="0"
                   value={directionalForm.horizon}
-                  onChange={(e) => setDirectionalForm({ ...directionalForm, horizon: parseInt(e.target.value) || 1 })}
+                  onChange={(e) => setDirectionalForm({ ...directionalForm, horizon: parseInt(e.target.value) || 0 })}
                   className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
                 />
                 <select
@@ -882,9 +882,9 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
               <div className="flex gap-1">
                 <input
                   type="number"
-                  min="1"
+                  min="0"
                   value={volatilityForm.horizon}
-                  onChange={(e) => setVolatilityForm({ ...volatilityForm, horizon: parseInt(e.target.value) || 1 })}
+                  onChange={(e) => setVolatilityForm({ ...volatilityForm, horizon: parseInt(e.target.value) || 0 })}
                   className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800"
                 />
                 <select
