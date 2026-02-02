@@ -315,12 +315,10 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
             try:
                 statement_types = fundamentals_config.get('statement_types')
                 if statement_types:
-                    lookback_statements = fundamentals_config.get('lookback_statements', 2)
                     providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
-                    df = FundamentalsService.create_statement_features(
+                    df = FundamentalsService.create_statement_features_v2(
                         df=df, ticker=ticker, statement_types=statement_types,
-                        lookback_statements=lookback_statements, providers=providers,
-                        frequency='quarterly'
+                        providers=providers, frequency='quarterly'
                     )
                 else:
                     fundamentals = FundamentalsService.get_fundamental_data(ticker)
@@ -455,7 +453,7 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
             df = add_time_features(df)
             logger.info(f"[Thread] Fetched {len(df)} OHLC data points")
         else:
-            # Load existing CSV
+            # Load existing CSV - start with ALL columns, only drop what we're regenerating
             existing_path = Path(file_path)
             if not existing_path.exists():
                 db_dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
@@ -465,38 +463,51 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
                     db.commit()
                 return
 
-            existing_df = pd.read_csv(existing_path)
-            existing_df['Date'] = pd.to_datetime(existing_df['Date'])
+            df = pd.read_csv(existing_path)
+            df['Date'] = pd.to_datetime(df['Date'])
+            original_cols = set(df.columns)
+            logger.info(f"[Thread] Loaded {len(df)} rows with {len(original_cols)} columns from existing dataset")
 
-            ohlcv_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-            # Also preserve time features if they exist
-            time_feature_cols = [c for c in existing_df.columns if c in ['day_of_week', 'hour_of_day']]
-            df = existing_df[ohlcv_cols + time_feature_cols].copy()
+            # Define column patterns for each regeneration type
+            ohlcv_time_cols = {'Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'day_of_week', 'hour_of_day'}
+            sentiment_prefixes = ('news_',)
+            fundamental_prefixes = ('bs_', 'is_', 'cf_', 'earn_', 'fundamental_')
+            macro_prefixes = ('macro_',)
 
-            # Preserve columns from components we're NOT regenerating
-            preserved_cols = []
-            if not regen_options.regenerate_sentiment:
-                sentiment_cols = [c for c in existing_df.columns if c.startswith('news_')]
-                for col in sentiment_cols:
-                    df[col] = existing_df[col]
-                    preserved_cols.append(col)
+            # Helper to identify column type
+            def get_column_type(col):
+                if col in ohlcv_time_cols:
+                    return 'ohlcv'
+                if col.startswith(sentiment_prefixes):
+                    return 'sentiment'
+                if col.startswith(fundamental_prefixes):
+                    return 'fundamentals'
+                if col.startswith(macro_prefixes):
+                    return 'macro'
+                return 'technical'  # Everything else is assumed to be technical indicators
 
-            if not regen_options.regenerate_fundamentals:
-                fundamental_cols = [c for c in existing_df.columns if c.startswith(('bs_', 'is_', 'cf_', 'earn_', 'fundamental_'))]
-                for col in fundamental_cols:
-                    df[col] = existing_df[col]
-                    preserved_cols.append(col)
+            # Drop columns only for components we ARE regenerating
+            cols_to_drop = []
+            for col in df.columns:
+                col_type = get_column_type(col)
+                if col_type == 'ohlcv':
+                    continue  # Never drop OHLCV
+                elif col_type == 'technical' and regen_options.regenerate_technical:
+                    cols_to_drop.append(col)
+                elif col_type == 'sentiment' and regen_options.regenerate_sentiment:
+                    cols_to_drop.append(col)
+                elif col_type == 'fundamentals' and regen_options.regenerate_fundamentals:
+                    cols_to_drop.append(col)
+                elif col_type == 'macro' and regen_options.regenerate_macro:
+                    cols_to_drop.append(col)
 
-            if not regen_options.regenerate_macro:
-                macro_cols = [c for c in existing_df.columns if c.startswith('macro_')]
-                for col in macro_cols:
-                    df[col] = existing_df[col]
-                    preserved_cols.append(col)
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
+                logger.info(f"[Thread] Dropped {len(cols_to_drop)} columns for regeneration")
 
-            if preserved_cols:
-                logger.info(f"[Thread] Preserved {len(preserved_cols)} columns from existing dataset")
-
-            logger.info(f"[Thread] Loaded {len(df)} rows from existing dataset")
+            preserved_count = len(df.columns) - len(ohlcv_time_cols & set(df.columns))
+            if preserved_count > 0:
+                logger.info(f"[Thread] Preserved {preserved_count} non-OHLCV columns")
 
         # Apply technical indicators if configured and regenerate_technical is True
         if technical_indicators and regen_options.regenerate_technical:
@@ -540,11 +551,9 @@ def _regenerate_dataset_in_background(dataset_id: int, regen_config: dict):
                     logger.info("[Thread] Fetching fundamentals data...")
                     statement_types = fundamentals_config.get('statement_types')
                     if statement_types:
-                        lookback_statements = fundamentals_config.get('lookback_statements', 2)
                         providers = fundamentals_config.get('fundamentals_providers', ['yfinance'])
-                        df = FundamentalsService.create_statement_features(
+                        df = FundamentalsService.create_statement_features_v2(
                             df, ticker, statement_types,
-                            lookback_statements=lookback_statements,
                             providers=providers
                         )
                         logger.info(f"[Thread] Added statement features for: {statement_types}")

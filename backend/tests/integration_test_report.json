@@ -1,38 +1,38 @@
 {
-  "timestamp": "2026-01-30T09:41:35.190260",
+  "timestamp": "2026-01-30T13:37:23.035707",
   "classification": {
     "lstm": {
       "status": "success",
-      "f1_score": 0.6188340807174888,
-      "accuracy": 0.44805194805194803,
+      "f1_score": 0.0,
+      "accuracy": 0.551948051948052,
       "metrics": {
-        "f1_score": 0.6188340807174888,
-        "accuracy": 0.44805194805194803,
-        "precision": 0.44805194805194803,
-        "recall": 1.0,
+        "f1_score": 0.0,
+        "accuracy": 0.551948051948052,
+        "precision": 0.0,
+        "recall": 0.0,
         "mcc": 0.0,
-        "auc_roc": 0.4629156010230179,
-        "true_negatives": 0,
-        "false_positives": 85,
-        "false_negatives": 0,
-        "true_positives": 69
+        "auc_roc": 0.5114236999147486,
+        "true_negatives": 85,
+        "false_positives": 0,
+        "false_negatives": 69,
+        "true_positives": 0
       }
     },
     "gru": {
       "status": "success",
-      "f1_score": 0.6188340807174888,
-      "accuracy": 0.44805194805194803,
+      "f1_score": 0.0,
+      "accuracy": 0.551948051948052,
       "metrics": {
-        "f1_score": 0.6188340807174888,
-        "accuracy": 0.44805194805194803,
-        "precision": 0.44805194805194803,
-        "recall": 1.0,
+        "f1_score": 0.0,
+        "accuracy": 0.551948051948052,
+        "precision": 0.0,
+        "recall": 0.0,
         "mcc": 0.0,
-        "auc_roc": 0.510144927536232,
-        "true_negatives": 0,
-        "false_positives": 85,
-        "false_negatives": 0,
-        "true_positives": 69
+        "auc_roc": 0.4242114236999147,
+        "true_negatives": 85,
+        "false_positives": 0,
+        "false_negatives": 69,
+        "true_positives": 0
       }
     },
     "tcn": {
@@ -45,7 +45,7 @@
         "precision": 0.44805194805194803,
         "recall": 1.0,
         "mcc": 0.0,
-        "auc_roc": 0.4060528559249787,
+        "auc_roc": 0.6179880647911339,
         "true_negatives": 0,
         "false_positives": 85,
         "false_negatives": 0,
@@ -54,56 +54,90 @@
     },
     "inception": {
       "status": "success",
-      "f1_score": 0.616822429906542,
-      "accuracy": 0.4675324675324675,
+      "f1_score": 0.6188340807174888,
+      "accuracy": 0.44805194805194803,
       "metrics": {
-        "f1_score": 0.616822429906542,
-        "accuracy": 0.4675324675324675,
-        "precision": 0.45517241379310347,
-        "recall": 0.9565217391304348,
-        "mcc": 0.05747220506623488,
-        "auc_roc": 0.40903665814151746,
-        "true_negatives": 6,
-        "false_positives": 79,
-        "false_negatives": 3,
-        "true_positives": 66
+        "f1_score": 0.6188340807174888,
+        "accuracy": 0.44805194805194803,
+        "precision": 0.44805194805194803,
+        "recall": 1.0,
+        "mcc": 0.0,
+        "auc_roc": 0.5382779198635977,
+        "true_negatives": 0,
+        "false_positives": 85,
+        "false_negatives": 0,
+        "true_positives": 69
       }
     },
     "resnet": {
       "status": "success",
-      "f1_score": 0.5527638190954773,
-      "accuracy": 0.42207792207792205,
+      "f1_score": 0.6188340807174888,
+      "accuracy": 0.44805194805194803,
       "metrics": {
-        "f1_score": 0.5527638190954773,
-        "accuracy": 0.42207792207792205,
-        "precision": 0.4230769230769231,
-        "recall": 0.7971014492753623,
-        "mcc": -0.11688497791023036,
-        "auc_roc": 0.46445012787723783,
-        "true_negatives": 10,
-        "false_positives": 75,
-        "false_negatives": 14,
-        "true_positives": 55
+        "f1_score": 0.6188340807174888,
+        "accuracy": 0.44805194805194803,
+        "precision": 0.44805194805194803,
+        "recall": 1.0,
+        "mcc": 0.0,
+        "auc_roc": 0.5536231884057972,
+        "true_negatives": 0,
+        "false_positives": 85,
+        "false_negatives": 0,
+        "true_positives": 69
       }
     },
     "omniscale": {
       "status": "success",
-      "f1_score": 0.33613445378151263,
-      "accuracy": 0.487012987012987,
+      "f1_score": 0.6188340807174888,
+      "accuracy": 0.44805194805194803,
       "metrics": {
-        "f1_score": 0.33613445378151263,
-        "accuracy": 0.487012987012987,
-        "precision": 0.4,
-        "recall": 0.2898550724637681,
-        "mcc": -0.06699864878448532,
-        "auc_roc": 0.5115089514066495,
-        "true_negatives": 55,
-        "false_positives": 30,
-        "false_negatives": 49,
-        "true_positives": 20
+        "f1_score": 0.6188340807174888,
+        "accuracy": 0.44805194805194803,
+        "precision": 0.44805194805194803,
+        "recall": 1.0,
+        "mcc": 0.0,
+        "auc_roc": 0.5994884910485933,
+        "true_negatives": 0,
+        "false_positives": 85,
+        "false_negatives": 0,
+        "true_positives": 69
       }
     },
     "lstm_fcn": {
+      "status": "success",
+      "f1_score": 0.6188340807174888,
+      "accuracy": 0.44805194805194803,
+      "metrics": {
+        "f1_score": 0.6188340807174888,
+        "accuracy": 0.44805194805194803,
+        "precision": 0.44805194805194803,
+        "recall": 1.0,
+        "mcc": 0.0,
+        "auc_roc": 0.6199488491048593,
+        "true_negatives": 0,
+        "false_positives": 85,
+        "false_negatives": 0,
+        "true_positives": 69
+      }
+    },
+    "tst": {
+      "status": "success",
+      "f1_score": 0.6188340807174888,
+      "accuracy": 0.44805194805194803,
+      "metrics": {
+        "f1_score": 0.6188340807174888,
+        "accuracy": 0.44805194805194803,
+        "precision": 0.44805194805194803,
+        "recall": 1.0,
+        "mcc": 0.0,
+        "auc_roc": 0.5614663256606991,
+        "true_negatives": 0,
+        "false_positives": 85,
+        "false_negatives": 0,
+        "true_positives": 69
+      }
+    },
+    "minirocket": {
       "status": "success",
       "f1_score": 0.0,
       "accuracy": 0.551948051948052,
@@ -113,62 +147,19 @@
         "precision": 0.0,
         "recall": 0.0,
         "mcc": 0.0,
-        "auc_roc": 0.5594202898550724,
+        "auc_roc": 0.5063938618925831,
         "true_negatives": 85,
         "false_positives": 0,
         "false_negatives": 69,
         "true_positives": 0
       }
     },
-    "tst": {
-      "status": "success",
-      "f1_score": 0.6063348416289592,
-      "accuracy": 0.43506493506493504,
-      "metrics": {
-        "f1_score": 0.6063348416289592,
-        "accuracy": 0.43506493506493504,
-        "precision": 0.4407894736842105,
-        "recall": 0.9710144927536232,
-        "mcc": -0.12731457403917473,
-        "auc_roc": 0.4508098891730605,
-        "true_negatives": 0,
-        "false_positives": 85,
-        "false_negatives": 2,
-        "true_positives": 67
-      }
-    },
-    "minirocket": {
-      "status": "success",
-      "f1_score": 0.5028571428571429,
-      "accuracy": 0.43506493506493504,
-      "metrics": {
-        "f1_score": 0.5028571428571429,
-        "accuracy": 0.43506493506493504,
-        "precision": 0.41509433962264153,
-        "recall": 0.6376811594202898,
-        "mcc": -0.0984860492423735,
-        "auc_roc": 0.378687127024723,
-        "true_negatives": 23,
-        "false_positives": 62,
-        "false_negatives": 25,
-        "true_positives": 44
-      }
-    },
     "xception": {
       "status": "success",
-      "f1_score": 0.10666666666666667,
-      "accuracy": 0.564935064935065,
+      "f1_score": 0,
+      "accuracy": 0,
       "metrics": {
-        "f1_score": 0.10666666666666667,
-        "accuracy": 0.564935064935065,
-        "precision": 0.6666666666666666,
-        "recall": 0.057971014492753624,
-        "mcc": 0.08851377807357286,
-        "auc_roc": 0.40920716112531974,
-        "true_negatives": 83,
-        "false_positives": 2,
-        "false_negatives": 65,
-        "true_positives": 4
+        "error": "Adaptive pool MPS: input sizes must be divisible by output sizes. Non-divisible input sizes are not implemented on MPS device yet. For now, you can manually transfer tensor to cpu in this case. Please refer to [this issue](https://github.com/pytorch/pytorch/issues/96056)"
       },
       "note": "CPU fallback due to MPS limitations"
     }
@@ -181,14 +172,14 @@
     },
     "inception": {
       "status": "success",
-      "f1_score": 0.05263157894736842,
+      "f1_score": 0.0,
       "horizon": 1
     }
   },
   "classification_h3": {
     "lstm": {
       "status": "success",
-      "f1_score": 0.62,
+      "f1_score": 0.0,
       "horizon": 3
     },
     "inception": {
@@ -200,27 +191,27 @@
   "regression": {
     "lstm": {
       "status": "success",
-      "mse": 0.008616833947598934
+      "mse": 0.003403362352401018
     },
     "nbeats": {
       "status": "success",
-      "mse": 0.004099641460925341
+      "mse": 0.010010008700191975
     },
     "tcn": {
       "status": "success",
-      "mse": 0.0006954391719773412
+      "mse": 0.005482618231326342
     },
     "gru": {
       "status": "success",
-      "mse": 0.014613821171224117
+      "mse": 0.015905044972896576
     },
     "tft": {
       "status": "success",
-      "mse": 0.1076977401971817
+      "mse": 0.025124579668045044
     },
     "transformer": {
       "status": "success",
-      "mse": 0.009114596992731094
+      "mse": 0.0032311382237821817
     }
   },
   "summary": {

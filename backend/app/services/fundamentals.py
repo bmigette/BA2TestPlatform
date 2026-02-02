@@ -557,3 +557,240 @@ class FundamentalsService:
 
         logger.info(f"Created statement features for {ticker}: {valid_statement_types} with {lookback_statements} periods")
         return result_df
+
+    @staticmethod
+    def create_statement_features_v2(
+        df: pd.DataFrame,
+        ticker: str,
+        statement_types: List[str],
+        providers: List[str] = None,
+        frequency: str = 'quarterly'
+    ) -> pd.DataFrame:
+        """
+        Create statement-based features with simpler structure (v2).
+
+        Instead of quarter-indexed columns (q0, q1, q2...), creates:
+        - {prefix}_{field}: Current (most recent) value
+        - {prefix}_{field}_days_old: Days since the data was released
+        - {prefix}_{field}_qoq_change: Quarter-over-quarter % change
+        - {prefix}_{field}_yoy_change: Year-over-year % change
+
+        Includes warmup: backfills earliest known value to start of dataset.
+
+        Args:
+            df: DataFrame with Date column
+            ticker: Stock ticker symbol
+            statement_types: List of statement types to fetch
+            providers: List of providers in priority order (default: ['yfinance'])
+            frequency: 'quarterly' or 'annual' (default: 'quarterly')
+
+        Returns:
+            DataFrame with added statement features
+        """
+        result_df = df.copy()
+
+        if 'Date' in result_df.columns:
+            result_df['Date'] = pd.to_datetime(result_df['Date'])
+
+        # Convert legacy metric names to statement types
+        converted_types = set()
+        for st in statement_types:
+            if st in STATEMENT_PREFIXES:
+                converted_types.add(st)
+            elif st in LEGACY_TO_STATEMENT:
+                converted_types.add(LEGACY_TO_STATEMENT[st])
+
+        valid_statement_types = list(converted_types)
+        if not valid_statement_types:
+            return result_df
+
+        # Import the provider-based service
+        try:
+            from dataproviders.fundamentals.service import FundamentalsService as ProviderService
+        except ImportError as e:
+            logger.error(f"Failed to import provider service: {e}")
+            return result_df
+
+        provider_list = providers or ['yfinance']
+        try:
+            provider_service = ProviderService(providers=provider_list)
+        except Exception as e:
+            logger.error(f"Failed to initialize provider service: {e}")
+            return result_df
+
+        min_date = result_df['Date'].min()
+        max_date = result_df['Date'].max()
+
+        # Calculate how many quarters the dataset spans, plus warmup
+        # We need: 4 quarters for YoY + quarters spanning the dataset + buffer
+        dataset_days = (max_date - min_date).days
+        dataset_quarters = max(1, dataset_days // 90)
+        warmup_quarters = 5  # 4 for YoY calculation + 1 buffer
+        fetch_periods = dataset_quarters + warmup_quarters + 4  # Extra buffer
+
+        logger.info(f"Fetching {fetch_periods} periods for {dataset_quarters} quarter dataset + {warmup_quarters} warmup")
+
+        for stmt_type in valid_statement_types:
+            prefix = STATEMENT_PREFIXES[stmt_type]
+            key_fields = STATEMENT_KEY_FIELDS.get(stmt_type, [])
+
+            try:
+                # Fetch statement data
+                if stmt_type == 'balance_sheet':
+                    response = provider_service.get_balance_sheet(
+                        symbol=ticker, frequency=frequency,
+                        end_date=max_date, lookback_periods=fetch_periods
+                    )
+                elif stmt_type == 'income_statement':
+                    response = provider_service.get_income_statement(
+                        symbol=ticker, frequency=frequency,
+                        end_date=max_date, lookback_periods=fetch_periods
+                    )
+                elif stmt_type == 'cash_flow':
+                    response = provider_service.get_cash_flow(
+                        symbol=ticker, frequency=frequency,
+                        end_date=max_date, lookback_periods=fetch_periods
+                    )
+                elif stmt_type == 'earnings':
+                    response = provider_service.get_earnings_merged(
+                        symbol=ticker, frequency=frequency,
+                        end_date=max_date, lookback_periods=fetch_periods
+                    )
+                else:
+                    continue
+
+                periods = response.periods
+                if not periods:
+                    logger.warning(f"No {stmt_type} data available for {ticker}")
+                    for field in key_fields:
+                        result_df[f'{prefix}_{field}'] = np.nan
+                        result_df[f'{prefix}_{field}_days_old'] = np.nan
+                    continue
+
+                # Sort periods by date (oldest first for processing)
+                periods_sorted = sorted(
+                    periods,
+                    key=lambda p: p.get('fiscal_date', ''),
+                    reverse=False
+                )
+
+                logger.info(f"Fetched {len(periods_sorted)} {stmt_type} periods for {ticker}")
+
+                # Build a timeline of values for each field
+                for field in key_fields:
+                    col_name = f'{prefix}_{field}'
+                    col_days = f'{prefix}_{field}_days_old'
+                    col_qoq = f'{prefix}_{field}_qoq_change'
+                    col_yoy = f'{prefix}_{field}_yoy_change'
+
+                    # Create period lookup with values and changes
+                    # Earnings are typically announced 30-45 days after fiscal quarter end
+                    # Use 45 days delay for point-in-time correctness
+                    EARNINGS_ANNOUNCEMENT_DELAY_DAYS = 45
+
+                    period_data = []
+                    for i, period in enumerate(periods_sorted):
+                        fiscal_date_str = period.get('fiscal_date')
+                        if not fiscal_date_str:
+                            continue
+
+                        try:
+                            fiscal_date = pd.to_datetime(fiscal_date_str)
+                            if hasattr(fiscal_date, 'tzinfo') and fiscal_date.tzinfo is not None:
+                                fiscal_date = fiscal_date.replace(tzinfo=None)
+                            # Estimate announcement date (when data becomes available)
+                            available_date = fiscal_date + pd.Timedelta(days=EARNINGS_ANNOUNCEMENT_DELAY_DAYS)
+                        except:
+                            continue
+
+                        value = period.get(field)
+                        if value is None:
+                            continue
+
+                        # Calculate QoQ change (previous quarter)
+                        qoq_change = None
+                        if i > 0:
+                            prev_val = periods_sorted[i-1].get(field)
+                            if prev_val and prev_val != 0:
+                                qoq_change = (value - prev_val) / abs(prev_val)
+
+                        # Calculate YoY change (4 quarters back)
+                        yoy_change = None
+                        if i >= 4:
+                            prev_year_val = periods_sorted[i-4].get(field)
+                            if prev_year_val and prev_year_val != 0:
+                                yoy_change = (value - prev_year_val) / abs(prev_year_val)
+
+                        period_data.append({
+                            'date': available_date,  # Use estimated announcement date for point-in-time
+                            'fiscal_date': fiscal_date,
+                            'value': value,
+                            'qoq_change': qoq_change,
+                            'yoy_change': yoy_change
+                        })
+
+                    if not period_data:
+                        result_df[col_name] = np.nan
+                        result_df[col_days] = np.nan
+                        result_df[col_qoq] = np.nan
+                        result_df[col_yoy] = np.nan
+                        continue
+
+                    # Sort by date
+                    period_data.sort(key=lambda x: x['date'])
+
+                    # Find first available QoQ and YoY values for warmup
+                    first_qoq = next((p['qoq_change'] for p in period_data if p['qoq_change'] is not None), 0.0)
+                    first_yoy = next((p['yoy_change'] for p in period_data if p['yoy_change'] is not None), 0.0)
+
+                    # For each row, find the most recent period before or on that date
+                    def get_period_for_date(row_date):
+                        if hasattr(row_date, 'tzinfo') and row_date.tzinfo is not None:
+                            row_date = row_date.replace(tzinfo=None)
+
+                        best = None
+                        for pd_item in period_data:
+                            if pd_item['date'] <= row_date:
+                                best = pd_item
+                            else:
+                                break
+                        return best
+
+                    values = []
+                    days_old = []
+                    qoq_changes = []
+                    yoy_changes = []
+
+                    for row_date in result_df['Date']:
+                        period_info = get_period_for_date(row_date)
+                        if period_info:
+                            values.append(period_info['value'])
+                            # days_old = days since fiscal quarter end (not announcement)
+                            days = (row_date - period_info['fiscal_date']).days
+                            days_old.append(max(0, days))
+                            # Use first available change values if current is None
+                            qoq_changes.append(period_info['qoq_change'] if period_info['qoq_change'] is not None else first_qoq)
+                            yoy_changes.append(period_info['yoy_change'] if period_info['yoy_change'] is not None else first_yoy)
+                        else:
+                            # Warmup: use earliest known value, calculate days backward
+                            earliest = period_data[0]
+                            values.append(earliest['value'])
+                            days = (earliest['date'] - row_date).days
+                            days_old.append(max(0, days))  # How many days until this data exists
+                            # Use first available change values for warmup
+                            qoq_changes.append(first_qoq)
+                            yoy_changes.append(first_yoy)
+
+                    result_df[col_name] = values
+                    result_df[col_days] = days_old
+                    result_df[col_qoq] = qoq_changes
+                    result_df[col_yoy] = yoy_changes
+
+            except Exception as e:
+                logger.error(f"Error processing {stmt_type}: {e}", exc_info=True)
+                for field in key_fields:
+                    result_df[f'{prefix}_{field}'] = np.nan
+                    result_df[f'{prefix}_{field}_days_old'] = np.nan
+
+        logger.info(f"Created v2 statement features for {ticker}: {valid_statement_types}")
+        return result_df
