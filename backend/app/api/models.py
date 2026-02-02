@@ -716,13 +716,16 @@ async def run_model_predictions(
             logger.info(f"Predictions: probs shape={probs.shape}, min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
 
             # Calculate predictions
+            # probs is now always 2D: (samples, n_classes)
             if prediction_mode == 'multistep':
                 # Multi-step: average probabilities across horizons
                 avg_probs = np.mean(probs, axis=1)
                 predicted_classes = (avg_probs >= threshold).astype(int)
             else:
-                predicted_classes = (probs >= threshold).astype(int)
-                avg_probs = probs
+                # Binary classification: probs[:, 1] is probability of class 1 (up)
+                prob_class_1 = probs[:, 1] if len(probs.shape) > 1 and probs.shape[1] > 1 else probs
+                predicted_classes = (prob_class_1 >= threshold).astype(int)
+                avg_probs = prob_class_1
 
             # Build results
             # Note: sequences start at index 0 but represent predictions for index seq_len-1+prediction_horizon

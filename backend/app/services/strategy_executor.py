@@ -107,6 +107,12 @@ def evaluate_comparison(left: Any, operator: str, right: Any) -> bool:
             if isinstance(right, (list, tuple)) and len(right) == 2:
                 return float(right[0]) <= float(left) <= float(right[1])
             return False
+        elif operator == "is_true":
+            # Check if value is truthy (1, True, "true", etc.)
+            return bool(left) and left != 0
+        elif operator == "is_false":
+            # Check if value is falsy (0, False, "false", etc.)
+            return not left or left == 0
         else:
             logger.warning(f"Unknown operator: {operator}")
             return False
