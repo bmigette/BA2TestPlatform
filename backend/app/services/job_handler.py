@@ -2975,6 +2975,7 @@ def train_unified_optimization(
                 'individual': individual_num,
                 'model_type': model_type,
                 'params': model_params,
+                'loss_function': loss_function_type,
                 'fitness': fitness,
                 'metrics': eval_result,
                 'training_history': training_history

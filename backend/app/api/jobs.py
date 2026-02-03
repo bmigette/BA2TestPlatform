@@ -175,6 +175,8 @@ class JobResponse(BaseModel):
     estimatedTimeRemaining: Optional[str] = None
     optimizeMetric: Optional[str] = None  # The metric being optimized
     lossFunction: Optional[str] = None  # The loss function being used
+    lossFunctions: Optional[List[str]] = None  # Multiple loss functions for optimization
+    optimizeLossFunction: Optional[bool] = None  # Whether loss function is being optimized
     # Training progress details
     currentEpoch: Optional[int] = None
     totalEpochs: Optional[int] = None
@@ -295,6 +297,8 @@ def load_jobs_from_database():
                     'estimatedTimeRemaining': None,
                     'optimizeMetric': metrics_config.get('optimizeMetric', 'f1_score'),
                     'lossFunction': metrics_config.get('lossFunction', 'focal_loss'),
+                    'lossFunctions': metrics_config.get('lossFunctions'),
+                    'optimizeLossFunction': metrics_config.get('optimizeLossFunction', False),
                     'datasetProgress': dataset_progress if len(dataset_ids) > 1 else None,
                     'currentDatasetId': None,
                     'foldResults': None,
@@ -537,6 +541,8 @@ async def create_job(job_create: JobCreate):
             totalGenerations=genetic_config.generations,
             optimizeMetric=metrics_config.optimizeMetric,
             lossFunction=metrics_config.lossFunction,
+            lossFunctions=metrics_config.lossFunctions,
+            optimizeLossFunction=metrics_config.optimizeLossFunction,
             totalCombinations=total_combinations,
             datasetProgress=dataset_progress if len(dataset_ids) > 1 else None,
             trainingDateRange=job_create.trainingDateRange,
