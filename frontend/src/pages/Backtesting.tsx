@@ -223,6 +223,40 @@ const Backtesting: React.FC = () => {
     fetchData();
   }, []);
 
+  // Poll for backtest status updates when there are pending/running backtests
+  useEffect(() => {
+    const hasPendingOrRunning = backtests.some(bt => bt.status === 'pending' || bt.status === 'running');
+    if (!hasPendingOrRunning) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/backtests`);
+        if (res.ok) {
+          const data = await res.json();
+          const updatedBacktests = data.backtests || [];
+          setBacktests(updatedBacktests);
+
+          // Update selected backtest if it was updated
+          if (selectedBacktest) {
+            const updated = updatedBacktests.find((bt: Backtest) => bt.id === selectedBacktest.id);
+            if (updated && updated.status !== selectedBacktest.status) {
+              // Fetch full details for the selected backtest
+              const detailsRes = await fetch(`${API_BASE}/backtests/${selectedBacktest.id}`);
+              if (detailsRes.ok) {
+                const details = await detailsRes.json();
+                setSelectedBacktest(details);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll backtests:', err);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [backtests, selectedBacktest]);
+
   // Fetch prediction fields when model changes
   const fetchPredictionFields = useCallback(async (modelId: string) => {
     if (!modelId) {
