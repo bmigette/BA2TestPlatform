@@ -21,7 +21,6 @@ import {
   ArrowDownRight,
   Filter,
   Save,
-  FolderOpen,
   X,
   Database,
   Layers
@@ -168,8 +167,6 @@ const Backtesting: React.FC = () => {
   const [endDate, setEndDate] = useState('2025-12-31');
 
   // Strategy configuration
-  const [selectedStrategyId, setSelectedStrategyId] = useState<number | ''>('');
-  const [useNewStrategy, setUseNewStrategy] = useState(true);
   const [buyEntryConditions, setBuyEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
   const [sellEntryConditions, setSellEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
   const [exitConditions, setExitConditions] = useState<ExitConditionSet[]>([]);
@@ -213,7 +210,6 @@ const Backtesting: React.FC = () => {
   const [saveStrategyName, setSaveStrategyName] = useState('');
   const [saveStrategyDescription, setSaveStrategyDescription] = useState('');
   const [savingStrategy, setSavingStrategy] = useState(false);
-  const [showLoadDropdown, setShowLoadDropdown] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -322,6 +318,46 @@ const Backtesting: React.FC = () => {
       return;
     }
 
+    // Validate conditions - check for empty fields
+    const validateConditions = (tree: ConditionTree, path: string): string | null => {
+      if (isConditionGroup(tree)) {
+        for (let i = 0; i < tree.conditions.length; i++) {
+          const error = validateConditions(tree.conditions[i], `${path}[${i}]`);
+          if (error) return error;
+        }
+        return null;
+      } else {
+        // It's a ConditionNode
+        if (!tree.field || tree.field.trim() === '') {
+          return `Empty field in ${path}. Please select a field or remove the condition.`;
+        }
+        if (!tree.comparison || tree.comparison.trim() === '') {
+          return `Empty comparison in ${path}. Please select a comparison operator.`;
+        }
+        return null;
+      }
+    };
+
+    const buyError = validateConditions(buyEntryConditions, 'Buy Entry');
+    if (buyError) {
+      setError(buyError);
+      return;
+    }
+
+    const sellError = validateConditions(sellEntryConditions, 'Sell Entry');
+    if (sellError) {
+      setError(sellError);
+      return;
+    }
+
+    for (let i = 0; i < exitConditions.length; i++) {
+      const exitError = validateConditions(exitConditions[i].conditions, `Exit Rule "${exitConditions[i].name}"`);
+      if (exitError) {
+        setError(exitError);
+        return;
+      }
+    }
+
     try {
       setRunning(true);
       setError(null);
@@ -332,39 +368,32 @@ const Backtesting: React.FC = () => {
         throw new Error('Selected model not found');
       }
 
-      // Build strategy params if using new strategy
-      let strategyParams = null;
-      let strategyId = null;
-
-      if (useNewStrategy) {
-        strategyParams = {
-          buyEntryConditions,
-          sellEntryConditions,
-          exitConditions: exitConditions.map(ec => ({
-            id: ec.id,
-            name: ec.name,
-            conditions: ec.conditions,
-            action: ec.action,
-            actionValue: ec.actionValue,
-            actionValueOptimize: ec.actionValueOptimize,
-            actionValueMin: ec.actionValueMin,
-            actionValueMax: ec.actionValueMax,
-            actionValueStep: ec.actionValueStep
-          })),
-          initialTpPercent,
-          initialTpOptimize,
-          initialTpMin: initialTpOptimize ? initialTpMin : null,
-          initialTpMax: initialTpOptimize ? initialTpMax : null,
-          initialTpStep: initialTpOptimize ? initialTpStep : null,
-          initialSlPercent,
-          initialSlOptimize,
-          initialSlMin: initialSlOptimize ? initialSlMin : null,
-          initialSlMax: initialSlOptimize ? initialSlMax : null,
-          initialSlStep: initialSlOptimize ? initialSlStep : null
-        };
-      } else if (selectedStrategyId) {
-        strategyId = selectedStrategyId;
-      }
+      // Build strategy params from current form state
+      const strategyParams = {
+        buyEntryConditions,
+        sellEntryConditions,
+        exitConditions: exitConditions.map(ec => ({
+          id: ec.id,
+          name: ec.name,
+          conditions: ec.conditions,
+          action: ec.action,
+          actionValue: ec.actionValue,
+          actionValueOptimize: ec.actionValueOptimize,
+          actionValueMin: ec.actionValueMin,
+          actionValueMax: ec.actionValueMax,
+          actionValueStep: ec.actionValueStep
+        })),
+        initialTpPercent,
+        initialTpOptimize,
+        initialTpMin: initialTpOptimize ? initialTpMin : null,
+        initialTpMax: initialTpOptimize ? initialTpMax : null,
+        initialTpStep: initialTpOptimize ? initialTpStep : null,
+        initialSlPercent,
+        initialSlOptimize,
+        initialSlMin: initialSlOptimize ? initialSlMin : null,
+        initialSlMax: initialSlOptimize ? initialSlMax : null,
+        initialSlStep: initialSlOptimize ? initialSlStep : null
+      };
 
       const res = await fetch(`${API_BASE}/backtests`, {
         method: 'POST',
@@ -374,7 +403,6 @@ const Backtesting: React.FC = () => {
           model_id: selectedModel,  // String model ID like "mdl-abc123"
           prediction_dataset_id: predictionDatasetId,
           execution_dataset_id: executionDatasetId,
-          strategy_id: strategyId,
           strategy_params: strategyParams,
           start_date: startDate,
           end_date: endDate,
@@ -572,27 +600,6 @@ const Backtesting: React.FC = () => {
     setInitialSlMin(strategy.initialSlMin ?? 1.0);
     setInitialSlMax(strategy.initialSlMax ?? 10.0);
     setInitialSlStep(strategy.initialSlStep ?? 0.5);
-
-    setShowLoadDropdown(false);
-    setUseNewStrategy(true);
-  };
-
-  const deleteStrategy = (strategyId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfirmDialog({
-      isOpen: true,
-      title: 'Delete Strategy',
-      message: 'Are you sure you want to delete this saved strategy?',
-      variant: 'danger',
-      onConfirm: async () => {
-        try {
-          await fetch(`${API_BASE}/strategies/${strategyId}`, { method: 'DELETE' });
-          setStrategies(prev => prev.filter(s => s.id !== strategyId));
-        } catch (err) {
-          setError('Failed to delete strategy');
-        }
-      },
-    });
   };
 
   if (loading) {
@@ -753,46 +760,31 @@ const Backtesting: React.FC = () => {
                   Strategy
                 </h3>
 
-                <div className="flex items-center gap-4 mb-3">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      checked={useNewStrategy}
-                      onChange={() => setUseNewStrategy(true)}
-                      className="text-blue-500"
-                    />
-                    <span className="text-gray-700 dark:text-gray-300">New Strategy</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      checked={!useNewStrategy}
-                      onChange={() => setUseNewStrategy(false)}
-                      className="text-blue-500"
-                    />
-                    <span className="text-gray-700 dark:text-gray-300">Use Saved</span>
-                  </label>
+                {/* Load Strategy Dropdown */}
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="relative flex-1">
+                    <select
+                      value=""
+                      onChange={e => {
+                        const stratId = parseInt(e.target.value);
+                        const strat = strategies.find(s => s.id === stratId);
+                        if (strat) loadStrategy(strat);
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    >
+                      <option value="">Load from saved strategy...</option>
+                      {strategies.map(strat => (
+                        <option key={strat.id} value={strat.id}>
+                          {strat.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-
-                {!useNewStrategy && (
-                  <select
-                    value={selectedStrategyId}
-                    onChange={e => setSelectedStrategyId(e.target.value ? parseInt(e.target.value) : '')}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                  >
-                    <option value="">-- Select a saved strategy --</option>
-                    {strategies.map(strat => (
-                      <option key={strat.id} value={strat.id}>
-                        {strat.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
               </div>
 
               {/* Entry/Exit Condition Buttons */}
-              {useNewStrategy && (
-                <div className="space-y-2 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+              <div className="space-y-2 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
                   <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                     Strategy Conditions
                   </h4>
@@ -824,13 +816,11 @@ const Backtesting: React.FC = () => {
                     <ChevronDown className="w-4 h-4 text-gray-400" />
                   </button>
                 </div>
-              )}
 
               {/* Initial TP/SL */}
-              {useNewStrategy && (
-                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Initial Take Profit / Stop Loss
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Initial Take Profit / Stop Loss
                   </h4>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -935,64 +925,19 @@ const Backtesting: React.FC = () => {
                       </div>
                     </div>
                 </div>
-              )}
 
-              {/* Save/Load Strategy Buttons */}
-              {useNewStrategy && (
-                <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
-                  <Tooltip content="Save current strategy configuration for later use">
-                    <button
-                      onClick={() => setShowSaveDialog(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                    >
-                      <Save className="w-4 h-4" />
-                      Save Strategy
-                    </button>
-                  </Tooltip>
-
-                  <div className="relative">
-                    <Tooltip content="Load a previously saved strategy configuration">
-                      <button
-                        onClick={() => setShowLoadDropdown(!showLoadDropdown)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                      >
-                        <FolderOpen className="w-4 h-4" />
-                        Load Strategy
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
-                    </Tooltip>
-
-                    {showLoadDropdown && (
-                      <div className="absolute z-10 left-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 max-h-60 overflow-y-auto">
-                        {strategies.length === 0 ? (
-                          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-3">No saved strategies</p>
-                        ) : (
-                          strategies.map(strat => (
-                            <div
-                              key={strat.id}
-                              onClick={() => loadStrategy(strat)}
-                              className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center justify-between"
-                            >
-                              <div>
-                                <p className="text-sm font-medium truncate text-gray-900 dark:text-gray-100">{strat.name}</p>
-                                {strat.description && (
-                                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{strat.description}</p>
-                                )}
-                              </div>
-                              <button
-                                onClick={(e) => deleteStrategy(strat.id, e)}
-                                className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-red-500"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              {/* Save Strategy Button */}
+              <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
+                <Tooltip content="Save current strategy configuration for later use">
+                  <button
+                    onClick={() => setShowSaveDialog(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save Strategy
+                  </button>
+                </Tooltip>
+              </div>
 
               {/* Advanced Options Toggle */}
               <button
