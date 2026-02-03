@@ -40,6 +40,7 @@ class TrainedModel(Base):
     prediction_mode = Column(String(20), default="shift")  # "shift" or "multistep"
     loss_function = Column(String(50), default="focal_loss")  # focal_loss, cross_entropy, weighted_cross_entropy
     threshold = Column(Float, default=0.5)  # Optimized classification threshold
+    target_columns = Column(JSON, nullable=True)  # Actual column names generated during training
 
     # Data normalization parameters (for inference)
     # Stores the scaler settings so the same normalization can be applied to new data
@@ -81,6 +82,7 @@ class TrainedModel(Base):
             "predictionMode": self.prediction_mode,
             "lossFunction": self.loss_function,
             "threshold": self.threshold,
+            "targetColumns": self.target_columns,
             "normalizationParams": self.normalization_params,
             "generations": self.generations,
             "bestGeneration": self.best_generation,
