@@ -5,12 +5,85 @@ Evaluates strategy conditions against data to generate trade signals.
 """
 
 import logging
-from collections import deque
+from collections import deque, defaultdict
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# Aggregated logging to reduce verbosity
+LOG_AGGREGATION_INTERVAL = 200  # Log summary every N evaluations
+
+
+class EvaluationStats:
+    """Tracks condition evaluation statistics for aggregated logging."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.eval_count = 0
+        self.total_evals = 0  # Total across all intervals
+        self.condition_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
+        self.tree_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
+        # Cumulative stats for end-of-backtest summary
+        self.cumulative_tree_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
+        self.cumulative_condition_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
+
+    def record_condition(self, field: str, result: bool):
+        self.condition_results[field]['true' if result else 'false'] += 1
+        self.cumulative_condition_results[field]['true' if result else 'false'] += 1
+
+    def record_tree(self, label: str, result: bool):
+        self.tree_results[label]['true' if result else 'false'] += 1
+        self.cumulative_tree_results[label]['true' if result else 'false'] += 1
+        self.eval_count += 1
+        self.total_evals += 1
+
+        if self.eval_count >= LOG_AGGREGATION_INTERVAL:
+            self._log_summary()
+            # Reset interval stats but keep cumulative
+            self.eval_count = 0
+            self.condition_results = defaultdict(lambda: {'true': 0, 'false': 0})
+            self.tree_results = defaultdict(lambda: {'true': 0, 'false': 0})
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Get cumulative statistics for end-of-backtest summary."""
+        return {
+            'total_evaluations': self.total_evals,
+            'tree_results': dict(self.cumulative_tree_results),
+            'condition_results': dict(self.cumulative_condition_results),
+        }
+
+    def _log_summary(self):
+        if not self.tree_results:
+            return
+
+        # Log tree results summary
+        tree_summary = []
+        for label, counts in self.tree_results.items():
+            tree_summary.append(f"{label}: {counts['true']}T/{counts['false']}F")
+        logger.debug(f"Condition tree results (last {self.eval_count} evals): {', '.join(tree_summary)}")
+
+        # Log top condition results (most frequently true)
+        if self.condition_results:
+            cond_summary = []
+            # Sort by true count descending
+            sorted_conds = sorted(
+                self.condition_results.items(),
+                key=lambda x: x[1]['true'],
+                reverse=True
+            )[:5]  # Top 5
+            for field, counts in sorted_conds:
+                if counts['true'] > 0:
+                    cond_summary.append(f"{field}: {counts['true']}T/{counts['false']}F")
+            if cond_summary:
+                logger.debug(f"Top conditions: {', '.join(cond_summary)}")
+
+
+# Module-level stats tracker
+_eval_stats = EvaluationStats()
 
 
 class ConfirmationTracker:
@@ -177,7 +250,8 @@ def evaluate_condition(
         return False
 
     raw_result = evaluate_comparison(field_value, comparison, value)
-    logger.debug(f"Condition: {field}={field_value} {comparison} {value} -> {raw_result}")
+    # Record for aggregated logging instead of per-evaluation logging
+    _eval_stats.record_condition(field, raw_result)
 
     # Check if confirmation is required
     confirmation_required = condition.get('confirmationRequired') or condition.get('confirmation_required')
@@ -203,11 +277,31 @@ def evaluate_condition_tree(
 ) -> bool:
     """Evaluate the full condition tree."""
     if not conditions:
-        logger.debug(f"[{label}] No conditions defined, returning False")
+        # Only log this once per label to avoid spam
+        if not hasattr(evaluate_condition_tree, '_empty_warned'):
+            evaluate_condition_tree._empty_warned = set()
+        if label not in evaluate_condition_tree._empty_warned:
+            evaluate_condition_tree._empty_warned.add(label)
+            logger.debug(f"[{label}] No conditions defined, returning False")
         return False
     result = evaluate_condition(conditions, context, confirmation_tracker)
-    logger.debug(f"[{label}] Condition tree result: {result}")
+    # Record for aggregated logging
+    _eval_stats.record_tree(label, result)
     return result
+
+
+def reset_evaluation_stats():
+    """Reset evaluation statistics. Call at start of new backtest."""
+    global _eval_stats
+    _eval_stats.reset()
+    # Also reset the empty conditions warning tracker
+    if hasattr(evaluate_condition_tree, '_empty_warned'):
+        evaluate_condition_tree._empty_warned.clear()
+
+
+def get_evaluation_stats() -> Dict[str, Any]:
+    """Get evaluation statistics for end-of-backtest summary."""
+    return _eval_stats.get_summary()
 
 
 class StrategyExecutor:

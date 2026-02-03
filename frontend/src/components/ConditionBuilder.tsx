@@ -80,6 +80,11 @@ const defaultFields: AvailableField[] = [
   { field: 'position:total_count', fieldType: 'position', description: 'Total number of open positions', category: 'Position', label: 'Total Position Count' },
   { field: 'position:position_pnl', fieldType: 'position', description: 'Current position P&L %', category: 'Position', label: 'Position P&L %' },
   { field: 'position:bars_in_position', fieldType: 'position', description: 'Bars since entry', category: 'Position', label: 'Bars in Position' },
+  // Trade timing - bars/days since last trade was opened
+  { field: 'trade:bars_since_last_buy', fieldType: 'trade', description: 'Bars since last buy trade was opened', category: 'Trade Timing', label: 'Bars Since Last Buy' },
+  { field: 'trade:bars_since_last_sell', fieldType: 'trade', description: 'Bars since last sell trade was opened', category: 'Trade Timing', label: 'Bars Since Last Sell' },
+  { field: 'trade:days_since_last_buy', fieldType: 'trade', description: 'Days since last buy trade was opened', category: 'Trade Timing', label: 'Days Since Last Buy' },
+  { field: 'trade:days_since_last_sell', fieldType: 'trade', description: 'Days since last sell trade was opened', category: 'Trade Timing', label: 'Days Since Last Sell' },
   { field: 'time:hour', fieldType: 'time', description: 'Hour of day (0-23)', category: 'Time', label: 'Hour of Day' },
   { field: 'time:day_of_week', fieldType: 'time', description: 'Day of week (0=Mon, 6=Sun)', category: 'Time', label: 'Day of Week' },
   { field: 'price:change_pct', fieldType: 'price', description: 'Price change % from previous bar', category: 'Price', label: 'Price Change %' },
