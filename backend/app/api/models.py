@@ -651,6 +651,15 @@ async def run_model_predictions(
             )
             logger.info(f"Prepared data: X shape={X.shape}, y shape={y.shape if hasattr(y, 'shape') else len(y)}")
 
+            # Check for NaN in prepared data
+            if np.isnan(X).any():
+                nan_count = np.isnan(X).sum()
+                logger.error(f"Prepared data X contains {nan_count} NaN values!")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Data preparation produced NaN values. Check dataset for invalid values or extreme outliers."
+                )
+
             # Load model based on file type
             if file_path_obj.suffix == '.pkl':
                 # Full learner export
@@ -715,6 +724,19 @@ async def run_model_predictions(
             )
             logger.info(f"Predictions: probs shape={probs.shape}, min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
             logger.info(f"First 5 probs: {probs[:5]}")
+
+            # Check for NaN in predictions
+            if np.isnan(probs).any():
+                nan_count = np.isnan(probs).sum()
+                logger.error(f"Predictions contain {nan_count} NaN values! This usually means:")
+                logger.error("  1. The dataset has different features than training data")
+                logger.error("  2. Normalization parameters differ from training")
+                logger.error("  3. The model weights were corrupted")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Model predictions contain NaN values ({nan_count} total). "
+                           f"This may be caused by mismatched dataset features or missing normalization parameters."
+                )
 
             # Calculate predictions
             # probs is now always 2D: (samples, n_classes)
