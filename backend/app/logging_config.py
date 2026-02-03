@@ -9,10 +9,12 @@ Configures Python logging with separate log files for different levels:
 All loggers use the Python logging module with:
 - Timestamp, level, module, and message format
 - Log rotation configured for production use
+- Python warnings are captured and routed to logs
 """
 
 import logging
 import logging.handlers
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -109,6 +111,12 @@ def setup_logging(
     ]
     for logger_name in verbose_loggers:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+    # Capture Python warnings and route them to the logging system
+    # This ensures warnings from libraries (e.g., backtesting.py) appear in logs
+    logging.captureWarnings(True)
+    warnings_logger = logging.getLogger('py.warnings')
+    warnings_logger.setLevel(logging.WARNING)
 
     return root_logger
 
