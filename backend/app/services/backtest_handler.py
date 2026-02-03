@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.models.database import SessionLocal
 from app.models import Dataset, TrainedModel, Strategy, Backtest
-from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError
+from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError, reset_evaluation_stats
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 from app.services.job_handler import ffill_sparse_indicators
@@ -327,6 +327,9 @@ def run_backtest(
     # Create confirmation tracker for condition history
     confirmation_tracker = ConfirmationTracker()
     logged_context_fields = False
+
+    # Reset evaluation stats for fresh aggregated logging
+    reset_evaluation_stats()
 
     # Track last trade entry for "no trade in past X bars/days" conditions
     last_buy_bar_idx: Optional[int] = None
