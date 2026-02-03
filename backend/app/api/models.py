@@ -575,31 +575,98 @@ async def run_model_predictions(
     logger.info(f"=== RUN-PREDICTIONS DEBUG for model {model_id} ===")
     logger.info(f"Model config: type={model.get('modelType')}, jobId={job_id}, datasetId={dataset_id}")
     logger.info(f"Prediction config: mode={prediction_mode}, horizon={prediction_horizon}, threshold={threshold}")
+    logger.info(f"Prediction targets: {prediction_targets}")
     logger.info(f"Hyperparameters: seq_len={seq_len}, c_in={hyperparameters.get('c_in')}, c_out={hyperparameters.get('c_out')}")
     logger.info(f"Has normalization_params: {normalization_params is not None}")
 
     # Find ALL target columns in the dataset
     available_targets = []
 
-    # First, match prediction targets from model config to dataset columns
-    for target in prediction_targets:
+    # Helper to generate expected column name from target config
+    def get_target_column_name(target: dict) -> tuple:
+        """Returns (column_name, label, target_type) or (None, None, None) if can't generate."""
         target_type = target.get('type', '')
-        target_label = target.get('label', target_type)
-        # Look for matching column in dataset
-        for col in df.columns:
-            if target_type.lower() in col.lower() or col.lower() in target_type.lower():
-                if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']:
+
+        if target_type == 'price_based':
+            direction = target.get('direction', 'up')
+            profit_pct = target.get('profitPct')
+            max_dd = target.get('maxDrawdownPct')
+            time_bars = target.get('timeBars')
+            time_unit = target.get('timeBarsUnit', 'bars')
+
+            if profit_pct is not None and max_dd is not None and time_bars is not None:
+                # Column format: price_up_5pct_10dd_15d (days) or price_up_5pct_10dd_360b (bars)
+                unit_suffix = 'd' if time_unit == 'days' else 'b'
+                col_name = f"price_{direction}_{profit_pct}pct_{max_dd}dd_{time_bars}{unit_suffix}"
+                label = f"Price {direction.title()} {profit_pct}% (DD {max_dd}%, {time_bars}{unit_suffix})"
+                return col_name, label, target_type
+
+        elif target_type == 'directional':
+            direction = target.get('direction', 'up')
+            horizon = target.get('horizon', 1)
+            horizon_unit = target.get('horizonUnit', 'bars')
+            unit_suffix = 'd' if horizon_unit == 'days' else 'b'
+            col_name = f"direction_{direction}_{horizon}{unit_suffix}"
+            label = f"Direction {direction.title()} ({horizon}{unit_suffix})"
+            return col_name, label, target_type
+
+        elif target_type == 'trend_reversal':
+            indicator = target.get('indicator', 'unknown')
+            indicator_type = target.get('indicatorType', 'reversal')
+            col_name = f"trend_{indicator}_{indicator_type}"
+            label = f"{indicator.upper()} {indicator_type.title()}"
+            return col_name, label, target_type
+
+        elif target_type == 'triple_barrier':
+            profit_pct = target.get('profitPct')
+            stop_pct = target.get('stopPct')
+            timeout = target.get('timeoutBars')
+            if profit_pct and stop_pct and timeout:
+                col_name = f"triple_barrier_{profit_pct}tp_{stop_pct}sl_{timeout}bars"
+                label = f"Triple Barrier ({profit_pct}% TP, {stop_pct}% SL)"
+                return col_name, label, target_type
+
+        return None, None, target_type
+
+    # Generate expected column names from model config and find in dataset
+    for target in prediction_targets:
+        col_name, label, target_type = get_target_column_name(target)
+
+        if col_name and col_name in df.columns:
+            available_targets.append({
+                'column': col_name,
+                'label': label or col_name,
+                'type': target_type
+            })
+            logger.info(f"Found target column: {col_name}")
+        elif col_name:
+            # Try partial match for columns that might have slight variations
+            for df_col in df.columns:
+                if col_name.lower() in df_col.lower() or df_col.lower().startswith(col_name.split('_')[0] + '_' + col_name.split('_')[1]):
                     available_targets.append({
-                        'column': col,
-                        'label': target_label or col,
+                        'column': df_col,
+                        'label': label or df_col,
                         'type': target_type
                     })
+                    logger.info(f"Found target column (partial match): {df_col} for {col_name}")
                     break
 
     # Fallback: look for common target column patterns if no matches found
     if not available_targets:
+        logger.warning(f"No targets matched from config, falling back to pattern search")
         for col in df.columns:
-            if any(x in col.lower() for x in ['target', 'signal', 'label', 'direction']):
+            # Look for price_* or direction_* columns first (more specific)
+            if col.startswith('price_') or col.startswith('direction_') or col.startswith('trend_') or col.startswith('triple_barrier_'):
+                available_targets.append({
+                    'column': col,
+                    'label': col,
+                    'type': 'auto-detected'
+                })
+
+    # Final fallback: generic target patterns
+    if not available_targets:
+        for col in df.columns:
+            if any(x in col.lower() for x in ['target', 'label']) and col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']:
                 available_targets.append({
                     'column': col,
                     'label': col,
