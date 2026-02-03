@@ -31,6 +31,7 @@ export interface PredictionsChartProps {
   showOnlyClass?: number | null; // Only show markers for this predicted class (null = show all)
   minProbability?: number; // Minimum probability to show marker (0-1)
   showActualTargets?: boolean; // Show markers for actual target values (ground truth from dataset)
+  showAllActualTargets?: boolean; // Show all actual targets vs only transitions (default: true = show all)
 }
 
 const PredictionsChart: React.FC<PredictionsChartProps> = ({
@@ -40,6 +41,7 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
   showOnlyClass = 1, // Default to only showing "up" predictions (class 1)
   minProbability = 0, // Default: show all predictions
   showActualTargets = false, // Default: only show model predictions
+  showAllActualTargets = true, // Default: show all actual targets (not just transitions)
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -125,14 +127,20 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
 
         // === ACTUAL TARGET MARKERS (Ground truth from dataset) ===
         if (showActualTargets && p.actual === 1) {
-          // Show a marker where actual target was 1 (the event occurred)
-          markers.push({
-            time,
-            position: 'aboveBar',
-            color: '#3B82F6', // Blue for actual targets
-            shape: 'circle',
-            text: 'T', // T for "Target"
-          });
+          // Check if we should show all targets or only transitions
+          const prevActual = idx > 0 ? predictions[idx - 1].actual : 0;
+          const isTransition = prevActual !== 1;
+
+          if (showAllActualTargets || isTransition) {
+            // Show a marker where actual target was 1 (the event occurred)
+            markers.push({
+              time,
+              position: 'aboveBar',
+              color: '#3B82F6', // Blue for actual targets
+              shape: 'circle',
+              text: isTransition ? 'T' : '', // Only show 'T' text on transitions to reduce clutter
+            });
+          }
         }
 
         // === MODEL PREDICTION MARKERS ===
@@ -202,7 +210,7 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
       console.error('PredictionsChart error:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [predictions, height, showOnlyTransitions, showOnlyClass, minProbability, showActualTargets]);
+  }, [predictions, height, showOnlyTransitions, showOnlyClass, minProbability, showActualTargets, showAllActualTargets]);
 
   if (error) {
     return (

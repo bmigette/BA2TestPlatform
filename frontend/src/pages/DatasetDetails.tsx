@@ -161,6 +161,7 @@ const DatasetDetails: React.FC = () => {
   const [targetSetModalOpen, setTargetSetModalOpen] = useState(false);
   const [targetSetModalMode, setTargetSetModalMode] = useState<'save' | 'load'>('save');
   const [currentTargetConfigs, setCurrentTargetConfigs] = useState<TargetConfig[]>([]);
+  const [showAllTargets, setShowAllTargets] = useState(false); // Show all targets vs transitions only
   const [indicators, setIndicators] = useState<IndicatorVisibility>({
     sma20: true,
     sma50: false,
@@ -1081,9 +1082,18 @@ const DatasetDetails: React.FC = () => {
             Trend Analysis
             {trendLoading && <Loader size={12} className="animate-spin" />}
           </button>
-          {/* Target Legend */}
-          {indicators.showTargets && predictionPreview && (
+          {/* Target Legend and Show All Toggle */}
+          {indicators.showTargets && (predictionPreview || calculatedTargets.length > 0) && (
             <div className="flex items-center gap-3 ml-2 text-xs">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showAllTargets}
+                  onChange={(e) => setShowAllTargets(e.target.checked)}
+                  className="w-3 h-3 text-purple-600 rounded"
+                />
+                <span className="text-gray-500 dark:text-gray-400">Show All</span>
+              </label>
               <div className="flex items-center gap-1">
                 <div className="w-2.5 h-2.5 rotate-45 bg-green-500 border border-green-700"></div>
                 <span className="text-gray-500 dark:text-gray-400">Up Target</span>
@@ -1196,6 +1206,7 @@ const DatasetDetails: React.FC = () => {
             calculatedTargets={calculatedTargets}
             indicatorData={indicatorData}
             height={500}
+            showAllTargets={showAllTargets}
           />
         ) : (
           <div className="text-center py-12">
