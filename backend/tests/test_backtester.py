@@ -27,6 +27,8 @@ def test_db():
     # Environment variable already set at module level before any imports
     # Import database components
     from app.models.database import engine, Base, SessionLocal
+    # Import all models to register them with Base before create_all
+    import app.models  # noqa: F401
 
     # Create tables (includes new buy/sell columns)
     Base.metadata.create_all(bind=engine)
@@ -655,7 +657,7 @@ class TestBacktestAPIEndpoints:
         """Test creating a new backtest."""
         backtest_data = {
             "name": "API Test Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "strategy_id": sample_strategy.id,
@@ -684,7 +686,7 @@ class TestBacktestAPIEndpoints:
         """Test creating backtest with non-existent model."""
         backtest_data = {
             "name": "Invalid Backtest",
-            "model_id": 99999,
+            "model_id": "mdl-nonexistent",
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "start_date": "2024-01-01T00:00:00",
@@ -699,7 +701,7 @@ class TestBacktestAPIEndpoints:
         """Test creating backtest with non-existent dataset."""
         backtest_data = {
             "name": "Invalid Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": 99999,
             "execution_dataset_id": 99999,
             "start_date": "2024-01-01T00:00:00",
@@ -714,7 +716,7 @@ class TestBacktestAPIEndpoints:
         """Test creating backtest with non-existent strategy."""
         backtest_data = {
             "name": "Invalid Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "strategy_id": 99999,
@@ -730,7 +732,7 @@ class TestBacktestAPIEndpoints:
         """Test creating backtest with invalid date format."""
         backtest_data = {
             "name": "Invalid Date Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "start_date": "not-a-date",
@@ -910,7 +912,7 @@ class TestBacktesterIntegration:
         # Step 2: Create a backtest using the strategy
         backtest_data = {
             "name": "Integration Test Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "strategy_id": strategy["id"],
@@ -958,7 +960,7 @@ class TestBacktesterIntegration:
         """Test creating a backtest without a strategy (using strategy_params directly)."""
         backtest_data = {
             "name": "No Strategy Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "strategy_params": {
@@ -985,7 +987,7 @@ class TestBacktesterIntegration:
         # Create a backtest
         backtest_data = {
             "name": "List Test Backtest",
-            "model_id": sample_model.id,
+            "model_id": sample_model.model_id,
             "prediction_dataset_id": sample_dataset.id,
             "execution_dataset_id": sample_dataset.id,
             "start_date": "2024-01-01T00:00:00",
