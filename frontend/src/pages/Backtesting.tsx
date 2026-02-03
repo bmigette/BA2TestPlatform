@@ -318,6 +318,46 @@ const Backtesting: React.FC = () => {
       return;
     }
 
+    // Validate conditions - check for empty fields
+    const validateConditions = (tree: ConditionTree, path: string): string | null => {
+      if (isConditionGroup(tree)) {
+        for (let i = 0; i < tree.conditions.length; i++) {
+          const error = validateConditions(tree.conditions[i], `${path}[${i}]`);
+          if (error) return error;
+        }
+        return null;
+      } else {
+        // It's a ConditionNode
+        if (!tree.field || tree.field.trim() === '') {
+          return `Empty field in ${path}. Please select a field or remove the condition.`;
+        }
+        if (!tree.comparison || tree.comparison.trim() === '') {
+          return `Empty comparison in ${path}. Please select a comparison operator.`;
+        }
+        return null;
+      }
+    };
+
+    const buyError = validateConditions(buyEntryConditions, 'Buy Entry');
+    if (buyError) {
+      setError(buyError);
+      return;
+    }
+
+    const sellError = validateConditions(sellEntryConditions, 'Sell Entry');
+    if (sellError) {
+      setError(sellError);
+      return;
+    }
+
+    for (let i = 0; i < exitConditions.length; i++) {
+      const exitError = validateConditions(exitConditions[i].conditions, `Exit Rule "${exitConditions[i].name}"`);
+      if (exitError) {
+        setError(exitError);
+        return;
+      }
+    }
+
     try {
       setRunning(true);
       setError(null);
