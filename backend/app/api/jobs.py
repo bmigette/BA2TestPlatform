@@ -1551,6 +1551,8 @@ async def save_elite_to_inventory(
         # Prediction targets and horizon - critical for model inference
         "predictionTargets": job.get('predictionTargets', []),
         "predictionHorizon": job.get('predictionHorizon', 3),
+        # Actual target column names generated during training (for exact matching in predictions)
+        "targetColumns": elite_model.get('target_columns') or job.get('targetColumns', []),
         # Normalization params - critical for inference to apply same transformation
         "normalizationParams": elite_model.get('normalization_params') or job.get('normalizationParams'),
         # Classification training params (from GA optimization)

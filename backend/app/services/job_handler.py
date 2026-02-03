@@ -1220,6 +1220,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                 target_service = PredictionTargetService()
 
                 target_column = None
+                all_target_columns = []  # Collect all generated target column names for model metadata
                 for pt in prediction_targets:
                     pt_type = pt.get('type')
                     # Support both old format (config) and new format (indicatorParams)
@@ -1269,6 +1270,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                                 logger.info(f"Aligned {col_name} from {target_timeframe} to {dataset_timeframe}")
 
                             combined_df[col_name] = target_series
+                            all_target_columns.append(col_name)
                             if target_column is None:
                                 target_column = col_name
                             logger.info(f"Created trend reversal target: {col_name}, positives: {int(target_series.sum())}")
@@ -1293,6 +1295,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                             combined_df[col_name] = (combined_df['Close'].shift(-horizon) > combined_df['Close']).astype(int)
                         else:
                             combined_df[col_name] = (combined_df['Close'].shift(-horizon) < combined_df['Close']).astype(int)
+                        all_target_columns.append(col_name)
                         if target_column is None:
                             target_column = col_name
                         logger.info(f"Created directional target: {col_name}")
@@ -1333,6 +1336,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                                     if c.startswith(f"price_{dir_label}"):
                                         combined_df[col_name] = target_series[c]
                                         break
+                            all_target_columns.append(col_name)
                             if target_column is None:
                                 target_column = col_name
                             positive_count = int(combined_df[col_name].sum()) if col_name in combined_df.columns else 0
@@ -1377,6 +1381,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                                         break
                                 labels.append(label)
                             combined_df[col_name] = labels
+                            all_target_columns.append(col_name)
                             if target_column is None:
                                 target_column = col_name
                             logger.info(f"Created triple_barrier target: {col_name}")
@@ -1410,6 +1415,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                                 combined_df[col_name] = tr.rolling(horizon).mean().shift(-horizon)
                             else:
                                 return {'status': 'failed', 'error': f'Unknown volatility method: {method}'}
+                            all_target_columns.append(col_name)
                             if target_column is None:
                                 target_column = col_name
                             logger.info(f"Created volatility target: {col_name}")
@@ -1422,7 +1428,10 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                 if target_column is None:
                     return {'status': 'failed', 'error': 'No valid target was created from prediction_targets'}
 
+                logger.info(f"Created {len(all_target_columns)} target columns: {all_target_columns}")
+
             else:
+                all_target_columns = []  # For legacy format
                 # Legacy price-based format
                 target_service = PredictionTargetService()
 
@@ -1515,11 +1524,12 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
                 jobs_store[task_id]["trainRows"] = len(train_df)
                 jobs_store[task_id]["testRows"] = len(test_df)
                 jobs_store[task_id]["targetColumn"] = target_column
+                jobs_store[task_id]["targetColumns"] = all_target_columns  # All generated target column names
                 jobs_store[task_id]["trainPositives"] = train_positives
                 jobs_store[task_id]["testPositives"] = test_positives
                 jobs_store[task_id]["trainPositivesPct"] = round(train_positives / len(train_df) * 100, 2) if len(train_df) > 0 else 0
                 jobs_store[task_id]["testPositivesPct"] = round(test_positives / len(test_df) * 100, 2) if len(test_df) > 0 else 0
-                logger.info(f"Updated job store with dataset stats: train={len(train_df)}, test={len(test_df)}")
+                logger.info(f"Updated job store with dataset stats: train={len(train_df)}, test={len(test_df)}, target_columns={all_target_columns}")
         except Exception as e:
             logger.warning(f"Failed to update job store with dataset stats: {e}")
 
@@ -2431,6 +2441,10 @@ def train_classification_optimization(
             try:
                 torch.save(result['model'].state_dict(), model_save_path)
                 # Save metadata for model reconstruction
+                # Get target columns from job store
+                from app.api.jobs import jobs_store as js
+                job_target_columns = js.get(task_id, {}).get('targetColumns', [])
+
                 metadata = {
                     'task_id': task_id,
                     'generation': gen,
@@ -2452,7 +2466,9 @@ def train_classification_optimization(
                     # Save training history for visualization after model is saved to inventory
                     'training_history': training_history,
                     # Save normalization params for forward test inference
-                    'normalization_params': mode_data.get('normalization_params')
+                    'normalization_params': mode_data.get('normalization_params'),
+                    # Save target column names for prediction matching
+                    'target_columns': job_target_columns
                 }
                 with open(meta_save_path, 'w') as f:
                     json.dump(metadata, f, indent=2, default=str)
