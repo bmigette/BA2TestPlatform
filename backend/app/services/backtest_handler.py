@@ -586,6 +586,7 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         exit_conditions = None
 
         if backtest.strategy_id:
+            # Load conditions from saved strategy in database
             strategy = db.query(Strategy).filter(Strategy.id == backtest.strategy_id).first()
             if strategy:
                 buy_entry_conditions = strategy.buy_entry_conditions
@@ -597,6 +598,13 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                     'initial_sl_percent': strategy.initial_sl_percent or 2.0,
                 }
                 strategy_params = {**strategy_base_params, **strategy_params}
+        else:
+            # Extract conditions from inline strategy_params (frontend sends camelCase)
+            buy_entry_conditions = strategy_params.get('buyEntryConditions') or strategy_params.get('buy_entry_conditions')
+            sell_entry_conditions = strategy_params.get('sellEntryConditions') or strategy_params.get('sell_entry_conditions')
+            exit_conditions = strategy_params.get('exitConditions') or strategy_params.get('exit_conditions')
+
+        logger.info(f"Strategy conditions loaded: buy={buy_entry_conditions is not None}, sell={sell_entry_conditions is not None}, exit={len(exit_conditions) if exit_conditions else 0} rules")
 
         # Load prediction dataset
         try:
