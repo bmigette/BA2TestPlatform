@@ -17,6 +17,7 @@ from app.models import Dataset, TrainedModel, Strategy, Backtest
 from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
+from app.services.job_handler import ffill_sparse_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,10 @@ def run_backtest(
     if not feature_cols:
         logger.error("No feature columns found in prediction dataset")
         return _empty_results(initial_capital)
+
+    # Forward-fill sparse indicators (e.g., zigzag) like training does
+    # These have NaN between pivots which causes prediction issues
+    pred_df = ffill_sparse_indicators(pred_df)
 
     # Apply normalization if available
     # Track which columns are actually used for NaN error reporting

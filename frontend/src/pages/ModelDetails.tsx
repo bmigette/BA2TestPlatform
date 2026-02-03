@@ -169,6 +169,7 @@ const ModelDetails: React.FC = () => {
   const [selectedTargetIndex, setSelectedTargetIndex] = useState(0); // Which target to show
   const [minProbability, setMinProbability] = useState<number | null>(null); // null = use model threshold, 0-100 for slider
   const [showActualTargets, setShowActualTargets] = useState(true); // Show ground truth markers
+  const [showAllActualTargets, setShowAllActualTargets] = useState(true); // Show all vs transitions only
 
   // Get effective min probability (from slider or model threshold)
   const effectiveMinProbability = minProbability !== null
@@ -958,6 +959,21 @@ const ModelDetails: React.FC = () => {
                         Show Actual Targets (Ground Truth)
                       </span>
                     </label>
+
+                    {/* Show All vs Transitions Toggle */}
+                    {showActualTargets && (
+                      <label className="flex items-center gap-2 cursor-pointer ml-4">
+                        <input
+                          type="checkbox"
+                          checked={showAllActualTargets}
+                          onChange={(e) => setShowAllActualTargets(e.target.checked)}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">
+                          Show All (vs Transitions Only)
+                        </span>
+                      </label>
+                    )}
                   </div>
                 </div>
 
@@ -992,6 +1008,7 @@ const ModelDetails: React.FC = () => {
                   showOnlyTransitions={false}
                   minProbability={effectiveMinProbability / 100}
                   showActualTargets={showActualTargets}
+                  showAllActualTargets={showAllActualTargets}
                 />
               </div>
 

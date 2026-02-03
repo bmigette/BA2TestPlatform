@@ -74,6 +74,7 @@ export interface TradingChartProps {
   calculatedTargets?: CalculatedTarget[];
   indicatorData?: IndicatorData;
   height?: number;
+  showAllTargets?: boolean; // Show all target markers vs only transitions (default: false = transitions only)
 }
 
 const TradingChart: React.FC<TradingChartProps> = ({
@@ -84,6 +85,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
   calculatedTargets = [],
   indicatorData,
   height = 500,
+  showAllTargets = false, // Default: show only transitions (existing behavior)
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -251,25 +253,28 @@ const TradingChart: React.FC<TradingChartProps> = ({
         return validChartDates.has(time as number);
       });
 
-      // For binary classification, only show markers at transitions (0→1)
+      // For binary classification, show markers at transitions (0→1) or all if showAllTargets is true
       if (config.category === 'binary_classification') {
         const direction = (config as { direction?: string }).direction;
         const isUp = direction === 'up' || direction === 'bullish';
 
         filteredData.forEach((point, idx) => {
           if (point.value === null || point.value === undefined) return;
+          if (point.value !== 1) return; // Only show markers where target is 1
 
-          // Only show marker when transitioning FROM 0 to 1
-          // Note: Use filteredData for previous value to maintain transition detection
+          // Check if this is a transition (0→1)
           const prevValue = idx > 0 ? filteredData[idx - 1].value : 0;
-          if (point.value === 1 && prevValue !== 1) {
+          const isTransition = prevValue !== 1;
+
+          // Show marker if: showAllTargets is true OR this is a transition
+          if (showAllTargets || isTransition) {
             const time = toTime(point.date);
             markers.push({
               time,
               position: isUp ? 'aboveBar' : 'belowBar',
               color: target.color,
               shape: isUp ? 'arrowUp' : 'arrowDown',
-              text: '',
+              text: '', // Keep empty to avoid clutter
             });
           }
         });
@@ -741,7 +746,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       console.error('TradingChart error:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [data, indicators, height, toTime, calculateSMA, calculateBollinger, newsFrequencyByDate, trendData, calculatedTargets, indicatorData]);
+  }, [data, indicators, height, toTime, calculateSMA, calculateBollinger, newsFrequencyByDate, trendData, calculatedTargets, indicatorData, showAllTargets]);
 
   if (error) {
     return (
