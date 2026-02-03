@@ -235,6 +235,42 @@ class WeightedBCELoss(nn.Module):
             return 1.0
         return negative_count / positive_count
 
+    @staticmethod
+    def calculate_per_target_weights(
+        target_stats: list
+    ) -> list:
+        """
+        Calculate per-target positive class weights for multi-target classification.
+
+        This is used when you have multiple prediction targets with different
+        class distributions. Each target gets its own weight based on its
+        positive/negative ratio.
+
+        Args:
+            target_stats: List of dicts with 'positive_count' and 'negative_count' per target.
+                Example: [
+                    {'positive_count': 586, 'negative_count': 625},  # Target 1: balanced
+                    {'positive_count': 35, 'negative_count': 485},   # Target 2: imbalanced
+                ]
+
+        Returns:
+            List of weights, one per target.
+            Example: [1.07, 13.86] - Target 2 gets much higher weight
+        """
+        weights = []
+        for stats in target_stats:
+            pos = stats.get('positive_count', 0)
+            neg = stats.get('negative_count', 0)
+            if pos == 0:
+                weight = 1.0
+            else:
+                weight = neg / pos
+            weights.append(weight)
+            logger.debug(f"Target weight: pos={pos}, neg={neg}, weight={weight:.4f}")
+
+        logger.info(f"Calculated per-target weights: {[f'{w:.4f}' for w in weights]}")
+        return weights
+
 
 def get_loss_function(
     loss_type: str,

@@ -1823,6 +1823,13 @@ const Step3Summary: React.FC<Step3Props> = ({
     ? previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length
     : 50;
 
+  // Detect distribution shift between train and test (>15% difference is significant)
+  const DISTRIBUTION_SHIFT_THRESHOLD = 15;
+  const targetsWithDistributionShift = previewData?.targets.filter(t =>
+    Math.abs(t.train_positive_pct - t.test_positive_pct) > DISTRIBUTION_SHIFT_THRESHOLD
+  ) ?? [];
+  const hasDistributionShift = targetsWithDistributionShift.length > 0;
+
   // Check if multistep-only mode (focal loss not supported)
   const isMultistepOnly = state.predictionModes.length === 1 && state.predictionModes.includes('multistep');
 
@@ -1837,7 +1844,11 @@ const Step3Summary: React.FC<Step3Props> = ({
   // Auto-select loss function and threshold range based on imbalance and metric
   React.useEffect(() => {
     if (previewData && state.jobType === 'classification') {
-      let recommendedLoss = isImbalanced ? 'focal_loss' : 'cross_entropy';
+      // Distribution shift between train/test is a strong signal for weighted loss
+      // It means the model will face different class proportions at inference time
+      let recommendedLoss = hasDistributionShift
+        ? 'weighted_cross_entropy'  // Best for distribution shift
+        : isImbalanced ? 'focal_loss' : 'cross_entropy';
 
       // If focal_loss is not compatible with current mode, fall back
       if (isMultistepOnly && recommendedLoss === 'focal_loss') {
@@ -1893,7 +1904,7 @@ const Step3Summary: React.FC<Step3Props> = ({
         }));
       }
     }
-  }, [previewData, isImbalanced, isMultistepOnly, state.metricsConfig.classificationMetric]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewData, isImbalanced, hasDistributionShift, isMultistepOnly, state.metricsConfig.classificationMetric]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
@@ -2039,11 +2050,41 @@ const Step3Summary: React.FC<Step3Props> = ({
               </span>
             </div>
             <div className="mt-2 text-xs text-gray-500">
-              {isImbalanced
-                ? 'Your data is imbalanced. Focal Loss or Weighted BCE are recommended to handle rare positive samples.'
-                : 'Your data appears balanced. Standard Cross Entropy should work well.'}
+              {hasDistributionShift
+                ? 'Distribution shift detected between train and test sets. Weighted BCE is recommended.'
+                : isImbalanced
+                  ? 'Your data is imbalanced. Focal Loss or Weighted BCE are recommended to handle rare positive samples.'
+                  : 'Your data appears balanced. Standard Cross Entropy should work well.'}
             </div>
           </div>
+
+          {/* Distribution shift warning - when train/test have different class distributions */}
+          {hasDistributionShift && (
+            <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                <div className="text-xs">
+                  <p className="font-medium text-amber-800 dark:text-amber-200">Train/Test Distribution Shift Detected</p>
+                  <p className="text-amber-700 dark:text-amber-300 mt-1">
+                    The following targets have significantly different positive rates between train and test sets:
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {targetsWithDistributionShift.map((t, idx) => (
+                      <li key={idx} className="text-amber-700 dark:text-amber-300">
+                        <strong>{t.label}</strong>: Train {t.train_positive_pct.toFixed(1)}% → Test {t.test_positive_pct.toFixed(1)}%
+                        <span className="text-amber-600 dark:text-amber-400 ml-1">
+                          (Δ{Math.abs(t.train_positive_pct - t.test_positive_pct).toFixed(1)}%)
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-amber-600 dark:text-amber-400">
+                    <strong>Weighted BCE</strong> is recommended as it applies class weights that help the model generalize better when test data has different class proportions.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Note when loss functions are filtered */}
           {isMultistepOnly && (
@@ -2098,12 +2139,20 @@ const Step3Summary: React.FC<Step3Props> = ({
                   <div className="flex-1">
                     <div className="flex items-center space-x-2">
                       <span className="font-medium text-sm">{loss.name}</span>
-                      {loss.forImbalanced && isImbalanced && (
+                      {/* Distribution shift: recommend Weighted BCE */}
+                      {hasDistributionShift && loss.id === 'weighted_cross_entropy' && (
                         <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
                           Recommended
                         </span>
                       )}
-                      {!loss.forImbalanced && !isImbalanced && (
+                      {/* Imbalanced (no shift): recommend Focal or Weighted */}
+                      {!hasDistributionShift && loss.forImbalanced && isImbalanced && (
+                        <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
+                          Recommended
+                        </span>
+                      )}
+                      {/* Balanced (no shift): recommend Cross Entropy */}
+                      {!hasDistributionShift && !loss.forImbalanced && !isImbalanced && (
                         <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
                           Recommended
                         </span>

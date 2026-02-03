@@ -298,7 +298,7 @@ class TSAITrainingService(ITrainingService):
         loss_type: str = 'focal',
         prediction_mode: str = 'shift',
         gamma: float = 2.0,
-        pos_weight: float = None
+        pos_weight: Any = None
     ) -> Any:
         """
         Get loss function for classification.
@@ -312,7 +312,9 @@ class TSAITrainingService(ITrainingService):
             loss_type: 'focal', 'ce' (cross-entropy), 'weighted_ce'
             prediction_mode: 'shift' for binary classification, 'multistep' for multi-label
             gamma: Gamma for focal loss (focusing parameter)
-            pos_weight: Weight for positive class (for imbalanced data)
+            pos_weight: Weight for positive class. Can be:
+                - float: Single weight applied to all targets
+                - list/array: Per-target weights for multistep mode (one per target)
 
         Returns:
             Loss function
@@ -324,7 +326,15 @@ class TSAITrainingService(ITrainingService):
             # Multi-step mode: use BCEWithLogitsLoss for multi-label classification
             # Note: FocalLoss is NOT compatible with multi-label - filter in UI
             if loss_type == 'weighted_ce' and pos_weight is not None:
-                weights = torch.tensor([pos_weight], dtype=torch.float32)
+                # Support per-target weights (list/array) or single weight
+                if isinstance(pos_weight, (list, tuple, np.ndarray)):
+                    # Per-target weights: [weight_target0, weight_target1, ...]
+                    weights = torch.tensor(pos_weight, dtype=torch.float32)
+                    logger.info(f"Using per-target pos_weights: {pos_weight}")
+                else:
+                    # Single weight applied to all targets
+                    weights = torch.tensor([pos_weight], dtype=torch.float32)
+                    logger.info(f"Using single pos_weight: {pos_weight}")
                 if DEVICE:
                     weights = weights.to(DEVICE)
                 return nn.BCEWithLogitsLoss(pos_weight=weights)

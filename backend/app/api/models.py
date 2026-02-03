@@ -525,18 +525,39 @@ async def run_model_predictions(
     if not dataset_id:
         raise HTTPException(status_code=400, detail="No dataset associated with this model")
 
-    # Load dataset
-    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-    if not dataset:
-        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+    # Get job_id to find cached combined dataset
+    job_id = model.get('jobId')
 
-    if not dataset.file_path or not Path(dataset.file_path).exists():
-        raise HTTPException(status_code=400, detail=f"Dataset file not found: {dataset.file_path}")
+    # Try to load from job cache first (contains all computed features from training)
+    dataset_path = None
+    if job_id:
+        cache_paths = [
+            Path(f"datasets/cache/jobs/{job_id}/combined_dataset.csv"),
+            Path(f"cache/jobs/{job_id}/combined_dataset.csv"),
+        ]
+        for path in cache_paths:
+            if path.exists():
+                dataset_path = path
+                logger.info(f"Using cached job dataset: {dataset_path}")
+                break
+
+    # Fall back to database dataset if no job cache
+    if not dataset_path:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+
+        if not dataset.file_path or not Path(dataset.file_path).exists():
+            raise HTTPException(status_code=400, detail=f"Dataset file not found: {dataset.file_path}")
+
+        dataset_path = Path(dataset.file_path)
+        logger.info(f"Using original dataset: {dataset_path}")
 
     # Load dataset CSV
     try:
-        df = pd.read_csv(dataset.file_path, parse_dates=['Date'])
+        df = pd.read_csv(dataset_path, parse_dates=['Date'])
         df = df.sort_values('Date').reset_index(drop=True)
+        logger.info(f"Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
 
@@ -548,6 +569,13 @@ async def run_model_predictions(
     hyperparameters = model.get('hyperparameters', {})
     seq_len = hyperparameters.get('seqLen', 24)
     normalization_params = model.get('normalizationParams')
+
+    # === DEBUG: Log model configuration ===
+    logger.info(f"=== RUN-PREDICTIONS DEBUG for model {model_id} ===")
+    logger.info(f"Model config: type={model.get('modelType')}, jobId={job_id}, datasetId={dataset_id}")
+    logger.info(f"Prediction config: mode={prediction_mode}, horizon={prediction_horizon}, threshold={threshold}")
+    logger.info(f"Hyperparameters: seq_len={seq_len}, c_in={hyperparameters.get('c_in')}, c_out={hyperparameters.get('c_out')}")
+    logger.info(f"Has normalization_params: {normalization_params is not None}")
 
     # Determine target column - find it in the dataset
     target_column = None
@@ -629,15 +657,22 @@ async def run_model_predictions(
             training_service = TSAITrainingService(normalize=True)
 
             # Load normalization params if available
+            logger.info(f"=== NORMALIZATION DEBUG ===")
             if normalization_params:
+                logger.info(f"Loading normalization params from model record")
+                logger.info(f"  - valid_columns count: {len(normalization_params.get('valid_columns', []))}")
+                logger.info(f"  - dropped_columns count: {len(normalization_params.get('dropped_columns', []))}")
                 training_service.data_prep = DataPreparationService()
                 training_service.data_prep.load_params(normalization_params)
             else:
                 # Check for .norm.json file
                 norm_file = file_path_obj.with_suffix('.norm.json')
                 if norm_file.exists():
+                    logger.info(f"Loading normalization params from file: {norm_file}")
                     training_service.data_prep = DataPreparationService()
                     training_service.data_prep.load_params_from_file(str(norm_file))
+                else:
+                    logger.warning(f"No normalization params found - will refit scaler on inference data (may cause issues)")
 
             # Prepare data first to get dimensions
             X, y = training_service.prepare_data(
@@ -649,7 +684,10 @@ async def run_model_predictions(
                 prediction_mode=prediction_mode,
                 fit_scaler=False if training_service.data_prep else True
             )
+            logger.info(f"=== DATA PREPARATION DEBUG ===")
             logger.info(f"Prepared data: X shape={X.shape}, y shape={y.shape if hasattr(y, 'shape') else len(y)}")
+            logger.info(f"X stats: min={X.min():.4f}, max={X.max():.4f}, mean={X.mean():.4f}")
+            logger.info(f"X NaN count: {np.isnan(X).sum()}, Inf count: {np.isinf(X).sum()}")
 
             # Check for NaN in prepared data
             if np.isnan(X).any():
@@ -661,8 +699,13 @@ async def run_model_predictions(
                 )
 
             # Load model based on file type
+            logger.info(f"=== MODEL LOADING DEBUG ===")
+            logger.info(f"Model file: {file_path_obj}")
+            logger.info(f"Model type: {model_type}, file suffix: {file_path_obj.suffix}")
+
             if file_path_obj.suffix == '.pkl':
                 # Full learner export
+                logger.info(f"Loading as full learner (.pkl)")
                 from tsai.all import load_learner
                 learner = load_learner(file_path)
                 model_obj = learner.model
@@ -703,6 +746,9 @@ async def run_model_predictions(
                                f"Model metadata not found for {file_path}"
                     )
 
+                logger.info(f"Creating model architecture: type={model_type}, c_in={c_in}, c_out={c_out}, seq_len={seq_len}")
+                logger.info(f"Model params: {model_params}")
+
                 model_service = TSAIModelService()
                 model_obj = model_service.create_model(
                     model_type=model_type,
@@ -713,17 +759,23 @@ async def run_model_predictions(
                 )
 
                 # Load state dict
+                logger.info(f"Loading state dict from {file_path}")
                 state_dict = torch.load(file_path, map_location='cpu', weights_only=True)
                 model_obj.load_state_dict(state_dict)
+                logger.info(f"Model loaded successfully, {sum(p.numel() for p in model_obj.parameters())} parameters")
 
             # Run inference
+            logger.info(f"=== INFERENCE DEBUG ===")
+            logger.info(f"Running inference on X with shape {X.shape}")
             probs = training_service.predict(
                 model=model_obj,
                 data=X,
                 prediction_mode=prediction_mode
             )
-            logger.info(f"Predictions: probs shape={probs.shape}, min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
-            logger.info(f"First 5 probs: {probs[:5]}")
+            logger.info(f"Predictions shape: {probs.shape}")
+            logger.info(f"Predictions stats: min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
+            logger.info(f"First 5 predictions:\n{probs[:5]}")
+            logger.info(f"NaN count in predictions: {np.isnan(probs).sum()}")
 
             # Check for NaN in predictions
             if np.isnan(probs).any():
