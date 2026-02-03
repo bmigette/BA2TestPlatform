@@ -1,20 +1,28 @@
 """
 Backtest Handler Service
 
-Executes backtests using the strategy executor and updates results in the database.
+Executes backtests using backtesting.py library with strategy condition evaluation.
+
+Supports dual-timeframe backtesting:
+- Execution data: Higher frequency (e.g., 1-minute) for precise TP/SL
+- Prediction data: Lower frequency (e.g., 1-hour) for ML signals
+
+Entry signals are only evaluated when a new prediction bar starts,
+while TP/SL and exit conditions are checked on every execution bar.
 """
 
+import bisect
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+from backtesting import Backtest, Strategy
 
 from app.models.database import SessionLocal
-from app.models import Dataset, TrainedModel, Strategy, Backtest
-from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError, reset_evaluation_stats, get_evaluation_stats
+from app.models import Dataset, TrainedModel, Strategy as StrategyModel, Backtest as BacktestModel
+from app.services.strategy_executor import evaluate_condition_tree, ConfirmationTracker, reset_evaluation_stats, get_evaluation_stats, next_evaluation_bar
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 from app.services.job_handler import ffill_sparse_indicators
@@ -22,28 +30,218 @@ from app.services.job_handler import ffill_sparse_indicators
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Trade:
-    """Represents a completed trade."""
-    entry_time: datetime
-    exit_time: datetime
-    direction: str  # "buy" or "sell"
-    entry_price: float
-    exit_price: float
-    size: float
-    pnl: float
-    pnl_pct: float
-    bars_held: int
+class MLStrategy(Strategy):
+    """
+    Strategy that uses ML predictions and condition trees for entry/exit decisions.
 
+    Supports dual-timeframe backtesting:
+    - Execution data runs at higher frequency (e.g., 1-minute bars)
+    - Predictions are from lower frequency (e.g., 1-hour bars)
 
-@dataclass
-class OpenPosition:
-    """Represents an open position during backtest."""
-    entry_time: datetime
-    direction: str  # "buy" or "sell"
-    entry_price: float
-    size: float
-    bars_held: int = 0
+    Entry signals are only evaluated when a new prediction bar starts,
+    while TP/SL is checked on every execution bar for precision.
+    """
+
+    # Class-level parameters set before running backtest
+    predictions = None  # Dict[timestamp, probability_array]
+    prediction_timestamps = None  # Sorted list of prediction timestamps for lookup
+    buy_entry_conditions = None
+    sell_entry_conditions = None
+    exit_conditions = None
+    tp_percent = 0.0
+    sl_percent = 0.0
+    n_classes = 2
+    confirmation_tracker = None
+    position_sizing_pct = 10.0  # Percent of equity per position
+
+    # Track last trade for "no trade in past X bars/days" conditions
+    last_buy_bar_idx = None
+    last_buy_date = None
+    last_sell_bar_idx = None
+    last_sell_date = None
+    bar_idx = 0
+
+    # Stats tracking
+    buy_trades_opened = 0
+    sell_trades_opened = 0
+
+    def init(self):
+        """Initialize strategy - called once before backtesting starts."""
+        self.confirmation_tracker = ConfirmationTracker()
+        self.bar_idx = 0
+        self.last_buy_bar_idx = None
+        self.last_buy_date = None
+        self.last_sell_bar_idx = None
+        self.last_sell_date = None
+        self.buy_trades_opened = 0
+        self.sell_trades_opened = 0
+        self._logged_context = False
+        self._last_pred_timestamp = None  # Track current prediction bar
+        self._current_probs = None  # Cache current prediction
+
+    def _get_prediction_for_time(self, current_time):
+        """
+        Get the prediction for the current execution bar.
+
+        Uses binary search to find the most recent prediction timestamp
+        that is <= current execution time. This allows higher-frequency
+        execution data to use lower-frequency predictions.
+
+        Returns:
+            tuple: (probs, is_new_bar) where is_new_bar indicates if this is
+                   the first execution bar of a new prediction period
+        """
+        if not self.prediction_timestamps or not self.predictions:
+            return None, False
+
+        # Convert to comparable timestamp
+        current_ts = pd.Timestamp(current_time)
+
+        # Binary search to find the rightmost prediction timestamp <= current_time
+        idx = bisect.bisect_right(self.prediction_timestamps, current_ts) - 1
+
+        if idx < 0:
+            # Current time is before all predictions
+            return None, False
+
+        pred_timestamp = self.prediction_timestamps[idx]
+        probs = self.predictions.get(pred_timestamp)
+
+        # Check if this is a new prediction bar
+        is_new_bar = (pred_timestamp != self._last_pred_timestamp)
+        self._last_pred_timestamp = pred_timestamp
+
+        return probs, is_new_bar
+
+    def next(self):
+        """Called for each bar - evaluate conditions and place orders."""
+        current_date = self.data.index[-1]
+        current_price = self.data.Close[-1]
+
+        # Get prediction for this bar (supports dual-timeframe)
+        probs, is_new_prediction_bar = self._get_prediction_for_time(current_date)
+
+        if probs is None:
+            self.bar_idx += 1
+            next_evaluation_bar()
+            return
+
+        # Build context for condition evaluation
+        predicted_class = int(np.argmax(probs))
+        max_prob = float(np.max(probs))
+
+        # Calculate bars/days since last trade
+        bars_since_last_buy = (self.bar_idx - self.last_buy_bar_idx) if self.last_buy_bar_idx is not None else 999999
+        bars_since_last_sell = (self.bar_idx - self.last_sell_bar_idx) if self.last_sell_bar_idx is not None else 999999
+
+        # Days since last trade
+        if self.last_buy_date is not None:
+            try:
+                days_since_last_buy = (current_date - self.last_buy_date).days
+            except (TypeError, AttributeError):
+                days_since_last_buy = bars_since_last_buy
+        else:
+            days_since_last_buy = 999999
+
+        if self.last_sell_date is not None:
+            try:
+                days_since_last_sell = (current_date - self.last_sell_date).days
+            except (TypeError, AttributeError):
+                days_since_last_sell = bars_since_last_sell
+        else:
+            days_since_last_sell = 999999
+
+        # Count positions
+        buy_count = 1 if self.position.is_long else 0
+        sell_count = 1 if self.position.is_short else 0
+        total_count = 1 if self.position else 0
+
+        context = {
+            'model:prediction': predicted_class,
+            'model:predicted_class': predicted_class,
+            'model:probability': max_prob,
+            'model:max_probability': max_prob,
+            'Open': float(self.data.Open[-1]),
+            'High': float(self.data.High[-1]),
+            'Low': float(self.data.Low[-1]),
+            'Close': current_price,
+            'Volume': float(self.data.Volume[-1]) if hasattr(self.data, 'Volume') else 0,
+            'position:in_position': total_count > 0,
+            'position:buy_count': buy_count,
+            'position:sell_count': sell_count,
+            'position:total_count': total_count,
+            'trade:bars_since_last_buy': bars_since_last_buy,
+            'trade:bars_since_last_sell': bars_since_last_sell,
+            'trade:days_since_last_buy': days_since_last_buy,
+            'trade:days_since_last_sell': days_since_last_sell,
+        }
+
+        # Add probability and class indicator for each class
+        for class_idx in range(len(probs)):
+            context[f'model:probability_{class_idx}'] = float(probs[class_idx])
+            context[f'model:class_{class_idx}'] = 1 if predicted_class == class_idx else 0
+
+        # Log context fields once
+        if not self._logged_context:
+            logger.info(f"Available context fields: {sorted(context.keys())}")
+            logger.info(f"Buy entry conditions: {self.buy_entry_conditions}")
+            logger.info(f"Sell entry conditions: {self.sell_entry_conditions}")
+            if self.prediction_timestamps:
+                logger.info(f"Dual-timeframe mode: {len(self.prediction_timestamps)} prediction bars")
+            self._logged_context = True
+
+        # Check exit conditions for existing position (checked on EVERY execution bar)
+        if self.position:
+            # Use backtesting.py's built-in P&L percentage
+            pnl_pct = self.position.pl_pct * 100  # Convert from decimal to %
+
+            exit_context = context.copy()
+            exit_context['position:is_buy'] = self.position.is_long
+            exit_context['position:is_sell'] = self.position.is_short
+            exit_context['position_pnl_pct'] = pnl_pct
+
+            # Check user-defined exit conditions (TP/SL are handled automatically by backtesting.py)
+            for exit_rule in (self.exit_conditions or []):
+                conditions = exit_rule.get('conditions', {})
+                if evaluate_condition_tree(conditions, exit_context, self.confirmation_tracker, label="Exit"):
+                    self.position.close()
+                    break
+
+        # Check entry conditions ONLY on new prediction bars
+        # This ensures we only enter when a new ML signal is generated
+        if not self.position and is_new_prediction_bar:
+            # Check buy entry
+            if self.buy_entry_conditions and evaluate_condition_tree(
+                self.buy_entry_conditions, context, self.confirmation_tracker, label="BuyEntry"
+            ):
+                # Calculate TP/SL prices
+                tp_price = current_price * (1 + self.tp_percent / 100) if self.tp_percent > 0 else None
+                sl_price = current_price * (1 - self.sl_percent / 100) if self.sl_percent > 0 else None
+
+                # Place buy order with TP/SL
+                self.buy(size=self.position_sizing_pct / 100, tp=tp_price, sl=sl_price)
+
+                self.last_buy_bar_idx = self.bar_idx
+                self.last_buy_date = current_date
+                self.buy_trades_opened += 1
+
+            # Check sell entry
+            elif self.sell_entry_conditions and evaluate_condition_tree(
+                self.sell_entry_conditions, context, self.confirmation_tracker, label="SellEntry"
+            ):
+                # Calculate TP/SL prices (inverted for short)
+                tp_price = current_price * (1 - self.tp_percent / 100) if self.tp_percent > 0 else None
+                sl_price = current_price * (1 + self.sl_percent / 100) if self.sl_percent > 0 else None
+
+                # Place sell order with TP/SL
+                self.sell(size=self.position_sizing_pct / 100, tp=tp_price, sl=sl_price)
+
+                self.last_sell_bar_idx = self.bar_idx
+                self.last_sell_date = current_date
+                self.sell_trades_opened += 1
+
+        self.bar_idx += 1
+        next_evaluation_bar()
 
 
 def run_backtest(
@@ -61,7 +259,7 @@ def run_backtest(
     exit_conditions: Optional[List[Dict]] = None,
 ) -> Dict[str, Any]:
     """
-    Run a backtest simulation.
+    Run a backtest simulation using backtesting.py.
 
     Args:
         model: TrainedModel record with model file path and params
@@ -97,7 +295,7 @@ def run_backtest(
     file_path = model.file_path
     file_path_obj = Path(file_path) if file_path else None
 
-    logger.info(f"Model {model.model_id}: file_path={file_path}, featureColumns in hyperparams={stored_feature_columns is not None}, hyperparams keys={list(hyperparameters.keys()) if hyperparameters else 'None'}")
+    logger.info(f"Model {model.model_id}: file_path={file_path}, featureColumns in hyperparams={stored_feature_columns is not None}")
 
     # If no stored feature_columns in hyperparameters, try metadata file
     if not stored_feature_columns and file_path_obj:
@@ -108,7 +306,6 @@ def run_backtest(
                 file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
                 file_path_obj.with_suffix('.json'),
             ]
-            logger.debug(f"Trying metadata patterns: {[str(p) for p in meta_patterns]}")
             for meta_path in meta_patterns:
                 if meta_path.exists():
                     try:
@@ -118,73 +315,48 @@ def run_backtest(
                         if stored_feature_columns:
                             logger.info(f"Loaded feature_columns from {meta_path}: {len(stored_feature_columns)} features")
                             break
-                        else:
-                            logger.warning(f"Metadata file {meta_path} exists but has no feature_columns key")
                     except Exception as e:
                         logger.warning(f"Failed to load metadata from {meta_path}: {e}")
-                else:
-                    logger.debug(f"Metadata file not found: {meta_path}")
 
     # Get feature columns - prefer stored columns from training
     c_in = hyperparameters.get('c_in')
 
     if stored_feature_columns:
         logger.info(f"Using {len(stored_feature_columns)} stored feature columns from training (c_in={c_in})")
-        # Use only features that exist in current dataset
         feature_cols = [col for col in stored_feature_columns if col in pred_df.columns]
 
-        # Validate that feature count matches c_in (model architecture)
         if c_in and len(feature_cols) != c_in:
-            logger.warning(f"Feature count mismatch: featureColumns has {len(feature_cols)} but model expects c_in={c_in}. "
-                          f"Model may have been saved with incorrect featureColumns. Retrain to fix.")
+            logger.warning(f"Feature count mismatch: featureColumns has {len(feature_cols)} but model expects c_in={c_in}")
 
-        logger.info(f"After filtering for dataset columns: {len(feature_cols)} features (dataset has {len(pred_df.columns)} total columns)")
-        if len(feature_cols) != len(stored_feature_columns):
-            missing = set(stored_feature_columns) - set(feature_cols)
-            if len(missing) < 20:  # Only log if not too many
-                logger.warning(f"Some training features not in dataset: {missing}")
-            else:
-                logger.warning(f"Some training features not in dataset: {len(missing)} missing")
         if not feature_cols:
-            logger.error(f"None of the training features found in dataset")
+            logger.error("None of the training features found in dataset")
             return _empty_results(initial_capital)
     else:
-        # Fall back to computing from dataset - WARN about this as it may cause issues
-        logger.warning(f"No stored feature_columns found for model {model.model_id}. "
-                      f"Falling back to computing features from dataset. "
-                      f"Tried hyperparameters.featureColumns and metadata file at {file_path_obj}")
+        logger.warning(f"No stored feature_columns found for model {model.model_id}. Falling back to computing features.")
         exclude_cols = {'Date', 'target', 'Open', 'High', 'Low', 'Close', 'Volume'}
         feature_cols = [c for c in pred_df.columns if c not in exclude_cols]
-        logger.info(f"Computed {len(feature_cols)} feature columns from dataset")
 
     if not feature_cols:
         logger.error("No feature columns found in prediction dataset")
         return _empty_results(initial_capital)
 
-    # Forward-fill sparse indicators (e.g., zigzag) like training does
-    # These have NaN between pivots which causes prediction issues
+    # Forward-fill sparse indicators (e.g., zigzag)
     pred_df = ffill_sparse_indicators(pred_df)
 
     # Apply normalization if available
-    # Track which columns are actually used for NaN error reporting
     used_feature_cols = feature_cols
     if model.normalization_params:
         data_prep = DataPreparationService()
         data_prep.load_params(model.normalization_params)
-        # Transform expects DataFrame, not numpy array
         df_normalized = data_prep.transform(pred_df[feature_cols])
-        # Use valid columns (excludes zero-variance columns dropped during training)
         valid_cols = data_prep.get_valid_columns()
         if valid_cols:
-            # Filter to columns that exist in our normalized DataFrame
             valid_cols = [c for c in valid_cols if c in df_normalized.columns]
             features = df_normalized[valid_cols].values
             used_feature_cols = valid_cols
             logger.info(f"Using {len(valid_cols)} valid columns after zero-variance filtering")
         else:
-            # Fallback if valid_columns not set
             features = df_normalized[feature_cols].values
-            logger.warning(f"No valid_columns info in normalization params, using all {len(feature_cols)} features")
     else:
         features = pred_df[feature_cols].values
 
@@ -196,17 +368,14 @@ def run_backtest(
 
     X = np.array([features[i:i+seq_len] for i in range(n_samples)])
     X = X.transpose(0, 2, 1)  # (samples, features, seq_len) for tsai
-    logger.info(f"Created input tensor X with shape {X.shape} (samples, features, seq_len)")
+    logger.info(f"Created input tensor X with shape {X.shape}")
 
     # Check for NaN in input features
     nan_count = np.isnan(X).sum()
     if nan_count > 0:
-        nan_pct = nan_count / X.size * 100
-        # Find which features have NaN
         nan_per_feature = np.isnan(X).any(axis=(0, 2))
         nan_features = [used_feature_cols[i] for i, has_nan in enumerate(nan_per_feature) if has_nan]
-        logger.error(f"Input features contain {nan_count} NaN values ({nan_pct:.1f}%). "
-                    f"Features with NaN: {nan_features[:10]}{'...' if len(nan_features) > 10 else ''}")
+        logger.error(f"Input features contain {nan_count} NaN values. Features with NaN: {nan_features[:10]}")
         result = _empty_results(initial_capital)
         result['error'] = f"Input features contain NaN values in: {nan_features[:5]}"
         result['status'] = 'failed'
@@ -226,19 +395,14 @@ def run_backtest(
 
     try:
         if file_path_obj.suffix == '.pkl':
-            # Full learner export
             from tsai.all import load_learner
             learner = load_learner(file_path)
             model_obj = learner.model
         else:
-            # State dict (.pt file) - need to recreate model architecture
-            # Get c_in from metadata (stored during training) - NOT from current dataset
-            import json
             c_in = hyperparameters.get('c_in')
             c_out = hyperparameters.get('c_out', 2)
             model_params = hyperparameters.get('modelParams', {})
 
-            # If c_in not in DB hyperparameters, check for _meta.json file
             if c_in is None:
                 meta_patterns = [
                     file_path_obj.with_name(file_path_obj.stem + '_meta.json'),
@@ -254,7 +418,6 @@ def run_backtest(
                                 c_out = meta.get('c_out', c_out)
                             if not model_params:
                                 model_params = meta.get('params', {})
-                            logger.info(f"Loaded model metadata: c_in={c_in}, c_out={c_out}")
                             break
                         except Exception as e:
                             logger.warning(f"Failed to load metadata from {meta_path}: {e}")
@@ -272,257 +435,121 @@ def run_backtest(
                 seq_len=seq_len
             )
 
-            # Load state dict
             state_dict = torch.load(file_path, map_location='cpu', weights_only=True)
             model_obj.load_state_dict(state_dict)
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
         return _empty_results(initial_capital)
 
-    # Run predictions
+    # Run predictions on CPU to avoid MPS compatibility issues with some architectures
     try:
-        predictions = training_service.predict(
-            model=model_obj,
-            data=X,
-            prediction_mode=prediction_mode
-        )
+        model_obj = model_obj.cpu()
+        model_obj.train(False)  # Set to evaluation mode
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        with torch.no_grad():
+            outputs = model_obj(X_tensor)
+            if prediction_mode == 'multistep':
+                predictions = torch.sigmoid(outputs).numpy()
+            else:
+                predictions = torch.softmax(outputs, dim=1).numpy()
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return _empty_results(initial_capital)
 
     # Check for NaN predictions
     nan_count = np.isnan(predictions).sum()
     if nan_count > 0:
-        nan_pct = nan_count / predictions.size * 100
-        logger.error(f"Predictions contain {nan_count} NaN values ({nan_pct:.1f}%). "
-                    f"This usually indicates NaN values in input features or model issues.")
-        # Check input data for NaN
-        input_nan_count = np.isnan(X).sum()
-        if input_nan_count > 0:
-            logger.error(f"Input data X contains {input_nan_count} NaN values - this is the cause.")
+        logger.error(f"Predictions contain {nan_count} NaN values")
         result = _empty_results(initial_capital)
-        result['error'] = f"Model produced {nan_count} NaN predictions. Check input data for NaN values."
+        result['error'] = f"Model produced {nan_count} NaN predictions"
         result['status'] = 'failed'
         return result
 
-    # Align predictions with execution data
-    # Predictions start at index seq_len-1 (after we have enough history)
+    # Create prediction lookup by date (using pd.Timestamp for consistent comparison)
     pred_start_idx = seq_len - 1
     pred_dates = pred_df['Date'].iloc[pred_start_idx:pred_start_idx + len(predictions)].values
-
-    # predictions is now 2D: (samples, n_classes) for all modes
-    # Create prediction lookup by date - stores full probability array per date
-    pred_lookup = dict(zip(pred_dates, predictions))
+    pred_timestamps = sorted([pd.Timestamp(d) for d in pred_dates])
+    pred_lookup = {ts: predictions[i] for i, ts in enumerate(pred_timestamps)}
     n_classes = predictions.shape[1] if len(predictions.shape) > 1 else 1
     logger.info(f"Predictions shape: {predictions.shape}, n_classes={n_classes}")
+    logger.info(f"Prediction timestamps: {len(pred_timestamps)} bars, "
+                f"range {pred_timestamps[0]} to {pred_timestamps[-1]}")
 
-    # Run simulation
-    equity = initial_capital
-    open_positions: List[OpenPosition] = []
-    completed_trades: List[Trade] = []
-    equity_curve = [{'date': exec_df['Date'].iloc[0].isoformat() if len(exec_df) > 0 else '', 'equity': equity}]
-
-    exit_conditions = exit_conditions or []
-
-    # Create confirmation tracker for condition history
-    confirmation_tracker = ConfirmationTracker()
-    logged_context_fields = False
-
-    # Reset evaluation stats for fresh aggregated logging
+    # Reset evaluation stats
     reset_evaluation_stats()
 
-    # Track last trade entry for "no trade in past X bars/days" conditions
-    last_buy_bar_idx: Optional[int] = None
-    last_buy_date: Optional[Any] = None
-    last_sell_bar_idx: Optional[int] = None
-    last_sell_date: Optional[Any] = None
+    # Prepare OHLCV data for backtesting.py
+    # Must have columns: Open, High, Low, Close, Volume with Date as index
+    bt_data = exec_df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
+    bt_data.set_index('Date', inplace=True)
 
-    # Track trade counts for summary
-    buy_trades_opened = 0
-    sell_trades_opened = 0
-    bars_processed = 0
+    # Ensure numeric types
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        bt_data[col] = pd.to_numeric(bt_data[col], errors='coerce')
 
-    for idx in range(len(exec_df)):
-        row = exec_df.iloc[idx]
-        current_date = row['Date']
-        current_price = row['Close']
+    # Drop any rows with NaN in OHLCV
+    bt_data = bt_data.dropna()
 
-        # Get prediction for this bar (now a probability array for all classes)
-        probs = pred_lookup.get(current_date, None)
-        if probs is None:
-            # No prediction available for this bar
-            for pos in open_positions:
-                pos.bars_held += 1
-            continue
+    # Extract TP/SL from strategy_params
+    tp_percent = strategy_params.get('initial_tp_percent') or strategy_params.get('initialTpPercent') or 0
+    sl_percent = strategy_params.get('initial_sl_percent') or strategy_params.get('initialSlPercent') or 0
+    if tp_percent or sl_percent:
+        logger.info(f"TP/SL: TP={tp_percent}%, SL={sl_percent}%")
 
-        # Count positions by direction
-        buy_positions = [p for p in open_positions if p.direction == 'buy']
-        sell_positions = [p for p in open_positions if p.direction == 'sell']
+    # Calculate position sizing as percentage
+    if position_sizing_type == 'percent':
+        position_sizing_pct = position_sizing_value
+    else:
+        # Convert fixed $ amount to approximate percentage
+        avg_price = bt_data['Close'].mean()
+        position_sizing_pct = (position_sizing_value / avg_price) / initial_capital * 100
+        position_sizing_pct = min(position_sizing_pct, 99)  # Cap at 99%
 
-        # Build context for condition evaluation
-        # probs is now an array of probabilities for each class
-        predicted_class = int(np.argmax(probs))
-        max_prob = float(np.max(probs))
+    # Set strategy parameters
+    MLStrategy.predictions = pred_lookup
+    MLStrategy.prediction_timestamps = pred_timestamps  # For dual-timeframe lookup
+    MLStrategy.buy_entry_conditions = buy_entry_conditions
+    MLStrategy.sell_entry_conditions = sell_entry_conditions
+    MLStrategy.exit_conditions = exit_conditions
+    MLStrategy.tp_percent = tp_percent
+    MLStrategy.sl_percent = sl_percent
+    MLStrategy.n_classes = n_classes
+    MLStrategy.position_sizing_pct = position_sizing_pct
 
-        # Calculate bars/days since last buy/sell trade was opened
-        bars_since_last_buy = (idx - last_buy_bar_idx) if last_buy_bar_idx is not None else 999999
-        bars_since_last_sell = (idx - last_sell_bar_idx) if last_sell_bar_idx is not None else 999999
+    # Log timeframe info
+    exec_timestamps = bt_data.index
+    if len(exec_timestamps) > 1 and len(pred_timestamps) > 1:
+        exec_interval = (exec_timestamps[1] - exec_timestamps[0]).total_seconds()
+        pred_interval = (pred_timestamps[1] - pred_timestamps[0]).total_seconds()
+        logger.info(f"Execution interval: {exec_interval/60:.0f}min, "
+                    f"Prediction interval: {pred_interval/60:.0f}min")
 
-        # Calculate days since last trade (handle both datetime and Timestamp)
-        if last_buy_date is not None:
-            try:
-                days_since_last_buy = (current_date - last_buy_date).days
-            except (TypeError, AttributeError):
-                days_since_last_buy = bars_since_last_buy  # Fallback to bars
-        else:
-            days_since_last_buy = 999999
+    # Run backtest using backtesting.py
+    bt = Backtest(
+        bt_data,
+        MLStrategy,
+        cash=initial_capital,
+        commission=commission / 100,  # Convert from % to decimal
+        exclusive_orders=True,  # Only one position at a time
+        trade_on_close=True,  # Execute trades at close price
+        hedging=False,  # No hedging - one direction at a time
+    )
 
-        if last_sell_date is not None:
-            try:
-                days_since_last_sell = (current_date - last_sell_date).days
-            except (TypeError, AttributeError):
-                days_since_last_sell = bars_since_last_sell  # Fallback to bars
-        else:
-            days_since_last_sell = 999999
-
-        context = {
-            'model:prediction': predicted_class,
-            'model:predicted_class': predicted_class,
-            'model:probability': max_prob,  # Probability of predicted class
-            'model:max_probability': max_prob,
-            'Open': row.get('Open', current_price),
-            'High': row.get('High', current_price),
-            'Low': row.get('Low', current_price),
-            'Close': current_price,
-            'Volume': row.get('Volume', 0),
-            'position:in_position': len(open_positions) > 0,
-            'position:buy_count': len(buy_positions),
-            'position:sell_count': len(sell_positions),
-            'position:total_count': len(open_positions),
-            # Bars/days since last trade was opened
-            'trade:bars_since_last_buy': bars_since_last_buy,
-            'trade:bars_since_last_sell': bars_since_last_sell,
-            'trade:days_since_last_buy': days_since_last_buy,
-            'trade:days_since_last_sell': days_since_last_sell,
-        }
-
-        # Add probability and class indicator for each class
-        for class_idx in range(len(probs)):
-            context[f'model:probability_{class_idx}'] = float(probs[class_idx])
-            context[f'model:class_{class_idx}'] = 1 if predicted_class == class_idx else 0
-
-        # Add any additional columns from exec_df
-        for col in exec_df.columns:
-            if col not in context and col != 'Date':
-                context[col] = row[col]
-
-        # Log available context fields once
-        if not logged_context_fields:
-            logger.info(f"Available context fields: {sorted(context.keys())}")
-            logger.info(f"Buy entry conditions: {buy_entry_conditions}")
-            logger.info(f"Sell entry conditions: {sell_entry_conditions}")
-            logged_context_fields = True
-
-        # Check exit conditions for each open position
-        positions_to_close = []
-        for i, pos in enumerate(open_positions):
-            # Calculate position P&L
-            if pos.direction == 'buy':
-                pnl_pct = (current_price - pos.entry_price) / pos.entry_price * 100
-            else:
-                pnl_pct = (pos.entry_price - current_price) / pos.entry_price * 100
-
-            pos_context = context.copy()
-            pos_context['position:is_buy'] = pos.direction == 'buy'
-            pos_context['position:is_sell'] = pos.direction == 'sell'
-            pos_context['bars_in_trade'] = pos.bars_held
-            pos_context['position_pnl_pct'] = pnl_pct
-
-            # Check each exit rule
-            for exit_rule in exit_conditions:
-                conditions = exit_rule.get('conditions', {})
-                if evaluate_condition_tree(conditions, pos_context, confirmation_tracker, label=f"Exit-{pos.direction}"):
-                    positions_to_close.append(i)
-                    break
-
-            pos.bars_held += 1
-
-        # Close positions (in reverse order to preserve indices)
-        for i in sorted(positions_to_close, reverse=True):
-            pos = open_positions.pop(i)
-            exit_price = current_price * (1 - slippage / 100)
-
-            if pos.direction == 'buy':
-                pnl = (exit_price - pos.entry_price) * pos.size - (commission / 100 * pos.size * exit_price)
-                pnl_pct = (exit_price - pos.entry_price) / pos.entry_price * 100
-            else:
-                pnl = (pos.entry_price - exit_price) * pos.size - (commission / 100 * pos.size * exit_price)
-                pnl_pct = (pos.entry_price - exit_price) / pos.entry_price * 100
-
-            completed_trades.append(Trade(
-                entry_time=pos.entry_time,
-                exit_time=current_date,
-                direction=pos.direction,
-                entry_price=pos.entry_price,
-                exit_price=exit_price,
-                size=pos.size,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                bars_held=pos.bars_held
-            ))
-            equity += pnl
-
-        # Check entry conditions (users can add position:total_count == 0 to limit entries)
-        # Check buy entry
-        if buy_entry_conditions and evaluate_condition_tree(buy_entry_conditions, context, confirmation_tracker, label="BuyEntry"):
-            entry_price = current_price * (1 + slippage / 100)
-            size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
-            if size > 0:
-                open_positions.append(OpenPosition(
-                    entry_time=current_date,
-                    direction='buy',
-                    entry_price=entry_price,
-                    size=size
-                ))
-                # Track last buy trade for "no trade in past X" conditions
-                last_buy_bar_idx = idx
-                last_buy_date = current_date
-                buy_trades_opened += 1
-
-        # Check sell entry
-        elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker, label="SellEntry"):
-            entry_price = current_price * (1 - slippage / 100)
-            size = _calculate_position_size(equity, position_sizing_type, position_sizing_value, entry_price)
-            if size > 0:
-                open_positions.append(OpenPosition(
-                    entry_time=current_date,
-                    direction='sell',
-                    entry_price=entry_price,
-                    size=size
-                ))
-                # Track last sell trade for "no trade in past X" conditions
-                last_sell_bar_idx = idx
-                last_sell_date = current_date
-                sell_trades_opened += 1
-
-        bars_processed += 1
-
-        # Record equity
-        equity_curve.append({
-            'date': current_date.isoformat() if hasattr(current_date, 'isoformat') else str(current_date),
-            'equity': equity
-        })
+    try:
+        stats = bt.run()
+    except Exception as e:
+        logger.error(f"Backtest execution failed: {e}")
+        return _empty_results(initial_capital)
 
     # Log backtest summary
     eval_stats = get_evaluation_stats()
-    total_trades = len(completed_trades)
-    winning = sum(1 for t in completed_trades if t.pnl > 0)
-    losing = total_trades - winning
-
     logger.info(f"=== Backtest Summary ===")
-    logger.info(f"Bars processed: {bars_processed}, Total condition evaluations: {eval_stats['total_evaluations']}")
-    logger.info(f"Trades opened: {buy_trades_opened} buy, {sell_trades_opened} sell")
-    logger.info(f"Trades completed: {total_trades} ({winning} winning, {losing} losing)")
+    logger.info(f"Execution bars: {len(bt_data)}, Prediction bars: {len(pred_timestamps)}")
+    logger.info(f"Condition evaluations: {eval_stats['total_evaluations']}")
+    logger.info(f"Trades: {stats['# Trades']}, Win Rate: {stats['Win Rate [%]']:.1f}%")
+    logger.info(f"Return: {stats['Return [%]']:.2f}%, Max Drawdown: {stats['Max. Drawdown [%]']:.2f}%")
 
     # Log condition hit rates
     tree_results = eval_stats.get('tree_results', {})
@@ -534,123 +561,202 @@ def run_backtest(
             hit_summary.append(f"{label}: {counts['true']}/{total} ({hit_rate:.1f}%)")
         logger.info(f"Entry/Exit hit rates: {', '.join(hit_summary)}")
 
-    # Calculate metrics
-    return _calculate_metrics(completed_trades, equity_curve, initial_capital, equity)
+    # Convert backtesting.py results to our format
+    return _convert_bt_results(stats, bt_data, initial_capital)
 
 
-def _empty_results(initial_capital: float) -> Dict[str, Any]:
-    """Return empty results structure."""
-    return {
-        'total_trades': 0,
-        'winning_trades': 0,
-        'losing_trades': 0,
-        'win_rate': 0.0,
-        'total_return': 0.0,
-        'sharpe_ratio': 0.0,
-        'max_drawdown': 0.0,
-        'profit_factor': 0.0,
-        'avg_trade_duration': 0.0,
-        'final_equity': initial_capital,
-        'equity_curve': [],
-        'drawdown_curve': [],
-        'trades': []
-    }
+def _safe_float(value, default=0.0) -> float:
+    """Safely convert a value to float, handling NaN and Inf."""
+    if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
+        return default
+    try:
+        result = float(value)
+        if np.isnan(result) or np.isinf(result):
+            return default
+        return result
+    except (TypeError, ValueError):
+        return default
 
 
-def _calculate_position_size(
-    equity: float,
-    sizing_type: str,
-    sizing_value: float,
-    price: float
-) -> float:
-    """Calculate position size based on sizing type."""
-    if sizing_type == 'percent':
-        return (equity * sizing_value / 100) / price
-    else:  # fixed
-        return sizing_value / price
+def _safe_duration_days(duration, default=0.0) -> float:
+    """Safely extract days from a duration/timedelta."""
+    if duration is None:
+        return default
+    if hasattr(duration, 'days'):
+        return float(duration.days) + duration.seconds / 86400
+    if hasattr(duration, 'total_seconds'):
+        return duration.total_seconds() / 86400
+    try:
+        return float(duration)
+    except (TypeError, ValueError):
+        return default
 
 
-def _calculate_metrics(
-    trades: List[Trade],
-    equity_curve: List[Dict],
-    initial_capital: float,
-    final_equity: float
-) -> Dict[str, Any]:
-    """Calculate backtest performance metrics."""
-    total_trades = len(trades)
+def _convert_bt_results(stats, bt_data: pd.DataFrame, initial_capital: float) -> Dict[str, Any]:
+    """
+    Convert backtesting.py stats to our result format.
 
-    if total_trades == 0:
-        return _empty_results(initial_capital)
+    Extracts all available metrics from backtesting.py including:
+    - Basic metrics: trades, win rate, return, drawdown
+    - Risk metrics: Sharpe, Sortino, Calmar ratios
+    - Advanced metrics: SQN, expectancy, exposure time
+    - Benchmark comparison: Buy & Hold return, Alpha, Beta
+    """
 
-    winning_trades = sum(1 for t in trades if t.pnl > 0)
-    losing_trades = sum(1 for t in trades if t.pnl <= 0)
-    win_rate = winning_trades / total_trades * 100 if total_trades > 0 else 0.0
+    # Extract trades from stats
+    trades_df = stats._trades if hasattr(stats, '_trades') else pd.DataFrame()
+    trades_list = []
 
-    total_return = (final_equity - initial_capital) / initial_capital * 100
+    if len(trades_df) > 0:
+        for _, trade in trades_df.iterrows():
+            trades_list.append({
+                'entry_time': trade['EntryTime'].isoformat() if hasattr(trade['EntryTime'], 'isoformat') else str(trade['EntryTime']),
+                'exit_time': trade['ExitTime'].isoformat() if hasattr(trade['ExitTime'], 'isoformat') else str(trade['ExitTime']),
+                'direction': 'buy' if trade['Size'] > 0 else 'sell',
+                'entry_price': float(trade['EntryPrice']),
+                'exit_price': float(trade['ExitPrice']),
+                'size': abs(float(trade['Size'])),
+                'pnl': float(trade['PnL']),
+                'pnl_pct': float(trade['ReturnPct']) * 100,
+                'bars_held': int(trade['Duration'].days) if hasattr(trade['Duration'], 'days') else int(trade['Duration'])
+            })
 
-    # Profit factor
-    gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
-    gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 0.0
-
-    # Average trade duration
-    avg_trade_duration = sum(t.bars_held for t in trades) / total_trades if total_trades > 0 else 0.0
-
-    # Calculate drawdown curve and max drawdown
-    equities = [e['equity'] for e in equity_curve]
-    peak = initial_capital
-    drawdowns = []
-    for eq in equities:
-        if eq > peak:
-            peak = eq
-        drawdown = (peak - eq) / peak * 100 if peak > 0 else 0.0
-        drawdowns.append(drawdown)
-
-    max_drawdown = max(drawdowns) if drawdowns else 0.0
-    drawdown_curve = [
-        {'date': equity_curve[i]['date'], 'drawdown': drawdowns[i]}
-        for i in range(len(drawdowns))
-    ]
-
-    # Sharpe ratio (simplified - using trade returns)
-    if len(trades) > 1:
-        returns = [t.pnl_pct for t in trades]
-        avg_return = np.mean(returns)
-        std_return = np.std(returns)
-        sharpe_ratio = (avg_return / std_return * np.sqrt(252)) if std_return > 0 else 0.0
+    # Build equity curve from stats
+    equity_curve = []
+    if hasattr(stats, '_equity_curve') and stats._equity_curve is not None:
+        eq_df = stats._equity_curve
+        for idx, row in eq_df.iterrows():
+            equity_curve.append({
+                'date': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                'equity': float(row['Equity'])
+            })
     else:
-        sharpe_ratio = 0.0
+        # Fallback: just start and end
+        equity_curve = [
+            {'date': bt_data.index[0].isoformat(), 'equity': initial_capital},
+            {'date': bt_data.index[-1].isoformat(), 'equity': _safe_float(stats.get('Equity Final [$]'), initial_capital)}
+        ]
 
-    # Format trades for storage
-    trades_list = [
-        {
-            'entry_time': t.entry_time.isoformat() if hasattr(t.entry_time, 'isoformat') else str(t.entry_time),
-            'exit_time': t.exit_time.isoformat() if hasattr(t.exit_time, 'isoformat') else str(t.exit_time),
-            'direction': t.direction,
-            'entry_price': t.entry_price,
-            'exit_price': t.exit_price,
-            'size': t.size,
-            'pnl': t.pnl,
-            'pnl_pct': t.pnl_pct,
-            'bars_held': t.bars_held
-        }
-        for t in trades
-    ]
+    # Build drawdown curve
+    drawdown_curve = []
+    if hasattr(stats, '_equity_curve') and stats._equity_curve is not None:
+        eq_df = stats._equity_curve
+        if 'DrawdownPct' in eq_df.columns:
+            for idx, row in eq_df.iterrows():
+                drawdown_curve.append({
+                    'date': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                    'drawdown': float(row['DrawdownPct']) * 100
+                })
+
+    # Basic metrics
+    total_trades = int(stats['# Trades'])
+    win_rate = _safe_float(stats.get('Win Rate [%]'))
+    winning_trades = int(total_trades * win_rate / 100) if total_trades > 0 else 0
+    losing_trades = total_trades - winning_trades
+
+    # Risk-adjusted metrics (handle Inf for profit factor)
+    sharpe = _safe_float(stats.get('Sharpe Ratio'))
+    sortino = _safe_float(stats.get('Sortino Ratio'))
+    calmar = _safe_float(stats.get('Calmar Ratio'))
+    profit_factor = _safe_float(stats.get('Profit Factor'))
+    if profit_factor > 999:
+        profit_factor = 999.99
+
+    # Duration metrics
+    avg_trade_duration = _safe_duration_days(stats.get('Avg. Trade Duration'))
+    max_dd_duration = _safe_duration_days(stats.get('Max. Drawdown Duration'))
 
     return {
+        # Basic trade metrics
         'total_trades': total_trades,
         'winning_trades': winning_trades,
         'losing_trades': losing_trades,
         'win_rate': round(win_rate, 2),
-        'total_return': round(total_return, 2),
-        'sharpe_ratio': round(sharpe_ratio, 2),
-        'max_drawdown': round(max_drawdown, 2),
-        'profit_factor': round(profit_factor, 2) if profit_factor != float('inf') else 999.99,
+
+        # Return metrics
+        'total_return': round(_safe_float(stats.get('Return [%]')), 2),
+        'annualized_return': round(_safe_float(stats.get('Return (Ann.) [%]')), 2),
+        'buy_hold_return': round(_safe_float(stats.get('Buy & Hold Return [%]')), 2),
+
+        # Risk metrics
+        'sharpe_ratio': round(sharpe, 2),
+        'sortino_ratio': round(sortino, 2),
+        'calmar_ratio': round(calmar, 2),
+        'volatility': round(_safe_float(stats.get('Volatility (Ann.) [%]')), 2),
+
+        # Drawdown metrics
+        'max_drawdown': round(_safe_float(stats.get('Max. Drawdown [%]')), 2),
+        'avg_drawdown': round(_safe_float(stats.get('Avg. Drawdown [%]')), 2),
+        'max_drawdown_duration': round(max_dd_duration, 1),
+
+        # Trade quality metrics
+        'profit_factor': round(profit_factor, 2),
+        'expectancy': round(_safe_float(stats.get('Expectancy [%]')), 2),
+        'sqn': round(_safe_float(stats.get('SQN')), 2),
+        'avg_trade': round(_safe_float(stats.get('Avg. Trade [%]')), 2),
+        'best_trade': round(_safe_float(stats.get('Best Trade [%]')), 2),
+        'worst_trade': round(_safe_float(stats.get('Worst Trade [%]')), 2),
+
+        # Duration metrics
         'avg_trade_duration': round(avg_trade_duration, 1),
-        'final_equity': round(final_equity, 2),
+        'exposure_time': round(_safe_float(stats.get('Exposure Time [%]')), 2),
+
+        # Equity metrics
+        'final_equity': round(_safe_float(stats.get('Equity Final [$]'), initial_capital), 2),
+        'equity_peak': round(_safe_float(stats.get('Equity Peak [$]'), initial_capital), 2),
+
+        # Curves and trades
         'equity_curve': equity_curve,
         'drawdown_curve': drawdown_curve,
         'trades': trades_list
+    }
+
+
+def _empty_results(initial_capital: float) -> Dict[str, Any]:
+    """Return empty results structure with all metrics initialized."""
+    return {
+        # Basic trade metrics
+        'total_trades': 0,
+        'winning_trades': 0,
+        'losing_trades': 0,
+        'win_rate': 0.0,
+
+        # Return metrics
+        'total_return': 0.0,
+        'annualized_return': 0.0,
+        'buy_hold_return': 0.0,
+
+        # Risk metrics
+        'sharpe_ratio': 0.0,
+        'sortino_ratio': 0.0,
+        'calmar_ratio': 0.0,
+        'volatility': 0.0,
+
+        # Drawdown metrics
+        'max_drawdown': 0.0,
+        'avg_drawdown': 0.0,
+        'max_drawdown_duration': 0.0,
+
+        # Trade quality metrics
+        'profit_factor': 0.0,
+        'expectancy': 0.0,
+        'sqn': 0.0,
+        'avg_trade': 0.0,
+        'best_trade': 0.0,
+        'worst_trade': 0.0,
+
+        # Duration metrics
+        'avg_trade_duration': 0.0,
+        'exposure_time': 0.0,
+
+        # Equity metrics
+        'final_equity': initial_capital,
+        'equity_peak': initial_capital,
+
+        # Curves and trades
+        'equity_curve': [],
+        'drawdown_curve': [],
+        'trades': []
     }
 
 
@@ -674,7 +780,7 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         # Get backtest record
-        backtest = db.query(Backtest).filter(Backtest.id == backtest_id).first()
+        backtest = db.query(BacktestModel).filter(BacktestModel.id == backtest_id).first()
         if not backtest:
             return {'status': 'failed', 'error': f'Backtest {backtest_id} not found'}
 
@@ -706,25 +812,22 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         exit_conditions = None
 
         if backtest.strategy_id:
-            # Load conditions from saved strategy in database
-            strategy = db.query(Strategy).filter(Strategy.id == backtest.strategy_id).first()
+            strategy = db.query(StrategyModel).filter(StrategyModel.id == backtest.strategy_id).first()
             if strategy:
                 buy_entry_conditions = strategy.buy_entry_conditions
                 sell_entry_conditions = strategy.sell_entry_conditions
                 exit_conditions = strategy.exit_conditions
-                # Merge strategy TP/SL params with backtest-specific overrides
                 strategy_base_params = {
                     'initial_tp_percent': strategy.initial_tp_percent or 5.0,
                     'initial_sl_percent': strategy.initial_sl_percent or 2.0,
                 }
                 strategy_params = {**strategy_base_params, **strategy_params}
         else:
-            # Extract conditions from inline strategy_params (frontend sends camelCase)
             buy_entry_conditions = strategy_params.get('buyEntryConditions') or strategy_params.get('buy_entry_conditions')
             sell_entry_conditions = strategy_params.get('sellEntryConditions') or strategy_params.get('sell_entry_conditions')
             exit_conditions = strategy_params.get('exitConditions') or strategy_params.get('exit_conditions')
 
-        logger.info(f"Strategy conditions loaded: buy={buy_entry_conditions is not None}, sell={sell_entry_conditions is not None}, exit={len(exit_conditions) if exit_conditions else 0} rules")
+        logger.info(f"Strategy conditions loaded: buy={buy_entry_conditions is not None}, sell={sell_entry_conditions is not None}")
 
         # Load prediction dataset
         try:
@@ -775,16 +878,46 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         # Update backtest with results
         backtest.status = 'completed'
         backtest.completed_at = datetime.now()
+
+        # Basic trade metrics
         backtest.total_trades = results['total_trades']
         backtest.winning_trades = results['winning_trades']
         backtest.losing_trades = results['losing_trades']
         backtest.win_rate = results['win_rate']
+
+        # Return metrics
         backtest.total_return = results['total_return']
+        backtest.annualized_return = results.get('annualized_return')
+        backtest.buy_hold_return = results.get('buy_hold_return')
+
+        # Risk metrics
         backtest.sharpe_ratio = results['sharpe_ratio']
+        backtest.sortino_ratio = results.get('sortino_ratio')
+        backtest.calmar_ratio = results.get('calmar_ratio')
+        backtest.volatility = results.get('volatility')
+
+        # Drawdown metrics
         backtest.max_drawdown = results['max_drawdown']
+        backtest.avg_drawdown = results.get('avg_drawdown')
+        backtest.max_drawdown_duration = results.get('max_drawdown_duration')
+
+        # Trade quality metrics
         backtest.profit_factor = results['profit_factor']
+        backtest.expectancy = results.get('expectancy')
+        backtest.sqn = results.get('sqn')
+        backtest.avg_trade = results.get('avg_trade')
+        backtest.best_trade = results.get('best_trade')
+        backtest.worst_trade = results.get('worst_trade')
+
+        # Duration metrics
         backtest.avg_trade_duration = results['avg_trade_duration']
+        backtest.exposure_time = results.get('exposure_time')
+
+        # Equity metrics
         backtest.final_equity = results['final_equity']
+        backtest.equity_peak = results.get('equity_peak')
+
+        # Curves and trades
         backtest.equity_curve = results['equity_curve']
         backtest.drawdown_curve = results['drawdown_curve']
         backtest.trades = results['trades']
@@ -801,8 +934,10 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Backtest {backtest_id} failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         try:
-            backtest = db.query(Backtest).filter(Backtest.id == backtest_id).first()
+            backtest = db.query(BacktestModel).filter(BacktestModel.id == backtest_id).first()
             if backtest:
                 backtest.status = 'failed'
                 backtest.error_message = str(e)
