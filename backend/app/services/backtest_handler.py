@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.models.database import SessionLocal
 from app.models import Dataset, TrainedModel, Strategy, Backtest
-from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError, reset_evaluation_stats, get_evaluation_stats
+from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError, reset_evaluation_stats, get_evaluation_stats, next_evaluation_bar
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 from app.services.job_handler import ffill_sparse_indicators
@@ -324,6 +324,12 @@ def run_backtest(
 
     exit_conditions = exit_conditions or []
 
+    # Extract TP/SL from strategy_params for automatic exit handling
+    tp_percent = strategy_params.get('initial_tp_percent') or strategy_params.get('initialTpPercent') or 0
+    sl_percent = strategy_params.get('initial_sl_percent') or strategy_params.get('initialSlPercent') or 0
+    if tp_percent or sl_percent:
+        logger.info(f"Built-in TP/SL: TP={tp_percent}%, SL={sl_percent}%")
+
     # Create confirmation tracker for condition history
     confirmation_tracker = ConfirmationTracker()
     logged_context_fields = False
@@ -432,13 +438,25 @@ def run_backtest(
             else:
                 pnl_pct = (pos.entry_price - current_price) / pos.entry_price * 100
 
+            # Built-in TP/SL check (before user-defined conditions)
+            should_close = False
+            if tp_percent > 0 and pnl_pct >= tp_percent:
+                should_close = True
+            elif sl_percent > 0 and pnl_pct <= -sl_percent:
+                should_close = True
+
+            if should_close:
+                positions_to_close.append(i)
+                pos.bars_held += 1
+                continue
+
             pos_context = context.copy()
             pos_context['position:is_buy'] = pos.direction == 'buy'
             pos_context['position:is_sell'] = pos.direction == 'sell'
             pos_context['bars_in_trade'] = pos.bars_held
             pos_context['position_pnl_pct'] = pnl_pct
 
-            # Check each exit rule
+            # Check user-defined exit rules
             for exit_rule in exit_conditions:
                 conditions = exit_rule.get('conditions', {})
                 if evaluate_condition_tree(conditions, pos_context, confirmation_tracker, label=f"Exit-{pos.direction}"):
@@ -506,6 +524,9 @@ def run_backtest(
                 sell_trades_opened += 1
 
         bars_processed += 1
+
+        # Track bar for aggregated logging
+        next_evaluation_bar()
 
         # Record equity
         equity_curve.append({

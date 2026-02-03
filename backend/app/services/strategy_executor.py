@@ -12,8 +12,8 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
-# Aggregated logging to reduce verbosity
-LOG_AGGREGATION_INTERVAL = 200  # Log summary every N evaluations
+# Aggregated logging to reduce verbosity - based on bars, not evaluations
+LOG_BAR_INTERVAL = 200  # Log summary every N bars
 
 
 class EvaluationStats:
@@ -23,8 +23,9 @@ class EvaluationStats:
         self.reset()
 
     def reset(self):
-        self.eval_count = 0
-        self.total_evals = 0  # Total across all intervals
+        self.bars_since_log = 0
+        self.total_bars = 0
+        self.total_evals = 0  # Total condition evaluations
         self.condition_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
         self.tree_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
         # Cumulative stats for end-of-backtest summary
@@ -34,23 +35,28 @@ class EvaluationStats:
     def record_condition(self, field: str, result: bool):
         self.condition_results[field]['true' if result else 'false'] += 1
         self.cumulative_condition_results[field]['true' if result else 'false'] += 1
+        self.total_evals += 1
 
     def record_tree(self, label: str, result: bool):
         self.tree_results[label]['true' if result else 'false'] += 1
         self.cumulative_tree_results[label]['true' if result else 'false'] += 1
-        self.eval_count += 1
-        self.total_evals += 1
 
-        if self.eval_count >= LOG_AGGREGATION_INTERVAL:
+    def next_bar(self):
+        """Call once per bar to track bar-based logging interval."""
+        self.bars_since_log += 1
+        self.total_bars += 1
+
+        if self.bars_since_log >= LOG_BAR_INTERVAL:
             self._log_summary()
             # Reset interval stats but keep cumulative
-            self.eval_count = 0
+            self.bars_since_log = 0
             self.condition_results = defaultdict(lambda: {'true': 0, 'false': 0})
             self.tree_results = defaultdict(lambda: {'true': 0, 'false': 0})
 
     def get_summary(self) -> Dict[str, Any]:
         """Get cumulative statistics for end-of-backtest summary."""
         return {
+            'total_bars': self.total_bars,
             'total_evaluations': self.total_evals,
             'tree_results': dict(self.cumulative_tree_results),
             'condition_results': dict(self.cumulative_condition_results),
@@ -64,22 +70,7 @@ class EvaluationStats:
         tree_summary = []
         for label, counts in self.tree_results.items():
             tree_summary.append(f"{label}: {counts['true']}T/{counts['false']}F")
-        logger.debug(f"Condition tree results (last {self.eval_count} evals): {', '.join(tree_summary)}")
-
-        # Log top condition results (most frequently true)
-        if self.condition_results:
-            cond_summary = []
-            # Sort by true count descending
-            sorted_conds = sorted(
-                self.condition_results.items(),
-                key=lambda x: x[1]['true'],
-                reverse=True
-            )[:5]  # Top 5
-            for field, counts in sorted_conds:
-                if counts['true'] > 0:
-                    cond_summary.append(f"{field}: {counts['true']}T/{counts['false']}F")
-            if cond_summary:
-                logger.debug(f"Top conditions: {', '.join(cond_summary)}")
+        logger.debug(f"[Bars {self.total_bars - self.bars_since_log + 1}-{self.total_bars}] Conditions: {', '.join(tree_summary)}")
 
 
 # Module-level stats tracker
@@ -302,6 +293,11 @@ def reset_evaluation_stats():
 def get_evaluation_stats() -> Dict[str, Any]:
     """Get evaluation statistics for end-of-backtest summary."""
     return _eval_stats.get_summary()
+
+
+def next_evaluation_bar():
+    """Call once per bar to track bar-based logging interval."""
+    _eval_stats.next_bar()
 
 
 class StrategyExecutor:
