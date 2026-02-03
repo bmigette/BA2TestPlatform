@@ -714,6 +714,7 @@ async def run_model_predictions(
                 prediction_mode=prediction_mode
             )
             logger.info(f"Predictions: probs shape={probs.shape}, min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
+            logger.info(f"First 5 probs: {probs[:5]}")
 
             # Calculate predictions
             # probs is now always 2D: (samples, n_classes)
@@ -724,6 +725,7 @@ async def run_model_predictions(
             else:
                 # Binary classification: probs[:, 1] is probability of class 1 (up)
                 prob_class_1 = probs[:, 1] if len(probs.shape) > 1 and probs.shape[1] > 1 else probs
+                logger.info(f"prob_class_1: shape={prob_class_1.shape}, min={prob_class_1.min():.4f}, max={prob_class_1.max():.4f}, first 5: {prob_class_1[:5]}")
                 predicted_classes = (prob_class_1 >= threshold).astype(int)
                 avg_probs = prob_class_1
 
