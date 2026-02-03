@@ -79,8 +79,50 @@ class Backtest(Base):
     def __repr__(self):
         return f"<Backtest(id={self.id}, name='{self.name}', return={self.total_return})>"
 
+    def _transform_trades_for_frontend(self):
+        """Transform trade data to match frontend expected format."""
+        if not self.trades:
+            return []
+
+        transformed = []
+        for i, trade in enumerate(self.trades):
+            # Map backend field names to frontend expected names
+            # Backend: entry_time, exit_time, direction (buy/sell), pnl_pct, bars_held
+            # Frontend: entryDate, exitDate, direction (long/short), pnlPercent, duration
+            direction = trade.get('direction', 'buy')
+            if direction == 'buy':
+                direction = 'long'
+            elif direction == 'sell':
+                direction = 'short'
+
+            transformed.append({
+                'id': i + 1,
+                'entryDate': trade.get('entry_time', ''),
+                'exitDate': trade.get('exit_time', ''),
+                'entryPrice': trade.get('entry_price', 0),
+                'exitPrice': trade.get('exit_price', 0),
+                'size': trade.get('size', 0),
+                'direction': direction,
+                'pnl': trade.get('pnl', 0),
+                'pnlPercent': trade.get('pnl_pct', 0),
+                'duration': trade.get('bars_held', 0),
+                'exitReason': trade.get('exit_reason', 'unknown'),
+            })
+        return transformed
+
     def to_dict(self):
         """Convert to dictionary for API response"""
+        # Transform trades to frontend format
+        transformed_trades = self._transform_trades_for_frontend()
+
+        # Build results object that frontend expects
+        results = {
+            "equityCurve": self.equity_curve or [],
+            "drawdownCurve": self.drawdown_curve or [],
+            "trades": transformed_trades,
+            "priceData": [],  # Price data would need to be fetched separately
+        }
+
         return {
             "id": self.id,
             "name": self.name,
@@ -98,8 +140,8 @@ class Backtest(Base):
             "slippage": self.slippage,
             "fitnessMetric": self.fitness_metric,
             "status": self.status,
-            "results": self.results,
-            "trades": self.trades,
+            "results": results,  # Nested results object for frontend
+            "trades": transformed_trades,  # Also at top level for backwards compat
             "equityCurve": self.equity_curve,
             "drawdownCurve": self.drawdown_curve,
             "totalReturn": self.total_return,
