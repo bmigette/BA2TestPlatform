@@ -161,10 +161,25 @@ def run_backtest(
         return _empty_results(initial_capital)
 
     # Apply normalization if available
+    # Track which columns are actually used for NaN error reporting
+    used_feature_cols = feature_cols
     if model.normalization_params:
         data_prep = DataPreparationService()
         data_prep.load_params(model.normalization_params)
-        features = data_prep.transform(pred_df[feature_cols].values)
+        # Transform expects DataFrame, not numpy array
+        df_normalized = data_prep.transform(pred_df[feature_cols])
+        # Use valid columns (excludes zero-variance columns dropped during training)
+        valid_cols = data_prep.get_valid_columns()
+        if valid_cols:
+            # Filter to columns that exist in our normalized DataFrame
+            valid_cols = [c for c in valid_cols if c in df_normalized.columns]
+            features = df_normalized[valid_cols].values
+            used_feature_cols = valid_cols
+            logger.info(f"Using {len(valid_cols)} valid columns after zero-variance filtering")
+        else:
+            # Fallback if valid_columns not set
+            features = df_normalized[feature_cols].values
+            logger.warning(f"No valid_columns info in normalization params, using all {len(feature_cols)} features")
     else:
         features = pred_df[feature_cols].values
 
@@ -184,7 +199,7 @@ def run_backtest(
         nan_pct = nan_count / X.size * 100
         # Find which features have NaN
         nan_per_feature = np.isnan(X).any(axis=(0, 2))
-        nan_features = [feature_cols[i] for i, has_nan in enumerate(nan_per_feature) if has_nan]
+        nan_features = [used_feature_cols[i] for i, has_nan in enumerate(nan_per_feature) if has_nan]
         logger.error(f"Input features contain {nan_count} NaN values ({nan_pct:.1f}%). "
                     f"Features with NaN: {nan_features[:10]}{'...' if len(nan_features) > 10 else ''}")
         result = _empty_results(initial_capital)
