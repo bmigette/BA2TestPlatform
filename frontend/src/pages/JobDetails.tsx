@@ -51,6 +51,8 @@ interface Job {
   // Optimization settings
   optimizeMetric?: string;
   lossFunction?: string;
+  lossFunctions?: string[];
+  optimizeLossFunction?: boolean;
   // Real-time individuals tracking
   individualsCount?: number;
   allIndividuals?: Individual[];
@@ -73,6 +75,7 @@ interface Individual {
   individual: number;
   model_type: string;
   params: Record<string, number | string>;
+  loss_function?: string;
   fitness: number;
   metrics: Record<string, number>;
   training_history?: Array<{ epoch: number; loss: number; val_loss?: number }>;
@@ -779,7 +782,11 @@ const JobDetails: React.FC = () => {
             </div>
             <div>
               <span className="text-gray-500 dark:text-gray-400">Loss:</span>
-              <span className="ml-2 font-medium">{formatLossFunction(job.lossFunction)}</span>
+              <span className="ml-2 font-medium">
+                {job.optimizeLossFunction && job.lossFunctions && job.lossFunctions.length > 1
+                  ? `Optimizing (${job.lossFunctions.length})`
+                  : formatLossFunction(job.lossFunction)}
+              </span>
             </div>
             <div>
               <span className="text-gray-500 dark:text-gray-400">Train Rows:</span>
@@ -1165,7 +1172,7 @@ const JobDetails: React.FC = () => {
             </div>
             <div>
               <span className="text-gray-500">Loss:</span>{' '}
-              <span className="font-medium">{formatLossFunction(individualsData.best_individual.params?.loss_function as string)}</span>
+              <span className="font-medium">{formatLossFunction(individualsData.best_individual.loss_function)}</span>
             </div>
             <div>
               <span className="text-gray-500">Generation:</span>{' '}
@@ -1455,7 +1462,7 @@ const JobDetails: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-2 px-2 text-xs text-gray-600 dark:text-gray-400">
-                                {formatLossFunction(ind.params?.loss_function as string)}
+                                {formatLossFunction(ind.loss_function)}
                               </td>
                               <td className="py-2 px-2 font-medium">{ind.fitness.toFixed(4)}</td>
                               <td className="py-2 px-2">
@@ -1545,7 +1552,7 @@ const JobDetails: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-sm text-gray-500">Loss Function</span>
-                  <div className="font-medium">{formatLossFunction(selectedIndividual.params?.loss_function as string)}</div>
+                  <div className="font-medium">{formatLossFunction(selectedIndividual.loss_function)}</div>
                 </div>
                 <div>
                   <span className="text-sm text-gray-500">Fitness</span>
