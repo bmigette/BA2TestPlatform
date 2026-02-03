@@ -65,6 +65,10 @@ class MLStrategy(Strategy):
     buy_trades_opened = 0
     sell_trades_opened = 0
 
+    # Exit reason tracking (class-level for retrieval after bt.run())
+    _exit_reasons_result = None  # Dict mapping entry_time -> exit_reason
+    _pending_trades_result = None  # Dict mapping entry_time -> {tp_price, sl_price, direction}
+
     def init(self):
         """Initialize strategy - called once before backtesting starts."""
         self.confirmation_tracker = ConfirmationTracker()
@@ -78,6 +82,10 @@ class MLStrategy(Strategy):
         self._logged_context = False
         self._last_pred_timestamp = None  # Track current prediction bar
         self._current_probs = None  # Cache current prediction
+        # Exit reason tracking - use class-level dicts so they persist after bt.run()
+        MLStrategy._exit_reasons_result = {}
+        MLStrategy._pending_trades_result = {}
+        self._current_entry_time = None  # Track entry time of current open position
 
     def _get_prediction_for_time(self, current_time):
         """
@@ -204,7 +212,14 @@ class MLStrategy(Strategy):
             for exit_rule in (self.exit_conditions or []):
                 conditions = exit_rule.get('conditions', {})
                 if evaluate_condition_tree(conditions, exit_context, self.confirmation_tracker, label="Exit"):
+                    # Record exit reason with condition details
+                    exit_label = exit_rule.get('label') or exit_rule.get('name') or 'Exit condition'
+                    # Use tracked entry time as key
+                    if self._current_entry_time:
+                        entry_key = str(self._current_entry_time)
+                        MLStrategy._exit_reasons_result[entry_key] = exit_label
                     self.position.close()
+                    self._current_entry_time = None  # Clear after closing
                     break
 
         # Check entry conditions ONLY on new prediction bars
@@ -221,6 +236,16 @@ class MLStrategy(Strategy):
                 # Place buy order with TP/SL
                 self.buy(size=self.position_sizing_pct / 100, tp=tp_price, sl=sl_price)
 
+                # Track TP/SL for exit reason detection (use class-level for retrieval after bt.run())
+                entry_key = str(current_date)
+                MLStrategy._pending_trades_result[entry_key] = {
+                    'tp_price': tp_price,
+                    'sl_price': sl_price,
+                    'direction': 'buy',
+                    'entry_price': current_price
+                }
+                self._current_entry_time = current_date
+
                 self.last_buy_bar_idx = self.bar_idx
                 self.last_buy_date = current_date
                 self.buy_trades_opened += 1
@@ -235,6 +260,16 @@ class MLStrategy(Strategy):
 
                 # Place sell order with TP/SL
                 self.sell(size=self.position_sizing_pct / 100, tp=tp_price, sl=sl_price)
+
+                # Track TP/SL for exit reason detection (use class-level for retrieval after bt.run())
+                entry_key = str(current_date)
+                MLStrategy._pending_trades_result[entry_key] = {
+                    'tp_price': tp_price,
+                    'sl_price': sl_price,
+                    'direction': 'sell',
+                    'entry_price': current_price
+                }
+                self._current_entry_time = current_date
 
                 self.last_sell_bar_idx = self.bar_idx
                 self.last_sell_date = current_date
@@ -563,8 +598,13 @@ def run_backtest(
             hit_summary.append(f"{label}: {counts['true']}/{total} ({hit_rate:.1f}%)")
         logger.info(f"Entry/Exit hit rates: {', '.join(hit_summary)}")
 
+    # Retrieve exit tracking data from class-level storage
+    # (set during strategy execution, accessed here after bt.run())
+    exit_reasons = MLStrategy._exit_reasons_result or {}
+    pending_trades = MLStrategy._pending_trades_result or {}
+
     # Convert backtesting.py results to our format
-    return _convert_bt_results(stats, bt_data, initial_capital)
+    return _convert_bt_results(stats, bt_data, initial_capital, exit_reasons, pending_trades)
 
 
 def _safe_float(value, default=0.0) -> float:
@@ -594,7 +634,13 @@ def _safe_duration_days(duration, default=0.0) -> float:
         return default
 
 
-def _convert_bt_results(stats, bt_data: pd.DataFrame, initial_capital: float) -> Dict[str, Any]:
+def _convert_bt_results(
+    stats,
+    bt_data: pd.DataFrame,
+    initial_capital: float,
+    exit_reasons: Optional[Dict[str, str]] = None,
+    pending_trades: Optional[Dict[str, Dict]] = None
+) -> Dict[str, Any]:
     """
     Convert backtesting.py stats to our result format.
 
@@ -604,23 +650,69 @@ def _convert_bt_results(stats, bt_data: pd.DataFrame, initial_capital: float) ->
     - Advanced metrics: SQN, expectancy, exposure time
     - Benchmark comparison: Buy & Hold return, Alpha, Beta
     """
+    exit_reasons = exit_reasons or {}
+    pending_trades = pending_trades or {}
 
     # Extract trades from stats
     trades_df = stats._trades if hasattr(stats, '_trades') else pd.DataFrame()
     trades_list = []
 
     if len(trades_df) > 0:
+        # Log available keys for debugging
+        if pending_trades:
+            logger.debug(f"Pending trade keys: {list(pending_trades.keys())[:5]}")
+        if exit_reasons:
+            logger.debug(f"Exit reason keys: {list(exit_reasons.keys())[:5]}")
+
         for _, trade in trades_df.iterrows():
+            entry_time = trade['EntryTime']
+            exit_price = float(trade['ExitPrice'])
+            entry_price = float(trade['EntryPrice'])
+            direction = 'buy' if trade['Size'] > 0 else 'sell'
+
+            # Determine exit reason - try multiple key formats for robustness
+            entry_key = str(entry_time)
+            exit_reason = 'unknown'
+
+            # Also try without timezone info for matching
+            entry_key_alt = str(pd.Timestamp(entry_time).tz_localize(None)) if hasattr(entry_time, 'tz') else entry_key
+
+            # First check if we recorded an exit condition
+            if entry_key in exit_reasons:
+                exit_reason = exit_reasons[entry_key]
+            elif entry_key_alt in exit_reasons:
+                exit_reason = exit_reasons[entry_key_alt]
+            else:
+                # Check if TP/SL was hit based on exit price
+                trade_info = pending_trades.get(entry_key) or pending_trades.get(entry_key_alt)
+                if trade_info:
+                    tp_price = trade_info.get('tp_price')
+                    sl_price = trade_info.get('sl_price')
+
+                    if direction == 'buy':
+                        # For long positions: TP is above entry, SL is below
+                        if tp_price and exit_price >= tp_price * 0.999:  # Small tolerance for price matching
+                            exit_reason = 'Take Profit'
+                        elif sl_price and exit_price <= sl_price * 1.001:
+                            exit_reason = 'Stop Loss'
+                    else:
+                        # For short positions: TP is below entry, SL is above
+                        if tp_price and exit_price <= tp_price * 1.001:
+                            exit_reason = 'Take Profit'
+                        elif sl_price and exit_price >= sl_price * 0.999:
+                            exit_reason = 'Stop Loss'
+
             trades_list.append({
-                'entry_time': trade['EntryTime'].isoformat() if hasattr(trade['EntryTime'], 'isoformat') else str(trade['EntryTime']),
+                'entry_time': entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
                 'exit_time': trade['ExitTime'].isoformat() if hasattr(trade['ExitTime'], 'isoformat') else str(trade['ExitTime']),
-                'direction': 'buy' if trade['Size'] > 0 else 'sell',
-                'entry_price': float(trade['EntryPrice']),
-                'exit_price': float(trade['ExitPrice']),
+                'direction': direction,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
                 'size': abs(float(trade['Size'])),
                 'pnl': float(trade['PnL']),
                 'pnl_pct': float(trade['ReturnPct']) * 100,
-                'bars_held': int(trade['Duration'].days) if hasattr(trade['Duration'], 'days') else int(trade['Duration'])
+                'bars_held': int(trade['Duration'].days) if hasattr(trade['Duration'], 'days') else int(trade['Duration']),
+                'exit_reason': exit_reason
             })
 
     # Build equity curve from stats
