@@ -154,14 +154,20 @@ def evaluate_condition(
     comparison = condition.get("comparison")
     value = condition.get("value")
 
-    if field is None or comparison is None:
-        logger.warning(f"Invalid condition: missing field or comparison")
-        return False
+    if not field or comparison is None:
+        import traceback
+        logger.error(f"Invalid condition: empty or missing field. condition={condition}\n{''.join(traceback.format_stack())}")
+        raise ValueError(f"Invalid strategy condition: empty or missing field (field={repr(field)}, comparison={comparison})")
 
     # Get field value from context
     field_value = context.get(field)
     if field_value is None:
-        logger.debug(f"Field {field} not found in context. Available: {list(context.keys())}")
+        # Only log once per missing field to avoid spam
+        if not hasattr(evaluate_condition, '_warned_fields'):
+            evaluate_condition._warned_fields = set()
+        if field not in evaluate_condition._warned_fields:
+            evaluate_condition._warned_fields.add(field)
+            logger.warning(f"Field '{field}' not found in context (first occurrence, will not repeat)")
         return False
 
     raw_result = evaluate_comparison(field_value, comparison, value)
