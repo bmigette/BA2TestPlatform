@@ -50,6 +50,7 @@ interface Job {
   epochHistory?: EpochMetric[];
   // Optimization settings
   optimizeMetric?: string;
+  lossFunction?: string;
   // Real-time individuals tracking
   individualsCount?: number;
   allIndividuals?: Individual[];
@@ -155,6 +156,11 @@ const MODEL_TEXT_COLORS: Record<string, string> = {
 };
 
 const DEFAULT_MODEL_COLOR = 'text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300';
+
+const formatLossFunction = (loss: string | undefined) => {
+  if (!loss) return 'N/A';
+  return loss.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+};
 
 const JobDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -766,10 +772,14 @@ const JobDetails: React.FC = () => {
       {(job.trainRows || job.testRows) && (
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Dataset Statistics</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-sm">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 text-sm">
             <div>
               <span className="text-gray-500 dark:text-gray-400">Target:</span>
               <span className="ml-2 font-mono text-xs">{job.targetColumn || '--'}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Loss:</span>
+              <span className="ml-2 font-medium">{formatLossFunction(job.lossFunction)}</span>
             </div>
             <div>
               <span className="text-gray-500 dark:text-gray-400">Train Rows:</span>
@@ -1146,12 +1156,16 @@ const JobDetails: React.FC = () => {
       {individualsData?.best_individual && (
         <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow border-2 border-green-500">
           <h3 className="text-sm font-semibold text-green-600 mb-3">Best Individual</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
             <div>
               <span className="text-gray-500">Model:</span>{' '}
               <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[individualsData.best_individual.model_type] || DEFAULT_MODEL_COLOR}`}>
                 {individualsData.best_individual.model_type.toUpperCase()}
               </span>
+            </div>
+            <div>
+              <span className="text-gray-500">Loss:</span>{' '}
+              <span className="font-medium">{formatLossFunction(individualsData.best_individual.params?.loss_function as string)}</span>
             </div>
             <div>
               <span className="text-gray-500">Generation:</span>{' '}
@@ -1422,6 +1436,7 @@ const JobDetails: React.FC = () => {
                         <tr className="text-gray-500 text-xs">
                           <th className="text-left py-1 px-2">#</th>
                           <th className="text-left py-1 px-2">Model</th>
+                          <th className="text-left py-1 px-2">Loss</th>
                           <th className="text-left py-1 px-2">Fitness</th>
                           <th className="text-left py-1 px-2">{(job.optimizeMetric || 'f1_score').replace(/_/g, ' ')}</th>
                           <th className="text-left py-1 px-2">Other Metrics</th>
@@ -1438,6 +1453,9 @@ const JobDetails: React.FC = () => {
                                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODEL_TEXT_COLORS[ind.model_type] || DEFAULT_MODEL_COLOR}`}>
                                   {ind.model_type.toUpperCase()}
                                 </span>
+                              </td>
+                              <td className="py-2 px-2 text-xs text-gray-600 dark:text-gray-400">
+                                {formatLossFunction(ind.params?.loss_function as string)}
                               </td>
                               <td className="py-2 px-2 font-medium">{ind.fitness.toFixed(4)}</td>
                               <td className="py-2 px-2">
@@ -1516,7 +1534,7 @@ const JobDetails: React.FC = () => {
               </button>
             </div>
             <div className="p-4 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div>
                   <span className="text-sm text-gray-500">Generation</span>
                   <div className="font-medium">{selectedIndividual.generation + 1}</div>
@@ -1524,6 +1542,10 @@ const JobDetails: React.FC = () => {
                 <div>
                   <span className="text-sm text-gray-500">Individual #</span>
                   <div className="font-medium">{selectedIndividual.individual}</div>
+                </div>
+                <div>
+                  <span className="text-sm text-gray-500">Loss Function</span>
+                  <div className="font-medium">{formatLossFunction(selectedIndividual.params?.loss_function as string)}</div>
                 </div>
                 <div>
                   <span className="text-sm text-gray-500">Fitness</span>

@@ -39,6 +39,7 @@ interface Model {
   generations: number;
   bestGeneration: number;
   fitness: number;
+  lossFunction?: string;
   performanceMetrics: {
     accuracy: number;
     precision: number;
@@ -135,6 +136,11 @@ const Models: React.FC = () => {
       'TFT': 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300',
     };
     return colors[type.toUpperCase()] || 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300';
+  };
+
+  const formatLossFunction = (loss: string | undefined) => {
+    if (!loss) return 'N/A';
+    return loss.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   };
 
   const handleSort = (field: SortField) => {
@@ -386,6 +392,13 @@ const Models: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Loss Function */}
+                {model.lossFunction && (
+                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                    Loss: <span className="font-medium text-gray-700 dark:text-gray-300">{formatLossFunction(model.lossFunction)}</span>
+                  </div>
+                )}
+
                 {/* Status and Info */}
                 <div className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
@@ -442,6 +455,7 @@ const Models: React.FC = () => {
               <tr>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-300">Name</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-300">Type</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-300">Loss</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-300">Dataset</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600 dark:text-gray-300">Accuracy</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600 dark:text-gray-300">Fitness</th>
@@ -465,6 +479,9 @@ const Models: React.FC = () => {
                     <span className={`px-2 py-1 text-xs font-medium rounded-full ${getModelTypeColor(model.modelType)}`}>
                       {model.modelType}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                    {formatLossFunction(model.lossFunction)}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
                     <div>{model.datasetName || `#${model.datasetId}`}</div>

@@ -32,7 +32,7 @@ import ConditionBuilder, {
   createEmptyGroup,
   isConditionGroup
 } from '../components/ConditionBuilder';
-import BacktestChart from '../components/BacktestChart';
+// BacktestChart removed - price chart tab not used
 import type {
   ConditionGroup,
   ConditionTree,
@@ -215,7 +215,7 @@ const Backtesting: React.FC = () => {
 
   // Results view
   const [selectedBacktest, setSelectedBacktest] = useState<Backtest | null>(null);
-  const [activeTab, setActiveTab] = useState<'equity' | 'drawdown' | 'price' | 'trades'>('equity');
+  const [activeTab, setActiveTab] = useState<'equity' | 'drawdown' | 'trades'>('equity');
   const [tradeFilter, setTradeFilter] = useState<'all' | 'profit' | 'loss'>('all');
   const [tradeSortField, setTradeSortField] = useState<'pnl' | 'date' | 'duration'>('date');
   const [tradeSortAsc, setTradeSortAsc] = useState(false);
@@ -1237,12 +1237,11 @@ const Backtesting: React.FC = () => {
                     {[
                       { id: 'equity', label: 'Equity Curve', icon: TrendingUp },
                       { id: 'drawdown', label: 'Drawdown', icon: TrendingDown },
-                      { id: 'price', label: 'Price Chart', icon: BarChart3 },
                       { id: 'trades', label: 'Trade List', icon: Activity }
                     ].map(tab => (
                       <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'price' | 'trades')}
+                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'trades')}
                         className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors text-sm ${
                           activeTab === tab.id
                             ? 'border-blue-500 text-blue-600'
@@ -1261,15 +1260,31 @@ const Backtesting: React.FC = () => {
                     <div className="h-80">
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={selectedBacktest.results.equityCurve}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="date" tickFormatter={d => d.slice(5)} />
-                          <YAxis domain={['dataMin - 500', 'dataMax + 500']} tickFormatter={v => `$${v.toLocaleString()}`} />
+                          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                          <XAxis
+                            dataKey="date"
+                            tickFormatter={(d: string) => {
+                              const date = new Date(d);
+                              return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+                            }}
+                            tick={{ fontSize: 11 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis
+                            domain={['auto', 'auto']}
+                            tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`}
+                            width={65}
+                            tick={{ fontSize: 11 }}
+                          />
                           <RechartsTooltip
-                            formatter={(value) => [`$${(value as number)?.toLocaleString() ?? '0'}`, 'Equity']}
-                            labelFormatter={label => `Date: ${label}`}
+                            formatter={(value) => [`$${(value as number)?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '0'}`, 'Equity']}
+                            labelFormatter={(label) => {
+                              const date = new Date(String(label));
+                              return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                            }}
                           />
                           <Area type="monotone" dataKey="equity" stroke="#22c55e" fill="#22c55e" fillOpacity={0.2} />
-                          <ReferenceLine y={10000} stroke="#888" strokeDasharray="3 3" label="Initial" />
+                          <ReferenceLine y={selectedBacktest.initialCapital || 10000} stroke="#888" strokeDasharray="3 3" label={{ value: 'Initial', position: 'right', fontSize: 11 }} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
@@ -1279,25 +1294,34 @@ const Backtesting: React.FC = () => {
                     <div className="h-80">
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={selectedBacktest.results.drawdownCurve}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="date" tickFormatter={d => d.slice(5)} />
-                          <YAxis domain={[0, 'dataMax + 2']} tickFormatter={v => `${v}%`} reversed />
+                          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                          <XAxis
+                            dataKey="date"
+                            tickFormatter={(d: string) => {
+                              const date = new Date(d);
+                              return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+                            }}
+                            tick={{ fontSize: 11 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis
+                            domain={[0, 'auto']}
+                            tickFormatter={(v: number) => `${v.toFixed(1)}%`}
+                            width={50}
+                            tick={{ fontSize: 11 }}
+                            reversed
+                          />
                           <RechartsTooltip
                             formatter={(value) => [`${((value as number) ?? 0).toFixed(2)}%`, 'Drawdown']}
-                            labelFormatter={label => `Date: ${label}`}
+                            labelFormatter={(label) => {
+                              const date = new Date(String(label));
+                              return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                            }}
                           />
                           <Area type="monotone" dataKey="drawdown" stroke="#ef4444" fill="#ef4444" fillOpacity={0.3} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
-                  )}
-
-                  {activeTab === 'price' && selectedBacktest.results?.priceData && (
-                    <BacktestChart
-                      priceData={selectedBacktest.results.priceData}
-                      trades={selectedBacktest.results.trades || []}
-                      height={400}
-                    />
                   )}
 
                   {activeTab === 'trades' && selectedBacktest.results?.trades && (
