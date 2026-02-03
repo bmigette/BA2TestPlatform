@@ -41,10 +41,17 @@ class HyperParameters(BaseModel):
 
 class TrainingHistory(BaseModel):
     epoch: int
-    loss: float
-    accuracy: float
-    valLoss: float
-    valAccuracy: float
+    # Support both old format (loss, valLoss) and new TSAI format (train_loss, val_loss)
+    loss: Optional[float] = None
+    accuracy: Optional[float] = None
+    valLoss: Optional[float] = None
+    valAccuracy: Optional[float] = None
+    # TSAI format fields
+    train_loss: Optional[float] = None
+    val_loss: Optional[float] = None
+
+    class Config:
+        extra = "allow"  # Allow extra fields from different training backends
 
 
 class PerformanceMetrics(BaseModel):
