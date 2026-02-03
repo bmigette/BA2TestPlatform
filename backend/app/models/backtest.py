@@ -2,7 +2,7 @@
 Backtest model for storing backtest results
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Float, Boolean
 from sqlalchemy.sql import func
 from .database import Base
 
@@ -70,6 +70,9 @@ class Backtest(Base):
     equity_peak = Column(Float, nullable=True)  # Peak equity reached
 
     error_message = Column(String(1000), nullable=True)
+
+    # Save status
+    is_saved = Column(Boolean, default=False)  # Whether backtest has been explicitly saved with a name
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -170,6 +173,7 @@ class Backtest(Base):
             "avgTrade": self.avg_trade,
             "equityPeak": self.equity_peak,
             "errorMessage": self.error_message,
+            "isSaved": self.is_saved or False,
             "createdAt": self.created_at.isoformat() if self.created_at else None,
             "startedAt": self.started_at.isoformat() if self.started_at else None,
             "completedAt": self.completed_at.isoformat() if self.completed_at else None,

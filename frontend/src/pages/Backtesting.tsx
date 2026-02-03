@@ -146,6 +146,7 @@ interface Backtest {
   slippage: number;
   fitnessMetric: string | null;
   status: string;
+  isSaved: boolean;
   totalReturn: number | null;
   sharpeRatio: number | null;
   maxDrawdown: number | null;
@@ -163,6 +164,16 @@ interface Backtest {
 
 const API_BASE = 'http://localhost:8000/api';
 
+// Generate random backtest name
+const generateBacktestName = (): string => {
+  const adjectives = ['Quick', 'Swift', 'Bold', 'Sharp', 'Smooth', 'Steady', 'Active', 'Rapid', 'Dynamic', 'Agile'];
+  const nouns = ['Trade', 'Signal', 'Strategy', 'Alpha', 'Edge', 'Flow', 'Wave', 'Pulse', 'Trend', 'Momentum'];
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const num = Math.floor(Math.random() * 1000);
+  return `${adj}${noun}_${num}`;
+};
+
 const Backtesting: React.FC = () => {
   const _navigate = useNavigate();
   void _navigate;
@@ -177,7 +188,6 @@ const Backtesting: React.FC = () => {
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [predictionDatasetId, setPredictionDatasetId] = useState<number | ''>('');
   const [executionDatasetId, setExecutionDatasetId] = useState<number | ''>('');
-  const [backtestName, setBacktestName] = useState('');
   const [startDate, setStartDate] = useState('2025-01-01');
   const [endDate, setEndDate] = useState('2025-12-31');
 
@@ -225,6 +235,15 @@ const Backtesting: React.FC = () => {
   const [saveStrategyName, setSaveStrategyName] = useState('');
   const [saveStrategyDescription, setSaveStrategyDescription] = useState('');
   const [savingStrategy, setSavingStrategy] = useState(false);
+
+  // Save backtest modal
+  const [showSaveBacktestModal, setShowSaveBacktestModal] = useState(false);
+  const [saveBacktestName, setSaveBacktestName] = useState('');
+  const [backtestToSave, setBacktestToSave] = useState<Backtest | null>(null);
+  const [savingBacktest, setSavingBacktest] = useState(false);
+
+  // Tab state for New Backtest card
+  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'saved'>('new');
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -362,11 +381,6 @@ const Backtesting: React.FC = () => {
       return;
     }
 
-    if (!backtestName.trim()) {
-      setError('Please enter a backtest name');
-      return;
-    }
-
     // Validate conditions - check for empty fields
     const validateConditions = (tree: ConditionTree, path: string): string | null => {
       if (isConditionGroup(tree)) {
@@ -444,11 +458,14 @@ const Backtesting: React.FC = () => {
         initialSlStep: initialSlOptimize ? initialSlStep : null
       };
 
+      // Generate a random name for the backtest
+      const autoName = generateBacktestName();
+
       const res = await fetch(`${API_BASE}/backtests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: backtestName,
+          name: autoName,
           model_id: selectedModel,  // String model ID like "mdl-abc123"
           prediction_dataset_id: predictionDatasetId,
           execution_dataset_id: executionDatasetId,
@@ -477,9 +494,6 @@ const Backtesting: React.FC = () => {
         setSelectedBacktest(details);
         setBacktests(prev => [details, ...prev]);
       }
-
-      // Reset form
-      setBacktestName('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run backtest');
     } finally {
@@ -617,6 +631,72 @@ const Backtesting: React.FC = () => {
     }
   };
 
+  const openSaveBacktestModal = (backtest: Backtest) => {
+    setBacktestToSave(backtest);
+    setSaveBacktestName(backtest.name);
+    setShowSaveBacktestModal(true);
+  };
+
+  const saveBacktest = async () => {
+    if (!backtestToSave || !saveBacktestName.trim()) {
+      setError('Please enter a backtest name');
+      return;
+    }
+
+    try {
+      setSavingBacktest(true);
+      setError(null);
+
+      const res = await fetch(`${API_BASE}/backtests/${backtestToSave.id}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: saveBacktestName })
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to save backtest');
+      }
+
+      const saved = await res.json();
+      setBacktests(prev => prev.map(bt => bt.id === saved.id ? saved : bt));
+      if (selectedBacktest?.id === saved.id) {
+        setSelectedBacktest(saved);
+      }
+      setShowSaveBacktestModal(false);
+      setBacktestToSave(null);
+      setSaveBacktestName('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save backtest');
+    } finally {
+      setSavingBacktest(false);
+    }
+  };
+
+  const clearUnsavedBacktests = () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Clear Unsaved Backtests',
+      message: 'Are you sure you want to delete all unsaved backtests? This cannot be undone.',
+      variant: 'warning',
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`${API_BASE}/backtests/unsaved`, { method: 'DELETE' });
+          if (res.ok) {
+            const data = await res.json();
+            // Remove unsaved backtests from state
+            setBacktests(prev => prev.filter(bt => bt.isSaved));
+            if (selectedBacktest && !selectedBacktest.isSaved) {
+              setSelectedBacktest(null);
+            }
+            console.log(`Cleared ${data.count} unsaved backtests`);
+          }
+        } catch (err) {
+          setError('Failed to clear unsaved backtests');
+        }
+      },
+    });
+  };
+
   const loadStrategy = (strategy: Strategy) => {
     // Load buy entry conditions - ensure it's a valid group
     if (strategy.buyEntryConditions && isConditionGroup(strategy.buyEntryConditions)) {
@@ -682,26 +762,34 @@ const Backtesting: React.FC = () => {
         <div className="xl:col-span-1 space-y-4">
           {/* New Backtest Form */}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-gray-100">
-              <Play className="w-5 h-5 text-green-500" />
-              New Backtest
-            </h2>
+            {/* Tabs for New Backtest vs Saved Backtests */}
+            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4">
+              <button
+                onClick={() => setBacktestCardTab('new')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  backtestCardTab === 'new'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <Play className="w-4 h-4 inline mr-1" />
+                New Backtest
+              </button>
+              <button
+                onClick={() => setBacktestCardTab('saved')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  backtestCardTab === 'saved'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <Save className="w-4 h-4 inline mr-1" />
+                Saved ({backtests.filter(bt => bt.isSaved).length})
+              </button>
+            </div>
 
+            {backtestCardTab === 'new' ? (
             <div className="space-y-4">
-              {/* Backtest Name */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Backtest Name
-                </label>
-                <input
-                  type="text"
-                  value={backtestName}
-                  onChange={e => setBacktestName(e.target.value)}
-                  placeholder="e.g., LSTM_AAPL_Conservative"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-
               {/* Model Selection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -1085,14 +1173,80 @@ const Backtesting: React.FC = () => {
                 )}
               </button>
             </div>
+            ) : (
+              /* Saved Backtests Tab */
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {backtests.filter(bt => bt.isSaved).length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
+                    No saved backtests yet. Run a backtest and save it to see it here.
+                  </p>
+                ) : (
+                  backtests.filter(bt => bt.isSaved).map(bt => (
+                    <div
+                      key={bt.id}
+                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                        selectedBacktest?.id === bt.id
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                          : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                      }`}
+                      onClick={() => viewBacktest(bt.id)}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">
+                          <Save className="w-3 h-3 inline mr-1 text-green-500" />
+                          {bt.name}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={e => { e.stopPropagation(); exportBacktest(bt.id); }}
+                            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                            title="Export"
+                          >
+                            <Download className="w-3.5 h-3.5 text-gray-500" />
+                          </button>
+                          <button
+                            onClick={e => { e.stopPropagation(); deleteBacktest(bt.id); }}
+                            className="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                          </button>
+                        </div>
+                      </div>
+                      {bt.status === 'completed' && (
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
+                          </span>
+                          <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
+                          <span className="text-gray-500">{bt.totalTrades} trades</span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
 
           {/* Previous Backtests */}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2 text-gray-900 dark:text-gray-100">
-              <Clock className="w-4 h-4 text-gray-500" />
-              Previous Backtests
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2 text-gray-900 dark:text-gray-100">
+                <Clock className="w-4 h-4 text-gray-500" />
+                Previous Backtests
+              </h3>
+              {backtests.some(bt => !bt.isSaved) && (
+                <button
+                  onClick={clearUnsavedBacktests}
+                  className="text-xs text-red-500 hover:text-red-600 flex items-center gap-1"
+                  title="Clear all unsaved backtests"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Clear Unsaved
+                </button>
+              )}
+            </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {backtests.length === 0 ? (
                 <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No backtests yet</p>
@@ -1108,8 +1262,20 @@ const Backtesting: React.FC = () => {
                     onClick={() => viewBacktest(bt.id)}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">{bt.name}</span>
+                      <span className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">
+                        {bt.isSaved && <Save className="w-3 h-3 inline mr-1 text-green-500" />}
+                        {bt.name}
+                      </span>
                       <div className="flex items-center gap-1">
+                        {!bt.isSaved && bt.status === 'completed' && (
+                          <button
+                            onClick={e => { e.stopPropagation(); openSaveBacktestModal(bt); }}
+                            className="p-1 hover:bg-green-100 dark:hover:bg-green-900/20 rounded"
+                            title="Save backtest"
+                          >
+                            <Save className="w-3.5 h-3.5 text-green-500" />
+                          </button>
+                        )}
                         <button
                           onClick={e => { e.stopPropagation(); exportBacktest(bt.id); }}
                           className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
@@ -1501,6 +1667,85 @@ const Backtesting: React.FC = () => {
                   className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {savingStrategy ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      Save
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Save Backtest Modal */}
+      {showSaveBacktestModal && backtestToSave && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+            onClick={() => setShowSaveBacktestModal(false)}
+          />
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+              <button
+                onClick={() => setShowSaveBacktestModal(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2">
+                <Save className="w-5 h-5 text-green-500" />
+                Save Backtest
+              </h3>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Backtest Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={saveBacktestName}
+                    onChange={e => setSaveBacktestName(e.target.value)}
+                    placeholder="e.g., Best AAPL Strategy"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-sm">
+                  <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Backtest Results:</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-400">
+                    <span>Return: <span className={`font-medium ${(backtestToSave.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {(backtestToSave.totalReturn || 0) >= 0 ? '+' : ''}{backtestToSave.totalReturn?.toFixed(1)}%
+                    </span></span>
+                    <span>Sharpe: {backtestToSave.sharpeRatio?.toFixed(2)}</span>
+                    <span>Trades: {backtestToSave.totalTrades}</span>
+                    <span>Win Rate: {backtestToSave.winRate?.toFixed(1)}%</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setShowSaveBacktestModal(false)}
+                  className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveBacktest}
+                  disabled={savingBacktest || !saveBacktestName.trim()}
+                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {savingBacktest ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
                       Saving...

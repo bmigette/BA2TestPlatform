@@ -289,3 +289,45 @@ async def compare_backtests(
         "backtests": backtests,
         "comparison": comparison
     }
+
+
+class BacktestSave(BaseModel):
+    """Request model for saving a backtest."""
+    name: str
+
+
+@router.post("/{backtest_id}/save")
+async def save_backtest(
+    backtest_id: int,
+    save_data: BacktestSave,
+    db: Session = Depends(get_db)
+):
+    """Save a backtest with a custom name (marks it as saved)."""
+    backtest = db.query(Backtest).filter(Backtest.id == backtest_id).first()
+    if not backtest:
+        raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
+
+    backtest.name = save_data.name
+    backtest.is_saved = True
+    db.commit()
+    db.refresh(backtest)
+
+    logger.info(f"Saved backtest: {backtest.name} (id={backtest_id})")
+    return backtest.to_dict()
+
+
+@router.delete("/unsaved")
+async def clear_unsaved_backtests(
+    db: Session = Depends(get_db)
+):
+    """Delete all unsaved backtests."""
+    unsaved = db.query(Backtest).filter(Backtest.is_saved == False).all()
+    count = len(unsaved)
+
+    for bt in unsaved:
+        db.delete(bt)
+
+    db.commit()
+
+    logger.info(f"Cleared {count} unsaved backtests")
+    return {"message": f"Deleted {count} unsaved backtests", "count": count}
