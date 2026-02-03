@@ -29,6 +29,8 @@ export interface PredictionsChartProps {
   height?: number;
   showOnlyTransitions?: boolean; // Only show markers where prediction changes or at signal points
   showOnlyClass?: number | null; // Only show markers for this predicted class (null = show all)
+  minProbability?: number; // Minimum probability to show marker (0-1)
+  showActualTargets?: boolean; // Show markers for actual target values (ground truth from dataset)
 }
 
 const PredictionsChart: React.FC<PredictionsChartProps> = ({
@@ -36,6 +38,8 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
   height = 500,
   showOnlyTransitions = true,
   showOnlyClass = 1, // Default to only showing "up" predictions (class 1)
+  minProbability = 0, // Default: show all predictions
+  showActualTargets = false, // Default: only show model predictions
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -118,8 +122,25 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
       predictions.forEach((p, idx) => {
         const time = toTime(p.date);
         if (!validChartDates.has(time as number)) return;
+
+        // === ACTUAL TARGET MARKERS (Ground truth from dataset) ===
+        if (showActualTargets && p.actual === 1) {
+          // Show a marker where actual target was 1 (the event occurred)
+          markers.push({
+            time,
+            position: 'aboveBar',
+            color: '#3B82F6', // Blue for actual targets
+            shape: 'circle',
+            text: 'T', // T for "Target"
+          });
+        }
+
+        // === MODEL PREDICTION MARKERS ===
         // Skip predictions with null correctness (actual not known yet)
         if (p.correct === null) return;
+
+        // Filter by minimum probability
+        if (p.probability < minProbability) return;
 
         // For transitions mode, only show when prediction changes
         if (showOnlyTransitions && idx > 0) {
@@ -181,7 +202,7 @@ const PredictionsChart: React.FC<PredictionsChartProps> = ({
       console.error('PredictionsChart error:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [predictions, height, showOnlyTransitions, showOnlyClass]);
+  }, [predictions, height, showOnlyTransitions, showOnlyClass, minProbability, showActualTargets]);
 
   if (error) {
     return (

@@ -158,6 +158,13 @@ const ModelDetails: React.FC = () => {
   const [predictionsData, setPredictionsData] = useState<PredictionsResponse | null>(null);
   const [predictionsLoading, setPredictionsLoading] = useState(false);
   const [predictionsError, setPredictionsError] = useState<string | null>(null);
+  const [minProbability, setMinProbability] = useState<number | null>(null); // null = use model threshold, 0-100 for slider
+  const [showActualTargets, setShowActualTargets] = useState(true); // Show ground truth markers
+
+  // Get effective min probability (from slider or model threshold)
+  const effectiveMinProbability = minProbability !== null
+    ? minProbability
+    : (predictionsData?.threshold ?? 0.5) * 100;
 
   useEffect(() => {
     fetchModelDetails();
@@ -865,6 +872,57 @@ const ModelDetails: React.FC = () => {
                   <TrendingUp className="w-5 h-5 text-blue-500" />
                   Price with Predictions Overlay
                 </h3>
+                {/* Chart Controls */}
+                <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <div className="flex flex-wrap items-center gap-6">
+                    {/* Model Threshold Info */}
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      Model threshold: <span className="font-mono font-medium text-blue-600 dark:text-blue-400">{((predictionsData?.threshold ?? 0.5) * 100).toFixed(0)}%</span>
+                    </div>
+
+                    {/* Probability Filter Slider */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Min Confidence:
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={effectiveMinProbability}
+                        onChange={(e) => setMinProbability(Number(e.target.value))}
+                        className="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-600"
+                      />
+                      <span className="text-sm font-mono w-12 text-gray-600 dark:text-gray-400">
+                        {effectiveMinProbability.toFixed(0)}%
+                      </span>
+                      {minProbability !== null && minProbability !== (predictionsData?.threshold ?? 0.5) * 100 && (
+                        <button
+                          onClick={() => setMinProbability(null)}
+                          className="text-xs text-blue-500 hover:text-blue-700"
+                          title="Reset to model threshold"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Show Actual Targets Toggle */}
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={showActualTargets}
+                        onChange={(e) => setShowActualTargets(e.target.checked)}
+                        className="w-4 h-4 text-blue-600 rounded"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
+                        Show Actual Targets (Ground Truth)
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Legend */}
                 <div className="mb-2 flex items-center gap-4 text-xs text-gray-500">
                   <span className="flex items-center gap-1">
                     <span className="w-3 h-3 bg-green-500 rounded-full"></span>
@@ -882,11 +940,19 @@ const ModelDetails: React.FC = () => {
                     <span className="text-lg">&#x25BC;</span>
                     Down Prediction
                   </span>
+                  {showActualTargets && (
+                    <span className="flex items-center gap-1">
+                      <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
+                      Actual Target (T)
+                    </span>
+                  )}
                 </div>
                 <PredictionsChart
                   predictions={predictionsData.predictions}
                   height={450}
                   showOnlyTransitions={false}
+                  minProbability={effectiveMinProbability / 100}
+                  showActualTargets={showActualTargets}
                 />
               </div>
 
