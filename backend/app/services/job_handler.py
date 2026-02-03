@@ -443,7 +443,7 @@ def update_job_training_state(
             # Reset epoch history when starting a new individual/model
             if reset_epoch_history:
                 job["epochHistory"] = []
-            if epoch_metrics is not None:
+            if epoch_metrics:  # Check not None AND not empty dict
                 # Append to epoch history for graphing
                 if "epochHistory" not in job:
                     job["epochHistory"] = []
