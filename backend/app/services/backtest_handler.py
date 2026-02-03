@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.models.database import SessionLocal
 from app.models import Dataset, TrainedModel, Strategy, Backtest
-from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker
+from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 

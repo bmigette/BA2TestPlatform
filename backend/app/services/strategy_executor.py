@@ -88,25 +88,31 @@ class Position:
         return 0.0
 
 
+class StrategyExecutionError(Exception):
+    """Raised when strategy execution encounters an unrecoverable error."""
+    pass
+
+
 def evaluate_comparison(left: Any, operator: str, right: Any) -> bool:
     """Evaluate a comparison operation."""
     try:
-        if operator == ">":
+        # Support both symbol and word-based operators
+        if operator in (">", "gt"):
             return float(left) > float(right)
-        elif operator == ">=":
+        elif operator in (">=", "gte", "ge"):
             return float(left) >= float(right)
-        elif operator == "<":
+        elif operator in ("<", "lt"):
             return float(left) < float(right)
-        elif operator == "<=":
+        elif operator in ("<=", "lte", "le"):
             return float(left) <= float(right)
-        elif operator == "==":
+        elif operator in ("==", "eq", "equals"):
             return left == right
-        elif operator == "!=":
+        elif operator in ("!=", "ne", "neq", "not_equals"):
             return left != right
         elif operator == "between":
             if isinstance(right, (list, tuple)) and len(right) == 2:
                 return float(right[0]) <= float(left) <= float(right[1])
-            return False
+            raise StrategyExecutionError(f"'between' operator requires [min, max] array, got: {right}")
         elif operator == "is_true":
             # Check if value is truthy (1, True, "true", etc.)
             return bool(left) and left != 0
@@ -114,11 +120,11 @@ def evaluate_comparison(left: Any, operator: str, right: Any) -> bool:
             # Check if value is falsy (0, False, "false", etc.)
             return not left or left == 0
         else:
-            logger.warning(f"Unknown operator: {operator}")
-            return False
+            raise StrategyExecutionError(f"Unknown operator: '{operator}'. Valid operators: >, >=, <, <=, ==, !=, gt, gte, lt, lte, eq, ne, between, is_true, is_false")
+    except StrategyExecutionError:
+        raise
     except (TypeError, ValueError) as e:
-        logger.warning(f"Comparison error: {e}")
-        return False
+        raise StrategyExecutionError(f"Comparison error ({left} {operator} {right}): {e}")
 
 
 def evaluate_condition(
