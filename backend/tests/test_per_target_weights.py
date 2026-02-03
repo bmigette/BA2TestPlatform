@@ -338,7 +338,7 @@ class TestEndToEndMultiTargetTraining:
             y_list.append([target1[i+seq_len-1], target2[i+seq_len-1]])
 
         X = np.array(X_list).transpose(0, 2, 1)  # (samples, features, seq_len)
-        y = np.array(y_list)  # (samples, n_targets)
+        y = np.array(y_list, dtype=np.float32)  # (samples, n_targets) - float32 for BCE loss
 
         # Split
         split_idx = int(len(X) * 0.8)
@@ -378,7 +378,8 @@ class TestEndToEndMultiTargetTraining:
             epochs=3,
             batch_size=32,
             learning_rate=0.001,
-            loss_fn=loss_fn
+            loss_fn=loss_fn,
+            prediction_mode='multistep'  # Required for multi-target training
         )
 
         assert result['status'] == 'success', f"Training failed: {result.get('error')}"

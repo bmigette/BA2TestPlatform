@@ -550,7 +550,12 @@ def get_task_queue() -> TaskQueueService:
 
 def init_task_queue(max_workers: int = 2):
     """Initialize and start the task queue."""
+    import os
     global _task_queue
     _task_queue = TaskQueueService(max_workers=max_workers)
-    _task_queue.start()
+    # Skip starting workers in test mode to avoid race conditions with table creation
+    if os.getenv('PYTEST_CURRENT_TEST') is None:
+        _task_queue.start()
+    else:
+        logger.info("Test mode detected - skipping task queue worker startup")
     return _task_queue

@@ -322,7 +322,9 @@ class TestTrainingWithRealData:
             )
 
             assert len(preds) == len(X_test)
-            assert all(0 <= p <= 1 for p in preds)
+            # Handle both 1D and 2D prediction arrays
+            preds_flat = preds.flatten() if hasattr(preds, 'flatten') else preds
+            assert all(0 <= p <= 1 for p in preds_flat)
 
 
 class TestAllModelsShiftMode:
