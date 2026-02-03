@@ -41,7 +41,7 @@ class Backtest(Base):
     equity_curve = Column(JSON, nullable=True)
     drawdown_curve = Column(JSON, nullable=True)
 
-    # Performance metrics
+    # Performance metrics (from backtesting.py)
     total_return = Column(Float, nullable=True)
     sharpe_ratio = Column(Float, nullable=True)
     max_drawdown = Column(Float, nullable=True)
@@ -54,6 +54,20 @@ class Backtest(Base):
     final_equity = Column(Float, nullable=True)
     best_trade = Column(Float, nullable=True)
     worst_trade = Column(Float, nullable=True)
+
+    # Additional metrics from backtesting.py
+    exposure_time = Column(Float, nullable=True)  # % of time in position
+    buy_hold_return = Column(Float, nullable=True)  # Benchmark B&H return
+    annualized_return = Column(Float, nullable=True)  # Annualized return %
+    volatility = Column(Float, nullable=True)  # Annualized volatility %
+    sortino_ratio = Column(Float, nullable=True)  # Downside risk-adjusted return
+    calmar_ratio = Column(Float, nullable=True)  # Return / Max Drawdown
+    sqn = Column(Float, nullable=True)  # System Quality Number
+    expectancy = Column(Float, nullable=True)  # Average expected return per trade
+    avg_drawdown = Column(Float, nullable=True)  # Average drawdown %
+    max_drawdown_duration = Column(Float, nullable=True)  # Max DD duration in days
+    avg_trade = Column(Float, nullable=True)  # Average trade return % (geometric)
+    equity_peak = Column(Float, nullable=True)  # Peak equity reached
 
     error_message = Column(String(1000), nullable=True)
 
@@ -100,6 +114,19 @@ class Backtest(Base):
             "finalEquity": self.final_equity,
             "bestTrade": self.best_trade,
             "worstTrade": self.worst_trade,
+            # Additional metrics from backtesting.py
+            "exposureTime": self.exposure_time,
+            "buyHoldReturn": self.buy_hold_return,
+            "annualizedReturn": self.annualized_return,
+            "volatility": self.volatility,
+            "sortinoRatio": self.sortino_ratio,
+            "calmarRatio": self.calmar_ratio,
+            "sqn": self.sqn,
+            "expectancy": self.expectancy,
+            "avgDrawdown": self.avg_drawdown,
+            "maxDrawdownDuration": self.max_drawdown_duration,
+            "avgTrade": self.avg_trade,
+            "equityPeak": self.equity_peak,
             "errorMessage": self.error_message,
             "createdAt": self.created_at.isoformat() if self.created_at else None,
             "startedAt": self.started_at.isoformat() if self.started_at else None,
