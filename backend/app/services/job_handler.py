@@ -443,7 +443,7 @@ def update_job_training_state(
             # Reset epoch history when starting a new individual/model
             if reset_epoch_history:
                 job["epochHistory"] = []
-            if epoch_metrics is not None:
+            if epoch_metrics:  # Check not None AND not empty dict
                 # Append to epoch history for graphing
                 if "epochHistory" not in job:
                     job["epochHistory"] = []
@@ -2151,8 +2151,9 @@ def train_classification_optimization(
             return {'model_type': 'classification', 'status': 'failed', 'error': 'metrics_config.lossFunction or lossFunctions is required'}
         loss_functions = [single_loss]
 
-    optimize_loss_function = metrics_config.get('optimizeLossFunction', False) and len(loss_functions) > 1
-    logger.info(f"Loss functions: {loss_functions}, optimize={optimize_loss_function}")
+    optimize_loss_function_flag = metrics_config.get('optimizeLossFunction', False)
+    optimize_loss_function = optimize_loss_function_flag and len(loss_functions) > 1
+    logger.info(f"Loss functions: {loss_functions}, optimizeLossFunction={optimize_loss_function_flag}, will_optimize={optimize_loss_function}")
 
     # Threshold optimization settings
     threshold_min = metrics_config.get('thresholdMin', 0.3)
@@ -2336,8 +2337,10 @@ def train_classification_optimization(
         if 'loss_function_idx' in params:
             loss_idx = int(params['loss_function_idx'])
             current_loss_function = loss_functions[loss_idx % len(loss_functions)]
+            logger.debug(f"Loss function from GA: idx={loss_idx} -> {current_loss_function} (from {loss_functions})")
         else:
             current_loss_function = loss_functions[0]
+            logger.debug(f"Loss function (no optimization): {current_loss_function}")
 
         # Get threshold from genes (decode discrete index to actual threshold)
         threshold_idx = int(params.get('threshold_idx', 0))
