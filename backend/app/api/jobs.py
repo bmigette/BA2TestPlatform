@@ -174,6 +174,7 @@ class JobResponse(BaseModel):
     gpuUtilization: Optional[float] = None
     estimatedTimeRemaining: Optional[str] = None
     optimizeMetric: Optional[str] = None  # The metric being optimized
+    lossFunction: Optional[str] = None  # The loss function being used
     # Training progress details
     currentEpoch: Optional[int] = None
     totalEpochs: Optional[int] = None
@@ -293,6 +294,7 @@ def load_jobs_from_database():
                     'gpuUtilization': None,
                     'estimatedTimeRemaining': None,
                     'optimizeMetric': metrics_config.get('optimizeMetric', 'f1_score'),
+                    'lossFunction': metrics_config.get('lossFunction', 'focal_loss'),
                     'datasetProgress': dataset_progress if len(dataset_ids) > 1 else None,
                     'currentDatasetId': None,
                     'foldResults': None,
@@ -534,6 +536,7 @@ async def create_job(job_create: JobCreate):
             createdAt=datetime.now().isoformat(),
             totalGenerations=genetic_config.generations,
             optimizeMetric=metrics_config.optimizeMetric,
+            lossFunction=metrics_config.lossFunction,
             totalCombinations=total_combinations,
             datasetProgress=dataset_progress if len(dataset_ids) > 1 else None,
             trainingDateRange=job_create.trainingDateRange,
@@ -1705,12 +1708,13 @@ async def create_retrain_job(retrain_request: RetrainJobCreate):
             predictionTargets=[PredictionTarget(**pt) if isinstance(pt, dict) else pt for pt in prediction_targets] if prediction_targets else [],
             trainTestSplit=80,
             geneticConfig=genetic_config,
-            metricsConfig=MetricsConfig(optimizeMetric='f1_score'),
+            metricsConfig=MetricsConfig(optimizeMetric='f1_score', lossFunction='focal_loss'),
             status="queued",
             progress=0.0,
             createdAt=datetime.now().isoformat(),
             totalGenerations=1,
             optimizeMetric='f1_score',
+            lossFunction='focal_loss',
             trainingDateRange=retrain_request.trainingDateRange,
         )
 
