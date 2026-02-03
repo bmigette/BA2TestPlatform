@@ -2078,7 +2078,7 @@ const Step3Summary: React.FC<Step3Props> = ({
                       </li>
                     ))}
                   </ul>
-                  <p className="mt-2 text-amber-600 dark:text-amber-400">
+                  <p className="mt-2 text-amber-700 dark:text-amber-200">
                     <strong>Weighted BCE</strong> is recommended as it applies class weights that help the model generalize better when test data has different class proportions.
                   </p>
                 </div>
