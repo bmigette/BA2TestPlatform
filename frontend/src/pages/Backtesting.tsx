@@ -50,11 +50,25 @@ import {
   ReferenceLine,
 } from 'recharts';
 
+interface PredictionTarget {
+  type: string;
+  category?: string;
+  direction?: string;
+  horizon?: number;
+  profitPct?: number;
+  maxDd?: number;
+  indicator?: string;
+  indicatorType?: string;
+  [key: string]: unknown;
+}
+
 interface Model {
   id: string;
   name: string;
   modelType: string;
   threshold?: number; // Classification threshold (default 0.5)
+  predictionTargets?: PredictionTarget[];
+  predictionHorizon?: number;
   performanceMetrics: {
     accuracy: number;
     sharpeRatio: number | null;
@@ -1519,18 +1533,81 @@ const Backtesting: React.FC = () => {
               </div>
 
               <div className="p-4 overflow-y-auto flex-1">
-                {/* Model Threshold Info */}
-                {selectedModel && (
-                  <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                    <p className="text-xs text-blue-700 dark:text-blue-300">
-                      <strong>Model Threshold:</strong> {(models.find(m => m.id === selectedModel)?.threshold ?? 0.5).toFixed(2)}
-                    </p>
-                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                      <strong>Prediction</strong> fields use this threshold (Prediction = 1 when Probability ≥ {((models.find(m => m.id === selectedModel)?.threshold ?? 0.5) * 100).toFixed(0)}%).
-                      Use <strong>Probability</strong> fields for custom thresholds.
-                    </p>
-                  </div>
-                )}
+                {/* Model Info: Targets and Threshold */}
+                {selectedModel && (() => {
+                  const model = models.find(m => m.id === selectedModel);
+                  const targets = model?.predictionTargets || [];
+                  const threshold = model?.threshold ?? 0.5;
+                  const horizon = model?.predictionHorizon;
+
+                  return (
+                    <div className="mb-4 space-y-3">
+                      {/* Prediction Targets Info */}
+                      {targets.length > 0 && (
+                        <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
+                          <p className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2 flex items-center gap-1">
+                            <Target className="w-3 h-3" />
+                            Prediction Targets
+                            {horizon !== undefined && (
+                              <span className="ml-2 font-normal text-purple-600 dark:text-purple-400">
+                                (Horizon: {horizon} bar{horizon !== 1 ? 's' : ''})
+                              </span>
+                            )}
+                          </p>
+                          <div className="space-y-2">
+                            {targets.map((target, idx) => {
+                              const targetType = target.type || 'unknown';
+                              const category = target.category || 'binary_classification';
+
+                              // Build readable description
+                              let description = '';
+                              if (targetType === 'directional') {
+                                description = `${target.direction === 'up' ? 'Price Up' : 'Price Down'} prediction`;
+                              } else if (targetType === 'price_based') {
+                                description = `Profit ${target.profitPct}%${target.maxDd ? `, Max DD ${target.maxDd}%` : ''}`;
+                              } else if (targetType === 'trend_reversal') {
+                                description = `${target.indicator || 'Indicator'} ${target.indicatorType || 'reversal'}`;
+                              } else {
+                                // Show raw properties for other types
+                                const props = Object.entries(target)
+                                  .filter(([k]) => !['type', 'category', 'enabled', 'color'].includes(k))
+                                  .map(([k, v]) => `${k}: ${v}`)
+                                  .join(', ');
+                                description = props || targetType;
+                              }
+
+                              return (
+                                <div key={idx} className="flex items-center gap-2 text-xs">
+                                  <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                                    category === 'binary_classification' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300' :
+                                    category === 'multiclass_classification' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300' :
+                                    'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                                  }`}>
+                                    {targetType.replace(/_/g, ' ')}
+                                  </span>
+                                  <span className="text-purple-600 dark:text-purple-400">
+                                    {description}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Model Threshold Info */}
+                      <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <p className="text-xs text-blue-700 dark:text-blue-300">
+                          <strong>Model Threshold:</strong> {threshold.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                          <strong>Prediction</strong> fields use this threshold (Prediction = 1 when Probability ≥ {(threshold * 100).toFixed(0)}%).
+                          Use <strong>Probability</strong> fields for custom thresholds.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {showConditionModal === 'buy' && (
                   <div>

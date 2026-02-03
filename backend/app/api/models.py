@@ -483,6 +483,7 @@ async def clone_model(model_id: str, db: Session = Depends(get_db)):
 class RunPredictionsRequest(BaseModel):
     """Request body for running predictions."""
     dataset_id: Optional[int] = None  # Optional: use different dataset
+    target_index: Optional[int] = 0  # Which target to show (for multi-target models)
 
 
 @router.post("/{model_id}/run-predictions")
@@ -577,31 +578,48 @@ async def run_model_predictions(
     logger.info(f"Hyperparameters: seq_len={seq_len}, c_in={hyperparameters.get('c_in')}, c_out={hyperparameters.get('c_out')}")
     logger.info(f"Has normalization_params: {normalization_params is not None}")
 
-    # Determine target column - find it in the dataset
-    target_column = None
+    # Find ALL target columns in the dataset
+    available_targets = []
+
+    # First, match prediction targets from model config to dataset columns
     for target in prediction_targets:
         target_type = target.get('type', '')
+        target_label = target.get('label', target_type)
         # Look for matching column in dataset
         for col in df.columns:
             if target_type.lower() in col.lower() or col.lower() in target_type.lower():
                 if col not in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']:
-                    target_column = col
+                    available_targets.append({
+                        'column': col,
+                        'label': target_label or col,
+                        'type': target_type
+                    })
                     break
-        if target_column:
-            break
 
-    # Fallback: look for common target column patterns
-    if not target_column:
+    # Fallback: look for common target column patterns if no matches found
+    if not available_targets:
         for col in df.columns:
             if any(x in col.lower() for x in ['target', 'signal', 'label', 'direction']):
-                target_column = col
-                break
+                available_targets.append({
+                    'column': col,
+                    'label': col,
+                    'type': 'auto-detected'
+                })
 
-    if not target_column:
+    if not available_targets:
         raise HTTPException(
             status_code=400,
-            detail="Could not identify target column in dataset"
+            detail="Could not identify any target columns in dataset"
         )
+
+    # Select target based on index
+    target_index = request.target_index if request and request.target_index is not None else 0
+    if target_index >= len(available_targets):
+        target_index = 0
+
+    selected_target = available_targets[target_index]
+    target_column = selected_target['column']
+    logger.info(f"Selected target {target_index}: {target_column} (available: {len(available_targets)})")
 
     # Get feature columns - prefer stored columns from training, fall back to dataset columns
     stored_feature_columns = hyperparameters.get('featureColumns')
@@ -870,6 +888,8 @@ async def run_model_predictions(
         "modelId": model_id,
         "datasetId": dataset_id,
         "targetColumn": target_column,
+        "targetIndex": target_index,
+        "availableTargets": available_targets,  # List of all targets for dropdown
         "predictionHorizon": prediction_horizon,
         "predictionMode": prediction_mode,
         "threshold": threshold,

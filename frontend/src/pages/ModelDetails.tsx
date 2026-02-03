@@ -105,10 +105,18 @@ interface PredictionResult {
   correct: boolean | null;
 }
 
+interface AvailableTarget {
+  column: string;
+  label: string;
+  type: string;
+}
+
 interface PredictionsResponse {
   modelId: string;
   datasetId: number;
   targetColumn: string;
+  targetIndex: number;
+  availableTargets: AvailableTarget[];
   predictionHorizon: number;
   predictionMode: string;
   threshold: number;
@@ -158,6 +166,7 @@ const ModelDetails: React.FC = () => {
   const [predictionsData, setPredictionsData] = useState<PredictionsResponse | null>(null);
   const [predictionsLoading, setPredictionsLoading] = useState(false);
   const [predictionsError, setPredictionsError] = useState<string | null>(null);
+  const [selectedTargetIndex, setSelectedTargetIndex] = useState(0); // Which target to show
   const [minProbability, setMinProbability] = useState<number | null>(null); // null = use model threshold, 0-100 for slider
   const [showActualTargets, setShowActualTargets] = useState(true); // Show ground truth markers
 
@@ -297,7 +306,7 @@ const ModelDetails: React.FC = () => {
     }
   };
 
-  const handleRunPredictions = async () => {
+  const handleRunPredictions = async (targetIndex: number = 0) => {
     if (!model) return;
 
     setPredictionsLoading(true);
@@ -306,12 +315,13 @@ const ModelDetails: React.FC = () => {
       const res = await fetch(`${API_BASE}/models/${id}/run-predictions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        body: JSON.stringify({ target_index: targetIndex })
       });
 
       if (res.ok) {
         const data = await res.json();
         setPredictionsData(data);
+        setSelectedTargetIndex(data.targetIndex ?? 0);
       } else {
         const error = await res.json();
         setPredictionsError(error.detail || 'Failed to run predictions');
@@ -810,7 +820,7 @@ const ModelDetails: React.FC = () => {
                 Run predictions on the training dataset to see how the model performs on each data point.
               </p>
               <button
-                onClick={handleRunPredictions}
+                onClick={() => handleRunPredictions(0)}
                 className="flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 mx-auto"
               >
                 <Play className="w-5 h-5" />
@@ -871,10 +881,39 @@ const ModelDetails: React.FC = () => {
                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                   <TrendingUp className="w-5 h-5 text-blue-500" />
                   Price with Predictions Overlay
+                  {predictionsData.availableTargets && predictionsData.availableTargets[selectedTargetIndex] && (
+                    <span className="ml-2 text-sm font-normal px-2 py-0.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded">
+                      Target: {predictionsData.availableTargets[selectedTargetIndex].label}
+                    </span>
+                  )}
                 </h3>
                 {/* Chart Controls */}
                 <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                   <div className="flex flex-wrap items-center gap-6">
+                    {/* Target Selector (for multi-target models) */}
+                    {predictionsData.availableTargets && predictionsData.availableTargets.length > 1 && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Target:
+                        </label>
+                        <select
+                          value={selectedTargetIndex}
+                          onChange={(e) => {
+                            const newIndex = Number(e.target.value);
+                            setSelectedTargetIndex(newIndex);
+                            handleRunPredictions(newIndex);
+                          }}
+                          className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                        >
+                          {predictionsData.availableTargets.map((target, idx) => (
+                            <option key={idx} value={idx}>
+                              {target.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
                     {/* Model Threshold Info */}
                     <div className="text-xs text-gray-500 dark:text-gray-400">
                       Model threshold: <span className="font-mono font-medium text-blue-600 dark:text-blue-400">{((predictionsData?.threshold ?? 0.5) * 100).toFixed(0)}%</span>
@@ -1020,7 +1059,7 @@ const ModelDetails: React.FC = () => {
               {/* Re-run button */}
               <div className="text-center">
                 <button
-                  onClick={handleRunPredictions}
+                  onClick={() => handleRunPredictions(selectedTargetIndex)}
                   className="flex items-center gap-2 px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg mx-auto"
                 >
                   <RefreshCw className="w-4 h-4" />
