@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.models.database import SessionLocal
 from app.models import Dataset, TrainedModel, Strategy, Backtest
-from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError, reset_evaluation_stats
+from app.services.strategy_executor import StrategyExecutor, evaluate_condition_tree, ConfirmationTracker, StrategyExecutionError, reset_evaluation_stats, get_evaluation_stats
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 from app.services.job_handler import ffill_sparse_indicators
@@ -337,6 +337,11 @@ def run_backtest(
     last_sell_bar_idx: Optional[int] = None
     last_sell_date: Optional[Any] = None
 
+    # Track trade counts for summary
+    buy_trades_opened = 0
+    sell_trades_opened = 0
+    bars_processed = 0
+
     for idx in range(len(exec_df)):
         row = exec_df.iloc[idx]
         current_date = row['Date']
@@ -482,6 +487,7 @@ def run_backtest(
                 # Track last buy trade for "no trade in past X" conditions
                 last_buy_bar_idx = idx
                 last_buy_date = current_date
+                buy_trades_opened += 1
 
         # Check sell entry
         elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker, label="SellEntry"):
@@ -497,12 +503,36 @@ def run_backtest(
                 # Track last sell trade for "no trade in past X" conditions
                 last_sell_bar_idx = idx
                 last_sell_date = current_date
+                sell_trades_opened += 1
+
+        bars_processed += 1
 
         # Record equity
         equity_curve.append({
             'date': current_date.isoformat() if hasattr(current_date, 'isoformat') else str(current_date),
             'equity': equity
         })
+
+    # Log backtest summary
+    eval_stats = get_evaluation_stats()
+    total_trades = len(completed_trades)
+    winning = sum(1 for t in completed_trades if t.pnl > 0)
+    losing = total_trades - winning
+
+    logger.info(f"=== Backtest Summary ===")
+    logger.info(f"Bars processed: {bars_processed}, Total condition evaluations: {eval_stats['total_evaluations']}")
+    logger.info(f"Trades opened: {buy_trades_opened} buy, {sell_trades_opened} sell")
+    logger.info(f"Trades completed: {total_trades} ({winning} winning, {losing} losing)")
+
+    # Log condition hit rates
+    tree_results = eval_stats.get('tree_results', {})
+    if tree_results:
+        hit_summary = []
+        for label, counts in tree_results.items():
+            total = counts['true'] + counts['false']
+            hit_rate = counts['true'] / total * 100 if total > 0 else 0
+            hit_summary.append(f"{label}: {counts['true']}/{total} ({hit_rate:.1f}%)")
+        logger.info(f"Entry/Exit hit rates: {', '.join(hit_summary)}")
 
     # Calculate metrics
     return _calculate_metrics(completed_trades, equity_curve, initial_capital, equity)

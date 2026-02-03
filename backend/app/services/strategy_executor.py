@@ -24,19 +24,37 @@ class EvaluationStats:
 
     def reset(self):
         self.eval_count = 0
+        self.total_evals = 0  # Total across all intervals
         self.condition_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
         self.tree_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
+        # Cumulative stats for end-of-backtest summary
+        self.cumulative_tree_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
+        self.cumulative_condition_results: Dict[str, Dict[str, int]] = defaultdict(lambda: {'true': 0, 'false': 0})
 
     def record_condition(self, field: str, result: bool):
         self.condition_results[field]['true' if result else 'false'] += 1
+        self.cumulative_condition_results[field]['true' if result else 'false'] += 1
 
     def record_tree(self, label: str, result: bool):
         self.tree_results[label]['true' if result else 'false'] += 1
+        self.cumulative_tree_results[label]['true' if result else 'false'] += 1
         self.eval_count += 1
+        self.total_evals += 1
 
         if self.eval_count >= LOG_AGGREGATION_INTERVAL:
             self._log_summary()
-            self.reset()
+            # Reset interval stats but keep cumulative
+            self.eval_count = 0
+            self.condition_results = defaultdict(lambda: {'true': 0, 'false': 0})
+            self.tree_results = defaultdict(lambda: {'true': 0, 'false': 0})
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Get cumulative statistics for end-of-backtest summary."""
+        return {
+            'total_evaluations': self.total_evals,
+            'tree_results': dict(self.cumulative_tree_results),
+            'condition_results': dict(self.cumulative_condition_results),
+        }
 
     def _log_summary(self):
         if not self.tree_results:
@@ -279,6 +297,11 @@ def reset_evaluation_stats():
     # Also reset the empty conditions warning tracker
     if hasattr(evaluate_condition_tree, '_empty_warned'):
         evaluate_condition_tree._empty_warned.clear()
+
+
+def get_evaluation_stats() -> Dict[str, Any]:
+    """Get evaluation statistics for end-of-backtest summary."""
+    return _eval_stats.get_summary()
 
 
 class StrategyExecutor:
