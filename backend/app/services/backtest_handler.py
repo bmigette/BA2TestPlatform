@@ -498,14 +498,16 @@ def run_backtest(
     if tp_percent or sl_percent:
         logger.info(f"TP/SL: TP={tp_percent}%, SL={sl_percent}%")
 
-    # Calculate position sizing as percentage
+    # Calculate position sizing as percentage of equity
     if position_sizing_type == 'percent':
         position_sizing_pct = position_sizing_value
     else:
-        # Convert fixed $ amount to approximate percentage
-        avg_price = bt_data['Close'].mean()
-        position_sizing_pct = (position_sizing_value / avg_price) / initial_capital * 100
+        # Convert fixed $ amount to percentage of initial capital
+        position_sizing_pct = (position_sizing_value / initial_capital) * 100
         position_sizing_pct = min(position_sizing_pct, 99)  # Cap at 99%
+
+    logger.info(f"Position sizing: {position_sizing_pct:.2f}% of equity "
+                f"(type={position_sizing_type}, value={position_sizing_value})")
 
     # Set strategy parameters
     MLStrategy.predictions = pred_lookup
