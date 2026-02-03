@@ -954,6 +954,7 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                 threshold = None
                 feature_columns = None
                 training_history = []
+                normalization_params = None
                 if meta_files:
                     try:
                         with open(meta_files[0], 'r') as f:
@@ -971,6 +972,8 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                             threshold = meta.get('threshold')
                             feature_columns = meta.get('feature_columns')
                             training_history = meta.get('training_history', [])
+                            # Critical for forward testing - normalization params
+                            normalization_params = meta.get('normalization_params')
                     except Exception:
                         pass
 
@@ -991,7 +994,8 @@ def get_elite_models(task_id: str) -> List[Dict[str, Any]]:
                     'loss_function': loss_function,
                     'threshold': threshold,
                     'feature_columns': feature_columns,
-                    'training_history': training_history
+                    'training_history': training_history,
+                    'normalization_params': normalization_params
                 })
 
         return sorted(elite_models, key=lambda x: x['rank'])
@@ -2190,12 +2194,15 @@ def train_classification_optimization(
                 c_out = 2 if mode == 'shift' else prediction_horizon
                 # Get the actual valid columns used after dropping zero-variance columns
                 valid_feature_columns = training_service.data_prep.get_valid_columns() if training_service.data_prep else feature_columns
+                # Get normalization params for inference consistency
+                normalization_params = training_service.get_normalization_params() if hasattr(training_service, 'get_normalization_params') else None
                 data_by_mode_and_seqlen[cache_key] = {
                     'X_train': X_train, 'X_test': X_test,
                     'y_train': y_train, 'y_test': y_test,
                     'c_out': c_out,
                     'seq_len': current_seq_len,
-                    'valid_feature_columns': valid_feature_columns  # Store the actual columns used
+                    'valid_feature_columns': valid_feature_columns,  # Store the actual columns used
+                    'normalization_params': normalization_params  # Store normalization params for forward test
                 }
                 logger.info(f"Prepared {mode} data (seq_len={current_seq_len}): train={len(X_train)}, test={len(X_test)}, c_out={c_out}, features={len(valid_feature_columns)}")
             except Exception as e:
@@ -2443,7 +2450,9 @@ def train_classification_optimization(
                     # This must match c_in for inference to work correctly
                     'feature_columns': mode_data.get('valid_feature_columns', feature_columns),
                     # Save training history for visualization after model is saved to inventory
-                    'training_history': training_history
+                    'training_history': training_history,
+                    # Save normalization params for forward test inference
+                    'normalization_params': mode_data.get('normalization_params')
                 }
                 with open(meta_save_path, 'w') as f:
                     json.dump(metadata, f, indent=2, default=str)
