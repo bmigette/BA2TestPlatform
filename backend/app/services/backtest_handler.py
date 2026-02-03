@@ -328,6 +328,12 @@ def run_backtest(
     confirmation_tracker = ConfirmationTracker()
     logged_context_fields = False
 
+    # Track last trade entry for "no trade in past X bars/days" conditions
+    last_buy_bar_idx: Optional[int] = None
+    last_buy_date: Optional[Any] = None
+    last_sell_bar_idx: Optional[int] = None
+    last_sell_date: Optional[Any] = None
+
     for idx in range(len(exec_df)):
         row = exec_df.iloc[idx]
         current_date = row['Date']
@@ -350,6 +356,27 @@ def run_backtest(
         predicted_class = int(np.argmax(probs))
         max_prob = float(np.max(probs))
 
+        # Calculate bars/days since last buy/sell trade was opened
+        bars_since_last_buy = (idx - last_buy_bar_idx) if last_buy_bar_idx is not None else 999999
+        bars_since_last_sell = (idx - last_sell_bar_idx) if last_sell_bar_idx is not None else 999999
+
+        # Calculate days since last trade (handle both datetime and Timestamp)
+        if last_buy_date is not None:
+            try:
+                days_since_last_buy = (current_date - last_buy_date).days
+            except (TypeError, AttributeError):
+                days_since_last_buy = bars_since_last_buy  # Fallback to bars
+        else:
+            days_since_last_buy = 999999
+
+        if last_sell_date is not None:
+            try:
+                days_since_last_sell = (current_date - last_sell_date).days
+            except (TypeError, AttributeError):
+                days_since_last_sell = bars_since_last_sell  # Fallback to bars
+        else:
+            days_since_last_sell = 999999
+
         context = {
             'model:prediction': predicted_class,
             'model:predicted_class': predicted_class,
@@ -364,6 +391,11 @@ def run_backtest(
             'position:buy_count': len(buy_positions),
             'position:sell_count': len(sell_positions),
             'position:total_count': len(open_positions),
+            # Bars/days since last trade was opened
+            'trade:bars_since_last_buy': bars_since_last_buy,
+            'trade:bars_since_last_sell': bars_since_last_sell,
+            'trade:days_since_last_buy': days_since_last_buy,
+            'trade:days_since_last_sell': days_since_last_sell,
         }
 
         # Add probability and class indicator for each class
@@ -444,6 +476,9 @@ def run_backtest(
                     entry_price=entry_price,
                     size=size
                 ))
+                # Track last buy trade for "no trade in past X" conditions
+                last_buy_bar_idx = idx
+                last_buy_date = current_date
 
         # Check sell entry
         elif sell_entry_conditions and evaluate_condition_tree(sell_entry_conditions, context, confirmation_tracker, label="SellEntry"):
@@ -456,6 +491,9 @@ def run_backtest(
                     entry_price=entry_price,
                     size=size
                 ))
+                # Track last sell trade for "no trade in past X" conditions
+                last_sell_bar_idx = idx
+                last_sell_date = current_date
 
         # Record equity
         equity_curve.append({
