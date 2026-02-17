@@ -753,6 +753,7 @@ async def create_dataset(
             sentiment_config=dataset_create.sentiment_config,
             generation_config=generation_config,
             normalization_buffer_pct=dataset_create.normalization_buffer_pct,
+            labels=dataset_create.labels,
             file_path=str(file_path)
         )
 
@@ -786,6 +787,138 @@ async def create_dataset(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create dataset: {str(e)}"
+        )
+
+
+@router.post("/batch", status_code=status.HTTP_201_CREATED)
+async def create_batch_datasets(
+    batch_request: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Create multiple datasets from a list of symbols with shared configuration.
+
+    Args:
+        batch_request: Dict with symbols list + shared dataset config + optional labels
+        db: Database session
+
+    Returns:
+        List of created dataset IDs
+    """
+    try:
+        symbols = batch_request.get('symbols', [])
+        if not symbols:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="symbols list is required and cannot be empty"
+            )
+
+        # Extract shared config
+        timeframe = batch_request.get('timeframe', '1d')
+        start_date_str = batch_request.get('start_date')
+        end_date_str = batch_request.get('end_date')
+        data_provider = batch_request.get('data_provider', 'yfinance')
+        technical_indicators = batch_request.get('technical_indicators')
+        sentiment_config = batch_request.get('sentiment_config')
+        fundamentals_config = batch_request.get('fundamentals_config')
+        normalization_buffer_pct = batch_request.get('normalization_buffer_pct', 0.35)
+        indicator_collection_id = batch_request.get('indicator_collection_id')
+        user_labels = batch_request.get('labels', [])
+        batch_name = batch_request.get('name')
+
+        # Generate batch label
+        if not batch_name:
+            batch_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        batch_label = f"batch-{batch_name}"
+
+        # Combine labels: batch label + user labels
+        combined_labels = [batch_label] + (user_labels or [])
+
+        # Calculate dates
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        else:
+            end_date = datetime.now()
+
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        else:
+            start_date = end_date - timedelta(days=365)
+
+        created_ids = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        for symbol in symbols:
+            symbol = symbol.strip().upper()
+            if not symbol:
+                continue
+
+            dataset_name = f"{symbol}_{timeframe}_{timestamp}"
+
+            generation_config = {
+                "data_provider": data_provider,
+                "original_start_date": start_date_str,
+                "original_end_date": end_date_str,
+                "indicator_collection_id": indicator_collection_id,
+                "created_at": datetime.now().isoformat(),
+                "batch_name": batch_name
+            }
+
+            datasets_dir = Path("datasets")
+            datasets_dir.mkdir(exist_ok=True)
+            file_path = datasets_dir / f"{dataset_name}.csv"
+
+            db_dataset = Dataset(
+                name=dataset_name,
+                ticker=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date,
+                rows_count=0,
+                status=DatasetStatus.BUILDING.value,
+                technical_indicators=technical_indicators,
+                fundamentals_config=fundamentals_config,
+                sentiment_config=sentiment_config,
+                generation_config=generation_config,
+                normalization_buffer_pct=normalization_buffer_pct,
+                labels=combined_labels,
+                file_path=str(file_path)
+            )
+
+            db.add(db_dataset)
+            db.commit()
+            db.refresh(db_dataset)
+
+            dataset_config = {
+                'ticker': symbol,
+                'timeframe': timeframe,
+                'start_date': start_date_str,
+                'end_date': end_date_str,
+                'data_provider': data_provider,
+                'technical_indicators': technical_indicators,
+                'sentiment_config': sentiment_config,
+                'fundamentals_config': fundamentals_config,
+            }
+
+            _dataset_executor.submit(_build_dataset_in_background, db_dataset.id, dataset_config)
+            created_ids.append(db_dataset.id)
+
+        logger.info(f"Batch created {len(created_ids)} datasets with label '{batch_label}'")
+
+        return {
+            "created_ids": created_ids,
+            "count": len(created_ids),
+            "batch_label": batch_label
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating batch datasets: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create batch datasets: {str(e)}"
         )
 
 

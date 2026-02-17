@@ -20,6 +20,7 @@ class DatasetCreate(BaseModel):
     sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")
     indicator_collection_id: Optional[int] = Field(None, description="ID of indicator collection to use")
     normalization_buffer_pct: float = Field(0.35, description="Buffer percentage for normalization (default 35%)")
+    labels: Optional[List[str]] = Field(None, description="Labels for organizing datasets (e.g., ['batch-SP500', 'daily'])")
 
 
 class DatasetUpdate(BaseModel):
@@ -34,6 +35,7 @@ class DatasetUpdate(BaseModel):
     normalization_buffer_pct: Optional[float] = Field(None, description="New buffer percentage")
     sentiment_config: Optional[Dict[str, Any]] = Field(None, description="Sentiment analysis configuration")
     fundamentals_config: Optional[Dict[str, Any]] = Field(None, description="Fundamentals configuration")
+    labels: Optional[List[str]] = Field(None, description="Labels for organizing datasets")
 
 
 class DatasetDuplicate(BaseModel):
@@ -69,6 +71,7 @@ class DatasetResponse(BaseModel):
     sentiment_config: Optional[Dict[str, Any]]
     generation_config: Optional[Dict[str, Any]]
     normalization_buffer_pct: float
+    labels: Optional[List[str]] = None
     file_path: str
     created_at: datetime
     updated_at: Optional[datetime]
