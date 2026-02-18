@@ -180,3 +180,20 @@ class TestCrossValidation:
         for _, _, test_ids in folds:
             tested_ids.update(test_ids)
         assert tested_ids == {1, 2, 3}
+
+
+class TestJobHandlerMultiDataset:
+    """Tests for job handler multi-dataset support."""
+
+    def test_load_datasets_separate_exists(self):
+        """load_datasets_separate function exists and is callable."""
+        from app.services.job_handler import load_datasets_separate
+        assert callable(load_datasets_separate)
+
+    def test_save_generation_model_accepts_symbols(self):
+        """save_generation_model accepts symbols and dataset_ids params."""
+        import inspect
+        from app.services.job_handler import save_generation_model
+        sig = inspect.signature(save_generation_model)
+        assert 'symbols' in sig.parameters
+        assert 'dataset_ids' in sig.parameters

@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import os
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
 from app.models.database import SessionLocal
@@ -588,7 +588,9 @@ def save_generation_model(
     metrics: Dict[str, Any],
     training_service: Any,
     training_history: Optional[List[Dict[str, Any]]] = None,
-    feature_columns: Optional[List[str]] = None
+    feature_columns: Optional[List[str]] = None,
+    symbols: Optional[List[str]] = None,
+    dataset_ids: Optional[List[int]] = None
 ) -> Optional[str]:
     """
     Save a model from a generation.
@@ -631,7 +633,9 @@ def save_generation_model(
             'metrics': metrics,
             'normalization_params': normalization_params,  # For inference consistency
             'training_history': training_history or [],  # Epoch-by-epoch history for visualization
-            'feature_columns': feature_columns or []  # Feature columns used during training
+            'feature_columns': feature_columns or [],  # Feature columns used during training
+            'symbols': symbols or [],  # Symbols used during training
+            'dataset_ids': dataset_ids or [],  # Dataset IDs used during training
         }
 
         # Note: Callbacks are now serializable (EpochProgressCallback implements
@@ -1127,6 +1131,37 @@ def get_dataset_info(dataset_id: int) -> Dict[str, Any]:
         return {'timeframe': 'daily'}
     finally:
         db.close()
+
+
+def load_datasets_separate(
+    dataset_ids: list,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> Tuple[List[pd.DataFrame], List[Dict[str, Any]]]:
+    """Load multiple datasets as separate DataFrames (not concatenated).
+
+    Args:
+        dataset_ids: List of dataset IDs to load
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+
+    Returns:
+        Tuple of (list of DataFrames, list of dataset info dicts)
+
+    Raises:
+        ValueError: If any dataset fails to load
+    """
+    dataframes = []
+    infos = []
+    for ds_id in dataset_ids:
+        df = load_dataset(ds_id, start_date=start_date, end_date=end_date)
+        if df is None:
+            raise ValueError(f"Failed to load dataset {ds_id}")
+        info = get_dataset_info(ds_id)
+        dataframes.append(df)
+        infos.append(info)
+        logger.info(f"Loaded dataset {ds_id} ({info.get('ticker', '?')}): {len(df)} rows")
+    return dataframes, infos
 
 
 def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
