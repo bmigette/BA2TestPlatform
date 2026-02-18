@@ -144,3 +144,39 @@ class TestTSAIMultiDataset:
         )
         assert X_train.shape[0] > 0
         assert X_test.shape[0] > 0
+
+
+class TestCrossValidation:
+    """Tests for dataset-level cross-validation."""
+
+    def test_manual_train_test_split(self):
+        """Manual assignment: specific datasets as train, others as test."""
+        from app.services.job_handler import split_datasets_by_role
+        dfs = [make_synthetic_dataset(t) for t in ['AAPL', 'MSFT', 'GOOGL']]
+        dataset_ids = [1, 2, 3]
+        test_ids = [3]  # GOOGL as test
+        train_dfs, test_dfs = split_datasets_by_role(dfs, dataset_ids, test_ids)
+        assert len(train_dfs) == 2
+        assert len(test_dfs) == 1
+
+    def test_kfold_creates_correct_folds(self):
+        """K-fold creates N folds where each dataset is test once."""
+        from app.services.job_handler import create_kfold_splits
+        dfs = [make_synthetic_dataset(t) for t in ['AAPL', 'MSFT', 'GOOGL']]
+        dataset_ids = [1, 2, 3]
+        folds = create_kfold_splits(dfs, dataset_ids)
+        assert len(folds) == 3  # 3 datasets = 3 folds
+        for train, test, test_ids in folds:
+            assert len(test) == 1
+            assert len(train) == 2
+
+    def test_kfold_every_dataset_tested(self):
+        """Every dataset appears as test exactly once across folds."""
+        from app.services.job_handler import create_kfold_splits
+        dfs = [make_synthetic_dataset(t) for t in ['AAPL', 'MSFT', 'GOOGL']]
+        dataset_ids = [1, 2, 3]
+        folds = create_kfold_splits(dfs, dataset_ids)
+        tested_ids = set()
+        for _, _, test_ids in folds:
+            tested_ids.update(test_ids)
+        assert tested_ids == {1, 2, 3}

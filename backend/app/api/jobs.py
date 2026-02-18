@@ -110,6 +110,8 @@ class MetricsConfig(BaseModel):
 
 class CrossValidationConfig(BaseModel):
     enabled: bool = False
+    mode: str = 'manual'  # 'manual' or 'kfold'
+    testDatasetIds: Optional[List[int]] = None  # For manual mode
     folds: int = 5
     useDatasetAsFold: bool = True  # Use each dataset as a fold
 

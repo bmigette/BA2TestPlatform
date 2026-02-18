@@ -40,6 +40,40 @@ MULTISTEP_MODELS = ['nbeats', 'tcn', 'transformer', 'tft']
 SPARSE_INDICATOR_PATTERNS = ['zigzag', 'zigzag_direction']
 
 
+def split_datasets_by_role(dfs: list, dataset_ids: list, test_dataset_ids: list) -> tuple:
+    """Split datasets into train and test groups based on manual assignment.
+
+    Args:
+        dfs: List of DataFrames
+        dataset_ids: List of dataset IDs corresponding to each DataFrame
+        test_dataset_ids: List of dataset IDs designated as test sets
+
+    Returns:
+        Tuple of (train_dfs, test_dfs)
+    """
+    train_dfs = [df for df, did in zip(dfs, dataset_ids) if did not in test_dataset_ids]
+    test_dfs = [df for df, did in zip(dfs, dataset_ids) if did in test_dataset_ids]
+    return train_dfs, test_dfs
+
+
+def create_kfold_splits(dfs: list, dataset_ids: list) -> list:
+    """Create K-fold splits where each dataset serves as the test set once.
+
+    Args:
+        dfs: List of DataFrames
+        dataset_ids: List of dataset IDs corresponding to each DataFrame
+
+    Returns:
+        List of tuples: (train_dfs, test_dfs, test_dataset_ids)
+    """
+    folds = []
+    for i, test_id in enumerate(dataset_ids):
+        test_dfs = [dfs[i]]
+        train_dfs = [df for j, df in enumerate(dfs) if j != i]
+        folds.append((train_dfs, test_dfs, [test_id]))
+    return folds
+
+
 def ffill_sparse_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Forward-fill sparse indicators at training time.
