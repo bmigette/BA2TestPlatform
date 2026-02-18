@@ -75,6 +75,37 @@ router = APIRouter()
 _dataset_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5, thread_name_prefix="dataset_gen")
 
 
+def check_dataset_compatibility(dataframes: list) -> dict:
+    """Check if multiple DataFrames have identical columns in the same order."""
+    if len(dataframes) <= 1:
+        return {'compatible': True, 'message': 'Single dataset is always compatible',
+                'common_columns': list(dataframes[0].columns) if dataframes else []}
+
+    reference_cols = list(dataframes[0].columns)
+    for i, df in enumerate(dataframes[1:], 1):
+        current_cols = list(df.columns)
+        if current_cols != reference_cols:
+            missing = set(reference_cols) - set(current_cols)
+            extra = set(current_cols) - set(reference_cols)
+            order_diff = current_cols != reference_cols and set(current_cols) == set(reference_cols)
+            parts = []
+            if missing:
+                parts.append(f"missing columns: {missing}")
+            if extra:
+                parts.append(f"extra columns: {extra}")
+            if order_diff:
+                parts.append("column order differs")
+            return {
+                'compatible': False,
+                'message': f"Dataset {i+1} incompatible: {'; '.join(parts)}",
+                'reference_columns': reference_cols,
+                'dataset_columns': current_cols
+            }
+
+    return {'compatible': True, 'message': 'All datasets compatible',
+            'common_columns': reference_cols}
+
+
 def calculate_regen_flags(old_config: Dict[str, Any], new_config: Dict[str, Any]) -> DatasetRegenerate:
     """
     Calculate which dataset components need regeneration based on config differences.
@@ -920,6 +951,31 @@ async def create_batch_datasets(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create batch datasets: {str(e)}"
         )
+
+
+@router.post("/check-compatibility")
+async def check_compatibility_endpoint(request: dict, db: Session = Depends(get_db)):
+    """Check if multiple datasets have identical columns for multi-dataset training."""
+    dataset_ids = request.get('dataset_ids', [])
+    if len(dataset_ids) < 2:
+        return {'compatible': True, 'message': 'Need at least 2 datasets to check'}
+
+    dataframes = []
+    dataset_names = []
+    for ds_id in dataset_ids:
+        dataset = db.query(Dataset).filter(Dataset.id == ds_id).first()
+        if not dataset or not dataset.file_path:
+            raise HTTPException(status_code=404, detail=f"Dataset {ds_id} not found")
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"Dataset {ds_id} file not found")
+        df = pd.read_csv(file_path)
+        dataframes.append(df)
+        dataset_names.append(dataset.name)
+
+    result = check_dataset_compatibility(dataframes)
+    result['dataset_names'] = dataset_names
+    return result
 
 
 @router.get("", response_model=DatasetListResponse)
