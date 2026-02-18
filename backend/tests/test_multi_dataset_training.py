@@ -197,3 +197,95 @@ class TestJobHandlerMultiDataset:
         sig = inspect.signature(save_generation_model)
         assert 'symbols' in sig.parameters
         assert 'dataset_ids' in sig.parameters
+
+
+class TestMultiDatasetIntegration:
+    """Integration tests for multi-dataset training pipeline."""
+
+    @pytest.mark.skipif(not TSAI_AVAILABLE, reason="tsai not available")
+    def test_classification_multi_dataset_training(self):
+        """Test TSAI classification training on multiple datasets."""
+        dfs = [make_synthetic_dataset(t, n_rows=200, seed=i)
+               for i, t in enumerate(['AAPL', 'MSFT'])]
+        for df in dfs:
+            df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+            df.dropna(subset=['target'], inplace=True)
+
+        service = TSAITrainingService()
+        X_train, X_test, y_train, y_test = service.prepare_multi_dataset_split(
+            dfs, train_ratio=0.8, target_column='target',
+            feature_columns=['Close', 'Volume', 'SMA_20', 'RSI_14'], seq_len=24
+        )
+        assert X_train.shape[0] > 0
+        assert X_test.shape[0] > 0
+        assert X_train.shape[1] == 4  # features
+        assert X_train.shape[2] == 24  # seq_len
+        # Verify combined is larger than single
+        single_service = TSAITrainingService()
+        X_single, _, _, _ = single_service.prepare_data_split(
+            dfs[0], train_ratio=0.8, target_column='target',
+            feature_columns=['Close', 'Volume', 'SMA_20', 'RSI_14'], seq_len=24
+        )
+        assert X_train.shape[0] > X_single.shape[0]
+
+    @pytest.mark.skipif(not DARTS_AVAILABLE, reason="darts not available")
+    def test_regression_multi_series_training(self):
+        """Test Darts regression training on multiple series."""
+        dfs = [make_synthetic_dataset(t, n_rows=200, seed=i)
+               for i, t in enumerate(['AAPL', 'MSFT'])]
+
+        service = DartsTrainingService()
+        train_s, test_s, train_c, test_c = service.prepare_multi_series_split(
+            dfs, train_ratio=0.8, target_column='Close',
+            feature_columns=['SMA_20', 'RSI_14'], timeframe='1h'
+        )
+        assert len(train_s) == 2
+        assert len(test_s) == 2
+        # Verify each series has data
+        for ts in train_s:
+            assert len(ts) > 0
+        for ts in test_s:
+            assert len(ts) > 0
+
+    def test_cross_validation_manual_split(self):
+        """Test manual train/test dataset assignment end-to-end."""
+        from app.services.job_handler import split_datasets_by_role
+        dfs = [make_synthetic_dataset(t) for t in ['AAPL', 'MSFT', 'GOOGL', 'TSLA']]
+        dataset_ids = [1, 2, 3, 4]
+        train_dfs, test_dfs = split_datasets_by_role(dfs, dataset_ids, test_dataset_ids=[3, 4])
+        assert len(train_dfs) == 2  # AAPL, MSFT
+        assert len(test_dfs) == 2   # GOOGL, TSLA
+
+    def test_cross_validation_kfold(self):
+        """Test K-fold creates correct number of folds."""
+        from app.services.job_handler import create_kfold_splits
+        dfs = [make_synthetic_dataset(t) for t in ['AAPL', 'MSFT', 'GOOGL']]
+        folds = create_kfold_splits(dfs, [1, 2, 3])
+        assert len(folds) == 3
+        # Verify each fold has correct train/test sizes
+        for train_dfs, test_dfs, test_ids in folds:
+            assert len(train_dfs) == 2
+            assert len(test_dfs) == 1
+
+    def test_compatibility_check_with_multi_dataset_prep(self):
+        """Test full workflow: check compatibility then prepare data."""
+        from app.api.datasets import check_dataset_compatibility
+        dfs = [make_synthetic_dataset(t, n_rows=100, seed=i)
+               for i, t in enumerate(['AAPL', 'MSFT', 'GOOGL'])]
+
+        # Check compatibility first
+        result = check_dataset_compatibility(dfs)
+        assert result['compatible'] is True
+
+        # Then prepare multi-dataset (if TSAI available)
+        if TSAI_AVAILABLE:
+            for df in dfs:
+                df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+                df.dropna(subset=['target'], inplace=True)
+
+            service = TSAITrainingService()
+            X_train, X_test, y_train, y_test = service.prepare_multi_dataset_split(
+                dfs, train_ratio=0.8, target_column='target',
+                feature_columns=['Close', 'Volume', 'SMA_20', 'RSI_14'], seq_len=10
+            )
+            assert X_train.shape[0] > 0
