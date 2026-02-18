@@ -205,6 +205,60 @@ class TSAITrainingService(ITrainingService):
         logger.info(f"Split data: train={len(X_train)}, test={len(X_test)}, horizon={prediction_horizon}, mode={prediction_mode}")
         return X_train, X_test, y_train, y_test
 
+    def prepare_multi_dataset_split(
+        self, dataframes: List[pd.DataFrame], train_ratio: float,
+        target_column: str, feature_columns: List[str],
+        timeframe: str = 'daily', seq_len: int = 24,
+        prediction_horizon: int = 0, prediction_mode: str = 'shift'
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Prepare multiple datasets: window each separately, then concatenate.
+
+        Each dataset is split and windowed independently to prevent windows
+        from spanning across dataset boundaries. Normalization is fitted on
+        all datasets combined.
+        """
+        if not TSAI_AVAILABLE:
+            raise RuntimeError("tsai library not available")
+
+        # Fit normalization on all datasets combined
+        if self.normalize:
+            combined_df = pd.concat(dataframes, ignore_index=True)
+            self.data_prep = DataPreparationService(buffer_pct=self.buffer_pct)
+            _ = self.data_prep.fit_transform(combined_df, feature_columns, method="minmax_buffered")
+            logger.info(f"Fitted normalization on {len(dataframes)} datasets ({len(combined_df)} total rows)")
+
+        all_X_train, all_X_test = [], []
+        all_y_train, all_y_test = [], []
+
+        for i, df in enumerate(dataframes):
+            # Split DataFrame
+            split_idx = int(len(df) * train_ratio)
+            df_train = df.iloc[:split_idx]
+            df_test = df.iloc[split_idx:]
+
+            # Prepare each split (scaler already fitted on combined data)
+            X_train, y_train = self.prepare_data(
+                df_train, target_column, feature_columns, timeframe, seq_len,
+                prediction_horizon, prediction_mode, fit_scaler=False
+            )
+            X_test, y_test = self.prepare_data(
+                df_test, target_column, feature_columns, timeframe, seq_len,
+                prediction_horizon, prediction_mode, fit_scaler=False
+            )
+
+            all_X_train.append(X_train)
+            all_X_test.append(X_test)
+            all_y_train.append(y_train)
+            all_y_test.append(y_test)
+            logger.info(f"Dataset {i+1}/{len(dataframes)}: X_train={X_train.shape}, X_test={X_test.shape}")
+
+        return (
+            np.concatenate(all_X_train, axis=0),
+            np.concatenate(all_X_test, axis=0),
+            np.concatenate(all_y_train, axis=0),
+            np.concatenate(all_y_test, axis=0),
+        )
+
     def _create_sequences(
         self,
         X: np.ndarray,

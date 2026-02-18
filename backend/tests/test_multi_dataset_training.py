@@ -95,3 +95,52 @@ class TestDartsMultiSeries:
         )
         assert len(train_s) == 2
         assert len(test_s) == 2
+
+
+from app.services.tsai_training import TSAITrainingService, TSAI_AVAILABLE
+
+
+class TestTSAIMultiDataset:
+    """Tests for TSAI multi-dataset windowed data preparation."""
+
+    @pytest.fixture
+    def service(self):
+        return TSAITrainingService()
+
+    @pytest.mark.skipif(not TSAI_AVAILABLE, reason="tsai not available")
+    def test_prepare_multi_dataset_split(self, service):
+        """Multi-dataset preparation creates windows per-dataset then concatenates."""
+        dfs = [make_synthetic_dataset('AAPL', n_rows=200, seed=1),
+               make_synthetic_dataset('MSFT', n_rows=200, seed=2)]
+        for df in dfs:
+            df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+            df.dropna(subset=['target'], inplace=True)
+
+        X_train, X_test, y_train, y_test = service.prepare_multi_dataset_split(
+            dfs, train_ratio=0.8, target_column='target',
+            feature_columns=['Close', 'Volume', 'SMA_20', 'RSI_14'], seq_len=24
+        )
+        # Combined should have more samples than single dataset
+        single_X, _, _, _ = service.prepare_data_split(
+            dfs[0], train_ratio=0.8, target_column='target',
+            feature_columns=['Close', 'Volume', 'SMA_20', 'RSI_14'], seq_len=24
+        )
+        assert X_train.shape[0] > single_X.shape[0]
+        assert X_train.shape[1] == 4  # features
+        assert X_train.shape[2] == 24  # seq_len
+
+    @pytest.mark.skipif(not TSAI_AVAILABLE, reason="tsai not available")
+    def test_no_cross_boundary_windows(self, service):
+        """Windows must not span across dataset boundaries."""
+        dfs = [make_synthetic_dataset('AAPL', n_rows=60, seed=1),
+               make_synthetic_dataset('MSFT', n_rows=60, seed=2)]
+        for df in dfs:
+            df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+            df.dropna(subset=['target'], inplace=True)
+
+        X_train, X_test, y_train, y_test = service.prepare_multi_dataset_split(
+            dfs, train_ratio=0.8, target_column='target',
+            feature_columns=['Close', 'Volume'], seq_len=10
+        )
+        assert X_train.shape[0] > 0
+        assert X_test.shape[0] > 0
