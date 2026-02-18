@@ -63,3 +63,35 @@ class TestDatasetCompatibility:
         df1 = make_synthetic_dataset('AAPL')
         result = check_dataset_compatibility([df1])
         assert result['compatible'] is True
+
+
+from app.services.darts_training import DartsTrainingService, DARTS_AVAILABLE
+
+
+class TestDartsMultiSeries:
+    """Tests for Darts multi-series data preparation."""
+
+    @pytest.fixture
+    def service(self):
+        return DartsTrainingService()
+
+    @pytest.mark.skipif(not DARTS_AVAILABLE, reason="darts not available")
+    def test_prepare_multi_series(self, service):
+        """prepare_multi_series returns list of TimeSeries."""
+        dfs = [make_synthetic_dataset('AAPL', seed=1), make_synthetic_dataset('MSFT', seed=2)]
+        series_list, cov_list = service.prepare_multi_series(
+            dfs, target_column='Close', feature_columns=['SMA_20', 'RSI_14'], timeframe='1h'
+        )
+        assert len(series_list) == 2
+        assert len(cov_list) == 2
+
+    @pytest.mark.skipif(not DARTS_AVAILABLE, reason="darts not available")
+    def test_prepare_multi_series_split(self, service):
+        """prepare_multi_series_split returns train/test lists."""
+        dfs = [make_synthetic_dataset('AAPL', seed=1), make_synthetic_dataset('MSFT', seed=2)]
+        train_s, test_s, train_c, test_c = service.prepare_multi_series_split(
+            dfs, train_ratio=0.8, target_column='Close',
+            feature_columns=['SMA_20', 'RSI_14'], timeframe='1h'
+        )
+        assert len(train_s) == 2
+        assert len(test_s) == 2
