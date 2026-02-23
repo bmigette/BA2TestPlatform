@@ -125,7 +125,7 @@ class SentimentService:
             return self._fallback_sentiment(text)
 
         try:
-            result = self._pipeline(text[:512])[0]  # Truncate to 512 chars
+            result = self._pipeline(text)[0]
 
             # Map FinBERT labels to standard format
             label = result['label'].lower()
@@ -180,7 +180,7 @@ class SentimentService:
         Uses cache to skip re-analysis of previously analyzed articles.
 
         Args:
-            articles: List of article dicts with 'title', 'content', 'date' keys
+            articles: List of article dicts with 'title', 'summary', 'content', 'date' keys
             provider: Optional provider name for cache updates
             ticker: Optional ticker for cache updates
 
@@ -218,10 +218,15 @@ class SentimentService:
                     cached_count += 1
                     continue
 
-            # Combine title and content for analysis
+            # Combine title, summary, and content for analysis
+            # FinBERT's tokenizer handles truncation at 512 tokens
             title = article.get('title', '')
-            content = article.get('content', '')[:500]
-            text = f"{title} {content}"
+            summary = article.get('summary', '')
+            content = article.get('content', '')
+            if summary:
+                text = f"{title}. {summary} {content}"
+            else:
+                text = f"{title}. {content}"
 
             # Debug log: article content
             logger.debug(f"[Article {i+1}/{len(articles)}] Title: {title}")
@@ -527,7 +532,8 @@ class SentimentService:
 
             standard_article = {
                 'title': article.get('title', ''),
-                'content': article.get('summary', article.get('snippet', '')),
+                'summary': article.get('summary', ''),
+                'content': article.get('full_content', article.get('summary', article.get('snippet', ''))),
                 'date': pub_date,
                 'source': article.get('source', provider.upper()),
                 'url': article.get('url', ''),
@@ -614,7 +620,8 @@ class SentimentService:
 
             articles.append({
                 'title': article.get('title', ''),
-                'content': article.get('summary', article.get('snippet', '')),
+                'summary': article.get('summary', ''),
+                'content': article.get('full_content', article.get('summary', article.get('snippet', ''))),
                 'date': pub_date,
                 'source': article.get('source', provider.upper()),
                 'url': article.get('url', ''),

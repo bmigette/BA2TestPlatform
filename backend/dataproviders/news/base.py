@@ -125,17 +125,25 @@ class MarketNewsInterface(ABC):
     # Content fetching utilities (shared by all providers)
 
     @staticmethod
-    def fetch_url_content(url: str, timeout: int = 10) -> Optional[str]:
+    def fetch_url_content(url: str, timeout: int = 10, published_at: datetime = None) -> Optional[str]:
         """
         Fetch article content from URL using trafilatura.
+        For articles older than 1 year, tries Wayback Machine first.
 
         Args:
             url: Article URL to fetch
             timeout: Request timeout in seconds
+            published_at: Article publish date (used to decide Wayback Machine fallback)
 
         Returns:
             Extracted text content or None if failed
         """
+        # For articles older than 1 year, try Wayback Machine first
+        if published_at and (datetime.now() - published_at).days > 365:
+            wayback_content = MarketNewsInterface._try_wayback_machine(url, published_at)
+            if wayback_content:
+                return wayback_content
+
         try:
             downloaded = trafilatura.fetch_url(url)
             if downloaded:
@@ -144,6 +152,41 @@ class MarketNewsInterface(ABC):
         except Exception as e:
             logger.debug(f"Failed to fetch content from {url}: {e}")
 
+        return None
+
+    @staticmethod
+    def _try_wayback_machine(url: str, published_at: datetime) -> Optional[str]:
+        """
+        Try to fetch content from Wayback Machine for old articles.
+
+        Args:
+            url: Original article URL
+            published_at: Article publish date (finds nearest snapshot on or after)
+
+        Returns:
+            Extracted text content or None if failed
+        """
+        try:
+            from waybackpy import WaybackMachineCDXServerAPI
+
+            cdx = WaybackMachineCDXServerAPI(url)
+            snapshot = cdx.nearest(
+                year=published_at.year,
+                month=published_at.month,
+                day=published_at.day
+            )
+
+            if snapshot and snapshot.archive_url:
+                # Only use snapshots on or after the publish date
+                if snapshot.datetime_timestamp >= published_at:
+                    downloaded = trafilatura.fetch_url(snapshot.archive_url)
+                    if downloaded:
+                        text = trafilatura.extract(downloaded)
+                        if text:
+                            logger.info(f"Fetched content from Wayback Machine: {url}")
+                            return text
+        except Exception as e:
+            logger.debug(f"Wayback Machine lookup failed for {url}: {e}")
         return None
 
     @staticmethod
@@ -283,10 +326,32 @@ class MarketNewsInterface(ABC):
 
         logger.info(f"Enriching {len(needs_enrichment)} articles with URL content")
 
+        # Build a map of article index to published_at for Wayback Machine
+        def _parse_published_at(article: Dict[str, Any]) -> Optional[datetime]:
+            pub = article.get('published_at') or article.get('date')
+            if isinstance(pub, datetime):
+                # Normalize to naive datetime
+                if pub.tzinfo is not None:
+                    pub = pub.replace(tzinfo=None)
+                return pub
+            if isinstance(pub, str) and pub:
+                try:
+                    dt = datetime.fromisoformat(pub.replace('Z', '+00:00'))
+                    if dt.tzinfo is not None:
+                        dt = dt.replace(tzinfo=None)
+                    return dt
+                except ValueError:
+                    pass
+            return None
+
         # Fetch content in parallel
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {
-                executor.submit(self.fetch_url_content, url): idx
+                executor.submit(
+                    self.fetch_url_content, url,
+                    10,  # timeout
+                    _parse_published_at(articles[idx])
+                ): idx
                 for idx, url in needs_enrichment
             }
 
@@ -295,8 +360,7 @@ class MarketNewsInterface(ABC):
                 try:
                     content = future.result()
                     if content and len(content) > len(articles[idx].get('summary', '') or ''):
-                        # Truncate to reasonable length for ML processing
-                        articles[idx]['summary'] = content[:2000]
+                        articles[idx]['full_content'] = content
                         articles[idx]['content_fetched'] = True
                 except Exception as e:
                     logger.debug(f"Error enriching article {idx}: {e}")

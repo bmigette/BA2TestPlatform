@@ -34,6 +34,7 @@ class NewsCache(Base):
     # Article metadata
     ticker = Column(String(20), nullable=True, index=True)  # May be null for global news
     title = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)  # Original provider summary (separate from full content in file)
     source = Column(String(200), nullable=True)
     published_at = Column(DateTime, nullable=True, index=True)
 
@@ -70,6 +71,7 @@ class NewsCache(Base):
             'resolved_url': self.resolved_url,
             'ticker': self.ticker,
             'title': self.title,
+            'summary': self.summary,
             'source': self.source,
             'published_at': self.published_at.isoformat() if self.published_at else None,
             'sentiment_label': self.sentiment_label,
@@ -94,6 +96,7 @@ class NewsCache(Base):
         """
         return {
             'title': self.title or '',
+            'summary': self.summary or '',
             'content': content or '',
             'date': self.published_at,
             'source': self.source or self.provider.upper(),
