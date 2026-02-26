@@ -346,6 +346,76 @@ async def delete_model(model_id: str, db: Session = Depends(get_db)):
     raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
 
+class FoundationModelRegister(BaseModel):
+    """Request model for registering a foundation model."""
+    model_name: str  # Key from CHRONOS_MODELS (e.g., "chronos-2")
+    name: Optional[str] = None  # Display name override
+
+
+@router.get("/foundation/available")
+async def list_foundation_models():
+    """List available foundation models that can be registered."""
+    from app.services.chronos_service import list_available_models, is_model_downloaded
+    models = list_available_models()
+    for m in models:
+        m['downloaded'] = is_model_downloaded(m['name'])
+    return {"models": models}
+
+
+@router.post("/foundation")
+async def register_foundation_model(
+    request: FoundationModelRegister,
+    db: Session = Depends(get_db)
+):
+    """Register a pre-trained foundation model for use in backtesting.
+
+    Creates a TrainedModel record with model_type='chronos'. The actual
+    model weights are downloaded from HuggingFace on first use.
+    """
+    from app.services.chronos_service import CHRONOS_MODELS, CHRONOS_AVAILABLE
+
+    if request.model_name not in CHRONOS_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model: {request.model_name}. "
+                   f"Available: {list(CHRONOS_MODELS.keys())}"
+        )
+
+    model_info = CHRONOS_MODELS[request.model_name]
+    display_name = request.name or model_info['description']
+    model_id = f"mdl-{uuid.uuid4().hex[:6]}"
+
+    model_data = {
+        'id': model_id,
+        'name': display_name,
+        'modelType': f"chronos:{request.model_name}",
+        'status': 'pretrained',
+        'hyperparameters': {
+            'chronos_model': request.model_name,
+            'repo_id': model_info['repo_id'],
+            'params': model_info['params'],
+            'supports_covariates': model_info['supports_covariates'],
+            'max_context_length': model_info['max_context_length'],
+            'max_prediction_length': model_info['max_prediction_length'],
+            'prediction_length': 1,
+        },
+        'predictionMode': 'regression',
+    }
+
+    saved_model = save_model_to_db(model_data, db)
+    logger.info(f"Registered foundation model: {model_id} ({request.model_name})")
+
+    return {
+        "id": model_id,
+        "name": display_name,
+        "modelType": f"chronos:{request.model_name}",
+        "status": "pretrained",
+        "message": f"Foundation model '{request.model_name}' registered. "
+                   f"Weights will be downloaded from HuggingFace on first use.",
+        "installed": CHRONOS_AVAILABLE,
+    }
+
+
 @router.get("/{model_id}/prediction-fields")
 async def get_prediction_fields(
     model_id: str,

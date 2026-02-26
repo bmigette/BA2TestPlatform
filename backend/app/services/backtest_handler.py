@@ -317,12 +317,30 @@ def run_backtest(
     from pathlib import Path
     from app.services.tsai_models import TSAIModelService
 
+    model_type = model.model_type.lower() if model.model_type else 'lstm'
+
+    # Route to Chronos backtest if model is a foundation model
+    if model_type.startswith('chronos:'):
+        return _run_chronos_backtest(
+            model=model,
+            pred_df=pred_df,
+            exec_df=exec_df,
+            strategy_params=strategy_params,
+            initial_capital=initial_capital,
+            position_sizing_type=position_sizing_type,
+            position_sizing_value=position_sizing_value,
+            commission=commission,
+            slippage=slippage,
+            buy_entry_conditions=buy_entry_conditions,
+            sell_entry_conditions=sell_entry_conditions,
+            exit_conditions=exit_conditions,
+        )
+
     # Get model parameters
     hyperparameters = model.hyperparameters or {}
     seq_len = hyperparameters.get('seq_len', hyperparameters.get('seqLen', 24))
     prediction_mode = model.prediction_mode or 'shift'
     threshold = model.threshold or 0.5
-    model_type = model.model_type.lower() if model.model_type else 'lstm'
 
     # Try to load metadata early for feature_columns
     import json
@@ -512,19 +530,72 @@ def run_backtest(
     logger.info(f"Prediction timestamps: {len(pred_timestamps)} bars, "
                 f"range {pred_timestamps[0]} to {pred_timestamps[-1]}")
 
+    # Use shared strategy backtest runner
+    return _run_strategy_backtest(
+        pred_lookup=pred_lookup,
+        pred_timestamps=pred_timestamps,
+        exec_df=exec_df,
+        strategy_params=strategy_params,
+        initial_capital=initial_capital,
+        position_sizing_type=position_sizing_type,
+        position_sizing_value=position_sizing_value,
+        commission=commission,
+        slippage=slippage,
+        buy_entry_conditions=buy_entry_conditions,
+        sell_entry_conditions=sell_entry_conditions,
+        exit_conditions=exit_conditions,
+        n_classes=n_classes,
+    )
+
+
+def _run_strategy_backtest(
+    pred_lookup: Dict,
+    pred_timestamps: list,
+    exec_df: pd.DataFrame,
+    strategy_params: Dict[str, Any],
+    initial_capital: float,
+    position_sizing_type: str,
+    position_sizing_value: float,
+    commission: float,
+    slippage: float,
+    buy_entry_conditions: Optional[Dict],
+    sell_entry_conditions: Optional[Dict],
+    exit_conditions: Optional[List[Dict]],
+    n_classes: int = 2,
+) -> Dict[str, Any]:
+    """Shared backtest execution: sets up MLStrategy and runs backtesting.py.
+
+    This is the common code path used by both tsai and Chronos backtests.
+    It takes a prediction lookup (timestamp -> probability array) and runs
+    the strategy simulation.
+
+    Args:
+        pred_lookup: Dict mapping pd.Timestamp -> np.ndarray of probabilities
+        pred_timestamps: Sorted list of prediction timestamps
+        exec_df: DataFrame with OHLCV + Date columns for trade execution
+        strategy_params: Strategy configuration (TP/SL, etc.)
+        initial_capital: Starting capital
+        position_sizing_type: "fixed" or "percent"
+        position_sizing_value: Position size in $ or %
+        commission: Commission per trade (%)
+        slippage: Slippage per trade (%)
+        buy_entry_conditions: Condition tree for buy entries
+        sell_entry_conditions: Condition tree for sell entries
+        exit_conditions: List of exit condition rules
+        n_classes: Number of output classes
+
+    Returns:
+        Dict with backtest results and metrics
+    """
     # Reset evaluation stats
     reset_evaluation_stats()
 
     # Prepare OHLCV data for backtesting.py
-    # Must have columns: Open, High, Low, Close, Volume with Date as index
     bt_data = exec_df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
     bt_data.set_index('Date', inplace=True)
 
-    # Ensure numeric types
     for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
         bt_data[col] = pd.to_numeric(bt_data[col], errors='coerce')
-
-    # Drop any rows with NaN in OHLCV
     bt_data = bt_data.dropna()
 
     # Extract TP/SL from strategy_params
@@ -533,20 +604,19 @@ def run_backtest(
     if tp_percent or sl_percent:
         logger.info(f"TP/SL: TP={tp_percent}%, SL={sl_percent}%")
 
-    # Calculate position sizing as percentage of equity
+    # Calculate position sizing
     if position_sizing_type == 'percent':
         position_sizing_pct = position_sizing_value
     else:
-        # Convert fixed $ amount to percentage of initial capital
         position_sizing_pct = (position_sizing_value / initial_capital) * 100
-        position_sizing_pct = min(position_sizing_pct, 99)  # Cap at 99%
+        position_sizing_pct = min(position_sizing_pct, 99)
 
     logger.info(f"Position sizing: {position_sizing_pct:.2f}% of equity "
                 f"(type={position_sizing_type}, value={position_sizing_value})")
 
     # Set strategy parameters
     MLStrategy.predictions = pred_lookup
-    MLStrategy.prediction_timestamps = pred_timestamps  # For dual-timeframe lookup
+    MLStrategy.prediction_timestamps = pred_timestamps
     MLStrategy.buy_entry_conditions = buy_entry_conditions
     MLStrategy.sell_entry_conditions = sell_entry_conditions
     MLStrategy.exit_conditions = exit_conditions
@@ -563,15 +633,15 @@ def run_backtest(
         logger.info(f"Execution interval: {exec_interval/60:.0f}min, "
                     f"Prediction interval: {pred_interval/60:.0f}min")
 
-    # Run backtest using backtesting.py
+    # Run backtest
     bt = Backtest(
         bt_data,
         MLStrategy,
         cash=initial_capital,
-        commission=commission / 100,  # Convert from % to decimal
-        exclusive_orders=True,  # Only one position at a time
-        trade_on_close=True,  # Execute trades at close price
-        hedging=False,  # No hedging - one direction at a time
+        commission=commission / 100,
+        exclusive_orders=True,
+        trade_on_close=True,
+        hedging=False,
     )
 
     try:
@@ -580,7 +650,7 @@ def run_backtest(
         logger.error(f"Backtest execution failed: {e}")
         return _empty_results(initial_capital)
 
-    # Log backtest summary
+    # Log summary
     eval_stats = get_evaluation_stats()
     logger.info(f"=== Backtest Summary ===")
     logger.info(f"Execution bars: {len(bt_data)}, Prediction bars: {len(pred_timestamps)}")
@@ -588,7 +658,6 @@ def run_backtest(
     logger.info(f"Trades: {stats['# Trades']}, Win Rate: {stats['Win Rate [%]']:.1f}%")
     logger.info(f"Return: {stats['Return [%]']:.2f}%, Max Drawdown: {stats['Max. Drawdown [%]']:.2f}%")
 
-    # Log condition hit rates
     tree_results = eval_stats.get('tree_results', {})
     if tree_results:
         hit_summary = []
@@ -598,13 +667,111 @@ def run_backtest(
             hit_summary.append(f"{label}: {counts['true']}/{total} ({hit_rate:.1f}%)")
         logger.info(f"Entry/Exit hit rates: {', '.join(hit_summary)}")
 
-    # Retrieve exit tracking data from class-level storage
-    # (set during strategy execution, accessed here after bt.run())
     exit_reasons = MLStrategy._exit_reasons_result or {}
     pending_trades = MLStrategy._pending_trades_result or {}
 
-    # Convert backtesting.py results to our format
     return _convert_bt_results(stats, bt_data, initial_capital, exit_reasons, pending_trades)
+
+
+def _run_chronos_backtest(
+    model: TrainedModel,
+    pred_df: pd.DataFrame,
+    exec_df: pd.DataFrame,
+    strategy_params: Dict[str, Any],
+    initial_capital: float = 10000.0,
+    position_sizing_type: str = "fixed",
+    position_sizing_value: float = 1000.0,
+    commission: float = 0.0,
+    slippage: float = 0.0,
+    buy_entry_conditions: Optional[Dict] = None,
+    sell_entry_conditions: Optional[Dict] = None,
+    exit_conditions: Optional[List[Dict]] = None,
+) -> Dict[str, Any]:
+    """Run a backtest using a Chronos foundation model for predictions.
+
+    Instead of loading a trained model file, this uses the Chronos pipeline
+    to generate rolling forecasts from the price series, then converts
+    those forecasts into probability signals for the strategy.
+
+    Args:
+        model: TrainedModel record with model_type starting with 'chronos:'
+        pred_df: DataFrame with OHLCV + Date columns
+        exec_df: DataFrame for trade execution (OHLCV)
+        strategy_params: Strategy configuration
+        initial_capital: Starting capital
+        position_sizing_type: "fixed" or "percent"
+        position_sizing_value: Position size in $ or %
+        commission: Commission per trade (%)
+        slippage: Slippage per trade (%)
+        buy_entry_conditions: Condition tree for buy entries
+        sell_entry_conditions: Condition tree for sell entries
+        exit_conditions: List of exit condition rules
+
+    Returns:
+        Dict with backtest results and metrics
+    """
+    from app.services.chronos_service import run_chronos_inference, CHRONOS_AVAILABLE
+
+    if not CHRONOS_AVAILABLE:
+        logger.error("chronos-forecasting is not installed")
+        result = _empty_results(initial_capital)
+        result['error'] = 'chronos-forecasting is not installed'
+        result['status'] = 'failed'
+        return result
+
+    hyperparameters = model.hyperparameters or {}
+    chronos_model = hyperparameters.get('chronos_model', 'chronos-2')
+    prediction_length = hyperparameters.get('prediction_length', 1)
+    target_column = 'Close'
+
+    logger.info(f"=== Chronos Backtest ===")
+    logger.info(f"Model: {chronos_model}, prediction_length={prediction_length}")
+    logger.info(f"Prediction dataset: {len(pred_df)} rows")
+    logger.info(f"Execution dataset: {len(exec_df)} rows")
+
+    # Run Chronos inference on the prediction dataset
+    try:
+        pred_lookup = run_chronos_inference(
+            df=pred_df,
+            prediction_length=prediction_length,
+            target_column=target_column,
+            model_name=chronos_model,
+        )
+    except Exception as e:
+        logger.error(f"Chronos inference failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        result = _empty_results(initial_capital)
+        result['error'] = f"Chronos inference failed: {e}"
+        result['status'] = 'failed'
+        return result
+
+    if not pred_lookup:
+        logger.error("Chronos inference produced no predictions")
+        return _empty_results(initial_capital)
+
+    pred_timestamps = sorted(pred_lookup.keys())
+    n_classes = 2  # Chronos signals are binary: [p_down, p_up]
+
+    logger.info(f"Chronos predictions: {len(pred_timestamps)} bars, "
+                f"range {pred_timestamps[0]} to {pred_timestamps[-1]}")
+
+    # Use shared strategy backtest runner
+    return _run_strategy_backtest(
+        pred_lookup=pred_lookup,
+        pred_timestamps=pred_timestamps,
+        exec_df=exec_df,
+        strategy_params=strategy_params,
+        initial_capital=initial_capital,
+        position_sizing_type=position_sizing_type,
+        position_sizing_value=position_sizing_value,
+        commission=commission,
+        slippage=slippage,
+        buy_entry_conditions=buy_entry_conditions,
+        sell_entry_conditions=sell_entry_conditions,
+        exit_conditions=exit_conditions,
+        n_classes=n_classes,
+    )
 
 
 def _safe_float(value, default=0.0) -> float:

@@ -29,6 +29,9 @@ fastai>=2.7.0
 ipython>=8.0.0  # Required by tsai/fastai on Windows
 ipykernel>=6.0.0  # Required by tsai/fastai on Windows
 
+# Foundation Models (pre-trained time series models)
+chronos-forecasting>=2.2.0
+
 # Darts Optional Dependencies (for additional models)
 prophet>=1.1.1
 catboost>=1.0.6
@@ -58,6 +61,7 @@ beautifulsoup4>=4.12.0
 tenacity>=8.2.0
 finnhub-python>=2.4.0
 trafilatura>=1.6.0
+waybackpy>=3.0.6
 
 # Validation
 pydantic>=2.10.0
