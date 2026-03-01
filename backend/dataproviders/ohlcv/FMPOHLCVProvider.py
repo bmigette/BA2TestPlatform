@@ -69,6 +69,16 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         "4hour": 1825,
     }
 
+    # Chunk size for daily data requests.
+    # FMP's historical-price-full endpoint can silently cap long ranges;
+    # fetching in 4-year chunks keeps each request well within any plan limit.
+    DAILY_CHUNK_DAYS: int = 365 * 4
+
+    # Tolerance (calendar days) when checking whether returned data covers
+    # the requested range.  Gaps smaller than this are treated as market
+    # holidays / weekends and ignored.
+    COVERAGE_TOLERANCE_DAYS: int = 5
+
     def __init__(self):
         """Initialize FMP OHLCV provider with caching support."""
         # Call parent __init__ to set up caching
@@ -147,75 +157,114 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
             raise
     
     def _fetch_daily_data(
-        self, 
-        symbol: str, 
-        start_date: datetime, 
+        self,
+        symbol: str,
+        start_date: datetime,
         end_date: datetime
     ) -> pd.DataFrame:
         """
-        Fetch daily OHLCV data from FMP API.
-        
-        Uses /api/v3/historical-price-full/{symbol} endpoint.
-        
+        Fetch daily OHLCV data from FMP API in DAILY_CHUNK_DAYS chunks.
+
+        FMP's historical-price-full endpoint may silently cap very long date
+        ranges.  Chunking by DAILY_CHUNK_DAYS and checking actual coverage
+        ensures the full requested range is retrieved without duplicates.
+
         Args:
             symbol: Stock ticker symbol
             start_date: Start date for data
             end_date: End date for data
-        
+
         Returns:
             DataFrame with columns: Date, Open, High, Low, Close, Volume
         """
-        url = f"{self.BASE_URL}/historical-price-full/{symbol}"
-        
-        params = {
-            "apikey": self.api_key,
-            "from": start_date.strftime("%Y-%m-%d"),
-            "to": end_date.strftime("%Y-%m-%d")
-        }
-        
-        logger.debug(f"FMP API request: {url} with params: {params}")
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        # Extract historical data from response
-        if "historical" not in data:
-            logger.warning(f"No 'historical' key in FMP response for {symbol}")
-            return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        
-        historical = data["historical"]
-        
-        if not historical:
-            logger.warning(f"Empty historical data from FMP for {symbol}")
-            return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(historical)
-        
-        # Rename columns to match expected format
-        df = df.rename(columns={
-            "date": "Date",
-            "open": "Open",
-            "high": "High",
-            "low": "Low",
-            "close": "Close",
-            "volume": "Volume"
-        })
-        
-        # Select only needed columns
-        df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-        
-        # Convert Date to datetime with UTC timezone
-        df['Date'] = pd.to_datetime(df['Date'], utc=True)
-        
-        # Sort by date (FMP returns newest first)
-        df = df.sort_values('Date')
-        
-        # Reset index
-        df = df.reset_index(drop=True)
-        
+        chunks = []
+        chunk_start = start_date
+
+        while chunk_start < end_date:
+            chunk_end = min(chunk_start + timedelta(days=self.DAILY_CHUNK_DAYS), end_date)
+            next_start = chunk_end + timedelta(days=1)  # default advancement
+
+            url = f"{self.BASE_URL}/historical-price-full/{symbol}"
+            params = {
+                "apikey": self.api_key,
+                "from": chunk_start.strftime("%Y-%m-%d"),
+                "to": chunk_end.strftime("%Y-%m-%d"),
+            }
+
+            logger.debug(
+                f"FMP daily chunk {symbol}: "
+                f"{chunk_start.date()} to {chunk_end.date()}"
+            )
+
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+
+                if "historical" not in data or not data["historical"]:
+                    logger.debug(
+                        f"  No data in chunk {chunk_start.date()} to {chunk_end.date()}"
+                    )
+                else:
+                    chunk_df = pd.DataFrame(data["historical"])
+                    chunk_df = chunk_df.rename(columns={
+                        "date": "Date",
+                        "open": "Open",
+                        "high": "High",
+                        "low": "Low",
+                        "close": "Close",
+                        "volume": "Volume",
+                    })
+                    chunk_df = chunk_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+                    chunk_df["Date"] = pd.to_datetime(chunk_df["Date"], utc=True)
+                    chunks.append(chunk_df)
+                    logger.debug(f"  Got {len(chunk_df)} bars")
+
+                    # Smart advancement: if FMP returned data significantly short
+                    # of chunk_end, advance from actual data end to avoid missing
+                    # bars or re-requesting already-covered dates.
+                    actual_end = chunk_df["Date"].max().date()
+                    chunk_end_date = chunk_end.date() if isinstance(chunk_end, datetime) else chunk_end
+                    gap_days = (chunk_end_date - actual_end).days
+                    if gap_days > self.COVERAGE_TOLERANCE_DAYS:
+                        logger.debug(
+                            f"  Coverage gap: data ends {actual_end}, "
+                            f"chunk to {chunk_end_date} (gap={gap_days}d). "
+                            f"Advancing from actual end."
+                        )
+                        next_start = chunk_df["Date"].max() + timedelta(days=1)
+
+            except Exception as e:
+                logger.warning(
+                    f"FMP daily chunk {chunk_start.date()}-{chunk_end.date()} failed: {e}"
+                )
+
+            chunk_start = next_start
+
+        if not chunks:
+            return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+
+        df = pd.concat(chunks, ignore_index=True)
+        df = df.drop_duplicates(subset=["Date"])
+
+        # Filter to exact requested range
+        start_ts = (
+            pd.Timestamp(start_date).tz_localize("UTC")
+            if pd.Timestamp(start_date).tz is None
+            else pd.Timestamp(start_date).tz_convert("UTC")
+        )
+        end_ts = (
+            pd.Timestamp(end_date).tz_localize("UTC")
+            if pd.Timestamp(end_date).tz is None
+            else pd.Timestamp(end_date).tz_convert("UTC")
+        )
+        df = df[(df["Date"] >= start_ts) & (df["Date"] <= end_ts)]
+
+        df = df.sort_values("Date").reset_index(drop=True)
+        logger.info(
+            f"FMP daily {symbol}: {len(df)} total bars "
+            f"({len(chunks)} chunk requests)"
+        )
         return df
     
     def _fetch_intraday_data(
@@ -248,6 +297,7 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
 
         while chunk_start < end_date:
             chunk_end = min(chunk_start + timedelta(days=chunk_days), end_date)
+            next_start = chunk_end + timedelta(days=1)  # default advancement
 
             url = f"{self.BASE_URL}/historical-chart/{fmp_interval}/{symbol}"
             params = {
@@ -280,13 +330,28 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                     chunk_df["Date"] = pd.to_datetime(chunk_df["Date"], utc=True)
                     chunks.append(chunk_df)
                     logger.debug(f"  Got {len(chunk_df)} bars")
+
+                    # Smart advancement: if FMP returned data significantly short
+                    # of chunk_end, advance from actual data end rather than
+                    # chunk_end to avoid re-requesting dates or missing bars.
+                    actual_end = chunk_df["Date"].max().date()
+                    chunk_end_date = chunk_end.date() if isinstance(chunk_end, datetime) else chunk_end
+                    gap_days = (chunk_end_date - actual_end).days
+                    if gap_days > self.COVERAGE_TOLERANCE_DAYS:
+                        logger.debug(
+                            f"  Coverage gap: data ends {actual_end}, "
+                            f"chunk to {chunk_end_date} (gap={gap_days}d). "
+                            f"Advancing from actual end."
+                        )
+                        next_start = chunk_df["Date"].max() + timedelta(days=1)
+
             except Exception as e:
                 logger.warning(
                     f"FMP intraday chunk {chunk_start.date()}-{chunk_end.date()} "
                     f"failed: {e}"
                 )
 
-            chunk_start = chunk_end + timedelta(days=1)
+            chunk_start = next_start
 
         if not chunks:
             return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
