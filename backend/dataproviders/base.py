@@ -80,7 +80,16 @@ class MarketDataProviderInterface(ABC):
         self.cache_max_age_hours = 24
 
     def _get_cache_file(self, symbol: str, interval: str) -> Path:
-        """Return per-provider cache file path, creating the directory if needed."""
+        """
+        Return the per-provider cache file path, creating the directory if needed.
+
+        Args:
+            symbol: Ticker symbol (e.g., 'AAPL').
+            interval: Data interval string (e.g., '1d', '1h').
+
+        Returns:
+            Path to the cache CSV file under cache_folder/<provider_name>/.
+        """
         provider_dir = self.cache_folder / self.get_provider_name()
         provider_dir.mkdir(parents=True, exist_ok=True)
         return provider_dir / f"{symbol}_{interval}.csv"
