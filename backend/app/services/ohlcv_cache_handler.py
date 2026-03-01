@@ -57,6 +57,8 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
         end_date = datetime.strptime(raw_end, '%Y-%m-%d')
 
     provider = get_ohlcv_provider(provider_name)
+    task_queue.update_progress(task_id, 0, f"Starting {symbol} ({len(timeframes)} timeframes)...")
+
     results = {}
     total = len(timeframes)
     completed_count = [0]

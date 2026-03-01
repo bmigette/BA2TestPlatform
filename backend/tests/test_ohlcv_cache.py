@@ -98,8 +98,8 @@ class TestHandleOHLCVCacheFetch:
                 'timeframes': ['1d', '4h', '1h']
             })
 
-            # Should update progress for each timeframe + final
-            assert mock_task_queue.update_progress.call_count == 4  # 3 timeframes + final 100%
+            # Should update progress: 1 initial + 3 timeframes + 1 final = 5
+            assert mock_task_queue.update_progress.call_count == 5
 
     def test_handler_uses_extend_ohlcv_cache(self, mock_task_queue, mock_provider):
         """Handler must call extend_ohlcv_cache, not get_ohlcv_data."""
