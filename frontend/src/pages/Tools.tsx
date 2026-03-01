@@ -30,7 +30,7 @@ interface NewsProvider {
 }
 
 const Tools: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro' | 'maintenance' | 'ohlcv'>('news');
+  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro' | 'maintenance' | 'ohlcv' | 'newsbatch'>('news');
 
   return (
     <div className="p-6">
@@ -100,6 +100,16 @@ const Tools: React.FC = () => {
             </div>
           </button>
           <button
+            onClick={() => setActiveTab('newsbatch')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'newsbatch'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            News Batch Fetch
+          </button>
+          <button
             onClick={() => setActiveTab('maintenance')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'maintenance'
@@ -120,6 +130,7 @@ const Tools: React.FC = () => {
       {activeTab === 'fundamentals' && <FundamentalsTester />}
       {activeTab === 'macro' && <MacroTester />}
       {activeTab === 'ohlcv' && <OHLCVCacheTool />}
+      {activeTab === 'newsbatch' && <NewsBatchFetchTool />}
       {activeTab === 'maintenance' && <MaintenancePanel />}
     </div>
   );
@@ -553,6 +564,302 @@ const OHLCVCacheTool: React.FC = () => {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// News Batch Fetch Tool Component
+interface NewsBatchTask {
+  symbol: string;
+  task_id: string;
+  status?: string;
+  progress?: number;
+  progress_message?: string;
+}
+
+interface NewsCacheStats {
+  total_articles: number;
+  with_sentiment: number;
+  with_content: number;
+  by_provider: Record<string, number>;
+}
+
+const NewsBatchFetchTool: React.FC = () => {
+  const [provider, setProvider] = useState('fmp');
+  const [providers, setProviders] = useState<NewsProvider[]>([]);
+  const [symbolInput, setSymbolInput] = useState('');
+  const [symbols, setSymbols] = useState<string[]>([]);
+
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+  const [fetching, setFetching] = useState(false);
+  const [activeTasks, setActiveTasks] = useState<NewsBatchTask[]>([]);
+  const [cacheStats, setCacheStats] = useState<NewsCacheStats | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchProviders();
+    fetchCacheStats();
+  }, []);
+
+  // Poll active tasks
+  useEffect(() => {
+    if (activeTasks.length === 0) return;
+    const interval = setInterval(async () => {
+      const updatedTasks = await Promise.all(
+        activeTasks.map(async t => {
+          try {
+            const r = await fetch(`http://localhost:8000/api/tasks/${t.task_id}/progress`);
+            if (r.ok) {
+              const d = await r.json();
+              return { ...t, status: d.status, progress: d.progress, progress_message: d.progress_message };
+            }
+          } catch { /* ignore */ }
+          return t;
+        })
+      );
+      setActiveTasks(updatedTasks);
+      const stillActive = updatedTasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
+      if (stillActive.length === 0) {
+        setActiveTasks([]);
+        setFetching(false);
+        fetchCacheStats();
+        setMessage('All tasks completed!');
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [activeTasks]);
+
+  const fetchProviders = async () => {
+    try {
+      const r = await fetch('http://localhost:8000/api/tools/news/providers');
+      if (r.ok) {
+        const d = await r.json();
+        // Filter providers that support company news (exclude localfiles)
+        setProviders((d.providers || []).filter((p: NewsProvider) => p.id !== 'localfiles'));
+      }
+    } catch { /* ignore */ }
+  };
+
+  const fetchCacheStats = async () => {
+    try {
+      const r = await fetch('http://localhost:8000/api/tools/news/cache-status');
+      if (r.ok) {
+        const d = await r.json();
+        setCacheStats(d);
+      }
+    } catch { /* ignore */ }
+  };
+
+  const addSymbol = () => {
+    const parts = symbolInput.split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+    setSymbols(prev => [...new Set([...prev, ...parts])]);
+    setSymbolInput('');
+  };
+
+  const removeSymbol = (s: string) => setSymbols(prev => prev.filter(x => x !== s));
+
+  const handleFetchBatch = async () => {
+    if (symbols.length === 0) { setError('Please enter at least one symbol'); return; }
+    if (!startDate || !endDate) { setError('Please select a date range'); return; }
+    if (startDate > endDate) { setError('Start date must be before end date'); return; }
+
+    setError(null);
+    setMessage(null);
+    setFetching(true);
+    setActiveTasks([]);
+
+    try {
+      const resp = await fetch('http://localhost:8000/api/tools/news/batch-fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, symbols, start_date: startDate, end_date: endDate })
+      });
+      if (!resp.ok) {
+        const e = await resp.json();
+        throw new Error(e.detail || 'Failed to queue tasks');
+      }
+      const data = await resp.json();
+      setActiveTasks(data.task_ids.map((t: any) => ({ symbol: t.symbol, task_id: t.task_id, status: 'pending' })));
+      setMessage(`Queued ${data.count} task(s). Fetching news for: ${symbols.join(', ')}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+      setFetching(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Fetch Form */}
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">
+          News Batch Fetch
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Bulk-fetch news articles for one or more symbols over a date range.
+          Article webpages are fetched (Wayback Machine for articles older than 1 year)
+          and FinBERT sentiment is analyzed. All results are persisted to the news cache.
+        </p>
+
+        <div className="space-y-4">
+          {/* Provider */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              News Provider
+            </label>
+            <select
+              value={provider}
+              onChange={e => setProvider(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            >
+              {providers.length === 0 && <option value="fmp">FMP (Financial Modeling Prep)</option>}
+              {providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Symbols */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Symbols
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={symbolInput}
+                onChange={e => setSymbolInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addSymbol()}
+                placeholder="AAPL, MSFT, TSLA"
+                className="flex-1 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <button
+                onClick={addSymbol}
+                className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md text-sm hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Add
+              </button>
+            </div>
+            {symbols.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {symbols.map(s => (
+                  <span key={s} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                    {s}
+                    <button onClick={() => removeSymbol(s)} className="hover:text-red-500">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Date Range */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Start Date
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={e => setStartDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                End Date
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={e => setEndDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {message && <p className="text-green-600 dark:text-green-400 text-sm">{message}</p>}
+
+          <button
+            onClick={handleFetchBatch}
+            disabled={fetching || symbols.length === 0}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            {fetching ? 'Fetching...' : 'Fetch & Analyze'}
+          </button>
+        </div>
+      </div>
+
+      {/* Active Tasks */}
+      {activeTasks.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-gray-100">Active Tasks</h3>
+          <div className="space-y-2">
+            {activeTasks.map(t => (
+              <div key={t.task_id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded">
+                <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{t.symbol}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">{t.progress_message || t.status || 'pending'}</span>
+                <span className={`text-xs px-2 py-1 rounded ${
+                  t.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
+                  t.status === 'failed' ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' :
+                  'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                }`}>{t.status || 'pending'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cache Stats */}
+      {cacheStats && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              News Cache Stats
+            </h3>
+            <button
+              onClick={fetchCacheStats}
+              className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700 rounded">
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{cacheStats.total_articles.toLocaleString()}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Total Articles</div>
+            </div>
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700 rounded">
+              <div className="text-2xl font-bold text-purple-600">{cacheStats.with_sentiment.toLocaleString()}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">With Sentiment</div>
+            </div>
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700 rounded">
+              <div className="text-2xl font-bold text-green-600">{cacheStats.with_content.toLocaleString()}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">With Content</div>
+            </div>
+          </div>
+          {Object.keys(cacheStats.by_provider).length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">By Provider</h4>
+              <div className="space-y-1">
+                {Object.entries(cacheStats.by_provider).map(([prov, count]) => (
+                  <div key={prov} className="flex justify-between text-sm text-gray-600 dark:text-gray-400">
+                    <span>{prov}</span>
+                    <span className="font-medium">{(count as number).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
