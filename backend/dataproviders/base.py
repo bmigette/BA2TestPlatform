@@ -217,7 +217,7 @@ class MarketDataProviderInterface(ABC):
         def _to_naive_ts(dt: datetime) -> pd.Timestamp:
             ts = pd.Timestamp(dt)
             if ts.tzinfo is not None:
-                ts = ts.tz_localize(None)
+                ts = ts.tz_convert('UTC').tz_localize(None)
             return ts
 
         start_ts = _to_naive_ts(start_date)
@@ -232,6 +232,7 @@ class MarketDataProviderInterface(ABC):
                 logger.warning(f"Could not read existing cache {cache_file}: {e}")
                 existing = pd.DataFrame()
 
+        merged = pd.DataFrame()  # default; overwritten in all live branches below
         if not existing.empty:
             cache_min = existing['Date'].min()
             cache_max = existing['Date'].max()
