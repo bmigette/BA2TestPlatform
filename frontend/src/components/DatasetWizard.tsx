@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle, Plus, Trash2, Save, ChevronDown, ChevronRight, FolderOpen } from 'lucide-react';
+import { X, MessageSquare, TrendingUp, BarChart3, FileText, Settings, CheckCircle, Plus, Trash2, Save, ChevronDown, ChevronRight, FolderOpen, Upload } from 'lucide-react';
 
 type WizardMode = 'create' | 'duplicate' | 'edit';
 
@@ -205,6 +205,59 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
   }, [isOpen, mode, initialData]);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Batch mode state
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchSymbolsInput, setBatchSymbolsInput] = useState('');
+  const [batchSymbols, setBatchSymbols] = useState<string[]>([]);
+
+  // Labels state
+  const [labels, setLabels] = useState<string[]>([]);
+  const [labelInput, setLabelInput] = useState('');
+
+  const parseBatchSymbols = (text: string): string[] => {
+    return text
+      .split(/[\n,;]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(s => s.length > 0 && /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(s));
+  };
+
+  const handleBatchSymbolsChange = (text: string) => {
+    setBatchSymbolsInput(text);
+    setBatchSymbols(parseBatchSymbols(text));
+  };
+
+  const handleBatchFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      setBatchSymbolsInput(text);
+      setBatchSymbols(parseBatchSymbols(text));
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const addLabel = (label: string) => {
+    const trimmed = label.trim();
+    if (trimmed && !labels.includes(trimmed)) {
+      setLabels([...labels, trimmed]);
+    }
+    setLabelInput('');
+  };
+
+  const removeLabel = (label: string) => {
+    setLabels(labels.filter(l => l !== label));
+  };
+
+  const handleLabelKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addLabel(labelInput);
+    }
+  };
 
   // Indicator add form state
   const [newIndicatorType, setNewIndicatorType] = useState('sma');
@@ -490,13 +543,20 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const handleNext = () => {
     if (currentStep === 1) {
-      if (!wizardData.ticker) {
-        setError('Ticker is required');
-        return;
-      }
-      if (!validateTicker(wizardData.ticker)) {
-        setError('Invalid ticker format. Use 1-5 uppercase letters (e.g., AAPL, MSFT)');
-        return;
+      if (batchMode) {
+        if (batchSymbols.length === 0) {
+          setError('Enter at least one valid symbol for batch creation');
+          return;
+        }
+      } else {
+        if (!wizardData.ticker) {
+          setError('Ticker is required');
+          return;
+        }
+        if (!validateTicker(wizardData.ticker)) {
+          setError('Invalid ticker format. Use 1-5 uppercase letters (e.g., AAPL, MSFT)');
+          return;
+        }
       }
       if (wizardData.startDate && wizardData.endDate) {
         const start = new Date(wizardData.startDate);
@@ -580,8 +640,27 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             fundamentals_config: fundamentalsConfig
           }),
         });
+      } else if (batchMode && batchSymbols.length > 0) {
+        // Batch Create: POST to /batch
+        response = await fetch('http://localhost:8000/api/datasets/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            symbols: batchSymbols,
+            name: wizardData.name || undefined,
+            timeframe: wizardData.timeframe,
+            start_date: wizardData.startDate || undefined,
+            end_date: wizardData.endDate || undefined,
+            data_provider: wizardData.dataProvider,
+            normalization_buffer_pct: wizardData.normalizationBufferPct,
+            technical_indicators: technicalIndicators,
+            sentiment_config: sentimentConfig,
+            fundamentals_config: fundamentalsConfig,
+            labels: labels.length > 0 ? labels : undefined
+          }),
+        });
       } else {
-        // Create: POST to /
+        // Single Create: POST to /
         response = await fetch('http://localhost:8000/api/datasets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -595,7 +674,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             normalization_buffer_pct: wizardData.normalizationBufferPct,
             technical_indicators: technicalIndicators,
             sentiment_config: sentimentConfig,
-            fundamentals_config: fundamentalsConfig
+            fundamentals_config: fundamentalsConfig,
+            labels: labels.length > 0 ? labels : undefined
           }),
         });
       }
@@ -611,6 +691,11 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       // Reset wizard
       setCurrentStep(1);
       setWizardData(getDefaultWizardData());
+      setBatchMode(false);
+      setBatchSymbolsInput('');
+      setBatchSymbols([]);
+      setLabels([]);
+      setLabelInput('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -623,13 +708,13 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
       switch (mode) {
         case 'duplicate': return 'Duplicating...';
         case 'edit': return 'Updating...';
-        default: return 'Creating...';
+        default: return batchMode ? `Creating ${batchSymbols.length} datasets...` : 'Creating...';
       }
     }
     switch (mode) {
       case 'duplicate': return 'Duplicate Dataset';
       case 'edit': return 'Update Dataset';
-      default: return 'Create Dataset';
+      default: return batchMode ? `Create ${batchSymbols.length} Datasets` : 'Create Dataset';
     }
   };
 
@@ -665,38 +750,101 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
   const renderStep1 = () => (
     <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
-          Ticker Symbol <span className="text-red-500">*</span>
-        </label>
-        <input
-          type="text"
-          value={wizardData.ticker}
-          onChange={(e) => setWizardData({ ...wizardData, ticker: e.target.value.toUpperCase() })}
-          placeholder="e.g., AAPL, MSFT, GOOGL"
-          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100 ${
-            tickerError
-              ? 'border-red-500 focus:ring-red-500'
-              : 'border-gray-300 dark:border-gray-600'
-          }`}
-        />
-        {tickerError && (
-          <p className="text-xs text-red-500 mt-1">{tickerError}</p>
-        )}
-      </div>
+      {/* Batch mode toggle - only in create mode */}
+      {mode === 'create' && (
+        <div className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+          <input
+            type="checkbox"
+            id="batchMode"
+            checked={batchMode}
+            onChange={(e) => setBatchMode(e.target.checked)}
+            className="rounded border-gray-300 dark:border-gray-600"
+          />
+          <label htmlFor="batchMode" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Create multiple datasets (batch mode)
+          </label>
+        </div>
+      )}
+
+      {/* Single ticker input */}
+      {!batchMode && (
+        <div>
+          <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+            Ticker Symbol <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={wizardData.ticker}
+            onChange={(e) => setWizardData({ ...wizardData, ticker: e.target.value.toUpperCase() })}
+            placeholder="e.g., AAPL, MSFT, GOOGL"
+            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100 ${
+              tickerError
+                ? 'border-red-500 focus:ring-red-500'
+                : 'border-gray-300 dark:border-gray-600'
+            }`}
+          />
+          {tickerError && (
+            <p className="text-xs text-red-500 mt-1">{tickerError}</p>
+          )}
+        </div>
+      )}
+
+      {/* Batch symbols input */}
+      {batchMode && (
+        <div>
+          <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+            Symbols ({batchSymbols.length} parsed) <span className="text-red-500">*</span>
+          </label>
+          <div className="flex gap-2">
+            <textarea
+              value={batchSymbolsInput}
+              onChange={(e) => handleBatchSymbolsChange(e.target.value)}
+              placeholder="Enter symbols, one per line or comma-separated&#10;e.g.:&#10;AAPL&#10;MSFT&#10;GOOGL"
+              rows={5}
+              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="flex flex-col gap-2">
+              <label className="px-3 py-2 bg-gray-100 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-500 cursor-pointer flex items-center gap-1 text-sm">
+                <Upload size={14} />
+                Upload .txt
+                <input
+                  type="file"
+                  accept=".txt"
+                  onChange={handleBatchFileUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+          {batchSymbols.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-2">
+              {batchSymbols.slice(0, 20).map(s => (
+                <span key={s} className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full">
+                  {s}
+                </span>
+              ))}
+              {batchSymbols.length > 20 && (
+                <span className="px-2 py-0.5 text-xs text-gray-500">+{batchSymbols.length - 20} more</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div>
         <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
-          Dataset Name
+          {batchMode ? 'Batch Name' : 'Dataset Name'}
         </label>
         <input
           type="text"
           value={wizardData.name}
           onChange={(e) => setWizardData({ ...wizardData, name: e.target.value })}
-          placeholder={wizardData.ticker ? `${wizardData.ticker}_${wizardData.timeframe}` : 'Auto-generated from ticker'}
+          placeholder={batchMode ? 'Optional batch name (used in batch label)' : (wizardData.ticker ? `${wizardData.ticker}_${wizardData.timeframe}` : 'Auto-generated from ticker')}
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
         />
-        <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">Leave empty to auto-generate from ticker and timeframe</p>
+        <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">
+          {batchMode ? 'Used as batch label prefix (e.g., batch-SP500)' : 'Leave empty to auto-generate from ticker and timeframe'}
+        </p>
       </div>
 
       <div>
@@ -744,6 +892,44 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         ) : (
           <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">Leave empty for today</p>
         )}
+      </div>
+
+      {/* Labels input */}
+      <div>
+        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Labels</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={labelInput}
+            onChange={(e) => setLabelInput(e.target.value)}
+            onKeyDown={handleLabelKeyDown}
+            onBlur={() => { if (labelInput.trim()) addLabel(labelInput); }}
+            placeholder="Type a label and press Enter"
+            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        {labels.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-2">
+            {labels.map(label => (
+              <span
+                key={label}
+                className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full px-2 py-0.5 text-xs"
+              >
+                {label}
+                <button
+                  onClick={() => removeLabel(label)}
+                  className="hover:text-blue-900 dark:hover:text-blue-100"
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-gray-400 dark:text-gray-300 mt-1">
+          Optional tags for organizing datasets. Press Enter or comma to add.
+          {batchMode && ' A batch label is auto-added.'}
+        </p>
       </div>
     </div>
   );

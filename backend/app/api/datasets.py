@@ -75,6 +75,37 @@ router = APIRouter()
 _dataset_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5, thread_name_prefix="dataset_gen")
 
 
+def check_dataset_compatibility(dataframes: list) -> dict:
+    """Check if multiple DataFrames have identical columns in the same order."""
+    if len(dataframes) <= 1:
+        return {'compatible': True, 'message': 'Single dataset is always compatible',
+                'common_columns': list(dataframes[0].columns) if dataframes else []}
+
+    reference_cols = list(dataframes[0].columns)
+    for i, df in enumerate(dataframes[1:], 1):
+        current_cols = list(df.columns)
+        if current_cols != reference_cols:
+            missing = set(reference_cols) - set(current_cols)
+            extra = set(current_cols) - set(reference_cols)
+            order_diff = current_cols != reference_cols and set(current_cols) == set(reference_cols)
+            parts = []
+            if missing:
+                parts.append(f"missing columns: {missing}")
+            if extra:
+                parts.append(f"extra columns: {extra}")
+            if order_diff:
+                parts.append("column order differs")
+            return {
+                'compatible': False,
+                'message': f"Dataset {i+1} incompatible: {'; '.join(parts)}",
+                'reference_columns': reference_cols,
+                'dataset_columns': current_cols
+            }
+
+    return {'compatible': True, 'message': 'All datasets compatible',
+            'common_columns': reference_cols}
+
+
 def calculate_regen_flags(old_config: Dict[str, Any], new_config: Dict[str, Any]) -> DatasetRegenerate:
     """
     Calculate which dataset components need regeneration based on config differences.
@@ -753,6 +784,7 @@ async def create_dataset(
             sentiment_config=dataset_create.sentiment_config,
             generation_config=generation_config,
             normalization_buffer_pct=dataset_create.normalization_buffer_pct,
+            labels=dataset_create.labels,
             file_path=str(file_path)
         )
 
@@ -787,6 +819,163 @@ async def create_dataset(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create dataset: {str(e)}"
         )
+
+
+@router.post("/batch", status_code=status.HTTP_201_CREATED)
+async def create_batch_datasets(
+    batch_request: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Create multiple datasets from a list of symbols with shared configuration.
+
+    Args:
+        batch_request: Dict with symbols list + shared dataset config + optional labels
+        db: Database session
+
+    Returns:
+        List of created dataset IDs
+    """
+    try:
+        symbols = batch_request.get('symbols', [])
+        if not symbols:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="symbols list is required and cannot be empty"
+            )
+
+        # Extract shared config
+        timeframe = batch_request.get('timeframe', '1d')
+        start_date_str = batch_request.get('start_date')
+        end_date_str = batch_request.get('end_date')
+        data_provider = batch_request.get('data_provider', 'yfinance')
+        technical_indicators = batch_request.get('technical_indicators')
+        sentiment_config = batch_request.get('sentiment_config')
+        fundamentals_config = batch_request.get('fundamentals_config')
+        normalization_buffer_pct = batch_request.get('normalization_buffer_pct', 0.35)
+        indicator_collection_id = batch_request.get('indicator_collection_id')
+        user_labels = batch_request.get('labels', [])
+        batch_name = batch_request.get('name')
+
+        # Generate batch label
+        if not batch_name:
+            batch_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        batch_label = f"batch-{batch_name}"
+
+        # Combine labels: batch label + user labels
+        combined_labels = [batch_label] + (user_labels or [])
+
+        # Calculate dates
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        else:
+            end_date = datetime.now()
+
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        else:
+            start_date = end_date - timedelta(days=365)
+
+        created_ids = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        for symbol in symbols:
+            symbol = symbol.strip().upper()
+            if not symbol:
+                continue
+
+            dataset_name = f"{symbol}_{timeframe}_{timestamp}"
+
+            generation_config = {
+                "data_provider": data_provider,
+                "original_start_date": start_date_str,
+                "original_end_date": end_date_str,
+                "indicator_collection_id": indicator_collection_id,
+                "created_at": datetime.now().isoformat(),
+                "batch_name": batch_name
+            }
+
+            datasets_dir = Path("datasets")
+            datasets_dir.mkdir(exist_ok=True)
+            file_path = datasets_dir / f"{dataset_name}.csv"
+
+            db_dataset = Dataset(
+                name=dataset_name,
+                ticker=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date,
+                rows_count=0,
+                status=DatasetStatus.BUILDING.value,
+                technical_indicators=technical_indicators,
+                fundamentals_config=fundamentals_config,
+                sentiment_config=sentiment_config,
+                generation_config=generation_config,
+                normalization_buffer_pct=normalization_buffer_pct,
+                labels=combined_labels,
+                file_path=str(file_path)
+            )
+
+            db.add(db_dataset)
+            db.commit()
+            db.refresh(db_dataset)
+
+            dataset_config = {
+                'ticker': symbol,
+                'timeframe': timeframe,
+                'start_date': start_date_str,
+                'end_date': end_date_str,
+                'data_provider': data_provider,
+                'technical_indicators': technical_indicators,
+                'sentiment_config': sentiment_config,
+                'fundamentals_config': fundamentals_config,
+            }
+
+            _dataset_executor.submit(_build_dataset_in_background, db_dataset.id, dataset_config)
+            created_ids.append(db_dataset.id)
+
+        logger.info(f"Batch created {len(created_ids)} datasets with label '{batch_label}'")
+
+        return {
+            "created_ids": created_ids,
+            "count": len(created_ids),
+            "batch_label": batch_label
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating batch datasets: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create batch datasets: {str(e)}"
+        )
+
+
+@router.post("/check-compatibility")
+async def check_compatibility_endpoint(request: dict, db: Session = Depends(get_db)):
+    """Check if multiple datasets have identical columns for multi-dataset training."""
+    dataset_ids = request.get('dataset_ids', [])
+    if len(dataset_ids) < 2:
+        return {'compatible': True, 'message': 'Need at least 2 datasets to check'}
+
+    dataframes = []
+    dataset_names = []
+    for ds_id in dataset_ids:
+        dataset = db.query(Dataset).filter(Dataset.id == ds_id).first()
+        if not dataset or not dataset.file_path:
+            raise HTTPException(status_code=404, detail=f"Dataset {ds_id} not found")
+        file_path = Path(dataset.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"Dataset {ds_id} file not found")
+        df = pd.read_csv(file_path)
+        dataframes.append(df)
+        dataset_names.append(dataset.name)
+
+    result = check_dataset_compatibility(dataframes)
+    result['dataset_names'] = dataset_names
+    return result
 
 
 @router.get("", response_model=DatasetListResponse)

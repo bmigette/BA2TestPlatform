@@ -11,7 +11,55 @@ import os
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Test database - MUST be set before any app imports
+TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "test_job_payloads.db")
+TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "AAPL_1h_test.csv")
+
+if os.path.exists(TEST_DB_PATH):
+    os.remove(TEST_DB_PATH)
+os.environ['DATABASE_URL'] = f"sqlite:///{TEST_DB_PATH}"
+
 from app.services.job_handler import handle_training_job
+
+
+@pytest.fixture(scope="module")
+def test_db():
+    """Set up test database with a real dataset."""
+    from app.models.database import engine, Base, SessionLocal
+    import app.models  # noqa: F401 - Register all models
+
+    Base.metadata.create_all(bind=engine)
+
+    db = SessionLocal()
+
+    import pandas as pd
+    from datetime import datetime
+    df = pd.read_csv(TEST_DATA_PATH)
+
+    from app.models.dataset import Dataset, DatasetStatus
+    dataset = Dataset(
+        name="AAPL_1h_test",
+        ticker="AAPL",
+        timeframe="1h",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 6, 30),
+        rows_count=len(df),
+        status=DatasetStatus.READY.value,
+        file_path=TEST_DATA_PATH,
+    )
+    db.add(dataset)
+    db.commit()
+    db.refresh(dataset)
+
+    yield db, dataset.id
+
+    db.close()
+    engine.dispose()
+    if os.path.exists(TEST_DB_PATH):
+        try:
+            os.remove(TEST_DB_PATH)
+        except PermissionError:
+            pass
 
 
 # Sample payloads for testing
@@ -229,19 +277,10 @@ class TestJobPayloadsDryRun:
     """Test actual job payloads with dry_run=True (requires database with dataset)."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
-        """Check if we can connect to the database."""
-        try:
-            from app.models.database import get_db
-            from app.models.dataset import Dataset
-            db = next(get_db())
-            dataset = db.query(Dataset).first()
-            if dataset is None:
-                pytest.skip("No datasets in database - run with a populated database")
-            # Use the actual dataset ID
-            self.dataset_id = dataset.id
-        except Exception as e:
-            pytest.skip(f"Database not available: {e}")
+    def setup(self, test_db):
+        """Use test database dataset."""
+        _, dataset_id = test_db
+        self.dataset_id = dataset_id
 
     def _update_payload_dataset(self, payload: dict) -> dict:
         """Update payload to use actual dataset ID."""

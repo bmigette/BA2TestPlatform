@@ -208,6 +208,40 @@ class DartsTrainingService(ITrainingService):
 
         return train_series, test_series, train_covariates, test_covariates
 
+    def prepare_multi_series(
+        self, dataframes: List[pd.DataFrame], target_column: str = 'Close',
+        feature_columns: List[str] = None, timeframe: str = 'daily'
+    ) -> Tuple[List[Any], List[Any]]:
+        """Prepare multiple DataFrames as separate TimeSeries for multi-series training."""
+        all_series = []
+        all_covariates = []
+        for i, df in enumerate(dataframes):
+            series, covariates = self.prepare_data(df, target_column, feature_columns, timeframe)
+            all_series.append(series)
+            all_covariates.append(covariates)
+            logger.info(f"Prepared series {i+1}/{len(dataframes)}: {len(series)} points")
+        return all_series, all_covariates
+
+    def prepare_multi_series_split(
+        self, dataframes: List[pd.DataFrame], train_ratio: float = 0.8,
+        target_column: str = 'Close', feature_columns: List[str] = None,
+        timeframe: str = 'daily'
+    ) -> Tuple[List[Any], List[Any], List[Any], List[Any]]:
+        """Prepare and split multiple DataFrames into train/test TimeSeries lists."""
+        train_series_list = []
+        test_series_list = []
+        train_cov_list = []
+        test_cov_list = []
+        for i, df in enumerate(dataframes):
+            train_s, test_s, train_c, test_c = self.prepare_data_split(
+                df, train_ratio, target_column, feature_columns, timeframe
+            )
+            train_series_list.append(train_s)
+            test_series_list.append(test_s)
+            train_cov_list.append(train_c)
+            test_cov_list.append(test_c)
+        return train_series_list, test_series_list, train_cov_list, test_cov_list
+
     def _infer_frequency(self, timeframe: str, df: pd.DataFrame) -> str:
         """
         Infer pandas frequency string from timeframe.
@@ -292,6 +326,32 @@ class DartsTrainingService(ITrainingService):
         logger.info(f"Starting training with {len(train_series)} data points")
 
         try:
+            # Check if multi-series mode (list of TimeSeries)
+            is_multi = isinstance(train_series, list)
+
+            if is_multi:
+                # Multi-series training: model.fit(series=[ts1, ts2, ...])
+                fit_kwargs = {'verbose': verbose}
+                if covariates is not None and isinstance(covariates, list):
+                    valid_covariates = [c for c in covariates if c is not None]
+                    if len(valid_covariates) == len(train_series):
+                        model_name = model.__class__.__name__
+                        if model_name != 'RNNModel':
+                            fit_kwargs['past_covariates'] = valid_covariates
+                model.fit(train_series, **fit_kwargs)
+
+                training_time = (datetime.now() - start_time).total_seconds()
+                total_samples = sum(len(s) for s in train_series)
+                metrics = {
+                    'training_time_seconds': training_time,
+                    'train_samples': total_samples,
+                    'num_series': len(train_series),
+                    'status': 'completed'
+                }
+                logger.info(f"Multi-series training completed in {training_time:.2f}s ({len(train_series)} series, {total_samples} total points)")
+                return metrics
+
+            # Single series training (existing code below)
             # Build fit kwargs with optional val_series for validation metrics during training
             fit_kwargs = {'verbose': verbose}
 

@@ -16,10 +16,58 @@ import numpy as np
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Test database - MUST be set before any app imports
+TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "test_optimization.db")
+TEST_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "AAPL_1h_test.csv")
+
+if os.path.exists(TEST_DB_PATH):
+    os.remove(TEST_DB_PATH)
+os.environ['DATABASE_URL'] = f"sqlite:///{TEST_DB_PATH}"
+
 from app.services.job_handler import handle_training_job
 
 # Check if running on Mac with MPS - these tests may be flaky
 IS_MAC = platform.system() == "Darwin"
+
+
+@pytest.fixture(scope="module")
+def test_db():
+    """Set up test database with a real dataset."""
+    from app.models.database import engine, Base, SessionLocal
+    import app.models  # noqa: F401 - Register all models
+
+    Base.metadata.create_all(bind=engine)
+
+    db = SessionLocal()
+
+    import pandas as pd
+    from datetime import datetime
+    df = pd.read_csv(TEST_DATA_PATH)
+
+    from app.models.dataset import Dataset, DatasetStatus
+    dataset = Dataset(
+        name="AAPL_1h_test",
+        ticker="AAPL",
+        timeframe="1h",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 6, 30),
+        rows_count=len(df),
+        status=DatasetStatus.READY.value,
+        file_path=TEST_DATA_PATH,
+    )
+    db.add(dataset)
+    db.commit()
+    db.refresh(dataset)
+
+    yield db, dataset.id
+
+    db.close()
+    engine.dispose()
+    if os.path.exists(TEST_DB_PATH):
+        try:
+            os.remove(TEST_DB_PATH)
+        except PermissionError:
+            pass
 
 
 # Minimal payload for quick optimization test
@@ -86,22 +134,10 @@ class TestOptimization:
     """Test genetic optimization end-to-end."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
-        """Check if we can connect to the database and get a dataset."""
-        try:
-            from app.models.database import get_db
-            from app.models.dataset import Dataset
-            db = next(get_db())
-            dataset = db.query(Dataset).first()
-            if dataset is None:
-                pytest.skip("No datasets in database - run with a populated database")
-            self.dataset_id = dataset.id
-            self.dataset_rows = dataset.rows_count
-            # Need enough data for train/test split + sequences
-            if self.dataset_rows < 200:
-                pytest.skip(f"Dataset too small ({self.dataset_rows} rows) - need at least 200")
-        except Exception as e:
-            pytest.skip(f"Database not available: {e}")
+    def setup(self, test_db):
+        """Use test database dataset."""
+        _, dataset_id = test_db
+        self.dataset_id = dataset_id
 
     def _update_payload_dataset(self, payload: dict) -> dict:
         """Update payload to use actual dataset ID."""

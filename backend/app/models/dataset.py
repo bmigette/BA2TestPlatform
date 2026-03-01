@@ -45,6 +45,9 @@ class Dataset(Base):
     # indicator_collection_id, and all parameters used during creation
     generation_config = Column(JSON, nullable=True)
 
+    # Labels for organizing/filtering datasets (e.g., ["batch-SP500", "daily"])
+    labels = Column(JSON, nullable=True)
+
     # Normalization buffer percentage for live data headroom (default 35%)
     normalization_buffer_pct = Column(Float, default=0.35, nullable=False)
 

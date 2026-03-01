@@ -986,3 +986,162 @@ async def cleanup_orphan_models(dry_run: bool = Query(True, description="If True
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clean orphan models: {str(e)}"
         )
+
+
+# ============================================================================
+# OHLCV Cache Endpoints
+# ============================================================================
+
+@router.get("/ohlcv/providers")
+async def list_ohlcv_providers():
+    """
+    List available OHLCV data providers and their configuration status.
+
+    Returns:
+        List of OHLCV providers with availability info
+    """
+    import os
+
+    providers = [
+        {
+            "id": "yfinance",
+            "name": "Yahoo Finance",
+            "description": "Free OHLCV data from Yahoo Finance (no API key required)",
+            "requires_api_key": False,
+            "api_key_configured": True,
+            "available": True
+        },
+        {
+            "id": "fmp",
+            "name": "Financial Modeling Prep",
+            "description": "OHLCV data from FMP API",
+            "requires_api_key": True,
+            "api_key_configured": bool(os.getenv("FMP_API_KEY")),
+            "available": bool(os.getenv("FMP_API_KEY"))
+        }
+    ]
+
+    return {
+        "providers": providers,
+        "default": "yfinance"
+    }
+
+
+@router.post("/ohlcv/fetch-cache")
+async def fetch_ohlcv_cache(request: Dict[str, Any]):
+    """
+    Queue OHLCV cache fetch jobs for multiple symbols and timeframes.
+
+    Each symbol gets its own background task that fetches all requested timeframes.
+
+    Args:
+        request: Dict with provider, symbols list, and timeframes list
+
+    Returns:
+        List of queued task IDs
+    """
+    from app.services.task_queue import get_task_queue
+
+    provider = request.get('provider', 'yfinance')
+    symbols = request.get('symbols', [])
+    timeframes = request.get('timeframes', ['1d'])
+
+    if not symbols:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="symbols list is required and cannot be empty"
+        )
+
+    if not timeframes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="timeframes list is required and cannot be empty"
+        )
+
+    task_queue = get_task_queue()
+    task_ids = []
+
+    for symbol in symbols:
+        symbol = symbol.strip().upper()
+        if not symbol:
+            continue
+
+        task_id = task_queue.queue_task(
+            task_type='ohlcv_cache_fetch',
+            name=f'Cache OHLCV: {symbol}',
+            payload={
+                'provider': provider,
+                'symbol': symbol,
+                'timeframes': timeframes
+            },
+            description=f'Fetch and cache OHLCV data for {symbol} ({", ".join(timeframes)})',
+            max_retries=1,
+            timeout_seconds=600
+        )
+        task_ids.append({'symbol': symbol, 'task_id': task_id})
+
+    logger.info(f"Queued {len(task_ids)} OHLCV cache fetch tasks")
+
+    return {
+        "task_ids": task_ids,
+        "count": len(task_ids),
+        "provider": provider,
+        "timeframes": timeframes
+    }
+
+
+@router.get("/ohlcv/cache-status")
+async def get_ohlcv_cache_status():
+    """
+    Get information about existing OHLCV cache files.
+
+    Scans the cache directory for CSV files and returns metadata.
+
+    Returns:
+        List of cache file entries with symbol, interval, size, and modification time
+    """
+    cache_dir = Path("backend/datasets/cache")
+    entries = []
+
+    if cache_dir.exists():
+        for filepath in cache_dir.glob("*.csv"):
+            try:
+                # Parse filename: {SYMBOL}_{interval}.csv
+                name_parts = filepath.stem.rsplit('_', 1)
+                if len(name_parts) == 2:
+                    symbol, interval = name_parts
+                else:
+                    symbol = filepath.stem
+                    interval = "unknown"
+
+                stat = filepath.stat()
+                file_size = stat.st_size
+
+                # Count rows (header + data)
+                rows = 0
+                try:
+                    with open(filepath, 'r') as f:
+                        rows = sum(1 for _ in f) - 1  # Subtract header
+                except Exception:
+                    pass
+
+                entries.append({
+                    "symbol": symbol,
+                    "interval": interval,
+                    "file_size": file_size,
+                    "file_size_mb": round(file_size / (1024 * 1024), 2),
+                    "last_modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "rows": max(0, rows),
+                    "filename": filepath.name
+                })
+            except Exception as e:
+                logger.warning(f"Error reading cache file {filepath}: {e}")
+
+    # Sort by symbol then interval
+    entries.sort(key=lambda x: (x['symbol'], x['interval']))
+
+    return {
+        "cache_files": entries,
+        "count": len(entries),
+        "cache_directory": str(cache_dir)
+    }

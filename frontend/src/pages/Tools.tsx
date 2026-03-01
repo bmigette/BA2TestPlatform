@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp, Trash2, HardDrive } from 'lucide-react';
+import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp, Trash2, HardDrive, Database, Upload } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 interface NewsArticle {
@@ -30,7 +30,7 @@ interface NewsProvider {
 }
 
 const Tools: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro' | 'maintenance'>('news');
+  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro' | 'maintenance' | 'ohlcv'>('news');
 
   return (
     <div className="p-6">
@@ -87,6 +87,19 @@ const Tools: React.FC = () => {
             </div>
           </button>
           <button
+            onClick={() => setActiveTab('ohlcv')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'ohlcv'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Database size={16} />
+              OHLCV Data
+            </div>
+          </button>
+          <button
             onClick={() => setActiveTab('maintenance')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'maintenance'
@@ -106,7 +119,402 @@ const Tools: React.FC = () => {
       {activeTab === 'news' && <NewsProviderTester />}
       {activeTab === 'fundamentals' && <FundamentalsTester />}
       {activeTab === 'macro' && <MacroTester />}
+      {activeTab === 'ohlcv' && <OHLCVCacheTool />}
       {activeTab === 'maintenance' && <MaintenancePanel />}
+    </div>
+  );
+};
+
+// OHLCV Cache Tool Component
+interface OHLCVProvider {
+  id: string;
+  name: string;
+  description: string;
+  available: boolean;
+}
+
+interface CacheFile {
+  symbol: string;
+  interval: string;
+  file_size_mb: number;
+  last_modified: string;
+  rows: number;
+  filename: string;
+}
+
+interface FetchTask {
+  symbol: string;
+  task_id: string;
+  status?: string;
+  progress?: number;
+  progress_message?: string;
+}
+
+const OHLCVCacheTool: React.FC = () => {
+  const [provider, setProvider] = useState('yfinance');
+  const [providers, setProviders] = useState<OHLCVProvider[]>([]);
+  const [symbolInput, setSymbolInput] = useState('');
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const [timeframes, setTimeframes] = useState<string[]>(['1d']);
+  const [fetching, setFetching] = useState(false);
+  const [tasks, setTasks] = useState<FetchTask[]>([]);
+  const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const availableTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+
+  // Fetch providers and cache status on mount
+  useEffect(() => {
+    fetchProviders();
+    fetchCacheStatus();
+  }, []);
+
+  // Poll task progress when tasks are active
+  useEffect(() => {
+    const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
+    if (activeTasks.length === 0) return;
+
+    const interval = setInterval(async () => {
+      const updatedTasks = await Promise.all(
+        tasks.map(async (task) => {
+          if (task.status === 'completed' || task.status === 'failed') return task;
+          try {
+            const resp = await fetch(`http://localhost:8000/api/tasks/${task.task_id}/progress`);
+            if (resp.ok) {
+              const data = await resp.json();
+              return { ...task, status: data.status, progress: data.progress, progress_message: data.progress_message };
+            }
+          } catch { /* ignore */ }
+          return task;
+        })
+      );
+      setTasks(updatedTasks);
+
+      // Refresh cache status when all tasks complete
+      const stillActive = updatedTasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
+      if (stillActive.length === 0) {
+        fetchCacheStatus();
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [tasks]);
+
+  const fetchProviders = async () => {
+    try {
+      const resp = await fetch('http://localhost:8000/api/tools/ohlcv/providers');
+      if (resp.ok) {
+        const data = await resp.json();
+        setProviders(data.providers || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch OHLCV providers:', err);
+    }
+  };
+
+  const fetchCacheStatus = async () => {
+    try {
+      const resp = await fetch('http://localhost:8000/api/tools/ohlcv/cache-status');
+      if (resp.ok) {
+        const data = await resp.json();
+        setCacheFiles(data.cache_files || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch cache status:', err);
+    }
+  };
+
+  const parseSymbols = (text: string): string[] => {
+    return text
+      .split(/[\n,;]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(s => s.length > 0 && /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(s));
+  };
+
+  const handleSymbolInputChange = (text: string) => {
+    setSymbolInput(text);
+    setSymbols(parseSymbols(text));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      setSymbolInput(text);
+      setSymbols(parseSymbols(text));
+    };
+    reader.readAsText(file);
+    // Reset input so same file can be re-uploaded
+    e.target.value = '';
+  };
+
+  const toggleTimeframe = (tf: string) => {
+    setTimeframes(prev =>
+      prev.includes(tf) ? prev.filter(t => t !== tf) : [...prev, tf]
+    );
+  };
+
+  const handleFetchCache = async () => {
+    if (symbols.length === 0) {
+      setError('Please enter at least one symbol');
+      return;
+    }
+    if (timeframes.length === 0) {
+      setError('Please select at least one timeframe');
+      return;
+    }
+
+    setFetching(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const resp = await fetch('http://localhost:8000/api/tools/ohlcv/fetch-cache', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, symbols, timeframes })
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        const newTasks: FetchTask[] = (data.task_ids || []).map((t: any) => ({
+          symbol: t.symbol,
+          task_id: t.task_id,
+          status: 'queued',
+          progress: 0,
+          progress_message: 'Queued'
+        }));
+        setTasks(newTasks);
+        setMessage(`Queued ${data.count} cache fetch tasks`);
+      } else {
+        const errData = await resp.json();
+        setError(errData.detail || 'Failed to queue cache fetch');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Fetch Form */}
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">
+          OHLCV Cache Prefetcher
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Prefetch and cache OHLCV data for multiple symbols and timeframes. Cached data speeds up dataset creation.
+        </p>
+
+        <div className="space-y-4">
+          {/* Provider */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Provider
+              </label>
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              >
+                {providers.map(p => (
+                  <option key={p.id} value={p.id} disabled={!p.available}>
+                    {p.name} {!p.available && '(Not configured)'}
+                  </option>
+                ))}
+                {providers.length === 0 && (
+                  <option value="yfinance">Yahoo Finance</option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          {/* Symbols */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Symbols ({symbols.length} parsed)
+            </label>
+            <div className="flex gap-2">
+              <textarea
+                value={symbolInput}
+                onChange={(e) => handleSymbolInputChange(e.target.value)}
+                placeholder="Enter symbols, one per line (e.g., AAPL, MSFT, GOOGL)"
+                rows={4}
+                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
+              />
+              <div className="flex flex-col gap-2">
+                <label className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer flex items-center gap-1 text-sm">
+                  <Upload size={14} />
+                  Upload .txt
+                  <input
+                    type="file"
+                    accept=".txt"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+            {symbols.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {symbols.map(s => (
+                  <span key={s} className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Timeframes */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Timeframes
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {availableTimeframes.map(tf => (
+                <label
+                  key={tf}
+                  className={`px-3 py-1.5 rounded-full cursor-pointer text-sm transition-colors ${
+                    timeframes.includes(tf)
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={timeframes.includes(tf)}
+                    onChange={() => toggleTimeframe(tf)}
+                    className="sr-only"
+                  />
+                  {tf}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Fetch Button */}
+          <button
+            onClick={handleFetchCache}
+            disabled={fetching || symbols.length === 0 || timeframes.length === 0}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            {fetching ? (
+              <>
+                <Loader size={16} className="animate-spin" />
+                Queueing...
+              </>
+            ) : (
+              <>
+                <Database size={16} />
+                Fetch & Cache ({symbols.length} symbols x {timeframes.length} timeframes)
+              </>
+            )}
+          </button>
+        </div>
+
+        {error && (
+          <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center gap-2">
+            <XCircle size={16} />
+            {error}
+          </div>
+        )}
+
+        {message && (
+          <div className="mt-4 p-4 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-md flex items-center gap-2">
+            <CheckCircle size={16} />
+            {message}
+          </div>
+        )}
+      </div>
+
+      {/* Active Tasks */}
+      {tasks.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
+            Fetch Tasks ({tasks.filter(t => t.status === 'completed').length}/{tasks.length} completed)
+          </h3>
+          <div className="space-y-2">
+            {tasks.map(task => (
+              <div key={task.task_id} className="flex items-center gap-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg">
+                <div className="flex-shrink-0">
+                  {task.status === 'completed' ? (
+                    <CheckCircle size={16} className="text-green-500" />
+                  ) : task.status === 'failed' ? (
+                    <XCircle size={16} className="text-red-500" />
+                  ) : (
+                    <Loader size={16} className="text-blue-500 animate-spin" />
+                  )}
+                </div>
+                <div className="flex-1">
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{task.symbol}</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400 ml-2">
+                    {task.progress_message || task.status}
+                  </span>
+                </div>
+                {task.progress !== undefined && task.status !== 'completed' && task.status !== 'failed' && (
+                  <div className="w-24 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all"
+                      style={{ width: `${task.progress}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cache Files */}
+      {cacheFiles.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              Cached Data ({cacheFiles.length} files)
+            </h3>
+            <button
+              onClick={fetchCacheStatus}
+              className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-700">
+                <tr>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Symbol</th>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Interval</th>
+                  <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Rows</th>
+                  <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Size (MB)</th>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Last Modified</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {cacheFiles.map((cf, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">{cf.symbol}</td>
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.interval}</td>
+                    <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{cf.rows.toLocaleString()}</td>
+                    <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{cf.file_size_mb}</td>
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">
+                      {new Date(cf.last_modified).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

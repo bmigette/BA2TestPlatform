@@ -11,6 +11,7 @@ interface Dataset {
   end_date: string;
   rows_count: number;
   created_at: string;
+  labels?: string[];
 }
 
 interface ParameterRanges {
@@ -181,7 +182,13 @@ interface TrainingDateRange {
 const getDefaultState = () => ({
   jobType: 'classification' as 'classification' | 'regression',
   predictionModes: ['shift'] as ('shift' | 'multistep')[],
-  selectedDatasetId: null as number | null,
+  selectedDatasetIds: [] as number[],
+  datasetCompatibility: null as { compatible: boolean; message: string } | null,
+  crossValidation: {
+    enabled: false,
+    mode: 'manual' as 'manual' | 'kfold',
+    testDatasetIds: [] as number[],
+  },
   selectedModels: [] as string[],
   parameterRanges: {
     layersMin: 2,
@@ -348,14 +355,14 @@ const JobWizard: React.FC<JobWizardProps> = ({
   }, []);
 
   const fetchPreview = useCallback(async () => {
-    if (!state.selectedDatasetId || state.predictionTargets.length === 0) return;
+    if (state.selectedDatasetIds.length === 0 || state.predictionTargets.length === 0) return;
 
     setPreviewLoading(true);
     setPreviewError(null);
 
     try {
       // Use the new calculate-targets endpoint with target configs
-      const response = await fetch(`http://localhost:8000/api/datasets/${state.selectedDatasetId}/calculate-targets`, {
+      const response = await fetch(`http://localhost:8000/api/datasets/${state.selectedDatasetIds[0]}/calculate-targets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -376,7 +383,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
       // Convert to preview format with proper train/test splits
       const previewResponse: PreviewResponse = {
-        dataset_id: state.selectedDatasetId,
+        dataset_id: state.selectedDatasetIds[0],
         dataset_rows: totalRows,
         train_rows: trainRows,
         test_rows: testRows,
@@ -421,18 +428,37 @@ const JobWizard: React.FC<JobWizardProps> = ({
     } finally {
       setPreviewLoading(false);
     }
-  }, [state.selectedDatasetId, state.predictionTargets, state.trainTestSplit, getTargetLabel]);
+  }, [state.selectedDatasetIds, state.predictionTargets, state.trainTestSplit, getTargetLabel]);
+
+  const checkCompatibility = useCallback(async (ids: number[]) => {
+    if (ids.length < 2) {
+      setState(prev => ({ ...prev, datasetCompatibility: null }));
+      return;
+    }
+    try {
+      const resp = await fetch('http://localhost:8000/api/datasets/check-compatibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataset_ids: ids })
+      });
+      const data = await resp.json();
+      setState(prev => ({ ...prev, datasetCompatibility: data }));
+    } catch {
+      setState(prev => ({ ...prev, datasetCompatibility: { compatible: false, message: 'Failed to check compatibility' } }));
+    }
+  }, []);
 
   // Refetch preview when prediction targets change (e.g., from loading a profile)
   useEffect(() => {
-    if (currentStep === 3 && state.predictionTargets.length > 0 && state.selectedDatasetId) {
+    if (currentStep === 3 && state.predictionTargets.length > 0 && state.selectedDatasetIds.length > 0) {
       fetchPreview();
     }
-  }, [currentStep, state.predictionTargets, state.selectedDatasetId, fetchPreview]);
+  }, [currentStep, state.predictionTargets, state.selectedDatasetIds, fetchPreview]);
 
   if (!isOpen) return null;
 
-  const selectedDataset = datasets.find(d => d.id === state.selectedDatasetId);
+  const selectedDatasets = datasets.filter(d => state.selectedDatasetIds.includes(d.id));
+  const selectedDataset = selectedDatasets.length === 1 ? selectedDatasets[0] : selectedDatasets.length > 0 ? selectedDatasets[0] : undefined;
 
   const isParameterValid = () => {
     return (
@@ -445,7 +471,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
   const isStep1Valid = () => {
     return (
-      state.selectedDatasetId !== null &&
+      state.selectedDatasetIds.length > 0 &&
       state.selectedModels.length > 0 &&
       isParameterValid() &&
       state.selectedTargetSetIds.length > 0
@@ -634,7 +660,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jobType: state.jobType,
-          datasetId: state.selectedDatasetId,
+          datasetIds: state.selectedDatasetIds,
+          crossValidation: state.selectedDatasetIds.length > 1 ? state.crossValidation : undefined,
           selectedModels: state.selectedModels,
           parameterRanges: state.parameterRanges,
           predictionTargets: state.predictionTargets,
@@ -727,6 +754,8 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 setState={setState}
                 datasets={datasets}
                 selectedDataset={selectedDataset}
+                selectedDatasets={selectedDatasets}
+                checkCompatibility={checkCompatibility}
                 handleModelToggle={handleModelToggle}
                 handleAllModelsToggle={handleAllModelsToggle}
                 targetSets={targetSets}
@@ -749,6 +778,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 state={state}
                 setState={setState}
                 selectedDataset={selectedDataset}
+                selectedDatasets={selectedDatasets}
                 previewData={previewData}
                 previewLoading={previewLoading}
                 previewError={previewError}
@@ -937,6 +967,8 @@ interface Step1Props {
   setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
   datasets: Dataset[];
   selectedDataset: Dataset | undefined;
+  selectedDatasets: Dataset[];
+  checkCompatibility: (ids: number[]) => void;
   handleModelToggle: (id: string) => void;
   handleAllModelsToggle: () => void;
   targetSets: TargetSet[];
@@ -952,6 +984,8 @@ const Step1Settings: React.FC<Step1Props> = ({
   setState,
   datasets,
   selectedDataset,
+  selectedDatasets,
+  checkCompatibility,
   handleModelToggle,
   handleAllModelsToggle,
   targetSets,
@@ -1022,30 +1056,96 @@ const Step1Settings: React.FC<Step1Props> = ({
       {/* Dataset Selection */}
       <div>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Select Dataset
+          Select Datasets
         </label>
-        <select
-          value={state.selectedDatasetId || ''}
-          onChange={(e) => setState(prev => ({ ...prev, selectedDatasetId: e.target.value ? Number(e.target.value) : null }))}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500"
-        >
-          <option value="">Choose a dataset...</option>
+
+        {/* Select by Label */}
+        {(() => {
+          const allLabels = [...new Set(datasets.flatMap(d => d.labels || []))];
+          if (allLabels.length > 0) {
+            return (
+              <div className="mb-3">
+                <span className="text-xs text-gray-500 mr-2">Select by label:</span>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {allLabels.map(label => (
+                    <button
+                      key={label}
+                      onClick={() => {
+                        const labelDatasetIds = datasets.filter(d => (d.labels || []).includes(label)).map(d => d.id);
+                        const allSelected = labelDatasetIds.every(id => state.selectedDatasetIds.includes(id));
+                        const newIds = allSelected
+                          ? state.selectedDatasetIds.filter(id => !labelDatasetIds.includes(id))
+                          : [...new Set([...state.selectedDatasetIds, ...labelDatasetIds])];
+                        setState(prev => ({ ...prev, selectedDatasetIds: newIds }));
+                        checkCompatibility(newIds);
+                      }}
+                      className={`px-2 py-0.5 text-xs rounded-full border ${
+                        datasets.filter(d => (d.labels || []).includes(label)).every(d => state.selectedDatasetIds.includes(d.id))
+                          ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 border-green-300 dark:border-green-700'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-600'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
+        {/* Dataset checkboxes */}
+        <div className="max-h-48 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-2 space-y-1">
           {datasets.map((dataset) => (
-            <option key={dataset.id} value={dataset.id}>
-              {dataset.name} ({dataset.ticker} - {dataset.timeframe} - {dataset.rows_count.toLocaleString()} rows)
-            </option>
+            <label key={dataset.id} className="flex items-center space-x-2 p-1.5 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={state.selectedDatasetIds.includes(dataset.id)}
+                onChange={() => {
+                  const newIds = state.selectedDatasetIds.includes(dataset.id)
+                    ? state.selectedDatasetIds.filter(id => id !== dataset.id)
+                    : [...state.selectedDatasetIds, dataset.id];
+                  setState(prev => ({ ...prev, selectedDatasetIds: newIds }));
+                  checkCompatibility(newIds);
+                }}
+                className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+              />
+              <span className="text-sm text-gray-900 dark:text-gray-100">
+                {dataset.name} ({dataset.ticker} - {dataset.timeframe} - {dataset.rows_count.toLocaleString()} rows)
+              </span>
+              {dataset.labels && dataset.labels.length > 0 && (
+                <span className="flex gap-1">
+                  {dataset.labels.map(l => (
+                    <span key={l} className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full">{l}</span>
+                  ))}
+                </span>
+              )}
+            </label>
           ))}
-        </select>
+        </div>
+
+        {/* Selection count + compatibility */}
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-xs text-gray-500">
+            {state.selectedDatasetIds.length} dataset(s) selected
+          </span>
+          {state.datasetCompatibility && (
+            <span className={`text-xs flex items-center space-x-1 ${state.datasetCompatibility.compatible ? 'text-green-600' : 'text-red-600'}`}>
+              {state.datasetCompatibility.compatible ? 'Compatible' : state.datasetCompatibility.message}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Dataset Details */}
-      {selectedDataset && (
+      {selectedDatasets.length > 0 && (
         <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
           <div className="grid grid-cols-4 gap-4 text-sm">
-            <div><span className="text-gray-500">Ticker:</span> <span className="font-medium">{selectedDataset.ticker}</span></div>
-            <div><span className="text-gray-500">Timeframe:</span> <span className="font-medium">{selectedDataset.timeframe}</span></div>
-            <div><span className="text-gray-500">Rows:</span> <span className="font-medium">{selectedDataset.rows_count.toLocaleString()}</span></div>
-            <div><span className="text-gray-500">Range:</span> <span className="font-medium">{formatDate(selectedDataset.start_date)} - {formatDate(selectedDataset.end_date)}</span></div>
+            <div><span className="text-gray-500">Datasets:</span> <span className="font-medium">{selectedDatasets.length}</span></div>
+            <div><span className="text-gray-500">Tickers:</span> <span className="font-medium">{[...new Set(selectedDatasets.map(d => d.ticker))].join(', ')}</span></div>
+            <div><span className="text-gray-500">Total Rows:</span> <span className="font-medium">{selectedDatasets.reduce((sum, d) => sum + d.rows_count, 0).toLocaleString()}</span></div>
+            <div><span className="text-gray-500">Timeframe:</span> <span className="font-medium">{selectedDatasets[0]?.timeframe}</span></div>
           </div>
 
           {/* Training Date Range Subset */}
@@ -1060,8 +1160,8 @@ const Step1Settings: React.FC<Step1Props> = ({
                     ...prev,
                     useSubsetDateRange: useSubset,
                     trainingDateRange: useSubset ? {
-                      startDate: selectedDataset.start_date.split('T')[0],
-                      endDate: selectedDataset.end_date.split('T')[0]
+                      startDate: selectedDatasets[0].start_date.split('T')[0],
+                      endDate: selectedDatasets[0].end_date.split('T')[0]
                     } : { startDate: null, endDate: null }
                   }));
                 }}
@@ -1079,8 +1179,8 @@ const Step1Settings: React.FC<Step1Props> = ({
                   <input
                     type="date"
                     value={state.trainingDateRange.startDate || ''}
-                    min={selectedDataset.start_date.split('T')[0]}
-                    max={state.trainingDateRange.endDate || selectedDataset.end_date.split('T')[0]}
+                    min={selectedDatasets[0].start_date.split('T')[0]}
+                    max={state.trainingDateRange.endDate || selectedDatasets[0].end_date.split('T')[0]}
                     onChange={(e) => setState(prev => ({
                       ...prev,
                       trainingDateRange: { ...prev.trainingDateRange, startDate: e.target.value }
@@ -1093,8 +1193,8 @@ const Step1Settings: React.FC<Step1Props> = ({
                   <input
                     type="date"
                     value={state.trainingDateRange.endDate || ''}
-                    min={state.trainingDateRange.startDate || selectedDataset.start_date.split('T')[0]}
-                    max={selectedDataset.end_date.split('T')[0]}
+                    min={state.trainingDateRange.startDate || selectedDatasets[0].start_date.split('T')[0]}
+                    max={selectedDatasets[0].end_date.split('T')[0]}
                     onChange={(e) => setState(prev => ({
                       ...prev,
                       trainingDateRange: { ...prev.trainingDateRange, endDate: e.target.value }
@@ -1266,7 +1366,7 @@ const Step1Settings: React.FC<Step1Props> = ({
               <Info size={16} className="text-blue-500 dark:text-blue-400 mt-0.5 flex-shrink-0" />
               <div className="text-sm text-blue-700 dark:text-blue-300">
                 <strong>Multi-timeframe targets:</strong> Some targets don't have an explicit timeframe set.
-                These will use the dataset's base timeframe ({datasets.find(d => d.id === state.selectedDatasetId)?.timeframe || 'unknown'}).
+                These will use the dataset's base timeframe ({selectedDatasets[0]?.timeframe || 'unknown'}).
                 To use a different timeframe for indicators, edit the target in the Dataset Visualization page.
               </div>
             </div>
@@ -1433,13 +1533,123 @@ const Step1Settings: React.FC<Step1Props> = ({
             {state.trainTestSplit}% / {100 - state.trainTestSplit}%
           </div>
         </div>
-        {selectedDataset && (
+        {selectedDatasets.length > 0 && (
           <p className="text-xs text-gray-500 mt-1">
-            Train: {Math.floor(selectedDataset.rows_count * state.trainTestSplit / 100).toLocaleString()} rows,
-            Test: {Math.floor(selectedDataset.rows_count * (100 - state.trainTestSplit) / 100).toLocaleString()} rows
+            Train: {Math.floor(selectedDatasets.reduce((sum, d) => sum + d.rows_count, 0) * state.trainTestSplit / 100).toLocaleString()} rows,
+            Test: {Math.floor(selectedDatasets.reduce((sum, d) => sum + d.rows_count, 0) * (100 - state.trainTestSplit) / 100).toLocaleString()} rows
           </p>
         )}
       </div>
+
+      {/* Cross-Validation (multi-dataset only) */}
+      {state.selectedDatasetIds.length > 1 && (
+        <div className="border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={state.crossValidation.enabled}
+              onChange={(e) => setState(prev => ({
+                ...prev,
+                crossValidation: { ...prev.crossValidation, enabled: e.target.checked }
+              }))}
+              className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+            />
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Dataset Cross-Validation
+            </span>
+          </label>
+
+          {state.crossValidation.enabled && (
+            <div className="mt-3 space-y-3">
+              {/* Mode selector */}
+              <div className="flex space-x-4">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="cvMode"
+                    value="manual"
+                    checked={state.crossValidation.mode === 'manual'}
+                    onChange={() => setState(prev => ({
+                      ...prev,
+                      crossValidation: { ...prev.crossValidation, mode: 'manual' }
+                    }))}
+                    className="w-4 h-4 text-green-600"
+                  />
+                  <span className="text-sm">Manual</span>
+                </label>
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="cvMode"
+                    value="kfold"
+                    checked={state.crossValidation.mode === 'kfold'}
+                    onChange={() => setState(prev => ({
+                      ...prev,
+                      crossValidation: { ...prev.crossValidation, mode: 'kfold' }
+                    }))}
+                    className="w-4 h-4 text-green-600"
+                  />
+                  <span className="text-sm">K-Fold</span>
+                </label>
+              </div>
+
+              {/* Manual mode: assign Train/Test per dataset */}
+              {state.crossValidation.mode === 'manual' && (
+                <div className="space-y-1">
+                  <p className="text-xs text-gray-500 mb-2">Assign each dataset as Train or Test:</p>
+                  {selectedDatasets.map(ds => (
+                    <div key={ds.id} className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded">
+                      <span className="text-sm">{ds.name} ({ds.ticker})</span>
+                      <div className="flex space-x-3">
+                        <label className="flex items-center space-x-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`cv-role-${ds.id}`}
+                            checked={!state.crossValidation.testDatasetIds.includes(ds.id)}
+                            onChange={() => setState(prev => ({
+                              ...prev,
+                              crossValidation: {
+                                ...prev.crossValidation,
+                                testDatasetIds: prev.crossValidation.testDatasetIds.filter(id => id !== ds.id)
+                              }
+                            }))}
+                            className="w-3 h-3 text-green-600"
+                          />
+                          <span className="text-xs text-green-700 dark:text-green-400">Train</span>
+                        </label>
+                        <label className="flex items-center space-x-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`cv-role-${ds.id}`}
+                            checked={state.crossValidation.testDatasetIds.includes(ds.id)}
+                            onChange={() => setState(prev => ({
+                              ...prev,
+                              crossValidation: {
+                                ...prev.crossValidation,
+                                testDatasetIds: [...prev.crossValidation.testDatasetIds.filter(id => id !== ds.id), ds.id]
+                              }
+                            }))}
+                            className="w-3 h-3 text-orange-600"
+                          />
+                          <span className="text-xs text-orange-700 dark:text-orange-400">Test</span>
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* K-Fold mode: explanation */}
+              {state.crossValidation.mode === 'kfold' && (
+                <p className="text-xs text-gray-500 bg-gray-50 dark:bg-gray-700 p-3 rounded">
+                  Each dataset will be used as the test set once, training {state.selectedDatasetIds.length} models total.
+                  Results are averaged across all folds.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Sequence Length (for classification) */}
       {state.jobType === 'classification' && (
@@ -1798,6 +2008,7 @@ interface Step3Props {
   state: ReturnType<typeof getDefaultState>;
   setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
   selectedDataset: Dataset | undefined;
+  selectedDatasets: Dataset[];
   previewData: PreviewResponse | null;
   previewLoading: boolean;
   previewError: string | null;
@@ -1809,6 +2020,7 @@ const Step3Summary: React.FC<Step3Props> = ({
   state,
   setState,
   selectedDataset,
+  selectedDatasets,
   previewData,
   previewLoading,
   previewError,
@@ -1924,13 +2136,13 @@ const Step3Summary: React.FC<Step3Props> = ({
       <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
         <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center space-x-2">
           <Database size={16} />
-          <span>Dataset</span>
+          <span>Dataset{selectedDatasets.length > 1 ? 's' : ''}</span>
         </h4>
-        {selectedDataset && (
+        {selectedDatasets.length > 0 && (
           <div className="grid grid-cols-4 gap-4 text-sm">
-            <div><span className="text-gray-500">Name:</span> <span className="font-medium">{selectedDataset.name}</span></div>
-            <div><span className="text-gray-500">Ticker:</span> <span className="font-medium">{selectedDataset.ticker}</span></div>
-            <div><span className="text-gray-500">Rows:</span> <span className="font-medium">{selectedDataset.rows_count.toLocaleString()}</span></div>
+            <div><span className="text-gray-500">Datasets:</span> <span className="font-medium">{selectedDatasets.length}</span></div>
+            <div><span className="text-gray-500">Tickers:</span> <span className="font-medium">{[...new Set(selectedDatasets.map(d => d.ticker))].join(', ')}</span></div>
+            <div><span className="text-gray-500">Total Rows:</span> <span className="font-medium">{selectedDatasets.reduce((sum, d) => sum + d.rows_count, 0).toLocaleString()}</span></div>
             <div><span className="text-gray-500">Split:</span> <span className="font-medium">{state.trainTestSplit}% / {100 - state.trainTestSplit}%</span></div>
           </div>
         )}

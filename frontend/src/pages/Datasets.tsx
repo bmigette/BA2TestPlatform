@@ -19,6 +19,7 @@ interface Dataset {
   normalization_buffer_pct?: number;
   technical_indicators?: any;
   generation_config?: any;
+  labels?: string[];
 }
 
 type WizardMode = 'create' | 'duplicate' | 'edit';
@@ -199,6 +200,9 @@ const Datasets: React.FC = () => {
                   Rows
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Labels
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Created
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
@@ -253,6 +257,22 @@ const Datasets: React.FC = () => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                     {dataset.rows_count.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 text-sm">
+                    {dataset.labels && dataset.labels.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {dataset.labels.map((label, idx) => (
+                          <span
+                            key={idx}
+                            className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full px-2 py-0.5 text-xs"
+                          >
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 dark:text-gray-600">-</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                     {formatDate(dataset.created_at)}
