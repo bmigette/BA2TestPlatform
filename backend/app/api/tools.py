@@ -1072,7 +1072,9 @@ async def fetch_ohlcv_cache(request: Dict[str, Any]):
             payload={
                 'provider': provider,
                 'symbol': symbol,
-                'timeframes': timeframes
+                'timeframes': timeframes,
+                'start_date': request.get('start_date'),
+                'end_date': request.get('end_date'),
             },
             description=f'Fetch and cache OHLCV data for {symbol} ({", ".join(timeframes)})',
             max_retries=1,
@@ -1104,9 +1106,17 @@ async def get_ohlcv_cache_status():
     entries = []
 
     if cache_dir.exists():
-        for filepath in cache_dir.glob("*.csv"):
+        # Scan both legacy flat files and new per-provider subdirectories
+        csv_files = list(cache_dir.glob("*.csv"))       # legacy flat files
+        csv_files += list(cache_dir.glob("*/*.csv"))    # per-provider subdirs
+        for filepath in csv_files:
             try:
-                # Parse filename: {SYMBOL}_{interval}.csv
+                # Provider name: parent dir name, or 'unknown' for legacy flat files
+                if filepath.parent == cache_dir:
+                    provider_name = "unknown"
+                else:
+                    provider_name = filepath.parent.name
+
                 name_parts = filepath.stem.rsplit('_', 1)
                 if len(name_parts) == 2:
                     symbol, interval = name_parts
@@ -1116,16 +1126,15 @@ async def get_ohlcv_cache_status():
 
                 stat = filepath.stat()
                 file_size = stat.st_size
-
-                # Count rows (header + data)
                 rows = 0
                 try:
                     with open(filepath, 'r') as f:
-                        rows = sum(1 for _ in f) - 1  # Subtract header
+                        rows = sum(1 for _ in f) - 1
                 except Exception:
                     pass
 
                 entries.append({
+                    "provider": provider_name,
                     "symbol": symbol,
                     "interval": interval,
                     "file_size": file_size,
@@ -1137,8 +1146,8 @@ async def get_ohlcv_cache_status():
             except Exception as e:
                 logger.warning(f"Error reading cache file {filepath}: {e}")
 
-    # Sort by symbol then interval
-    entries.sort(key=lambda x: (x['symbol'], x['interval']))
+    # Sort by provider, symbol, interval
+    entries.sort(key=lambda x: (x['provider'], x['symbol'], x['interval']))
 
     return {
         "cache_files": entries,
