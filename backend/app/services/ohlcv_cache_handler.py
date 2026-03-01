@@ -18,8 +18,8 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
     """
     Background task handler for OHLCV cache fetching.
 
-    Fetches OHLCV data for a single symbol across multiple timeframes,
-    forcing cache refresh.
+    Fetches OHLCV data for a single symbol across multiple timeframes using
+    extend-only semantics: already-cached date ranges are not re-fetched.
 
     Args:
         task_id: Task ID for progress tracking
@@ -27,6 +27,8 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
             - provider: str (e.g., 'yfinance', 'fmp')
             - symbol: str (e.g., 'AAPL')
             - timeframes: list[str] (e.g., ['1d', '1h', '4h'])
+            - start_date: str ISO date 'YYYY-MM-DD' (optional, default 15yr ago)
+            - end_date: str ISO date 'YYYY-MM-DD' (optional, default today)
 
     Returns:
         Summary dict with status and results per timeframe
@@ -41,25 +43,31 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
     if not symbol:
         return {'status': 'failed', 'error': 'symbol is required'}
 
+    # Parse date range from payload or fall back to 15-year default
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=15 * 365)
+
+    raw_start = payload.get('start_date')
+    raw_end = payload.get('end_date')
+    if raw_start:
+        start_date = datetime.strptime(raw_start, '%Y-%m-%d')
+    if raw_end:
+        end_date = datetime.strptime(raw_end, '%Y-%m-%d')
+
     provider = get_ohlcv_provider(provider_name)
     results = {}
     total = len(timeframes)
 
-    # Default date range: 15 years back from today
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=15 * 365)
-
     for i, tf in enumerate(timeframes):
-        progress = ((i) / total) * 100
+        progress = (i / total) * 100
         task_queue.update_progress(task_id, progress, f"Fetching {symbol} {tf}...")
 
         try:
-            df = provider.get_ohlcv_data(
+            df = provider.extend_ohlcv_cache(
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date,
-                interval=tf,
-                use_cache=False  # Force fresh fetch
+                interval=tf
             )
             rows = len(df) if df is not None else 0
             results[tf] = {'status': 'success', 'rows': rows}

@@ -24,7 +24,7 @@ class TestHandleOHLCVCacheFetch:
     def mock_provider(self):
         """Create a mock OHLCV provider."""
         provider = MagicMock()
-        provider.get_ohlcv_data.return_value = pd.DataFrame({
+        _df = pd.DataFrame({
             'Date': pd.date_range('2020-01-01', periods=100),
             'Open': range(100),
             'High': range(100),
@@ -32,6 +32,7 @@ class TestHandleOHLCVCacheFetch:
             'Close': range(100),
             'Volume': range(100)
         })
+        provider.extend_ohlcv_cache.return_value = _df
         return provider
 
     def test_successful_cache_fetch(self, mock_task_queue, mock_provider):
@@ -55,7 +56,7 @@ class TestHandleOHLCVCacheFetch:
 
     def test_cache_fetch_with_provider_error(self, mock_task_queue, mock_provider):
         """Test cache fetch handles provider errors gracefully."""
-        mock_provider.get_ohlcv_data.side_effect = Exception("API limit reached")
+        mock_provider.extend_ohlcv_cache.side_effect = Exception("API limit reached")
 
         with patch('app.services.ohlcv_cache_handler.get_task_queue', return_value=mock_task_queue), \
              patch('app.api.datasets.get_ohlcv_provider', return_value=mock_provider):
@@ -100,23 +101,54 @@ class TestHandleOHLCVCacheFetch:
             # Should update progress for each timeframe + final
             assert mock_task_queue.update_progress.call_count == 4  # 3 timeframes + final 100%
 
-    def test_cache_fetch_calls_use_cache_false(self, mock_task_queue, mock_provider):
-        """Test that cache fetch forces refresh (use_cache=False)."""
-        with patch('app.services.ohlcv_cache_handler.get_task_queue', return_value=mock_task_queue), \
-             patch('app.api.datasets.get_ohlcv_provider', return_value=mock_provider):
-            from app.services.ohlcv_cache_handler import handle_ohlcv_cache_fetch
-
-            handle_ohlcv_cache_fetch('task-123', {
+    def test_handler_uses_extend_ohlcv_cache(self, mock_task_queue, mock_provider):
+        """Handler must call extend_ohlcv_cache, not get_ohlcv_data."""
+        mock_provider.extend_ohlcv_cache = MagicMock(return_value=pd.DataFrame(
+            {'Date': [], 'Close': []}
+        ))
+        with patch('app.services.ohlcv_cache_handler.get_task_queue',
+                   return_value=mock_task_queue), \
+             patch('app.api.datasets.get_ohlcv_provider',
+                   return_value=mock_provider):
+            from importlib import reload
+            import app.services.ohlcv_cache_handler as mod
+            reload(mod)
+            mod.handle_ohlcv_cache_fetch('task-1', {
                 'provider': 'yfinance',
                 'symbol': 'AAPL',
-                'timeframes': ['1d']
+                'timeframes': ['1d'],
             })
+        mock_provider.extend_ohlcv_cache.assert_called()
+        mock_provider.get_ohlcv_data.assert_not_called()
 
-            # Verify use_cache=False was passed
-            call_kwargs = mock_provider.get_ohlcv_data.call_args
-            assert call_kwargs.kwargs.get('use_cache') is False or \
-                   (len(call_kwargs.args) > 3 and call_kwargs.kwargs.get('use_cache', None) is False) or \
-                   'use_cache' in str(call_kwargs) and 'False' in str(call_kwargs)
+    def test_handler_passes_custom_date_range(self, mock_task_queue, mock_provider):
+        """Handler must parse start_date/end_date strings from payload into datetime."""
+        from datetime import datetime
+        captured = {}
+        def capture(*args, **kwargs):
+            captured['start'] = kwargs.get('start_date') or args[1]
+            captured['end'] = kwargs.get('end_date') or args[2]
+            return pd.DataFrame({'Date': [], 'Close': []})
+
+        mock_provider.extend_ohlcv_cache = MagicMock(side_effect=capture)
+        with patch('app.services.ohlcv_cache_handler.get_task_queue',
+                   return_value=mock_task_queue), \
+             patch('app.api.datasets.get_ohlcv_provider',
+                   return_value=mock_provider):
+            from importlib import reload
+            import app.services.ohlcv_cache_handler as mod
+            reload(mod)
+            mod.handle_ohlcv_cache_fetch('task-1', {
+                'provider': 'yfinance',
+                'symbol': 'AAPL',
+                'timeframes': ['1d'],
+                'start_date': '2023-01-01',
+                'end_date': '2024-12-31',
+            })
+        assert isinstance(captured.get('start'), datetime), "start_date must be datetime"
+        assert isinstance(captured.get('end'), datetime), "end_date must be datetime"
+        assert captured['start'] == datetime(2023, 1, 1)
+        assert captured['end'] == datetime(2024, 12, 31)
 
 
 class TestOHLCVProviderEndpoint:
