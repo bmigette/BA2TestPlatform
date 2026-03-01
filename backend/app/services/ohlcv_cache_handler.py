@@ -6,6 +6,8 @@ for multiple symbols and timeframes.
 """
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
@@ -57,11 +59,10 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
     provider = get_ohlcv_provider(provider_name)
     results = {}
     total = len(timeframes)
+    completed_count = [0]
+    lock = threading.Lock()
 
-    for i, tf in enumerate(timeframes):
-        progress = (i / total) * 100
-        task_queue.update_progress(task_id, progress, f"Fetching {symbol} {tf}...")
-
+    def fetch_timeframe(tf: str):
         try:
             df = provider.extend_ohlcv_cache(
                 symbol=symbol,
@@ -70,11 +71,24 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
                 interval=tf
             )
             rows = len(df) if df is not None else 0
-            results[tf] = {'status': 'success', 'rows': rows}
+            result = {'status': 'success', 'rows': rows}
             logger.info(f"Cached {symbol} {tf}: {rows} rows")
         except Exception as e:
-            results[tf] = {'status': 'error', 'error': str(e)}
+            result = {'status': 'error', 'error': str(e)}
             logger.error(f"Error caching {symbol} {tf}: {e}")
+
+        with lock:
+            completed_count[0] += 1
+            progress = (completed_count[0] / total) * 100
+            task_queue.update_progress(task_id, progress, f"Fetched {symbol} {tf}")
+
+        return tf, result
+
+    with ThreadPoolExecutor(max_workers=min(8, total)) as executor:
+        futures = {executor.submit(fetch_timeframe, tf): tf for tf in timeframes}
+        for future in as_completed(futures):
+            tf, result = future.result()
+            results[tf] = result
 
     task_queue.update_progress(task_id, 100, f"Completed {symbol}")
 

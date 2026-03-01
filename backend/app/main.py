@@ -244,8 +244,8 @@ async def startup_event():
 
     # Initialize task queue
     from app.services.task_queue import init_task_queue, get_task_queue
-    init_task_queue(max_workers=1)
-    logger.info("Task queue initialized with 1 worker (sequential processing)")
+    init_task_queue(max_workers=8)
+    logger.info("Task queue initialized with 8 workers")
 
     # Register task handlers
     from app.services.dataset_handler import handle_dataset_regeneration
