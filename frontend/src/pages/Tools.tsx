@@ -134,6 +134,7 @@ interface OHLCVProvider {
 }
 
 interface CacheFile {
+  provider?: string;
   symbol: string;
   interval: string;
   file_size_mb: number;
@@ -161,6 +162,13 @@ const OHLCVCacheTool: React.FC = () => {
   const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 15);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
 
   const availableTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 
@@ -267,6 +275,10 @@ const OHLCVCacheTool: React.FC = () => {
       setError('Please select at least one timeframe');
       return;
     }
+    if (startDate > endDate) {
+      setError('Start date must be before end date');
+      return;
+    }
 
     setFetching(true);
     setError(null);
@@ -276,7 +288,7 @@ const OHLCVCacheTool: React.FC = () => {
       const resp = await fetch('http://localhost:8000/api/tools/ohlcv/fetch-cache', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, symbols, timeframes })
+        body: JSON.stringify({ provider, symbols, timeframes, start_date: startDate, end_date: endDate })
       });
 
       if (resp.ok) {
@@ -400,6 +412,32 @@ const OHLCVCacheTool: React.FC = () => {
             </div>
           </div>
 
+          {/* Date Range */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Start Date
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={e => setStartDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                End Date
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={e => setEndDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+          </div>
+
           {/* Fetch Button */}
           <button
             onClick={handleFetchCache}
@@ -491,6 +529,7 @@ const OHLCVCacheTool: React.FC = () => {
             <table className="min-w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Provider</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Symbol</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Interval</th>
                   <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Rows</th>
@@ -501,6 +540,7 @@ const OHLCVCacheTool: React.FC = () => {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {cacheFiles.map((cf, idx) => (
                   <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.provider || '–'}</td>
                     <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">{cf.symbol}</td>
                     <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.interval}</td>
                     <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{cf.rows.toLocaleString()}</td>
