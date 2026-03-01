@@ -230,3 +230,79 @@ class TestCacheFilePerProvider:
             s.cache_folder = pathlib.Path(tmp)
             p = s._get_cache_file("MSFT", "1d")
             assert p.parent.exists(), "Provider subdirectory should have been created"
+
+
+class TestExtendOHLCVCache:
+    """Tests for extend_ohlcv_cache extend-only semantics."""
+
+    def _make_df(self, start: str, end: str) -> pd.DataFrame:
+        dates = pd.date_range(start, end, freq='D')
+        return pd.DataFrame({
+            'Date': dates, 'Open': 1.0, 'High': 2.0,
+            'Low': 0.5, 'Close': 1.5, 'Volume': 100.0
+        })
+
+    def _make_provider(self, tmp_dir: str):
+        from dataproviders.base import MarketDataProviderInterface
+
+        class _Stub(MarketDataProviderInterface):
+            def _get_ohlcv_data_impl(self, symbol, start, end, interval):
+                dates = pd.date_range(start, end, freq='D')
+                return pd.DataFrame({
+                    'Date': dates, 'Open': 1.0, 'High': 2.0,
+                    'Low': 0.5, 'Close': 1.5, 'Volume': 100.0
+                })
+            def get_provider_name(self): return "stub"
+            def get_supported_features(self): return []
+            def validate_config(self): return True
+
+        p = _Stub()
+        p.cache_folder = pathlib.Path(tmp_dir)
+        return p
+
+    def test_no_fetch_when_range_covered(self):
+        """If cache covers the range, _get_ohlcv_data_impl must not be called."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prov = self._make_provider(tmp)
+            cache_file = prov._get_cache_file("AAPL", "1d")
+            self._make_df("2024-01-01", "2024-12-31").to_csv(cache_file, index=False)
+
+            with patch.object(prov, '_get_ohlcv_data_impl',
+                              wraps=prov._get_ohlcv_data_impl) as mock_impl:
+                prov.extend_ohlcv_cache("AAPL", datetime(2024, 3, 1), datetime(2024, 6, 1), "1d")
+                mock_impl.assert_not_called()
+
+    def test_full_fetch_when_no_cache(self):
+        """If no cache exists, fetches the full requested range and saves."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prov = self._make_provider(tmp)
+            prov.extend_ohlcv_cache("AAPL", datetime(2024, 1, 1), datetime(2024, 3, 31), "1d")
+            cache_file = prov._get_cache_file("AAPL", "1d")
+            assert cache_file.exists()
+            df = pd.read_csv(cache_file)
+            assert len(df) > 0
+
+    def test_extends_right_only(self):
+        """Only fetches the right-side gap, not the already-cached portion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prov = self._make_provider(tmp)
+            cache_file = prov._get_cache_file("AAPL", "1d")
+            self._make_df("2024-01-01", "2024-06-30").to_csv(cache_file, index=False)
+
+            with patch.object(prov, '_get_ohlcv_data_impl',
+                              wraps=prov._get_ohlcv_data_impl) as mock_impl:
+                prov.extend_ohlcv_cache("AAPL", datetime(2024, 1, 1), datetime(2024, 9, 30), "1d")
+                assert mock_impl.call_count == 1
+                # The fetch should start from around the cache max date
+                call_start = mock_impl.call_args[0][1]
+                assert call_start >= datetime(2024, 6, 28)
+
+    def test_no_duplicate_rows_after_extend(self):
+        """Merged cache must not have duplicate Date rows."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prov = self._make_provider(tmp)
+            cache_file = prov._get_cache_file("AAPL", "1d")
+            self._make_df("2024-01-01", "2024-06-30").to_csv(cache_file, index=False)
+            prov.extend_ohlcv_cache("AAPL", datetime(2024, 1, 1), datetime(2024, 9, 30), "1d")
+            df = pd.read_csv(cache_file, parse_dates=['Date'])
+            assert df['Date'].duplicated().sum() == 0

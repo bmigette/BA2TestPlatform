@@ -188,6 +188,104 @@ class MarketDataProviderInterface(ABC):
 
         return df
 
+    def extend_ohlcv_cache(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        interval: str = '1d'
+    ) -> pd.DataFrame:
+        """
+        Fetch and cache OHLCV data for the requested range using extend-only semantics.
+
+        - If the cache already covers [start_date, end_date] entirely, returns
+          cached data without any API call.
+        - Otherwise fetches only the uncovered head/tail portions, merges with
+          existing data, deduplicates on Date, and overwrites the cache file.
+
+        Args:
+            symbol: Ticker symbol
+            start_date: Desired range start (inclusive)
+            end_date: Desired range end (inclusive)
+            interval: Data interval ('1d', '1h', etc.)
+
+        Returns:
+            Full merged DataFrame (existing + newly fetched)
+        """
+        cache_file = self._get_cache_file(symbol, interval)
+
+        def _to_naive_ts(dt: datetime) -> pd.Timestamp:
+            ts = pd.Timestamp(dt)
+            if ts.tzinfo is not None:
+                ts = ts.tz_localize(None)
+            return ts
+
+        start_ts = _to_naive_ts(start_date)
+        end_ts = _to_naive_ts(end_date)
+
+        existing = pd.DataFrame()
+        if cache_file.exists():
+            try:
+                existing = pd.read_csv(cache_file)
+                existing['Date'] = pd.to_datetime(existing['Date']).dt.tz_localize(None)
+            except Exception as e:
+                logger.warning(f"Could not read existing cache {cache_file}: {e}")
+                existing = pd.DataFrame()
+
+        if not existing.empty:
+            cache_min = existing['Date'].min()
+            cache_max = existing['Date'].max()
+
+            # Range fully covered — no fetch needed
+            if cache_min <= start_ts and cache_max >= end_ts:
+                logger.debug(f"Cache for {symbol}/{interval} already covers "
+                             f"{start_date.date()} to {end_date.date()}, skipping fetch")
+                return existing[(existing['Date'] >= start_ts) & (existing['Date'] <= end_ts)]
+
+            # Collect gap pieces
+            pieces = [existing]
+
+            if start_ts < cache_min:
+                logger.info(f"Extending {symbol}/{interval} left: "
+                            f"{start_date.date()} to {cache_min.date()}")
+                left = self._get_ohlcv_data_impl(
+                    symbol, start_date, cache_min.to_pydatetime(), interval
+                )
+                if not left.empty:
+                    left['Date'] = pd.to_datetime(left['Date']).dt.tz_localize(None)
+                    pieces.append(left)
+
+            if end_ts > cache_max:
+                logger.info(f"Extending {symbol}/{interval} right: "
+                            f"{cache_max.date()} to {end_date.date()}")
+                right = self._get_ohlcv_data_impl(
+                    symbol, cache_max.to_pydatetime(), end_date, interval
+                )
+                if not right.empty:
+                    right['Date'] = pd.to_datetime(right['Date']).dt.tz_localize(None)
+                    pieces.append(right)
+
+            merged = (
+                pd.concat(pieces, ignore_index=True)
+                  .drop_duplicates(subset=['Date'])
+                  .sort_values('Date')
+                  .reset_index(drop=True)
+            )
+        else:
+            # No cache — fetch full range
+            logger.info(f"No cache for {symbol}/{interval}, fetching "
+                        f"{start_date.date()} to {end_date.date()}")
+            merged = self._get_ohlcv_data_impl(symbol, start_date, end_date, interval)
+            if not merged.empty:
+                merged['Date'] = pd.to_datetime(merged['Date']).dt.tz_localize(None)
+
+        if not merged.empty:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            merged.to_csv(cache_file, index=False)
+            logger.info(f"Saved {len(merged)} rows to {cache_file}")
+
+        return merged
+
     def get_data(
         self,
         symbol: str,
