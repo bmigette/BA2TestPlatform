@@ -183,3 +183,50 @@ class TestOHLCVCacheStatusEndpoint:
                 assert result['cache_files'][0]['symbol'] == 'AAPL'
                 assert result['cache_files'][0]['interval'] == '1d'
                 assert result['cache_files'][0]['rows'] == 2
+
+
+import pathlib
+
+
+class TestCacheFilePerProvider:
+    """Test that cache files are stored per-provider in subdirectories."""
+
+    def test_cache_file_is_per_provider(self):
+        """Cache file path must include provider name as subdirectory."""
+        from dataproviders.base import MarketDataProviderInterface
+
+        class _Stub(MarketDataProviderInterface):
+            def _get_ohlcv_data_impl(self, *a, **kw):
+                return pd.DataFrame()
+            def get_provider_name(self):
+                return "testprov"
+            def get_supported_features(self):
+                return []
+            def validate_config(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            s = _Stub()
+            s.cache_folder = pathlib.Path(tmp)
+            p = s._get_cache_file("AAPL", "1h")
+            assert p == pathlib.Path(tmp) / "testprov" / "AAPL_1h.csv"
+
+    def test_cache_file_creates_directory(self):
+        """_get_cache_file must create the provider subdirectory if it does not exist."""
+        from dataproviders.base import MarketDataProviderInterface
+
+        class _Stub(MarketDataProviderInterface):
+            def _get_ohlcv_data_impl(self, *a, **kw):
+                return pd.DataFrame()
+            def get_provider_name(self):
+                return "myprov"
+            def get_supported_features(self):
+                return []
+            def validate_config(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            s = _Stub()
+            s.cache_folder = pathlib.Path(tmp)
+            p = s._get_cache_file("MSFT", "1d")
+            assert p.parent.exists(), "Provider subdirectory should have been created"

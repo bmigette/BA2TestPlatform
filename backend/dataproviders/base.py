@@ -79,6 +79,12 @@ class MarketDataProviderInterface(ABC):
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.cache_max_age_hours = 24
 
+    def _get_cache_file(self, symbol: str, interval: str) -> Path:
+        """Return per-provider cache file path, creating the directory if needed."""
+        provider_dir = self.cache_folder / self.get_provider_name()
+        provider_dir.mkdir(parents=True, exist_ok=True)
+        return provider_dir / f"{symbol}_{interval}.csv"
+
     @abstractmethod
     def _get_ohlcv_data_impl(
         self,
@@ -109,7 +115,8 @@ class MarketDataProviderInterface(ABC):
         start_date: datetime,
         end_date: datetime,
         interval: str = '1d',
-        use_cache: bool = True
+        use_cache: bool = True,
+        force_refresh: bool = False
     ) -> pd.DataFrame:
         """
         Get OHLCV data with optional caching.
@@ -119,14 +126,16 @@ class MarketDataProviderInterface(ABC):
             start_date: Start date for data
             end_date: End date for data
             interval: Data interval
-            use_cache: Whether to use cached data
+            use_cache: Whether to use/write cached data
+            force_refresh: If True, bypass reading from cache but still write
+                           fresh data to cache (useful for cache prefetch jobs)
 
         Returns:
             DataFrame with OHLCV data
         """
-        # Check cache first if enabled
-        if use_cache:
-            cache_file = self.cache_folder / f"{symbol}_{interval}.csv"
+        # Check cache first if enabled and not forcing a refresh
+        if use_cache and not force_refresh:
+            cache_file = self._get_cache_file(symbol, interval)
             if cache_file.exists():
                 # Check if cache is fresh
                 cache_age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
@@ -162,9 +171,9 @@ class MarketDataProviderInterface(ABC):
         # Fetch fresh data
         df = self._get_ohlcv_data_impl(symbol, start_date, end_date, interval)
 
-        # Cache the data if caching is enabled
-        if use_cache and not df.empty:
-            cache_file = self.cache_folder / f"{symbol}_{interval}.csv"
+        # Cache the data if caching is enabled (also when force_refresh bypassed reading)
+        if (use_cache or force_refresh) and not df.empty:
+            cache_file = self._get_cache_file(symbol, interval)
             df.to_csv(cache_file, index=False)
             logger.debug(f"Cached data for {symbol} to {cache_file}")
 
