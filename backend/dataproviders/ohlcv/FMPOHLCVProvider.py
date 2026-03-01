@@ -57,7 +57,18 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
     
     # Base URL for FMP API
     BASE_URL = "https://financialmodelingprep.com/api/v3"
-    
+
+    # Maximum days per API request for each intraday interval.
+    # FMP silently truncates responses that exceed ~5 000 bars.
+    INTRADAY_CHUNK_DAYS: dict = {
+        "1min":  30,
+        "5min":  90,
+        "15min": 180,
+        "30min": 365,
+        "1hour": 730,
+        "4hour": 1825,
+    }
+
     def __init__(self):
         """Initialize FMP OHLCV provider with caching support."""
         # Call parent __init__ to set up caching
@@ -208,82 +219,99 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         return df
     
     def _fetch_intraday_data(
-        self, 
-        symbol: str, 
-        start_date: datetime, 
+        self,
+        symbol: str,
+        start_date: datetime,
         end_date: datetime,
         fmp_interval: str
     ) -> pd.DataFrame:
         """
-        Fetch intraday OHLCV data from FMP API.
-        
-        Uses /api/v3/historical-chart/{interval}/{symbol} endpoint.
-        
-        Note: FMP intraday API has limitations:
-        - Free tier: Last 5 days only
-        - Premium: More historical data available
-        
+        Fetch intraday OHLCV data from FMP API, chunking long date ranges to avoid
+        silent API truncation.
+
+        FMP's /historical-chart endpoint silently truncates responses beyond ~5 000
+        bars. Chunking by INTRADAY_CHUNK_DAYS ensures complete data is retrieved
+        across any requested date range.
+
         Args:
             symbol: Stock ticker symbol
             start_date: Start date for data
             end_date: End date for data
-            fmp_interval: FMP interval format (1min, 5min, 15min, 30min, 1hour, 4hour)
-        
+            fmp_interval: FMP interval string (1min, 5min, 15min, 30min, 1hour, 4hour)
+
         Returns:
             DataFrame with columns: Date, Open, High, Low, Close, Volume
         """
-        url = f"{self.BASE_URL}/historical-chart/{fmp_interval}/{symbol}"
-        
-        params = {
-            "apikey": self.api_key,
-            "from": start_date.strftime("%Y-%m-%d"),
-            "to": end_date.strftime("%Y-%m-%d")
-        }
-        
-        logger.debug(f"FMP API request: {url} with params: {params}")
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if not data or not isinstance(data, list):
-            logger.warning(f"No data or invalid format from FMP intraday API for {symbol}")
-            return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(data)
-        
-        # Rename columns to match expected format
-        df = df.rename(columns={
-            "date": "Date",
-            "open": "Open",
-            "high": "High",
-            "low": "Low",
-            "close": "Close",
-            "volume": "Volume"
-        })
-        
-        # Select only needed columns
-        df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-        
-        # Convert Date to datetime with UTC timezone
-        df['Date'] = pd.to_datetime(df['Date'], utc=True)
-        
-        # Ensure start_date and end_date are timezone-aware for comparison
-        # Convert to pandas Timestamp with UTC timezone if needed
-        start_date_tz = pd.Timestamp(start_date).tz_localize('UTC') if pd.Timestamp(start_date).tz is None else pd.Timestamp(start_date).tz_convert('UTC')
-        end_date_tz = pd.Timestamp(end_date).tz_localize('UTC') if pd.Timestamp(end_date).tz is None else pd.Timestamp(end_date).tz_convert('UTC')
-        
-        # Filter by date range (FMP may return more data than requested)
-        df = df[(df['Date'] >= start_date_tz) & (df['Date'] <= end_date_tz)]
-        
-        # Sort by date (FMP returns newest first)
-        df = df.sort_values('Date')
-        
-        # Reset index
-        df = df.reset_index(drop=True)
-        
+        chunk_days = self.INTRADAY_CHUNK_DAYS.get(fmp_interval, 90)
+        chunks = []
+        chunk_start = start_date
+
+        while chunk_start < end_date:
+            chunk_end = min(chunk_start + timedelta(days=chunk_days), end_date)
+
+            url = f"{self.BASE_URL}/historical-chart/{fmp_interval}/{symbol}"
+            params = {
+                "apikey": self.api_key,
+                "from": chunk_start.strftime("%Y-%m-%d"),
+                "to": chunk_end.strftime("%Y-%m-%d"),
+            }
+
+            logger.debug(
+                f"FMP intraday chunk {symbol}/{fmp_interval}: "
+                f"{chunk_start.date()} to {chunk_end.date()}"
+            )
+
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+
+                if data and isinstance(data, list):
+                    chunk_df = pd.DataFrame(data)
+                    chunk_df = chunk_df.rename(columns={
+                        "date": "Date",
+                        "open": "Open",
+                        "high": "High",
+                        "low": "Low",
+                        "close": "Close",
+                        "volume": "Volume",
+                    })
+                    chunk_df = chunk_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+                    chunk_df["Date"] = pd.to_datetime(chunk_df["Date"], utc=True)
+                    chunks.append(chunk_df)
+                    logger.debug(f"  Got {len(chunk_df)} bars")
+            except Exception as e:
+                logger.warning(
+                    f"FMP intraday chunk {chunk_start.date()}-{chunk_end.date()} "
+                    f"failed: {e}"
+                )
+
+            chunk_start = chunk_end + timedelta(days=1)
+
+        if not chunks:
+            return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+
+        df = pd.concat(chunks, ignore_index=True)
+        df = df.drop_duplicates(subset=["Date"])
+
+        # Filter to exact requested range
+        start_ts = (
+            pd.Timestamp(start_date).tz_localize("UTC")
+            if pd.Timestamp(start_date).tz is None
+            else pd.Timestamp(start_date).tz_convert("UTC")
+        )
+        end_ts = (
+            pd.Timestamp(end_date).tz_localize("UTC")
+            if pd.Timestamp(end_date).tz is None
+            else pd.Timestamp(end_date).tz_convert("UTC")
+        )
+        df = df[(df["Date"] >= start_ts) & (df["Date"] <= end_ts)]
+
+        df = df.sort_values("Date").reset_index(drop=True)
+        logger.info(
+            f"FMP intraday {symbol}/{fmp_interval}: {len(df)} total bars "
+            f"({len(chunks)} chunk requests)"
+        )
         return df
 
     def get_provider_name(self) -> str:
