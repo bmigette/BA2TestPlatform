@@ -1102,7 +1102,7 @@ async def get_ohlcv_cache_status():
     Returns:
         List of cache file entries with symbol, interval, size, and modification time
     """
-    cache_dir = Path("backend/datasets/cache")
+    cache_dir = Path("datasets/cache/ohlcv")
     entries = []
 
     if cache_dir.exists():

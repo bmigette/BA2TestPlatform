@@ -75,7 +75,7 @@ class MarketDataProviderInterface(ABC):
 
     def __init__(self):
         """Initialize the provider."""
-        self.cache_folder = Path("backend/datasets/cache")
+        self.cache_folder = Path("datasets/cache/ohlcv")
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.cache_max_age_hours = 24
 
