@@ -1461,8 +1461,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </label>
           </div>
 
-          {/* API News Sources */}
-          {!wizardData.sentiment.useCachedNews && (
+          {/* API News Sources & Local Files (hidden when using cached news) */}
+          {!wizardData.sentiment.useCachedNews && (<>
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">API News Sources</label>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Fetch live news from providers</p>
@@ -1550,7 +1550,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               Export news from the Tools page first, then import here
             </p>
           </div>
-          )}
+          </>)}
 
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Lookback Periods</label>
