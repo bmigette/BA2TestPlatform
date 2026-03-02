@@ -52,7 +52,7 @@ start_backend() {
 
     log_success "Backend starting on http://localhost:8000"
     log_info "API docs: http://localhost:8000/docs"
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn app.main:app --host 0.0.0.0 --port 8000
 }
 
 # Start frontend

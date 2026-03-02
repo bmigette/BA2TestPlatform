@@ -300,10 +300,13 @@ class SentimentService:
         if result_df['Date'].dt.tz is not None:
             result_df['Date'] = result_df['Date'].dt.tz_localize(None)
 
-        # Analyze articles if not already analyzed
+        # Analyze articles that don't yet have sentiment stored
         if news_articles:
-            first_article = news_articles[0]
-            if 'sentiment' not in first_article or first_article.get('sentiment') is None:
+            needs_analysis = any(
+                not a.get('sentiment') or not a.get('sentiment_score')
+                for a in news_articles
+            )
+            if needs_analysis:
                 news_articles = self.analyze_news_articles(news_articles, provider, ticker)
 
         # Convert to DataFrame for easier manipulation

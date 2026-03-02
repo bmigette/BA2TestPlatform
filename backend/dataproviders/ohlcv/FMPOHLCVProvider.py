@@ -58,15 +58,21 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
     # Base URL for FMP API
     BASE_URL = "https://financialmodelingprep.com/api/v3"
 
-    # Maximum days per API request for each intraday interval.
-    # FMP silently truncates responses that exceed ~5 000 bars.
+    # Maximum calendar days per API request for each intraday interval.
+    #
+    # IMPORTANT: FMP's intraday historical endpoint silently returns only the last
+    # ~88 calendar days of any requested window, regardless of the 'from' date.
+    # Chunks must be STRICTLY BELOW this limit to guarantee complete coverage:
+    # if chunk_size < FMP_limit, FMP returns all data in the chunk.
+    # Verified empirically: 1h data with 730-day chunks produces ~88-day segments
+    # (Oct→Jan) with ~640-day gaps between them.
     INTRADAY_CHUNK_DAYS: dict = {
         "1min":  30,
-        "5min":  90,
-        "15min": 180,
-        "30min": 365,
-        "1hour": 730,
-        "4hour": 1825,
+        "5min":  60,
+        "15min": 60,
+        "30min": 60,
+        "1hour": 60,
+        "4hour": 60,
     }
 
     # Chunk size for daily data requests.
