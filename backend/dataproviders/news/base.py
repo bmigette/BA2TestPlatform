@@ -139,19 +139,21 @@ class MarketNewsInterface(ABC):
         Returns:
             Extracted text content or None if failed
         """
-        # For articles older than 1 year, try Wayback Machine first
-        if published_at and (datetime.now() - published_at).days > 365:
-            wayback_content = MarketNewsInterface._try_wayback_machine(url, published_at)
-            if wayback_content:
-                return wayback_content
-
+        # Try original URL first
         try:
             downloaded = trafilatura.fetch_url(url)
             if downloaded:
                 text = trafilatura.extract(downloaded)
-                return text
+                if text:
+                    return text
         except Exception as e:
             logger.debug(f"Failed to fetch content from {url}: {e}")
+
+        # Fall back to Wayback Machine for old articles
+        if published_at and (datetime.now() - published_at).days > 365:
+            wayback_content = MarketNewsInterface._try_wayback_machine(url, published_at)
+            if wayback_content:
+                return wayback_content
 
         return None
 
