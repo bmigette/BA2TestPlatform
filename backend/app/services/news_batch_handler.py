@@ -74,7 +74,16 @@ def handle_news_batch_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str, 
             results[symbol] = {'status': 'skipped', 'reason': 'empty symbol'}
             continue
 
-        base_progress = (i / total) * 100
+        # Each symbol gets a progress slice: [base_progress, base_progress + per_symbol]
+        per_symbol = 100.0 / total
+        base_progress = i * per_symbol
+
+        def on_progress(phase, pct, message):
+            # Map fetch (0-70%), enrich (70-90%), cache (90-100%) into the symbol's slice
+            # Fetch+enrich+cache = 80% of symbol slice, sentiment = remaining 20%
+            scaled = base_progress + (pct / 100.0) * per_symbol * 0.8
+            task_queue.update_progress(task_id, scaled, f"[{i+1}/{total}] {symbol}: {message}")
+
         task_queue.update_progress(
             task_id, base_progress,
             f"[{i+1}/{total}] Fetching news for {symbol}..."
@@ -87,13 +96,14 @@ def handle_news_batch_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str, 
                 end_date=end_date,
                 provider=provider,
                 enrich_content=True,
-                use_cache=True
+                use_cache=True,
+                progress_callback=on_progress
             )
 
             new_articles = [a for a in articles if not a.get('sentiment')]
 
             task_queue.update_progress(
-                task_id, base_progress + (0.8 / total) * 100,
+                task_id, base_progress + per_symbol * 0.8,
                 f"[{i+1}/{total}] Analyzing sentiment for {symbol} "
                 f"({len(new_articles)} articles)..."
             )

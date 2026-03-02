@@ -170,7 +170,7 @@ class MarketNewsInterface(ABC):
             from waybackpy import WaybackMachineCDXServerAPI
 
             cdx = WaybackMachineCDXServerAPI(url)
-            snapshot = cdx.nearest(
+            snapshot = cdx.near(
                 year=published_at.year,
                 month=published_at.month,
                 day=published_at.day

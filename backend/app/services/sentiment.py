@@ -407,7 +407,8 @@ class SentimentService:
         provider: str = "fmp",
         enrich_content: bool = True,
         limit: int = None,  # None means no limit, fetch all
-        use_cache: bool = True
+        use_cache: bool = True,
+        progress_callback: callable = None
     ) -> List[Dict[str, Any]]:
         """
         Fetch news articles for a ticker in date range using real news providers.
@@ -425,6 +426,7 @@ class SentimentService:
             enrich_content: Whether to fetch full article content for short summaries
             limit: Maximum number of articles to fetch per month (None = unlimited)
             use_cache: Whether to use cached articles (default: True)
+            progress_callback: Optional callback(phase, progress_pct, message) for progress
 
         Returns:
             List of news articles with title, content, date, source
@@ -468,9 +470,15 @@ class SentimentService:
             if url:
                 seen_urls.add(url)
 
-        for chunk_start, chunk_end in monthly_chunks:
+        total_chunks = len(monthly_chunks)
+        for chunk_idx, (chunk_start, chunk_end) in enumerate(monthly_chunks):
             try:
                 logger.debug(f"Fetching chunk: {chunk_start.date()} to {chunk_end.date()}")
+
+                if progress_callback:
+                    pct = (chunk_idx / total_chunks) * 70  # fetching = 0-70%
+                    progress_callback('fetch', pct,
+                                      f"Fetching {chunk_start.strftime('%Y-%m')} ({chunk_idx+1}/{total_chunks}, {len(all_raw_articles)} articles so far)")
 
                 # Fetch news for this chunk
                 result = news_provider.get_company_news(
@@ -512,6 +520,8 @@ class SentimentService:
 
         # Enrich articles with short summaries using trafilatura
         if enrich_content and new_articles_count > 0 and hasattr(news_provider, 'enrich_articles_with_content'):
+            if progress_callback:
+                progress_callback('enrich', 70, f"Enriching {new_articles_count} articles with content...")
             logger.info("Enriching articles with URL content via trafilatura...")
             raw_articles = news_provider.enrich_articles_with_content(
                 raw_articles,
@@ -546,6 +556,8 @@ class SentimentService:
 
         # Cache articles in batch (reduces DB lock contention)
         if use_cache and self.use_cache and self._cache_service and articles:
+            if progress_callback:
+                progress_callback('cache', 90, f"Caching {len(articles)} articles...")
             cached_count, _ = self._cache_service.cache_articles_batch(articles, provider, ticker)
             logger.debug(f"Batch cached {cached_count} articles for {ticker}")
 
