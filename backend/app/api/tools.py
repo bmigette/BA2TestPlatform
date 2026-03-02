@@ -1145,3 +1145,134 @@ async def get_ohlcv_cache_status():
         "count": len(entries),
         "cache_directory": str(cache_dir)
     }
+
+
+# ============================================================================
+# News Cache Endpoints
+# ============================================================================
+
+@router.post("/news/fetch-cache")
+async def fetch_news_cache(request: Dict[str, Any]):
+    """
+    Queue news cache fetch jobs for multiple symbols.
+
+    Each symbol gets its own background task that fetches and caches news articles.
+
+    Args:
+        request: Dict with provider, symbols list, start_date, end_date, enrich_content
+
+    Returns:
+        List of queued task IDs
+    """
+    from app.services.task_queue import get_task_queue
+
+    provider = request.get('provider', 'fmp')
+    symbols = request.get('symbols', [])
+    start_date = request.get('start_date', '')
+    end_date = request.get('end_date', '')
+    enrich_content = request.get('enrich_content', True)
+
+    if not symbols:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="symbols list is required and cannot be empty"
+        )
+
+    if not start_date or not end_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date and end_date are required"
+        )
+
+    task_queue = get_task_queue()
+    task_ids = []
+
+    for symbol in symbols:
+        symbol = symbol.strip().upper()
+        if not symbol:
+            continue
+
+        task_id = task_queue.queue_task(
+            task_type='news_cache_fetch',
+            name=f'Cache News: {symbol}',
+            payload={
+                'provider': provider,
+                'symbol': symbol,
+                'start_date': start_date,
+                'end_date': end_date,
+                'enrich_content': enrich_content
+            },
+            description=f'Fetch and cache news for {symbol} ({start_date} to {end_date})',
+            max_retries=1,
+            timeout_seconds=600
+        )
+        task_ids.append({'symbol': symbol, 'task_id': task_id})
+
+    logger.info(f"Queued {len(task_ids)} news cache fetch tasks")
+
+    return {
+        "task_ids": task_ids,
+        "count": len(task_ids),
+        "provider": provider,
+        "start_date": start_date,
+        "end_date": end_date
+    }
+
+
+@router.get("/news/cache-status")
+async def get_news_cache_status():
+    """
+    Get news cache statistics.
+
+    Returns:
+        Cache stats including total articles, by provider, and by ticker
+    """
+    try:
+        from app.services.news_cache import NewsCacheService
+        from app.models.database import SessionLocal
+        from app.models.news_cache import NewsCache
+        from sqlalchemy import func
+
+        cache_service = NewsCacheService()
+        stats = cache_service.get_cache_stats()
+
+        # Also get per-ticker counts
+        db = SessionLocal()
+        try:
+            by_ticker = (
+                db.query(
+                    NewsCache.ticker,
+                    NewsCache.provider,
+                    func.count(NewsCache.id).label('count'),
+                    func.min(NewsCache.published_at).label('earliest'),
+                    func.max(NewsCache.published_at).label('latest'),
+                    func.sum(NewsCache.content_fetched).label('with_content')
+                )
+                .filter(NewsCache.ticker.isnot(None))
+                .group_by(NewsCache.ticker, NewsCache.provider)
+                .order_by(NewsCache.ticker, NewsCache.provider)
+                .all()
+            )
+
+            ticker_stats = []
+            for row in by_ticker:
+                ticker_stats.append({
+                    'ticker': row.ticker,
+                    'provider': row.provider,
+                    'count': row.count,
+                    'earliest': row.earliest.isoformat() if row.earliest else None,
+                    'latest': row.latest.isoformat() if row.latest else None,
+                    'with_content': int(row.with_content or 0)
+                })
+        finally:
+            db.close()
+
+        stats['by_ticker'] = ticker_stats
+        return stats
+
+    except Exception as e:
+        logger.error(f"Error fetching news cache status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get news cache status: {str(e)}"
+        )
