@@ -19,10 +19,6 @@ logger = logging.getLogger(__name__)
 # Import trafilatura for content fetching (required dependency)
 import trafilatura
 
-# Circuit breaker for Wayback Machine — shared across threads
-_wayback_failures = 0
-_wayback_disabled = False
-_WAYBACK_MAX_FAILURES = 3
 
 # Headers for resolving Finnhub redirect URLs
 BROWSER_HEADERS = {
@@ -173,15 +169,11 @@ class MarketNewsInterface(ABC):
         Returns:
             Extracted text content or None if failed
         """
-        global _wayback_failures, _wayback_disabled
-
-        if _wayback_disabled:
-            return None
-
         try:
             from waybackpy import WaybackMachineCDXServerAPI
 
-            cdx = WaybackMachineCDXServerAPI(url)
+            # max_tries=1 to fail fast per article instead of retrying
+            cdx = WaybackMachineCDXServerAPI(url, max_tries=1)
             snapshot = cdx.near(
                 year=published_at.year,
                 month=published_at.month,
@@ -195,16 +187,10 @@ class MarketNewsInterface(ABC):
                     if downloaded:
                         text = trafilatura.extract(downloaded)
                         if text:
-                            _wayback_failures = 0  # reset on success
                             logger.info(f"Fetched content from Wayback Machine: {url}")
                             return text
         except Exception as e:
-            _wayback_failures += 1
-            if _wayback_failures >= _WAYBACK_MAX_FAILURES:
-                _wayback_disabled = True
-                logger.warning(f"Wayback Machine disabled after {_wayback_failures} consecutive failures (last: {e})")
-            else:
-                logger.debug(f"Wayback Machine lookup failed for {url}: {e}")
+            logger.debug(f"Wayback Machine lookup failed for {url}: {e}")
         return None
 
     @staticmethod
