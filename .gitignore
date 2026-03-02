@@ -109,6 +109,10 @@ after-refresh
 chart-test
 dataset-page
 
+# Test result files (machine-specific)
+backend/tests/*_report.json
+backend/tests/*_results.json
+
 # Cache directories
 backend/datasets/cache/
 backend/test_output/
