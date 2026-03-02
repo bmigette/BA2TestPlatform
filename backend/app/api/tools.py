@@ -1127,9 +1127,26 @@ async def get_ohlcv_cache_status():
                 stat = filepath.stat()
                 file_size = stat.st_size
                 rows = 0
+                date_from = None
+                date_to = None
                 try:
                     with open(filepath, 'r') as f:
-                        rows = sum(1 for _ in f) - 1
+                        first_line = None
+                        last_line = None
+                        for i, line in enumerate(f):
+                            if i == 0:
+                                continue  # skip header
+                            if i == 1:
+                                first_line = line
+                            last_line = line
+                            rows += 1
+                        if first_line:
+                            date_from = first_line.split(',')[0].strip()
+                        if last_line:
+                            date_to = last_line.split(',')[0].strip()
+                        # Ensure date_from <= date_to (CSV might be reverse sorted)
+                        if date_from and date_to and date_from > date_to:
+                            date_from, date_to = date_to, date_from
                 except Exception:
                     pass
 
@@ -1141,6 +1158,8 @@ async def get_ohlcv_cache_status():
                     "file_size_mb": round(file_size / (1024 * 1024), 2),
                     "last_modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                     "rows": max(0, rows),
+                    "date_from": date_from,
+                    "date_to": date_to,
                     "filename": filepath.name
                 })
             except Exception as e:

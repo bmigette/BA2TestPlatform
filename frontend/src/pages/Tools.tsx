@@ -151,6 +151,8 @@ interface CacheFile {
   file_size_mb: number;
   last_modified: string;
   rows: number;
+  date_from?: string;
+  date_to?: string;
   filename: string;
 }
 
@@ -543,6 +545,8 @@ const OHLCVCacheTool: React.FC = () => {
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Provider</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Symbol</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Interval</th>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Date From</th>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Date To</th>
                   <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Rows</th>
                   <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Size (MB)</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Last Modified</th>
@@ -554,6 +558,8 @@ const OHLCVCacheTool: React.FC = () => {
                     <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.provider || '–'}</td>
                     <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">{cf.symbol}</td>
                     <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.interval}</td>
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.date_from ? new Date(cf.date_from).toLocaleDateString() : '–'}</td>
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.date_to ? new Date(cf.date_to).toLocaleDateString() : '–'}</td>
                     <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{cf.rows.toLocaleString()}</td>
                     <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{cf.file_size_mb}</td>
                     <td className="px-4 py-2 text-gray-600 dark:text-gray-400">

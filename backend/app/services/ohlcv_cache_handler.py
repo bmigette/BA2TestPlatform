@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
+import pandas as pd
+
 from app.services.task_queue import get_task_queue
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,34 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
 
     def fetch_timeframe(tf: str):
         try:
+            # Check existing cache range and report status
+            cache_file = provider._get_cache_file(symbol, tf)
+            cache_msg = ""
+            if cache_file.exists():
+                try:
+                    cached = pd.read_csv(cache_file, usecols=['Date'])
+                    if not cached.empty:
+                        cached['Date'] = pd.to_datetime(cached['Date'])
+                        c_min = cached['Date'].min().strftime('%Y-%m-%d')
+                        c_max = cached['Date'].max().strftime('%Y-%m-%d')
+                        req_start = start_date.strftime('%Y-%m-%d')
+                        req_end = end_date.strftime('%Y-%m-%d')
+                        if c_min <= req_start and c_max >= req_end:
+                            cache_msg = f"Already cached ({c_min} to {c_max}), skipping"
+                        else:
+                            cache_msg = f"Cache has {c_min} to {c_max}, extending to {req_start}–{req_end}"
+                except Exception:
+                    cache_msg = "Existing cache unreadable, refetching"
+            else:
+                cache_msg = f"No cache, fetching {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+
+            with lock:
+                task_queue.update_progress(
+                    task_id,
+                    (completed_count[0] / total) * 100,
+                    f"{symbol}/{tf}: {cache_msg}"
+                )
+
             df = provider.extend_ohlcv_cache(
                 symbol=symbol,
                 start_date=start_date,
@@ -82,7 +112,8 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
         with lock:
             completed_count[0] += 1
             progress = (completed_count[0] / total) * 100
-            task_queue.update_progress(task_id, progress, f"Fetched {symbol} {tf}")
+            msg = f"Done {symbol}/{tf}: {result.get('rows', '?')} rows" if result.get('status') == 'success' else f"Failed {symbol}/{tf}"
+            task_queue.update_progress(task_id, progress, msg)
 
         return tf, result
 
