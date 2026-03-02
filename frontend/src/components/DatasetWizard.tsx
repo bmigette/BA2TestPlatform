@@ -1461,11 +1461,16 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </label>
           </div>
 
-          {/* API News Sources & Local Files (hidden when using cached news) */}
-          {!wizardData.sentiment.useCachedNews && (<>
+          {/* News Provider Selection (always shown) */}
           <div>
-            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">API News Sources</label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Fetch live news from providers</p>
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
+              {wizardData.sentiment.useCachedNews ? 'Cached News Providers' : 'API News Sources'}
+            </label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              {wizardData.sentiment.useCachedNews
+                ? 'Select which providers to load cached articles from'
+                : 'Fetch live news from providers'}
+            </p>
             <div className="flex flex-wrap gap-2">
               {[
                 { id: 'fmp_news', label: 'FMP News' },
@@ -1498,7 +1503,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             </div>
           </div>
 
-          {/* Local Files News Sources */}
+          {/* Local Files News Sources (hidden when using cached news) */}
+          {!wizardData.sentiment.useCachedNews && (
           <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Local Files (Cached News)</label>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Import previously exported news from local JSON files</p>
@@ -1550,7 +1556,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               Export news from the Tools page first, then import here
             </p>
           </div>
-          </>)}
+          )}
 
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Lookback Periods</label>
