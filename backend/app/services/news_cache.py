@@ -589,6 +589,41 @@ class NewsCacheService:
         finally:
             db.close()
 
+    def get_cached_content_for_urls(self, urls: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Bulk lookup cached content for a list of URLs.
+
+        Returns a dict mapping URL -> {'content': str, 'content_fetched': bool}
+        for URLs that have content cached. URLs without cached content are omitted.
+        """
+        if not urls:
+            return {}
+
+        db = SessionLocal()
+        try:
+            url_hashes = {self._get_url_hash(url): url for url in urls if url}
+            if not url_hashes:
+                return {}
+
+            entries = db.query(NewsCache).filter(
+                NewsCache.url_hash.in_(list(url_hashes.keys())),
+                NewsCache.content_fetched == 1
+            ).all()
+
+            result = {}
+            for entry in entries:
+                url = url_hashes.get(entry.url_hash)
+                if url and entry.content_file_path:
+                    content = self._load_content_file(entry.content_file_path)
+                    if content:
+                        result[url] = {
+                            'content': content,
+                            'content_fetched': True,
+                        }
+            return result
+        finally:
+            db.close()
+
     def get_cache_stats(self) -> Dict[str, Any]:
         """
         Get cache statistics.

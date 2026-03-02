@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # Import trafilatura for content fetching (required dependency)
 import trafilatura
 
+# Circuit breaker for Wayback Machine — shared across threads
+_wayback_failures = 0
+_wayback_disabled = False
+_WAYBACK_MAX_FAILURES = 3
+
 # Headers for resolving Finnhub redirect URLs
 BROWSER_HEADERS = {
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -158,6 +163,8 @@ class MarketNewsInterface(ABC):
     def _try_wayback_machine(url: str, published_at: datetime) -> Optional[str]:
         """
         Try to fetch content from Wayback Machine for old articles.
+        Uses a circuit breaker: after _WAYBACK_MAX_FAILURES consecutive
+        connection errors, stops trying for the rest of the process lifetime.
 
         Args:
             url: Original article URL
@@ -166,6 +173,11 @@ class MarketNewsInterface(ABC):
         Returns:
             Extracted text content or None if failed
         """
+        global _wayback_failures, _wayback_disabled
+
+        if _wayback_disabled:
+            return None
+
         try:
             from waybackpy import WaybackMachineCDXServerAPI
 
@@ -183,10 +195,16 @@ class MarketNewsInterface(ABC):
                     if downloaded:
                         text = trafilatura.extract(downloaded)
                         if text:
+                            _wayback_failures = 0  # reset on success
                             logger.info(f"Fetched content from Wayback Machine: {url}")
                             return text
         except Exception as e:
-            logger.debug(f"Wayback Machine lookup failed for {url}: {e}")
+            _wayback_failures += 1
+            if _wayback_failures >= _WAYBACK_MAX_FAILURES:
+                _wayback_disabled = True
+                logger.warning(f"Wayback Machine disabled after {_wayback_failures} consecutive failures (last: {e})")
+            else:
+                logger.debug(f"Wayback Machine lookup failed for {url}: {e}")
         return None
 
     @staticmethod
@@ -312,6 +330,9 @@ class MarketNewsInterface(ABC):
         # Find articles needing enrichment
         needs_enrichment = []
         for i, article in enumerate(articles):
+            # Skip articles that already have content fetched (from cache or prior run)
+            if article.get('content_fetched'):
+                continue
             summary = article.get('summary', '') or ''
             # Use resolved_url for content fetching if available (for Finnhub redirects)
             url = article.get('resolved_url') or article.get('url', '')

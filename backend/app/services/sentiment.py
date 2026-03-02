@@ -497,11 +497,26 @@ class SentimentService:
         new_articles_count = len(raw_articles)
         logger.info(f"Received {new_articles_count} articles from {provider}")
 
+        # Pre-populate articles with cached content to skip re-fetching
+        if self._cache_service and new_articles_count > 0:
+            urls = [a.get('url', '') for a in raw_articles]
+            cached_content = self._cache_service.get_cached_content_for_urls(urls)
+            if cached_content:
+                populated = 0
+                for article in raw_articles:
+                    url = article.get('url', '')
+                    if url in cached_content:
+                        article['full_content'] = cached_content[url]['content']
+                        article['content_fetched'] = True
+                        populated += 1
+                logger.info(f"Pre-populated {populated}/{new_articles_count} articles with cached content")
+
         # Enrich articles with short summaries using trafilatura
         if enrich_content and new_articles_count > 0 and hasattr(news_provider, 'enrich_articles_with_content'):
+            needs_fetch = sum(1 for a in raw_articles if not a.get('content_fetched'))
             if progress_callback:
-                progress_callback('enrich', 70, f"Enriching {new_articles_count} articles with content...")
-            logger.info("Enriching articles with URL content via trafilatura...")
+                progress_callback('enrich', 70, f"Enriching {needs_fetch} articles with content ({new_articles_count - needs_fetch} already cached)...")
+            logger.info(f"Enriching {needs_fetch} articles with URL content via trafilatura ({new_articles_count - needs_fetch} already cached)")
             raw_articles = news_provider.enrich_articles_with_content(
                 raw_articles,
                 max_workers=5,
