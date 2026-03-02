@@ -262,14 +262,34 @@ class NewsCacheService:
             ).first()
 
             if existing:
+                updated = False
+
+                # Update summary if different
+                new_summary = article.get('summary') or None
+                if new_summary and new_summary != existing.summary:
+                    existing.summary = new_summary
+                    updated = True
+
+                # Update content file if new content available
+                content = article.get('content', '')
+                if content and (not existing.content_fetched or not existing.content_file_path):
+                    content_file_path = self._get_content_file_path(url_hash, provider)
+                    self._save_content_file(content, content_file_path)
+                    existing.content_file_path = content_file_path
+                    existing.content_fetched = 1
+                    updated = True
+
                 # Update sentiment if newly analyzed
-                if article.get('sentiment') and not existing.sentiment_label:
+                if article.get('sentiment'):
                     existing.sentiment_label = article.get('sentiment')
                     existing.sentiment_score = article.get('sentiment_score')
                     existing.positive_prob = article.get('positive_prob')
                     existing.neutral_prob = article.get('neutral_prob')
                     existing.negative_prob = article.get('negative_prob')
                     existing.analyzed_at = datetime.now()
+                    updated = True
+
+                if updated:
                     db.commit()
                 return existing
 
@@ -368,14 +388,34 @@ class NewsCacheService:
                 ).first()
 
                 if existing:
+                    updated = False
+
+                    # Update summary if different
+                    new_summary = article.get('summary') or None
+                    if new_summary and new_summary != existing.summary:
+                        existing.summary = new_summary
+                        updated = True
+
+                    # Update content file if new content available
+                    content = article.get('content', '')
+                    if content and (not existing.content_fetched or not existing.content_file_path):
+                        content_file_path = self._get_content_file_path(url_hash, provider)
+                        self._save_content_file(content, content_file_path)
+                        existing.content_file_path = content_file_path
+                        existing.content_fetched = 1
+                        updated = True
+
                     # Update sentiment if newly analyzed
-                    if article.get('sentiment') and not existing.sentiment_label:
+                    if article.get('sentiment'):
                         existing.sentiment_label = article.get('sentiment')
                         existing.sentiment_score = article.get('sentiment_score')
                         existing.positive_prob = article.get('positive_prob')
                         existing.neutral_prob = article.get('neutral_prob')
                         existing.negative_prob = article.get('negative_prob')
                         existing.analyzed_at = datetime.now()
+                        updated = True
+
+                    if updated:
                         pending_count += 1
                     cached += 1
                 else:

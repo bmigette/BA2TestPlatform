@@ -437,21 +437,6 @@ class SentimentService:
         """
         logger.info(f"Fetching news for {ticker} from {start_date} to {end_date} using {provider}")
 
-        # Check cache first
-        cached_articles = []
-        if use_cache and self.use_cache and self._cache_service:
-            cached_articles = self._cache_service.get_cached_articles_for_ticker(
-                ticker=ticker,
-                provider=provider,
-                start_date=start_date,
-                end_date=end_date
-            )
-            if cached_articles:
-                logger.info(f"Found {len(cached_articles)} cached articles for {ticker}")
-                # If we have cached articles covering the date range, use them
-                # For now, we'll still fetch to get any new articles
-                # but we'll dedupe using cached URLs
-
         # Get the news provider - fail if not available
         news_provider = self._get_news_provider(provider)
         if news_provider is None:
@@ -463,12 +448,6 @@ class SentimentService:
 
         all_raw_articles = []
         seen_urls = set()
-
-        # Add cached URLs to seen set to avoid re-fetching
-        for cached in cached_articles:
-            url = cached.get('url', '')
-            if url:
-                seen_urls.add(url)
 
         total_chunks = len(monthly_chunks)
         for chunk_idx, (chunk_start, chunk_end) in enumerate(monthly_chunks):
@@ -516,7 +495,7 @@ class SentimentService:
 
         raw_articles = all_raw_articles
         new_articles_count = len(raw_articles)
-        logger.info(f"Received {new_articles_count} new raw articles from {provider} (not in cache)")
+        logger.info(f"Received {new_articles_count} articles from {provider}")
 
         # Enrich articles with short summaries using trafilatura
         if enrich_content and new_articles_count > 0 and hasattr(news_provider, 'enrich_articles_with_content'):
@@ -561,10 +540,8 @@ class SentimentService:
             cached_count, _ = self._cache_service.cache_articles_batch(articles, provider, ticker)
             logger.debug(f"Batch cached {cached_count} articles for {ticker}")
 
-        # Combine cached articles with newly fetched articles
-        all_articles = cached_articles + articles
-        logger.info(f"Total: {len(all_articles)} articles for {ticker} ({len(cached_articles)} cached, {len(articles)} new)")
-        return all_articles
+        logger.info(f"Total: {len(articles)} articles for {ticker}")
+        return articles
 
     def fetch_global_news(
         self,

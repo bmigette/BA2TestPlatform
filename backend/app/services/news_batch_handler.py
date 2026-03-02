@@ -96,31 +96,34 @@ def handle_news_batch_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str, 
                 end_date=end_date,
                 provider=provider,
                 enrich_content=True,
-                use_cache=True,
+                use_cache=False,
                 progress_callback=on_progress
             )
-
-            new_articles = [a for a in articles if not a.get('sentiment')]
 
             task_queue.update_progress(
                 task_id, base_progress + per_symbol * 0.8,
                 f"[{i+1}/{total}] Analyzing sentiment for {symbol} "
-                f"({len(new_articles)} articles)..."
+                f"({len(articles)} articles)..."
             )
 
             analyzed_count = 0
-            if new_articles:
-                analyzed = sentiment_service.analyze_news_articles(new_articles)
+            if articles:
+                analyzed = sentiment_service.analyze_news_articles(articles)
                 analyzed_count = len(analyzed)
+
+                # Save/update all articles in cache (upserts by URL)
+                if sentiment_service._cache_service:
+                    sentiment_service._cache_service.cache_articles_batch(
+                        analyzed, provider, symbol
+                    )
 
             results[symbol] = {
                 'status': 'success',
                 'total_articles': len(articles),
-                'new_articles': len(new_articles),
                 'analyzed': analyzed_count,
             }
             logger.info(f"News batch {symbol}: {len(articles)} total, "
-                        f"{len(new_articles)} new, {analyzed_count} analyzed")
+                        f"{analyzed_count} analyzed")
 
         except Exception as e:
             results[symbol] = {'status': 'error', 'error': str(e)}
