@@ -1175,6 +1175,80 @@ async def get_ohlcv_cache_status():
     }
 
 
+@router.get("/ohlcv/check-gaps")
+async def check_ohlcv_gaps():
+    """
+    Analyze all OHLCV cache files for internal data gaps.
+
+    A gap is defined as a time interval between consecutive rows
+    that exceeds 5 calendar days (covers weekends + holidays).
+
+    Returns:
+        Report with gap details per cache file, sorted by gap count descending
+    """
+    import pandas as pd
+
+    cache_dir = Path("datasets/cache/ohlcv")
+    results = []
+
+    if cache_dir.exists():
+        csv_files = list(cache_dir.glob("*.csv"))
+        csv_files += list(cache_dir.glob("*/*.csv"))
+
+        for filepath in csv_files:
+            try:
+                provider_name = "unknown" if filepath.parent == cache_dir else filepath.parent.name
+                name_parts = filepath.stem.rsplit('_', 1)
+                symbol, interval = name_parts if len(name_parts) == 2 else (filepath.stem, "unknown")
+
+                df = pd.read_csv(filepath, usecols=['Date'])
+                df['Date'] = pd.to_datetime(df['Date'], utc=True, errors='coerce')
+                df = df.dropna(subset=['Date']).sort_values('Date').reset_index(drop=True)
+
+                gaps = []
+                if len(df) > 1:
+                    diffs = df['Date'].diff()
+                    gap_threshold = pd.Timedelta(days=5)
+                    for idx in diffs[diffs > gap_threshold].index:
+                        gap_start = df.loc[idx - 1, 'Date']
+                        gap_end = df.loc[idx, 'Date']
+                        gap_days = int((gap_end - gap_start).total_seconds() / 86400)
+                        gaps.append({
+                            "gap_start": gap_start.isoformat(),
+                            "gap_end": gap_end.isoformat(),
+                            "gap_days": gap_days,
+                        })
+
+                results.append({
+                    "provider": provider_name,
+                    "symbol": symbol,
+                    "interval": interval,
+                    "filename": filepath.name,
+                    "rows": len(df),
+                    "date_from": df['Date'].min().isoformat() if not df.empty else None,
+                    "date_to": df['Date'].max().isoformat() if not df.empty else None,
+                    "gap_count": len(gaps),
+                    "gaps": gaps,
+                    "has_gaps": len(gaps) > 0,
+                })
+            except Exception as e:
+                logger.warning(f"Error checking gaps in {filepath}: {e}")
+
+    # Files with gaps first (descending gap count), then clean files alphabetically
+    results.sort(key=lambda x: (-x['gap_count'], x['provider'], x['symbol'], x['interval']))
+
+    files_with_gaps = sum(1 for r in results if r['has_gaps'])
+    total_gaps = sum(r['gap_count'] for r in results)
+
+    return {
+        "results": results,
+        "total_files": len(results),
+        "files_with_gaps": files_with_gaps,
+        "files_without_gaps": len(results) - files_with_gaps,
+        "total_gaps": total_gaps,
+    }
+
+
 @router.post("/news/batch-fetch")
 async def batch_fetch_news(request: Dict[str, Any]):
     """

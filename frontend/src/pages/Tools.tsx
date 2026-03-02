@@ -156,6 +156,33 @@ interface CacheFile {
   filename: string;
 }
 
+interface GapInfo {
+  gap_start: string;
+  gap_end: string;
+  gap_days: number;
+}
+
+interface GapResult {
+  provider: string;
+  symbol: string;
+  interval: string;
+  filename: string;
+  rows: number;
+  date_from: string | null;
+  date_to: string | null;
+  gap_count: number;
+  gaps: GapInfo[];
+  has_gaps: boolean;
+}
+
+interface GapReport {
+  results: GapResult[];
+  total_files: number;
+  files_with_gaps: number;
+  files_without_gaps: number;
+  total_gaps: number;
+}
+
 interface FetchTask {
   symbol: string;
   task_id: string;
@@ -175,6 +202,37 @@ const OHLCVCacheTool: React.FC = () => {
   const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [gapReport, setGapReport] = useState<GapReport | null>(null);
+  const [checkingGaps, setCheckingGaps] = useState(false);
+  const [expandedGapFiles, setExpandedGapFiles] = useState<Set<string>>(new Set());
+
+  const handleCheckGaps = async () => {
+    setCheckingGaps(true);
+    setGapReport(null);
+    try {
+      const resp = await fetch('http://localhost:8000/api/tools/ohlcv/check-gaps');
+      if (resp.ok) {
+        const data = await resp.json();
+        setGapReport(data);
+        setExpandedGapFiles(new Set());
+      } else {
+        setError('Failed to check gaps');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setCheckingGaps(false);
+    }
+  };
+
+  const toggleGapExpand = (filename: string) => {
+    setExpandedGapFiles(prev => {
+      const next = new Set(prev);
+      if (next.has(filename)) next.delete(filename);
+      else next.add(filename);
+      return next;
+    });
+  };
 
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
@@ -556,12 +614,22 @@ const OHLCVCacheTool: React.FC = () => {
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
               Cached Data ({cacheFiles.length} files)
             </h3>
-            <button
-              onClick={fetchCacheStatus}
-              className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
-            >
-              Refresh
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCheckGaps}
+                disabled={checkingGaps}
+                className="px-3 py-1 text-sm bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 rounded hover:bg-orange-200 dark:hover:bg-orange-900/50 flex items-center gap-1 disabled:opacity-50"
+              >
+                {checkingGaps ? <Loader size={14} className="animate-spin" /> : <Search size={14} />}
+                Check Gaps
+              </button>
+              <button
+                onClick={fetchCacheStatus}
+                className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Refresh
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -595,6 +663,96 @@ const OHLCVCacheTool: React.FC = () => {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Gap Report */}
+      {gapReport && (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+              <Search size={18} />
+              Gap Analysis Report
+            </h3>
+            <button
+              onClick={() => setGapReport(null)}
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              title="Close report"
+            >
+              <XCircle size={18} />
+            </button>
+          </div>
+
+          {/* Summary */}
+          <div className="flex flex-wrap gap-3 mb-4">
+            <span className={`px-3 py-1.5 rounded-full text-sm font-medium flex items-center gap-1 ${gapReport.files_with_gaps > 0 ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'}`}>
+              {gapReport.files_with_gaps > 0 ? <AlertCircle size={14} /> : <CheckCircle size={14} />}
+              {gapReport.files_with_gaps} file{gapReport.files_with_gaps !== 1 ? 's' : ''} with gaps
+            </span>
+            <span className="px-3 py-1.5 rounded-full text-sm font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 flex items-center gap-1">
+              <CheckCircle size={14} />
+              {gapReport.files_without_gaps} clean file{gapReport.files_without_gaps !== 1 ? 's' : ''}
+            </span>
+            <span className="px-3 py-1.5 rounded-full text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+              {gapReport.total_gaps} total gap{gapReport.total_gaps !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {gapReport.files_with_gaps === 0 ? (
+            <div className="flex items-center gap-2 text-green-600 dark:text-green-400 py-4">
+              <CheckCircle size={20} />
+              <span>All cache files are gap-free.</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {gapReport.results.filter(r => r.has_gaps).map(result => (
+                <div key={result.filename} className="border border-red-200 dark:border-red-800 rounded-lg overflow-hidden">
+                  <button
+                    className="w-full flex items-center gap-3 px-4 py-3 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-left"
+                    onClick={() => toggleGapExpand(result.filename)}
+                  >
+                    {expandedGapFiles.has(result.filename) ? <ChevronDown size={16} className="text-red-500 flex-shrink-0" /> : <ChevronRight size={16} className="text-red-500 flex-shrink-0" />}
+                    <span className="font-medium text-gray-900 dark:text-gray-100">{result.symbol}</span>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">{result.interval}</span>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">[{result.provider}]</span>
+                    <span className="ml-auto flex items-center gap-2 text-sm">
+                      <span className="px-2 py-0.5 bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200 rounded-full font-medium">
+                        {result.gap_count} gap{result.gap_count !== 1 ? 's' : ''}
+                      </span>
+                      <span className="text-gray-500 dark:text-gray-400">
+                        max {Math.max(...result.gaps.map(g => g.gap_days))}d
+                      </span>
+                    </span>
+                  </button>
+                  {expandedGapFiles.has(result.filename) && (
+                    <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-red-200 dark:border-red-800">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                        {result.rows.toLocaleString()} rows &bull; {result.date_from ? new Date(result.date_from).toLocaleDateString() : '?'} → {result.date_to ? new Date(result.date_to).toLocaleDateString() : '?'}
+                      </div>
+                      <table className="min-w-full text-xs">
+                        <thead>
+                          <tr className="text-gray-500 dark:text-gray-400">
+                            <th className="text-left pr-6 pb-1">Gap Start</th>
+                            <th className="text-left pr-6 pb-1">Gap End</th>
+                            <th className="text-right pb-1">Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                          {result.gaps.map((gap, i) => (
+                            <tr key={i} className="text-gray-700 dark:text-gray-300">
+                              <td className="pr-6 py-0.5">{new Date(gap.gap_start).toLocaleDateString()}</td>
+                              <td className="pr-6 py-0.5">{new Date(gap.gap_end).toLocaleDateString()}</td>
+                              <td className="text-right py-0.5 font-medium text-red-600 dark:text-red-400">{gap.gap_days}d</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
