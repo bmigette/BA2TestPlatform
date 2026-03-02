@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp, Trash2, HardDrive, Database, Upload } from 'lucide-react';
+import { Wrench, Newspaper, Search, Loader, CheckCircle, XCircle, AlertCircle, MessageSquare, Download, DollarSign, TrendingUp, Trash2, HardDrive, Database, Upload, ChevronDown, ChevronRight } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 interface NewsArticle {
@@ -610,11 +610,18 @@ interface NewsBatchTask {
   progress_message?: string;
 }
 
+interface SymbolStats {
+  count: number;
+  with_sentiment: number;
+  with_content: number;
+}
+
 interface NewsCacheStats {
   total_articles: number;
   with_sentiment: number;
   with_content: number;
   by_provider: Record<string, number>;
+  by_provider_symbol?: Record<string, Record<string, SymbolStats>>;
 }
 
 const NewsBatchFetchTool: React.FC = () => {
@@ -633,6 +640,7 @@ const NewsBatchFetchTool: React.FC = () => {
   const [fetching, setFetching] = useState(false);
   const [activeTasks, setActiveTasks] = useState<NewsBatchTask[]>([]);
   const [cacheStats, setCacheStats] = useState<NewsCacheStats | null>(null);
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -968,12 +976,58 @@ const NewsBatchFetchTool: React.FC = () => {
             <div>
               <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">By Provider</h4>
               <div className="space-y-1">
-                {Object.entries(cacheStats.by_provider).map(([prov, count]) => (
-                  <div key={prov} className="flex justify-between text-sm text-gray-600 dark:text-gray-400">
-                    <span>{prov}</span>
-                    <span className="font-medium">{(count as number).toLocaleString()}</span>
-                  </div>
-                ))}
+                {Object.entries(cacheStats.by_provider).map(([prov, count]) => {
+                  const isExpanded = expandedProviders.has(prov);
+                  const symbolStats = cacheStats.by_provider_symbol?.[prov];
+                  const hasSymbols = symbolStats && Object.keys(symbolStats).length > 0;
+                  return (
+                    <div key={prov}>
+                      <div
+                        className={`flex justify-between items-center text-sm text-gray-600 dark:text-gray-400 ${hasSymbols ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 rounded px-2 py-1 -mx-2' : ''}`}
+                        onClick={() => {
+                          if (!hasSymbols) return;
+                          setExpandedProviders(prev => {
+                            const next = new Set(prev);
+                            if (next.has(prov)) next.delete(prov); else next.add(prov);
+                            return next;
+                          });
+                        }}
+                      >
+                        <span className="flex items-center gap-1">
+                          {hasSymbols && (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
+                          {prov}
+                        </span>
+                        <span className="font-medium">{(count as number).toLocaleString()}</span>
+                      </div>
+                      {isExpanded && symbolStats && (
+                        <div className="ml-5 mt-1 mb-2 border-l-2 border-gray-200 dark:border-gray-600 pl-3">
+                          <table className="w-full text-xs text-gray-500 dark:text-gray-400">
+                            <thead>
+                              <tr className="border-b border-gray-200 dark:border-gray-600">
+                                <th className="text-left py-1 font-medium">Symbol</th>
+                                <th className="text-right py-1 font-medium">Articles</th>
+                                <th className="text-right py-1 font-medium">Sentiment</th>
+                                <th className="text-right py-1 font-medium">Content</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(symbolStats)
+                                .sort(([, a], [, b]) => b.count - a.count)
+                                .map(([sym, stats]) => (
+                                <tr key={sym} className="border-b border-gray-100 dark:border-gray-700">
+                                  <td className="py-1 font-medium text-gray-700 dark:text-gray-300">{sym}</td>
+                                  <td className="py-1 text-right">{stats.count.toLocaleString()}</td>
+                                  <td className="py-1 text-right">{stats.with_sentiment.toLocaleString()}</td>
+                                  <td className="py-1 text-right">{stats.with_content.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

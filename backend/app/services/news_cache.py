@@ -649,11 +649,41 @@ class NewsCacheService:
                 .all()
             )
 
+            # Count by provider + symbol with sentiment/content stats
+            by_provider_symbol = {}
+            rows = db.query(
+                NewsCache.provider,
+                NewsCache.ticker,
+                func.count(NewsCache.id),
+                func.sum(
+                    func.case(
+                        (NewsCache.sentiment_label.isnot(None), 1),
+                        else_=0
+                    )
+                ),
+                func.sum(
+                    func.case(
+                        (NewsCache.content_fetched == 1, 1),
+                        else_=0
+                    )
+                ),
+            ).group_by(NewsCache.provider, NewsCache.ticker).all()
+
+            for prov, ticker, count, sent_count, content_count in rows:
+                if prov not in by_provider_symbol:
+                    by_provider_symbol[prov] = {}
+                by_provider_symbol[prov][ticker or '(no ticker)'] = {
+                    'count': count,
+                    'with_sentiment': int(sent_count or 0),
+                    'with_content': int(content_count or 0),
+                }
+
             return {
                 'total_articles': total,
                 'with_sentiment': with_sentiment,
                 'with_content': with_content,
-                'by_provider': by_provider
+                'by_provider': by_provider,
+                'by_provider_symbol': by_provider_symbol,
             }
 
         finally:
