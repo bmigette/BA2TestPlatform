@@ -642,7 +642,7 @@ class NewsCacheService:
             ).count()
 
             # Count by provider
-            from sqlalchemy import func
+            from sqlalchemy import func, case
             by_provider = dict(
                 db.query(NewsCache.provider, func.count(NewsCache.id))
                 .group_by(NewsCache.provider)
@@ -656,13 +656,13 @@ class NewsCacheService:
                 NewsCache.ticker,
                 func.count(NewsCache.id),
                 func.sum(
-                    func.case(
+                    case(
                         (NewsCache.sentiment_label.isnot(None), 1),
                         else_=0
                     )
                 ),
                 func.sum(
-                    func.case(
+                    case(
                         (NewsCache.content_fetched == 1, 1),
                         else_=0
                     )
