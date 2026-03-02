@@ -126,14 +126,14 @@ class MarketNewsInterface(ABC):
     # Content fetching utilities (shared by all providers)
 
     @staticmethod
-    def fetch_url_content(url: str, timeout: int = 5, published_at: datetime = None) -> Optional[str]:
+    def fetch_url_content(url: str, timeout: int = 15, published_at: datetime = None) -> Optional[str]:
         """
         Fetch article content from URL using requests + trafilatura extract.
         For articles older than 1 year, tries Wayback Machine as fallback.
 
         Args:
             url: Article URL to fetch
-            timeout: Request timeout in seconds (default 5s)
+            timeout: Request timeout in seconds (default 15s)
             published_at: Article publish date (used to decide Wayback Machine fallback)
 
         Returns:
