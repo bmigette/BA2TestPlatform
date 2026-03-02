@@ -244,22 +244,22 @@ async def startup_event():
 
     # Initialize task queue
     from app.services.task_queue import init_task_queue, get_task_queue
-    init_task_queue(max_workers=1)
-    logger.info("Task queue initialized with 1 worker (sequential processing)")
+    init_task_queue(max_workers=8)
+    logger.info("Task queue initialized with 8 workers")
 
     # Register task handlers
     from app.services.dataset_handler import handle_dataset_regeneration
     from app.services.job_handler import handle_training_job
     from app.services.backtest_handler import handle_backtest
     from app.services.ohlcv_cache_handler import handle_ohlcv_cache_fetch
-    from app.services.news_cache_handler import handle_news_cache_fetch
+    from app.services.news_batch_handler import handle_news_batch_fetch
     task_queue = get_task_queue()
     task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
     task_queue.register_handler('training_job', handle_training_job)
     task_queue.register_handler('backtest', handle_backtest)
     task_queue.register_handler('ohlcv_cache_fetch', handle_ohlcv_cache_fetch)
-    task_queue.register_handler('news_cache_fetch', handle_news_cache_fetch)
-    logger.info("Registered task handlers: dataset_regeneration, training_job, backtest, ohlcv_cache_fetch, news_cache_fetch")
+    task_queue.register_handler('news_batch_fetch', handle_news_batch_fetch)
+    logger.info("Registered task handlers: dataset_regeneration, training_job, backtest, ohlcv_cache_fetch, news_batch_fetch")
 
     # Recover interrupted jobs (crashed while running)
     recover_interrupted_jobs()

@@ -22,15 +22,18 @@ logger = logging.getLogger(__name__)
 class FMPNewsProvider(MarketNewsInterface):
     """
     Financial Modeling Prep News Provider.
-    
+
     Provides access to news articles from FMP API, including:
     - Company-specific news articles
     - General market news
     - Article summaries and metadata
     - Source attribution
-    
+
     Requires FMP API key (free tier available).
     """
+
+    # Articles fetched per API page (FMP max is 50)
+    PAGE_SIZE = 50
     
     def __init__(self):
         """Initialize the FMP News Provider with API key."""
@@ -120,34 +123,52 @@ class FMPNewsProvider(MarketNewsInterface):
         )
         
         try:
-            # FMP stock_news returns list of news articles
-            # Note: FMP doesn't support date filtering in API, we filter manually
-            news_data = fmpsdk.stock_news(
-                apikey=self.api_key,
-                tickers=symbol,
-                limit=limit * 2  # Get extra to account for filtering
-            )
-
-            if not news_data:
-                logger.warning(f"No news data returned from FMP for {symbol}")
-                return self._format_empty_response(symbol, actual_start_date, end_date, format_type)
-
             # Ensure comparison dates are timezone-aware
             compare_start = actual_start_date if actual_start_date.tzinfo else actual_start_date.replace(tzinfo=timezone.utc)
             compare_end = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
 
-            # Filter by date range (FMP returns publishedDate as string)
+            # Paginate through FMP pages (newest-first) until we cover the date range
             filtered_articles = []
-            for article in news_data:
-                if "publishedDate" in article:
+            page = 0
+            while True:
+                news_data = fmpsdk.stock_news(
+                    apikey=self.api_key,
+                    tickers=symbol,
+                    limit=self.PAGE_SIZE,
+                    page=page,
+                )
+                if not news_data:
+                    break
+
+                reached_before_start = False
+                for article in news_data:
+                    if "publishedDate" not in article:
+                        continue
                     pub_date = datetime.fromisoformat(article["publishedDate"].replace("Z", "+00:00"))
-                    # Ensure all dates are timezone-aware for comparison
                     if pub_date.tzinfo is None:
                         pub_date = pub_date.replace(tzinfo=timezone.utc)
-                    if compare_start <= pub_date <= compare_end:
+
+                    if pub_date < compare_start:
+                        reached_before_start = True
+                        break
+
+                    if pub_date <= compare_end:
                         filtered_articles.append(article)
                         if len(filtered_articles) >= limit:
                             break
+
+                if len(filtered_articles) >= limit or reached_before_start:
+                    break
+                if len(news_data) < self.PAGE_SIZE:
+                    break  # Last page returned fewer items than requested
+                page += 1
+
+            logger.debug(f"FMP company news for {symbol}: fetched {len(filtered_articles)} articles "
+                         f"across {page + 1} page(s)")
+
+            if not filtered_articles:
+                logger.warning(f"No news data returned from FMP for {symbol}")
+                return self._format_empty_response(symbol, actual_start_date, end_date, format_type)
             
             # Build dict response
             dict_response = {
@@ -248,32 +269,50 @@ class FMPNewsProvider(MarketNewsInterface):
         )
         
         try:
-            # FMP general_news returns latest market news
-            news_data = fmpsdk.general_news(
-                apikey=self.api_key,
-                page=0  # Get first page
-            )
-
-            if not news_data:
-                logger.warning("No general news data returned from FMP")
-                return self._format_empty_response(None, actual_start_date, end_date, format_type)
-
             # Ensure comparison dates are timezone-aware
             compare_start = actual_start_date if actual_start_date.tzinfo else actual_start_date.replace(tzinfo=timezone.utc)
             compare_end = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
 
-            # Filter by date range and limit
+            # Paginate through FMP pages (newest-first) until we cover the date range
             filtered_articles = []
-            for article in news_data:
-                if "publishedDate" in article:
+            page = 0
+            while True:
+                news_data = fmpsdk.general_news(
+                    apikey=self.api_key,
+                    page=page,
+                )
+                if not news_data:
+                    break
+
+                reached_before_start = False
+                for article in news_data:
+                    if "publishedDate" not in article:
+                        continue
                     pub_date = datetime.fromisoformat(article["publishedDate"].replace("Z", "+00:00"))
-                    # Ensure all dates are timezone-aware for comparison
                     if pub_date.tzinfo is None:
                         pub_date = pub_date.replace(tzinfo=timezone.utc)
-                    if compare_start <= pub_date <= compare_end:
+
+                    if pub_date < compare_start:
+                        reached_before_start = True
+                        break
+
+                    if pub_date <= compare_end:
                         filtered_articles.append(article)
                         if len(filtered_articles) >= limit:
                             break
+
+                if len(filtered_articles) >= limit or reached_before_start:
+                    break
+                if len(news_data) < self.PAGE_SIZE:
+                    break  # Last page returned fewer items than requested
+                page += 1
+
+            logger.debug(f"FMP general news: fetched {len(filtered_articles)} articles "
+                         f"across {page + 1} page(s)")
+
+            if not filtered_articles:
+                logger.warning("No general news data returned from FMP")
+                return self._format_empty_response(None, actual_start_date, end_date, format_type)
             
             # Build dict response
             dict_response = {

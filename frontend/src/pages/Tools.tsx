@@ -30,7 +30,7 @@ interface NewsProvider {
 }
 
 const Tools: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'news' | 'news-cache' | 'fundamentals' | 'macro' | 'maintenance' | 'ohlcv'>('news');
+  const [activeTab, setActiveTab] = useState<'news' | 'fundamentals' | 'macro' | 'maintenance' | 'ohlcv' | 'newsbatch'>('news');
 
   return (
     <div className="p-6">
@@ -58,19 +58,6 @@ const Tools: React.FC = () => {
             <div className="flex items-center gap-2">
               <Newspaper size={16} />
               News Providers
-            </div>
-          </button>
-          <button
-            onClick={() => setActiveTab('news-cache')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'news-cache'
-                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Download size={16} />
-              News Cache
             </div>
           </button>
           <button
@@ -113,6 +100,16 @@ const Tools: React.FC = () => {
             </div>
           </button>
           <button
+            onClick={() => setActiveTab('newsbatch')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'newsbatch'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            News Batch Fetch
+          </button>
+          <button
             onClick={() => setActiveTab('maintenance')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'maintenance'
@@ -130,10 +127,10 @@ const Tools: React.FC = () => {
 
       {/* Tab Content */}
       {activeTab === 'news' && <NewsProviderTester />}
-      {activeTab === 'news-cache' && <NewsCacheTool />}
       {activeTab === 'fundamentals' && <FundamentalsTester />}
       {activeTab === 'macro' && <MacroTester />}
       {activeTab === 'ohlcv' && <OHLCVCacheTool />}
+      {activeTab === 'newsbatch' && <NewsBatchFetchTool />}
       {activeTab === 'maintenance' && <MaintenancePanel />}
     </div>
   );
@@ -148,6 +145,7 @@ interface OHLCVProvider {
 }
 
 interface CacheFile {
+  provider?: string;
   symbol: string;
   interval: string;
   file_size_mb: number;
@@ -175,6 +173,13 @@ const OHLCVCacheTool: React.FC = () => {
   const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 15);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
 
   const availableTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 
@@ -281,6 +286,10 @@ const OHLCVCacheTool: React.FC = () => {
       setError('Please select at least one timeframe');
       return;
     }
+    if (startDate > endDate) {
+      setError('Start date must be before end date');
+      return;
+    }
 
     setFetching(true);
     setError(null);
@@ -290,7 +299,7 @@ const OHLCVCacheTool: React.FC = () => {
       const resp = await fetch('http://localhost:8000/api/tools/ohlcv/fetch-cache', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, symbols, timeframes })
+        body: JSON.stringify({ provider, symbols, timeframes, start_date: startDate, end_date: endDate })
       });
 
       if (resp.ok) {
@@ -414,6 +423,32 @@ const OHLCVCacheTool: React.FC = () => {
             </div>
           </div>
 
+          {/* Date Range */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Start Date
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={e => setStartDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                End Date
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={e => setEndDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+            </div>
+          </div>
+
           {/* Fetch Button */}
           <button
             onClick={handleFetchCache}
@@ -505,6 +540,7 @@ const OHLCVCacheTool: React.FC = () => {
             <table className="min-w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
+                  <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Provider</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Symbol</th>
                   <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Interval</th>
                   <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Rows</th>
@@ -515,6 +551,7 @@ const OHLCVCacheTool: React.FC = () => {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {cacheFiles.map((cf, idx) => (
                   <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.provider || '–'}</td>
                     <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">{cf.symbol}</td>
                     <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{cf.interval}</td>
                     <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{cf.rows.toLocaleString()}</td>
@@ -533,154 +570,128 @@ const OHLCVCacheTool: React.FC = () => {
   );
 };
 
-// News Cache Tool Component
-interface NewsCacheTickerStat {
-  ticker: string;
-  provider: string;
-  count: number;
-  earliest: string | null;
-  latest: string | null;
-  with_content: number;
+// News Batch Fetch Tool Component
+interface NewsBatchTask {
+  symbol: string;
+  task_id: string;
+  status?: string;
+  progress?: number;
+  progress_message?: string;
 }
 
-const NewsCacheTool: React.FC = () => {
+interface NewsCacheStats {
+  total_articles: number;
+  with_sentiment: number;
+  with_content: number;
+  by_provider: Record<string, number>;
+}
+
+const NewsBatchFetchTool: React.FC = () => {
   const [provider, setProvider] = useState('fmp');
   const [providers, setProviders] = useState<NewsProvider[]>([]);
   const [symbolInput, setSymbolInput] = useState('');
   const [symbols, setSymbols] = useState<string[]>([]);
+
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
-    d.setDate(d.getDate() - 30);
+    d.setFullYear(d.getFullYear() - 1);
     return d.toISOString().split('T')[0];
   });
   const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [enrichContent, setEnrichContent] = useState(true);
+
   const [fetching, setFetching] = useState(false);
-  const [tasks, setTasks] = useState<FetchTask[]>([]);
-  const [cacheStats, setCacheStats] = useState<{
-    total_articles: number;
-    with_sentiment: number;
-    with_content: number;
-    by_provider: Record<string, number>;
-    by_ticker: NewsCacheTickerStat[];
-  } | null>(null);
+  const [activeTasks, setActiveTasks] = useState<NewsBatchTask[]>([]);
+  const [cacheStats, setCacheStats] = useState<NewsCacheStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  // Fetch providers and cache status on mount
   useEffect(() => {
     fetchProviders();
-    fetchCacheStatus();
+    fetchCacheStats();
   }, []);
 
-  // Poll task progress when tasks are active
+  // Poll active tasks
   useEffect(() => {
-    const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
     if (activeTasks.length === 0) return;
-
     const interval = setInterval(async () => {
       const updatedTasks = await Promise.all(
-        tasks.map(async (task) => {
-          if (task.status === 'completed' || task.status === 'failed') return task;
+        activeTasks.map(async t => {
           try {
-            const resp = await fetch(`http://localhost:8000/api/tasks/${task.task_id}/progress`);
-            if (resp.ok) {
-              const data = await resp.json();
-              return { ...task, status: data.status, progress: data.progress, progress_message: data.progress_message };
+            const r = await fetch(`http://localhost:8000/api/tasks/${t.task_id}/progress`);
+            if (r.ok) {
+              const d = await r.json();
+              return { ...t, status: d.status, progress: d.progress, progress_message: d.progress_message };
             }
           } catch { /* ignore */ }
-          return task;
+          return t;
         })
       );
-      setTasks(updatedTasks);
-
-      // Refresh cache status when all tasks complete
+      setActiveTasks(updatedTasks);
       const stillActive = updatedTasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
       if (stillActive.length === 0) {
-        fetchCacheStatus();
+        setActiveTasks([]);
+        setFetching(false);
+        fetchCacheStats();
+        setMessage('All tasks completed!');
       }
-    }, 2000);
-
+    }, 3000);
     return () => clearInterval(interval);
-  }, [tasks]);
+  }, [activeTasks]);
 
   const fetchProviders = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/api/tools/news/providers');
-      if (resp.ok) {
-        const data = await resp.json();
-        setProviders(data.providers || []);
+      const r = await fetch('http://localhost:8000/api/tools/news/providers');
+      if (r.ok) {
+        const d = await r.json();
+        // Filter providers that support company news (exclude localfiles)
+        setProviders((d.providers || []).filter((p: NewsProvider) => p.id !== 'localfiles'));
       }
-    } catch (err) {
-      console.error('Failed to fetch news providers:', err);
-    }
+    } catch { /* ignore */ }
   };
 
-  const fetchCacheStatus = async () => {
+  const fetchCacheStats = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/api/tools/news/cache-status');
-      if (resp.ok) {
-        const data = await resp.json();
-        setCacheStats(data);
+      const r = await fetch('http://localhost:8000/api/tools/news/cache-status');
+      if (r.ok) {
+        const d = await r.json();
+        setCacheStats(d);
       }
-    } catch (err) {
-      console.error('Failed to fetch news cache status:', err);
-    }
+    } catch { /* ignore */ }
   };
 
-  const parseSymbols = (text: string): string[] => {
-    return text
-      .split(/[\n,;]+/)
-      .map(s => s.trim().toUpperCase())
-      .filter(s => s.length > 0 && /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(s));
+  const addSymbol = () => {
+    const parts = symbolInput.split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+    setSymbols(prev => [...new Set([...prev, ...parts])]);
+    setSymbolInput('');
   };
 
-  const handleSymbolInputChange = (text: string) => {
-    setSymbolInput(text);
-    setSymbols(parseSymbols(text));
-  };
+  const removeSymbol = (s: string) => setSymbols(prev => prev.filter(x => x !== s));
 
-  const handleFetchCache = async () => {
-    if (symbols.length === 0) {
-      setError('Please enter at least one symbol');
-      return;
-    }
+  const handleFetchBatch = async () => {
+    if (symbols.length === 0) { setError('Please enter at least one symbol'); return; }
+    if (!startDate || !endDate) { setError('Please select a date range'); return; }
+    if (startDate > endDate) { setError('Start date must be before end date'); return; }
 
-    setFetching(true);
     setError(null);
     setMessage(null);
+    setFetching(true);
+    setActiveTasks([]);
 
     try {
-      const resp = await fetch('http://localhost:8000/api/tools/news/fetch-cache', {
+      const resp = await fetch('http://localhost:8000/api/tools/news/batch-fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider,
-          symbols,
-          start_date: startDate,
-          end_date: endDate,
-          enrich_content: enrichContent
-        })
+        body: JSON.stringify({ provider, symbols, start_date: startDate, end_date: endDate })
       });
-
-      if (resp.ok) {
-        const data = await resp.json();
-        const newTasks: FetchTask[] = (data.task_ids || []).map((t: any) => ({
-          symbol: t.symbol,
-          task_id: t.task_id,
-          status: 'queued',
-          progress: 0,
-          progress_message: 'Queued'
-        }));
-        setTasks(newTasks);
-        setMessage(`Queued ${data.count} news cache fetch tasks`);
-      } else {
-        const errData = await resp.json();
-        setError(errData.detail || 'Failed to queue news cache fetch');
+      if (!resp.ok) {
+        const e = await resp.json();
+        throw new Error(e.detail || 'Failed to queue tasks');
       }
+      const data = await resp.json();
+      setActiveTasks(data.task_ids.map((t: any) => ({ symbol: t.symbol, task_id: t.task_id, status: 'pending' })));
+      setMessage(`Queued ${data.count} task(s). Fetching news for: ${symbols.join(', ')}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Network error');
-    } finally {
       setFetching(false);
     }
   };
@@ -690,34 +701,67 @@ const NewsCacheTool: React.FC = () => {
       {/* Fetch Form */}
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
         <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">
-          News Cache Prefetcher
+          News Batch Fetch
         </h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-          Prefetch and cache news articles for multiple symbols. Cached articles speed up sentiment feature creation and avoid redundant API calls. Articles older than 1 year are fetched via Wayback Machine when available.
+          Bulk-fetch news articles for one or more symbols over a date range.
+          Article webpages are fetched (Wayback Machine for articles older than 1 year)
+          and FinBERT sentiment is analyzed. All results are persisted to the news cache.
         </p>
 
         <div className="space-y-4">
-          {/* Provider and Date Range */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Provider
-              </label>
-              <select
-                value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+          {/* Provider */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              News Provider
+            </label>
+            <select
+              value={provider}
+              onChange={e => setProvider(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            >
+              {providers.length === 0 && <option value="fmp">FMP (Financial Modeling Prep)</option>}
+              {providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Symbols */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Symbols
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={symbolInput}
+                onChange={e => setSymbolInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addSymbol()}
+                placeholder="AAPL, MSFT, TSLA"
+                className="flex-1 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <button
+                onClick={addSymbol}
+                className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md text-sm hover:bg-gray-200 dark:hover:bg-gray-600"
               >
-                {providers.filter(p => p.id !== 'localfiles').map(p => (
-                  <option key={p.id} value={p.id} disabled={!p.api_key_configured}>
-                    {p.name} {!p.api_key_configured && '(No API Key)'}
-                  </option>
-                ))}
-                {providers.length === 0 && (
-                  <option value="fmp">Financial Modeling Prep</option>
-                )}
-              </select>
+                Add
+              </button>
             </div>
+            {symbols.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {symbols.map(s => (
+                  <span key={s} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                    {s}
+                    <button onClick={() => removeSymbol(s)} className="hover:text-red-500">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Date Range */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Start Date
@@ -725,8 +769,8 @@ const NewsCacheTool: React.FC = () => {
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                onChange={e => setStartDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
             <div>
@@ -736,115 +780,39 @@ const NewsCacheTool: React.FC = () => {
               <input
                 type="date"
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                onChange={e => setEndDate(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enrichContent}
-                  onChange={(e) => setEnrichContent(e.target.checked)}
-                  className="rounded border-gray-300 dark:border-gray-600"
-                />
-                <span className="text-sm text-gray-700 dark:text-gray-300">
-                  Enrich content (fetch full article text)
-                </span>
-              </label>
-            </div>
           </div>
 
-          {/* Symbols */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Symbols ({symbols.length} parsed)
-            </label>
-            <textarea
-              value={symbolInput}
-              onChange={(e) => handleSymbolInputChange(e.target.value)}
-              placeholder="Enter symbols, one per line or comma-separated (e.g., AAPL, MSFT, GOOGL)"
-              rows={4}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
-            />
-            {symbols.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {symbols.map(s => (
-                  <span key={s} className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full">
-                    {s}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {message && <p className="text-green-600 dark:text-green-400 text-sm">{message}</p>}
 
-          {/* Fetch Button */}
           <button
-            onClick={handleFetchCache}
+            onClick={handleFetchBatch}
             disabled={fetching || symbols.length === 0}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
           >
-            {fetching ? (
-              <>
-                <Loader size={16} className="animate-spin" />
-                Queueing...
-              </>
-            ) : (
-              <>
-                <Download size={16} />
-                Fetch & Cache ({symbols.length} symbols)
-              </>
-            )}
+            {fetching ? 'Fetching...' : 'Fetch & Analyze'}
           </button>
         </div>
-
-        {error && (
-          <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center gap-2">
-            <XCircle size={16} />
-            {error}
-          </div>
-        )}
-
-        {message && (
-          <div className="mt-4 p-4 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-md flex items-center gap-2">
-            <CheckCircle size={16} />
-            {message}
-          </div>
-        )}
       </div>
 
       {/* Active Tasks */}
-      {tasks.length > 0 && (
+      {activeTasks.length > 0 && (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
-            Fetch Tasks ({tasks.filter(t => t.status === 'completed').length}/{tasks.length} completed)
-          </h3>
+          <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-gray-100">Active Tasks</h3>
           <div className="space-y-2">
-            {tasks.map(task => (
-              <div key={task.task_id} className="flex items-center gap-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg">
-                <div className="flex-shrink-0">
-                  {task.status === 'completed' ? (
-                    <CheckCircle size={16} className="text-green-500" />
-                  ) : task.status === 'failed' ? (
-                    <XCircle size={16} className="text-red-500" />
-                  ) : (
-                    <Loader size={16} className="text-blue-500 animate-spin" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <span className="font-medium text-gray-900 dark:text-gray-100">{task.symbol}</span>
-                  <span className="text-sm text-gray-500 dark:text-gray-400 ml-2">
-                    {task.progress_message || task.status}
-                  </span>
-                </div>
-                {task.progress !== undefined && task.status !== 'completed' && task.status !== 'failed' && (
-                  <div className="w-24 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                    <div
-                      className="bg-blue-600 h-2 rounded-full transition-all"
-                      style={{ width: `${task.progress}%` }}
-                    />
-                  </div>
-                )}
+            {activeTasks.map(t => (
+              <div key={t.task_id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded">
+                <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{t.symbol}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">{t.progress_message || t.status || 'pending'}</span>
+                <span className={`text-xs px-2 py-1 rounded ${
+                  t.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
+                  t.status === 'failed' ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' :
+                  'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                }`}>{t.status || 'pending'}</span>
               </div>
             ))}
           </div>
@@ -854,76 +822,42 @@ const NewsCacheTool: React.FC = () => {
       {/* Cache Stats */}
       {cacheStats && (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              News Cache Status
+              News Cache Stats
             </h3>
             <button
-              onClick={fetchCacheStatus}
+              onClick={fetchCacheStats}
               className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
             >
               Refresh
             </button>
           </div>
-
-          {/* Summary Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700 rounded">
               <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{cacheStats.total_articles.toLocaleString()}</div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">Total Articles</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Total Articles</div>
             </div>
-            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{cacheStats.with_content.toLocaleString()}</div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">With Content</div>
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700 rounded">
+              <div className="text-2xl font-bold text-purple-600">{cacheStats.with_sentiment.toLocaleString()}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">With Sentiment</div>
             </div>
-            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{cacheStats.with_sentiment.toLocaleString()}</div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">With Sentiment</div>
-            </div>
-            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{Object.keys(cacheStats.by_provider).length}</div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">Providers</div>
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-700 rounded">
+              <div className="text-2xl font-bold text-green-600">{cacheStats.with_content.toLocaleString()}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">With Content</div>
             </div>
           </div>
-
-          {/* Per-Ticker Table */}
-          {cacheStats.by_ticker && cacheStats.by_ticker.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50 dark:bg-gray-700">
-                  <tr>
-                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Ticker</th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Provider</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">Articles</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-700 dark:text-gray-300">With Content</th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Earliest</th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300">Latest</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {cacheStats.by_ticker.map((stat, idx) => (
-                    <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-medium">{stat.ticker}</td>
-                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{stat.provider}</td>
-                      <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{stat.count.toLocaleString()}</td>
-                      <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-400">{stat.with_content}</td>
-                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400">
-                        {stat.earliest ? new Date(stat.earliest).toLocaleDateString() : '-'}
-                      </td>
-                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400">
-                        {stat.latest ? new Date(stat.latest).toLocaleDateString() : '-'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {(!cacheStats.by_ticker || cacheStats.by_ticker.length === 0) && cacheStats.total_articles === 0 && (
-            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-              <Newspaper size={48} className="mx-auto mb-2 opacity-50" />
-              <p>No cached news articles yet. Use the form above to start caching.</p>
+          {Object.keys(cacheStats.by_provider).length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">By Provider</h4>
+              <div className="space-y-1">
+                {Object.entries(cacheStats.by_provider).map(([prov, count]) => (
+                  <div key={prov} className="flex justify-between text-sm text-gray-600 dark:text-gray-400">
+                    <span>{prov}</span>
+                    <span className="font-medium">{(count as number).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

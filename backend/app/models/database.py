@@ -5,6 +5,7 @@ Database configuration and session management
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 import os
 from dotenv import load_dotenv
 
@@ -20,12 +21,18 @@ sqlite_connect_args = {
     "timeout": 30,  # Wait up to 30 seconds for locks
 }
 
-# Create engine
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+# Create engine.
+# For SQLite use NullPool so every session gets its own file handle — no pool
+# to exhaust when many worker threads open sessions concurrently.
+# For other DBs keep the default QueuePool and test connections before use.
 engine = create_engine(
     DATABASE_URL,
-    connect_args=sqlite_connect_args if DATABASE_URL.startswith("sqlite") else {},
+    connect_args=sqlite_connect_args if _is_sqlite else {},
+    poolclass=NullPool if _is_sqlite else None,
     echo=False,
-    pool_pre_ping=True,  # Test connections before use
+    pool_pre_ping=not _is_sqlite,
 )
 
 

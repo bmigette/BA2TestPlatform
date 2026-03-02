@@ -1072,7 +1072,9 @@ async def fetch_ohlcv_cache(request: Dict[str, Any]):
             payload={
                 'provider': provider,
                 'symbol': symbol,
-                'timeframes': timeframes
+                'timeframes': timeframes,
+                'start_date': request.get('start_date'),
+                'end_date': request.get('end_date'),
             },
             description=f'Fetch and cache OHLCV data for {symbol} ({", ".join(timeframes)})',
             max_retries=1,
@@ -1104,9 +1106,17 @@ async def get_ohlcv_cache_status():
     entries = []
 
     if cache_dir.exists():
-        for filepath in cache_dir.glob("*.csv"):
+        # Scan both legacy flat files and new per-provider subdirectories
+        csv_files = list(cache_dir.glob("*.csv"))       # legacy flat files
+        csv_files += list(cache_dir.glob("*/*.csv"))    # per-provider subdirs
+        for filepath in csv_files:
             try:
-                # Parse filename: {SYMBOL}_{interval}.csv
+                # Provider name: parent dir name, or 'unknown' for legacy flat files
+                if filepath.parent == cache_dir:
+                    provider_name = "unknown"
+                else:
+                    provider_name = filepath.parent.name
+
                 name_parts = filepath.stem.rsplit('_', 1)
                 if len(name_parts) == 2:
                     symbol, interval = name_parts
@@ -1116,16 +1126,15 @@ async def get_ohlcv_cache_status():
 
                 stat = filepath.stat()
                 file_size = stat.st_size
-
-                # Count rows (header + data)
                 rows = 0
                 try:
                     with open(filepath, 'r') as f:
-                        rows = sum(1 for _ in f) - 1  # Subtract header
+                        rows = sum(1 for _ in f) - 1
                 except Exception:
                     pass
 
                 entries.append({
+                    "provider": provider_name,
                     "symbol": symbol,
                     "interval": interval,
                     "file_size": file_size,
@@ -1137,8 +1146,8 @@ async def get_ohlcv_cache_status():
             except Exception as e:
                 logger.warning(f"Error reading cache file {filepath}: {e}")
 
-    # Sort by symbol then interval
-    entries.sort(key=lambda x: (x['symbol'], x['interval']))
+    # Sort by provider, symbol, interval
+    entries.sort(key=lambda x: (x['provider'], x['symbol'], x['interval']))
 
     return {
         "cache_files": entries,
@@ -1147,41 +1156,41 @@ async def get_ohlcv_cache_status():
     }
 
 
-# ============================================================================
-# News Cache Endpoints
-# ============================================================================
-
-@router.post("/news/fetch-cache")
-async def fetch_news_cache(request: Dict[str, Any]):
+@router.post("/news/batch-fetch")
+async def batch_fetch_news(request: Dict[str, Any]):
     """
-    Queue news cache fetch jobs for multiple symbols.
+    Queue news batch fetch jobs for multiple symbols.
 
-    Each symbol gets its own background task that fetches and caches news articles.
+    Each symbol gets its own background task that fetches articles,
+    enriches with webpage content, analyzes sentiment, and caches results.
 
     Args:
-        request: Dict with provider, symbols list, start_date, end_date, enrich_content
+        request: Dict with provider, symbols, start_date, end_date
 
     Returns:
         List of queued task IDs
     """
     from app.services.task_queue import get_task_queue
 
-    provider = request.get('provider', 'fmp')
+    provider = request.get('provider')
     symbols = request.get('symbols', [])
-    start_date = request.get('start_date', '')
-    end_date = request.get('end_date', '')
-    enrich_content = request.get('enrich_content', True)
+    start_date = request.get('start_date')
+    end_date = request.get('end_date')
 
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="provider is required"
+        )
     if not symbols:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="symbols list is required and cannot be empty"
         )
-
     if not start_date or not end_date:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="start_date and end_date are required"
+            detail="start_date and end_date are required (YYYY-MM-DD)"
         )
 
     task_queue = get_task_queue()
@@ -1193,85 +1202,46 @@ async def fetch_news_cache(request: Dict[str, Any]):
             continue
 
         task_id = task_queue.queue_task(
-            task_type='news_cache_fetch',
-            name=f'Cache News: {symbol}',
+            task_type='news_batch_fetch',
+            name=f'News Batch: {symbol}',
             payload={
                 'provider': provider,
-                'symbol': symbol,
+                'symbols': [symbol],
                 'start_date': start_date,
                 'end_date': end_date,
-                'enrich_content': enrich_content
             },
             description=f'Fetch and cache news for {symbol} ({start_date} to {end_date})',
             max_retries=1,
-            timeout_seconds=600
+            timeout_seconds=3600
         )
         task_ids.append({'symbol': symbol, 'task_id': task_id})
 
-    logger.info(f"Queued {len(task_ids)} news cache fetch tasks")
+    logger.info(f"Queued {len(task_ids)} news batch fetch tasks")
 
     return {
         "task_ids": task_ids,
         "count": len(task_ids),
         "provider": provider,
         "start_date": start_date,
-        "end_date": end_date
+        "end_date": end_date,
     }
 
 
 @router.get("/news/cache-status")
 async def get_news_cache_status():
     """
-    Get news cache statistics.
+    Get news cache statistics from the database.
 
     Returns:
-        Cache stats including total articles, by provider, and by ticker
+        Article counts by provider and ticker
     """
+    from app.services.news_cache import NewsCacheService
     try:
-        from app.services.news_cache import NewsCacheService
-        from app.models.database import SessionLocal
-        from app.models.news_cache import NewsCache
-        from sqlalchemy import func
-
-        cache_service = NewsCacheService()
-        stats = cache_service.get_cache_stats()
-
-        # Also get per-ticker counts
-        db = SessionLocal()
-        try:
-            by_ticker = (
-                db.query(
-                    NewsCache.ticker,
-                    NewsCache.provider,
-                    func.count(NewsCache.id).label('count'),
-                    func.min(NewsCache.published_at).label('earliest'),
-                    func.max(NewsCache.published_at).label('latest'),
-                    func.sum(NewsCache.content_fetched).label('with_content')
-                )
-                .filter(NewsCache.ticker.isnot(None))
-                .group_by(NewsCache.ticker, NewsCache.provider)
-                .order_by(NewsCache.ticker, NewsCache.provider)
-                .all()
-            )
-
-            ticker_stats = []
-            for row in by_ticker:
-                ticker_stats.append({
-                    'ticker': row.ticker,
-                    'provider': row.provider,
-                    'count': row.count,
-                    'earliest': row.earliest.isoformat() if row.earliest else None,
-                    'latest': row.latest.isoformat() if row.latest else None,
-                    'with_content': int(row.with_content or 0)
-                })
-        finally:
-            db.close()
-
-        stats['by_ticker'] = ticker_stats
+        cache = NewsCacheService()
+        stats = cache.get_cache_stats()
         return stats
-
     except Exception as e:
-        logger.error(f"Error fetching news cache status: {e}", exc_info=True)
+        logger.error(f"Error getting news cache status: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get news cache status: {str(e)}"
