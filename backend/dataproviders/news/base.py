@@ -45,10 +45,11 @@ class MarketNewsInterface(ABC):
     """
 
     # Circuit breaker for Wayback Machine: after N consecutive connection
-    # failures, stop trying for the rest of the process lifetime.
+    # failures, pause for a cooldown period before retrying.
     _wayback_failures = 0
     _wayback_max_failures = 3
-    _wayback_disabled = False
+    _wayback_cooldown_seconds = 30
+    _wayback_cooldown_until = None  # datetime when cooldown expires
 
     def __init__(self):
         """Initialize the news provider."""
@@ -178,7 +179,7 @@ class MarketNewsInterface(ABC):
         """
         Try to fetch content from Wayback Machine for old articles.
         Uses a circuit breaker: after consecutive connection errors,
-        stops trying for the rest of the process lifetime.
+        pauses for a cooldown period before retrying.
 
         Args:
             url: Original article URL
@@ -187,9 +188,14 @@ class MarketNewsInterface(ABC):
         Returns:
             Extracted text content or None if failed
         """
-        # Circuit breaker: skip if Wayback Machine is unreachable
-        if MarketNewsInterface._wayback_disabled:
-            return None
+        # Circuit breaker: skip if in cooldown period
+        if MarketNewsInterface._wayback_cooldown_until is not None:
+            if datetime.now() < MarketNewsInterface._wayback_cooldown_until:
+                return None
+            # Cooldown expired, allow a retry
+            logger.info("Wayback Machine cooldown expired, retrying...")
+            MarketNewsInterface._wayback_cooldown_until = None
+            MarketNewsInterface._wayback_failures = 0
 
         try:
             from waybackpy import WaybackMachineCDXServerAPI
@@ -235,10 +241,12 @@ class MarketNewsInterface(ABC):
             if 'NewConnectionError' in str(e) or 'ConnectionError' in str(e) or 'Max retries' in str(e):
                 MarketNewsInterface._wayback_failures += 1
                 if MarketNewsInterface._wayback_failures >= MarketNewsInterface._wayback_max_failures:
-                    MarketNewsInterface._wayback_disabled = True
+                    MarketNewsInterface._wayback_cooldown_until = (
+                        datetime.now() + timedelta(seconds=MarketNewsInterface._wayback_cooldown_seconds)
+                    )
                     logger.warning(
-                        f"Wayback Machine disabled after {MarketNewsInterface._wayback_failures} "
-                        f"consecutive connection failures"
+                        f"Wayback Machine paused for {MarketNewsInterface._wayback_cooldown_seconds}s "
+                        f"after {MarketNewsInterface._wayback_failures} consecutive connection failures"
                     )
 
         return None
