@@ -44,6 +44,12 @@ class MarketNewsInterface(ABC):
     the required abstract methods.
     """
 
+    # Circuit breaker for Wayback Machine: after N consecutive connection
+    # failures, stop trying for the rest of the process lifetime.
+    _wayback_failures = 0
+    _wayback_max_failures = 3
+    _wayback_disabled = False
+
     def __init__(self):
         """Initialize the news provider."""
         pass
@@ -151,11 +157,16 @@ class MarketNewsInterface(ABC):
                 text = trafilatura.extract(response.text)
                 if text:
                     return text
+                else:
+                    logger.debug(f"trafilatura extracted nothing from {url} (status={response.status_code})")
+            else:
+                logger.debug(f"Failed to fetch {url}: status={response.status_code}")
         except Exception as e:
             logger.debug(f"Failed to fetch content from {url}: {e}")
 
-        # Fall back to Wayback Machine for old articles
+        # Fall back to Wayback Machine for old articles (> 1 year old)
         if published_at and (datetime.now() - published_at).days > 365:
+            logger.debug(f"Original URL failed, trying Wayback Machine for {url}")
             wayback_content = MarketNewsInterface._try_wayback_machine(url, published_at)
             if wayback_content:
                 return wayback_content
@@ -166,8 +177,8 @@ class MarketNewsInterface(ABC):
     def _try_wayback_machine(url: str, published_at: datetime) -> Optional[str]:
         """
         Try to fetch content from Wayback Machine for old articles.
-        Uses a circuit breaker: after _WAYBACK_MAX_FAILURES consecutive
-        connection errors, stops trying for the rest of the process lifetime.
+        Uses a circuit breaker: after consecutive connection errors,
+        stops trying for the rest of the process lifetime.
 
         Args:
             url: Original article URL
@@ -176,11 +187,25 @@ class MarketNewsInterface(ABC):
         Returns:
             Extracted text content or None if failed
         """
+        # Circuit breaker: skip if Wayback Machine is unreachable
+        if MarketNewsInterface._wayback_disabled:
+            return None
+
         try:
             from waybackpy import WaybackMachineCDXServerAPI
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
 
-            # max_tries=1 to fail fast per article instead of retrying
+            # Create a session with NO urllib3 retries to fail fast
+            session = requests.Session()
+            no_retry = Retry(total=0)
+            session.mount('https://', HTTPAdapter(max_retries=no_retry))
+            session.mount('http://', HTTPAdapter(max_retries=no_retry))
+
             cdx = WaybackMachineCDXServerAPI(url, max_tries=1)
+            # Patch the session to disable retries
+            cdx.session = session
+
             snapshot = cdx.near(
                 year=published_at.year,
                 month=published_at.month,
@@ -190,7 +215,7 @@ class MarketNewsInterface(ABC):
             if snapshot and snapshot.archive_url:
                 # Only use snapshots on or after the publish date
                 if snapshot.datetime_timestamp >= published_at:
-                    response = requests.get(
+                    response = session.get(
                         snapshot.archive_url,
                         headers=BROWSER_HEADERS,
                         timeout=10,
@@ -200,9 +225,22 @@ class MarketNewsInterface(ABC):
                         text = trafilatura.extract(response.text)
                         if text:
                             logger.info(f"Fetched content from Wayback Machine: {url}")
+                            # Reset failure counter on success
+                            MarketNewsInterface._wayback_failures = 0
                             return text
+
         except Exception as e:
-            logger.debug(f"Wayback Machine lookup failed for {url}: {e}")
+            logger.debug(f"Wayback Machine failed for {url}: {e}")
+            # Track consecutive connection failures for circuit breaker
+            if 'NewConnectionError' in str(e) or 'ConnectionError' in str(e) or 'Max retries' in str(e):
+                MarketNewsInterface._wayback_failures += 1
+                if MarketNewsInterface._wayback_failures >= MarketNewsInterface._wayback_max_failures:
+                    MarketNewsInterface._wayback_disabled = True
+                    logger.warning(
+                        f"Wayback Machine disabled after {MarketNewsInterface._wayback_failures} "
+                        f"consecutive connection failures"
+                    )
+
         return None
 
     @staticmethod
