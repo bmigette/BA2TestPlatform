@@ -308,7 +308,8 @@ class MarketNewsInterface(ABC):
         self,
         articles: List[Dict[str, Any]],
         max_workers: int = 8,
-        min_summary_length: int = 100
+        min_summary_length: int = 100,
+        progress_callback: callable = None
     ) -> List[Dict[str, Any]]:
         """
         Enrich articles that have short/missing summaries by fetching URL content.
@@ -318,6 +319,7 @@ class MarketNewsInterface(ABC):
             articles: List of article dicts with 'url' and 'summary' keys
             max_workers: Maximum parallel fetch threads
             min_summary_length: Minimum summary length before fetching is attempted
+            progress_callback: Optional callback(done, total) for progress
 
         Returns:
             Articles with enriched summaries
@@ -374,6 +376,8 @@ class MarketNewsInterface(ABC):
                 for idx, url in needs_enrichment
             }
 
+            enriched_count = 0
+            total_to_enrich = len(needs_enrichment)
             for future in as_completed(future_to_index):
                 idx = future_to_index[future]
                 try:
@@ -383,6 +387,10 @@ class MarketNewsInterface(ABC):
                         articles[idx]['content_fetched'] = True
                 except Exception as e:
                     logger.debug(f"Error enriching article {idx}: {e}")
+
+                enriched_count += 1
+                if progress_callback and (enriched_count % 10 == 0 or enriched_count == total_to_enrich):
+                    progress_callback(enriched_count, total_to_enrich)
 
         return articles
 

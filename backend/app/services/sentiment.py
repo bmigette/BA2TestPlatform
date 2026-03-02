@@ -172,7 +172,8 @@ class SentimentService:
         self,
         articles: List[Dict[str, Any]],
         provider: str = None,
-        ticker: str = None
+        ticker: str = None,
+        progress_callback: callable = None
     ) -> List[Dict[str, Any]]:
         """
         Analyze sentiment of multiple news articles.
@@ -183,6 +184,7 @@ class SentimentService:
             articles: List of article dicts with 'title', 'summary', 'content', 'date' keys
             provider: Optional provider name for cache updates
             ticker: Optional ticker for cache updates
+            progress_callback: Optional callback(done, total) for progress
 
         Returns:
             List of articles with sentiment added
@@ -255,6 +257,9 @@ class SentimentService:
             # Collect cache update for batch processing
             if self.use_cache and self._cache_service and url:
                 sentiment_updates.append((url, sentiment))
+
+            if progress_callback and ((i + 1) % 10 == 0 or i + 1 == len(articles)):
+                progress_callback(i + 1, len(articles))
 
         # Batch update sentiment in cache (reduces DB lock contention)
         if sentiment_updates and self._cache_service:
@@ -517,10 +522,17 @@ class SentimentService:
             if progress_callback:
                 progress_callback('enrich', 70, f"Enriching {needs_fetch} articles with content ({new_articles_count - needs_fetch} already cached)...")
             logger.info(f"Enriching {needs_fetch} articles with URL content via trafilatura ({new_articles_count - needs_fetch} already cached)")
+
+            def _enrich_progress(done, total):
+                if progress_callback:
+                    pct = 70 + (done / max(total, 1)) * 20  # enrich = 70-90%
+                    progress_callback('enrich', pct, f"Enriching articles: {done}/{total}")
+
             raw_articles = news_provider.enrich_articles_with_content(
                 raw_articles,
                 max_workers=5,
-                min_summary_length=100
+                min_summary_length=100,
+                progress_callback=_enrich_progress
             )
 
         # Convert to standard format

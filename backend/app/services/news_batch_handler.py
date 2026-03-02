@@ -80,8 +80,8 @@ def handle_news_batch_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str, 
 
         def on_progress(phase, pct, message):
             # Map fetch (0-70%), enrich (70-90%), cache (90-100%) into the symbol's slice
-            # Fetch+enrich+cache = 80% of symbol slice, sentiment = remaining 20%
-            scaled = base_progress + (pct / 100.0) * per_symbol * 0.8
+            # Fetch+enrich+cache = 85% of symbol slice, sentiment = remaining 15%
+            scaled = base_progress + (pct / 100.0) * per_symbol * 0.85
             task_queue.update_progress(task_id, scaled, f"[{i+1}/{total}] {symbol}: {message}")
 
         task_queue.update_progress(
@@ -101,17 +101,30 @@ def handle_news_batch_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str, 
             )
 
             task_queue.update_progress(
-                task_id, base_progress + per_symbol * 0.8,
+                task_id, base_progress + per_symbol * 0.85,
                 f"[{i+1}/{total}] Analyzing sentiment for {symbol} "
                 f"({len(articles)} articles)..."
             )
 
             analyzed_count = 0
             if articles:
-                analyzed = sentiment_service.analyze_news_articles(articles)
+                def on_sentiment_progress(done, article_total):
+                    pct = base_progress + per_symbol * (0.85 + 0.12 * done / max(article_total, 1))
+                    task_queue.update_progress(
+                        task_id, pct,
+                        f"[{i+1}/{total}] {symbol}: Sentiment {done}/{article_total}"
+                    )
+
+                analyzed = sentiment_service.analyze_news_articles(
+                    articles, progress_callback=on_sentiment_progress
+                )
                 analyzed_count = len(analyzed)
 
                 # Save/update all articles in cache (upserts by URL)
+                task_queue.update_progress(
+                    task_id, base_progress + per_symbol * 0.97,
+                    f"[{i+1}/{total}] {symbol}: Caching {analyzed_count} articles..."
+                )
                 if sentiment_service._cache_service:
                     sentiment_service._cache_service.cache_articles_batch(
                         analyzed, provider, symbol
