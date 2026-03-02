@@ -665,13 +665,30 @@ const NewsBatchFetchTool: React.FC = () => {
     } catch { /* ignore */ }
   };
 
-  const addSymbol = () => {
-    const parts = symbolInput.split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
-    setSymbols(prev => [...new Set([...prev, ...parts])]);
-    setSymbolInput('');
+  const parseSymbols = (text: string): string[] => {
+    return text
+      .split(/[\n,;\s]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(s => s.length > 0 && /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(s));
   };
 
-  const removeSymbol = (s: string) => setSymbols(prev => prev.filter(x => x !== s));
+  const handleSymbolInputChange = (text: string) => {
+    setSymbolInput(text);
+    setSymbols([...new Set(parseSymbols(text))]);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      setSymbolInput(text);
+      setSymbols([...new Set(parseSymbols(text))]);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   const handleFetchBatch = async () => {
     if (symbols.length === 0) { setError('Please enter at least one symbol'); return; }
@@ -736,30 +753,34 @@ const NewsBatchFetchTool: React.FC = () => {
           {/* Symbols */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Symbols
+              Symbols ({symbols.length} parsed)
             </label>
             <div className="flex gap-2">
-              <input
-                type="text"
+              <textarea
                 value={symbolInput}
-                onChange={e => setSymbolInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addSymbol()}
-                placeholder="AAPL, MSFT, TSLA"
-                className="flex-1 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                onChange={(e) => handleSymbolInputChange(e.target.value)}
+                placeholder="Enter symbols, one per line or comma-separated (e.g., AAPL, MSFT, GOOGL)"
+                rows={4}
+                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
               />
-              <button
-                onClick={addSymbol}
-                className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md text-sm hover:bg-gray-200 dark:hover:bg-gray-600"
-              >
-                Add
-              </button>
+              <div className="flex flex-col gap-2">
+                <label className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer flex items-center gap-1 text-sm">
+                  <Upload size={14} />
+                  Upload .txt
+                  <input
+                    type="file"
+                    accept=".txt"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
             </div>
             {symbols.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
+              <div className="flex flex-wrap gap-1 mt-2">
                 {symbols.map(s => (
-                  <span key={s} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm">
+                  <span key={s} className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full">
                     {s}
-                    <button onClick={() => removeSymbol(s)} className="hover:text-red-500">×</button>
                   </span>
                 ))}
               </div>
@@ -800,7 +821,17 @@ const NewsBatchFetchTool: React.FC = () => {
             disabled={fetching || symbols.length === 0}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
           >
-            {fetching ? 'Fetching...' : 'Fetch & Analyze'}
+            {fetching ? (
+              <>
+                <Loader size={16} className="animate-spin" />
+                Queueing...
+              </>
+            ) : (
+              <>
+                <Download size={16} />
+                Fetch & Analyze ({symbols.length} symbols)
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -808,17 +839,35 @@ const NewsBatchFetchTool: React.FC = () => {
       {/* Active Tasks */}
       {activeTasks.length > 0 && (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-gray-100">Active Tasks</h3>
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
+            Fetch Tasks ({activeTasks.filter(t => t.status === 'completed').length}/{activeTasks.length} completed)
+          </h3>
           <div className="space-y-2">
             {activeTasks.map(t => (
-              <div key={t.task_id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded">
-                <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{t.symbol}</span>
-                <span className="text-xs text-gray-500 dark:text-gray-400">{t.progress_message || t.status || 'pending'}</span>
-                <span className={`text-xs px-2 py-1 rounded ${
-                  t.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
-                  t.status === 'failed' ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' :
-                  'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
-                }`}>{t.status || 'pending'}</span>
+              <div key={t.task_id} className="flex items-center gap-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg">
+                <div className="flex-shrink-0">
+                  {t.status === 'completed' ? (
+                    <CheckCircle size={16} className="text-green-500" />
+                  ) : t.status === 'failed' ? (
+                    <XCircle size={16} className="text-red-500" />
+                  ) : (
+                    <Loader size={16} className="text-blue-500 animate-spin" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{t.symbol}</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400 ml-2 truncate">
+                    {t.progress_message || t.status || 'pending'}
+                  </span>
+                </div>
+                {t.progress !== undefined && t.status !== 'completed' && t.status !== 'failed' && (
+                  <div className="w-24 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all"
+                      style={{ width: `${t.progress}%` }}
+                    />
+                  </div>
+                )}
               </div>
             ))}
           </div>

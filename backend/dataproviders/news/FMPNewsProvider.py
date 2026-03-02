@@ -123,11 +123,7 @@ class FMPNewsProvider(MarketNewsInterface):
         )
         
         try:
-            # Ensure comparison dates are timezone-aware
-            compare_start = actual_start_date if actual_start_date.tzinfo else actual_start_date.replace(tzinfo=timezone.utc)
-            compare_end = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
-
-            # Paginate through FMP pages (newest-first) until we cover the date range
+            # Paginate through FMP pages using server-side date filtering
             filtered_articles = []
             page = 0
             while True:
@@ -136,28 +132,20 @@ class FMPNewsProvider(MarketNewsInterface):
                     tickers=symbol,
                     limit=self.PAGE_SIZE,
                     page=page,
+                    from_date=actual_start_date.strftime('%Y-%m-%d'),
+                    to_date=end_date.strftime('%Y-%m-%d'),
                 )
                 if not news_data:
                     break
 
-                reached_before_start = False
                 for article in news_data:
                     if "publishedDate" not in article:
                         continue
-                    pub_date = datetime.fromisoformat(article["publishedDate"].replace("Z", "+00:00"))
-                    if pub_date.tzinfo is None:
-                        pub_date = pub_date.replace(tzinfo=timezone.utc)
-
-                    if pub_date < compare_start:
-                        reached_before_start = True
+                    filtered_articles.append(article)
+                    if len(filtered_articles) >= limit:
                         break
 
-                    if pub_date <= compare_end:
-                        filtered_articles.append(article)
-                        if len(filtered_articles) >= limit:
-                            break
-
-                if len(filtered_articles) >= limit or reached_before_start:
+                if len(filtered_articles) >= limit:
                     break
                 if len(news_data) < self.PAGE_SIZE:
                     break  # Last page returned fewer items than requested
