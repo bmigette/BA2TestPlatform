@@ -407,6 +407,32 @@ class TaskQueueService:
         finally:
             db.close()
 
+    def recover_stuck_tasks(self):
+        """
+        On startup, mark any 'running' tasks as 'stopped' since no worker
+        is actually processing them (workers died on restart).
+        """
+        db = SessionLocal()
+        try:
+            stuck = db.query(TaskQueue).filter(
+                TaskQueue.status == TaskStatus.RUNNING.value
+            ).all()
+            for task in stuck:
+                logger.warning(
+                    f"Recovering stuck task {task.task_id} ({task.name}) - "
+                    f"was running, marking as stopped"
+                )
+                task.status = TaskStatus.STOPPED.value
+                task.error_message = "Task interrupted by server restart"
+            if stuck:
+                db.commit()
+                logger.info(f"Recovered {len(stuck)} stuck tasks")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to recover stuck tasks: {e}")
+        finally:
+            db.close()
+
     def _worker_loop(self):
         """Worker thread main loop."""
         worker_name = threading.current_thread().name
@@ -555,6 +581,7 @@ def init_task_queue(max_workers: int = 2):
     _task_queue = TaskQueueService(max_workers=max_workers)
     # Skip starting workers in test mode to avoid race conditions with table creation
     if os.getenv('PYTEST_CURRENT_TEST') is None:
+        _task_queue.recover_stuck_tasks()
         _task_queue.start()
     else:
         logger.info("Test mode detected - skipping task queue worker startup")

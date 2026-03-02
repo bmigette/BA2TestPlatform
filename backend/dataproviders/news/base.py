@@ -126,24 +126,29 @@ class MarketNewsInterface(ABC):
     # Content fetching utilities (shared by all providers)
 
     @staticmethod
-    def fetch_url_content(url: str, timeout: int = 10, published_at: datetime = None) -> Optional[str]:
+    def fetch_url_content(url: str, timeout: int = 5, published_at: datetime = None) -> Optional[str]:
         """
-        Fetch article content from URL using trafilatura.
-        For articles older than 1 year, tries Wayback Machine first.
+        Fetch article content from URL using requests + trafilatura extract.
+        For articles older than 1 year, tries Wayback Machine as fallback.
 
         Args:
             url: Article URL to fetch
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds (default 5s)
             published_at: Article publish date (used to decide Wayback Machine fallback)
 
         Returns:
             Extracted text content or None if failed
         """
-        # Try original URL first
+        # Try original URL first using requests with controlled timeout
         try:
-            downloaded = trafilatura.fetch_url(url)
-            if downloaded:
-                text = trafilatura.extract(downloaded)
+            response = requests.get(
+                url,
+                headers=BROWSER_HEADERS,
+                timeout=timeout,
+                allow_redirects=True
+            )
+            if response.ok and response.text:
+                text = trafilatura.extract(response.text)
                 if text:
                     return text
         except Exception as e:
@@ -185,9 +190,14 @@ class MarketNewsInterface(ABC):
             if snapshot and snapshot.archive_url:
                 # Only use snapshots on or after the publish date
                 if snapshot.datetime_timestamp >= published_at:
-                    downloaded = trafilatura.fetch_url(snapshot.archive_url)
-                    if downloaded:
-                        text = trafilatura.extract(downloaded)
+                    response = requests.get(
+                        snapshot.archive_url,
+                        headers=BROWSER_HEADERS,
+                        timeout=10,
+                        allow_redirects=True
+                    )
+                    if response.ok and response.text:
+                        text = trafilatura.extract(response.text)
                         if text:
                             logger.info(f"Fetched content from Wayback Machine: {url}")
                             return text

@@ -185,21 +185,45 @@ const OHLCVCacheTool: React.FC = () => {
 
   const availableTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 
-  // Fetch providers and cache status on mount
+  // Fetch providers and cache status on mount, restore running tasks
   useEffect(() => {
     fetchProviders();
     fetchCacheStatus();
+    // Restore any running/queued OHLCV tasks
+    (async () => {
+      try {
+        const responses = await Promise.all([
+          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache&status=running'),
+          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache&status=queued'),
+        ]);
+        const restored: FetchTask[] = [];
+        for (const r of responses) {
+          if (r.ok) {
+            const d = await r.json();
+            for (const t of (d.tasks || [])) {
+              const sym = t.payload?.symbols?.[0] || t.name?.replace('OHLCV Cache: ', '') || '?';
+              restored.push({ symbol: sym, task_id: t.task_id, status: t.status, progress: t.progress, progress_message: t.progress_message });
+            }
+          }
+        }
+        if (restored.length > 0) {
+          setTasks(restored);
+          setFetching(true);
+        }
+      } catch { /* ignore */ }
+    })();
   }, []);
 
   // Poll task progress when tasks are active
   useEffect(() => {
-    const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
+    const terminalStatuses = ['completed', 'failed', 'cancelled', 'stopped'];
+    const activeTasks = tasks.filter(t => !terminalStatuses.includes(t.status || ''));
     if (activeTasks.length === 0) return;
 
     const interval = setInterval(async () => {
       const updatedTasks = await Promise.all(
         tasks.map(async (task) => {
-          if (task.status === 'completed' || task.status === 'failed') return task;
+          if (terminalStatuses.includes(task.status || '')) return task;
           try {
             const resp = await fetch(`http://localhost:8000/api/tasks/${task.task_id}/progress`);
             if (resp.ok) {
@@ -213,8 +237,9 @@ const OHLCVCacheTool: React.FC = () => {
       setTasks(updatedTasks);
 
       // Refresh cache status when all tasks complete
-      const stillActive = updatedTasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
-      if (stillActive.length === 0) {
+      const ohlcvStillActive = updatedTasks.filter(t => !terminalStatuses.includes(t.status || ''));
+      if (ohlcvStillActive.length === 0) {
+        setFetching(false);
         fetchCacheStatus();
       }
     }, 2000);
@@ -614,7 +639,39 @@ const NewsBatchFetchTool: React.FC = () => {
   useEffect(() => {
     fetchProviders();
     fetchCacheStats();
+    restoreActiveTasks();
   }, []);
+
+  const restoreActiveTasks = async () => {
+    try {
+      // Check for running or queued news_batch_fetch tasks
+      const responses = await Promise.all([
+        fetch('http://localhost:8000/api/tasks?task_type=news_batch_fetch&status=running'),
+        fetch('http://localhost:8000/api/tasks?task_type=news_batch_fetch&status=queued'),
+      ]);
+      const allTasks: NewsBatchTask[] = [];
+      for (const r of responses) {
+        if (r.ok) {
+          const d = await r.json();
+          for (const t of (d.tasks || [])) {
+            // Extract symbol from payload
+            const sym = t.payload?.symbols?.[0] || t.name?.replace('News Batch: ', '') || '?';
+            allTasks.push({
+              symbol: sym,
+              task_id: t.task_id,
+              status: t.status,
+              progress: t.progress,
+              progress_message: t.progress_message,
+            });
+          }
+        }
+      }
+      if (allTasks.length > 0) {
+        setActiveTasks(allTasks);
+        setFetching(true);
+      }
+    } catch { /* ignore */ }
+  };
 
   // Poll active tasks
   useEffect(() => {
@@ -633,12 +690,17 @@ const NewsBatchFetchTool: React.FC = () => {
         })
       );
       setActiveTasks(updatedTasks);
-      const stillActive = updatedTasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
+      const terminalStatuses = ['completed', 'failed', 'cancelled', 'stopped'];
+      const stillActive = updatedTasks.filter(t => !terminalStatuses.includes(t.status || ''));
       if (stillActive.length === 0) {
-        setActiveTasks([]);
         setFetching(false);
         fetchCacheStats();
-        setMessage('All tasks completed!');
+        const failedCount = updatedTasks.filter(t => t.status === 'failed' || t.status === 'stopped').length;
+        if (failedCount > 0) {
+          setMessage(`Tasks finished: ${updatedTasks.length - failedCount} completed, ${failedCount} failed/stopped`);
+        } else {
+          setMessage('All tasks completed!');
+        }
       }
     }, 3000);
     return () => clearInterval(interval);
@@ -848,7 +910,7 @@ const NewsBatchFetchTool: React.FC = () => {
                 <div className="flex-shrink-0">
                   {t.status === 'completed' ? (
                     <CheckCircle size={16} className="text-green-500" />
-                  ) : t.status === 'failed' ? (
+                  ) : t.status === 'failed' || t.status === 'stopped' ? (
                     <XCircle size={16} className="text-red-500" />
                   ) : (
                     <Loader size={16} className="text-blue-500 animate-spin" />
