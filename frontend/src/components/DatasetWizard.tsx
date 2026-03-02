@@ -62,6 +62,7 @@ interface SentimentConfig {
   lookbackPeriods: string[];
   sentimentCategories: string[];
   impactTimeframes: string[];
+  useCachedNews: boolean;
 }
 
 interface FundamentalsConfig {
@@ -132,7 +133,8 @@ const getDefaultWizardData = (): WizardData => ({
     newsSources: ['fmp_news'],
     lookbackPeriods: ['1d', '1w', '1m', '6m'],
     sentimentCategories: ['positive', 'neutral', 'negative'],
-    impactTimeframes: ['short', 'medium', 'long']
+    impactTimeframes: ['short', 'medium', 'long'],
+    useCachedNews: false
   },
   fundamentals: {
     enabled: false,
@@ -172,7 +174,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         newsSources: savedSentiment.newsSources || savedSentiment.news_sources || ['fmp_news'],
         lookbackPeriods: savedSentiment.lookbackPeriods || savedSentiment.lookback_periods || ['1d', '1w', '1m', '6m'],
         sentimentCategories: savedSentiment.sentimentCategories || savedSentiment.sentiment_categories || ['positive', 'neutral', 'negative'],
-        impactTimeframes: savedSentiment.impactTimeframes || savedSentiment.impact_timeframes || ['short', 'medium', 'long']
+        impactTimeframes: savedSentiment.impactTimeframes || savedSentiment.impact_timeframes || ['short', 'medium', 'long'],
+        useCachedNews: savedSentiment.useCachedNews || savedSentiment.use_cached_news || false
       };
 
       // Parse fundamentals config from saved data
@@ -600,7 +603,8 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         news_sources: wizardData.sentiment.newsSources,
         lookback_periods: wizardData.sentiment.lookbackPeriods,
         sentiment_categories: wizardData.sentiment.sentimentCategories,
-        impact_timeframes: wizardData.sentiment.impactTimeframes
+        impact_timeframes: wizardData.sentiment.impactTimeframes,
+        use_cached_news: wizardData.sentiment.useCachedNews
       } : { enabled: false };
 
       const fundamentalsConfig = wizardData.fundamentals.enabled ? {
@@ -1434,7 +1438,31 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
 
       {wizardData.sentiment.enabled && (
         <div className="space-y-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+          {/* Use Cached News toggle */}
+          <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+            <div>
+              <h4 className="text-sm font-medium text-blue-800 dark:text-blue-200">Use Cached News</h4>
+              <p className="text-xs text-blue-600 dark:text-blue-400">
+                Use pre-fetched news from the cache (Tools &gt; News Batch Fetch) instead of calling the API.
+                Faster and doesn't consume API credits.
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+              <input
+                type="checkbox"
+                checked={wizardData.sentiment.useCachedNews}
+                onChange={(e) => setWizardData({
+                  ...wizardData,
+                  sentiment: { ...wizardData.sentiment, useCachedNews: e.target.checked }
+                })}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+            </label>
+          </div>
+
           {/* API News Sources */}
+          {!wizardData.sentiment.useCachedNews && (
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">API News Sources</label>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Fetch live news from providers</p>
@@ -1522,6 +1550,7 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
               Export news from the Tools page first, then import here
             </p>
           </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">Lookback Periods</label>

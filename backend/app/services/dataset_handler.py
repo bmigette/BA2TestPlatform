@@ -308,55 +308,102 @@ def handle_dataset_regeneration(task_id: str, payload: Dict[str, Any]) -> Dict[s
                 all_articles = []
                 start_date = df['Date'].min()
                 end_date = df['Date'].max()
+                use_cached_news = sentiment_config.get('use_cached_news', False)
 
-                # Create progress callback for detailed news fetching progress
-                progress_callback = create_progress_callback(
-                    dataset_id, task_id, "Resolving news URLs"
-                )
+                if use_cached_news:
+                    # Use pre-fetched articles from the news cache DB
+                    from app.services.news_cache import NewsCacheService
+                    cache_service = NewsCacheService()
 
-                for idx, source in enumerate(news_sources):
-                    provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
-                    update_dataset_progress(
-                        dataset_id,
-                        f"Fetching news from {provider} ({idx + 1}/{len(news_sources)})...",
-                        task_id
-                    )
-
-                    try:
-                        articles = sentiment_service.fetch_news_for_ticker(
-                            ticker=ticker,
-                            start_date=start_date if hasattr(start_date, 'to_pydatetime') else start_date,
-                            end_date=end_date if hasattr(end_date, 'to_pydatetime') else end_date,
-                            provider=provider,
-                            enrich_content=sentiment_config.get('enrich_content', True),
-                            progress_callback=progress_callback
-                        )
-                        if articles:
-                            logger.info(f"[Task {task_id}] Fetched {len(articles)} articles from {provider}")
-                            update_dataset_progress(
-                                dataset_id,
-                                f"Fetched {len(articles)} articles from {provider}",
-                                task_id
-                            )
-                            all_articles.extend(articles)
-                    except TypeError:
-                        # Fallback if progress_callback not supported
-                        articles = sentiment_service.fetch_news_for_ticker(
-                            ticker=ticker,
-                            start_date=start_date if hasattr(start_date, 'to_pydatetime') else start_date,
-                            end_date=end_date if hasattr(end_date, 'to_pydatetime') else end_date,
-                            provider=provider,
-                            enrich_content=sentiment_config.get('enrich_content', True)
-                        )
-                        if articles:
-                            all_articles.extend(articles)
-                    except Exception as e:
-                        logger.warning(f"[Task {task_id}] Error fetching from {provider}: {e}")
+                    for idx, source in enumerate(news_sources):
+                        provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
                         update_dataset_progress(
                             dataset_id,
-                            f"Warning: Error fetching from {provider}",
+                            f"Loading cached news from {provider} ({idx + 1}/{len(news_sources)})...",
                             task_id
                         )
+
+                        try:
+                            sd = start_date.to_pydatetime() if hasattr(start_date, 'to_pydatetime') else start_date
+                            ed = end_date.to_pydatetime() if hasattr(end_date, 'to_pydatetime') else end_date
+                            articles = cache_service.get_cached_articles_for_ticker(
+                                ticker=ticker,
+                                provider=provider,
+                                start_date=sd,
+                                end_date=ed
+                            )
+                            if articles:
+                                logger.info(f"[Task {task_id}] Loaded {len(articles)} cached articles from {provider}")
+                                update_dataset_progress(
+                                    dataset_id,
+                                    f"Loaded {len(articles)} cached articles from {provider}",
+                                    task_id
+                                )
+                                all_articles.extend(articles)
+                            else:
+                                logger.warning(f"[Task {task_id}] No cached articles found for {ticker}/{provider}")
+                                update_dataset_progress(
+                                    dataset_id,
+                                    f"Warning: No cached news for {ticker} from {provider}",
+                                    task_id
+                                )
+                        except Exception as e:
+                            logger.warning(f"[Task {task_id}] Error loading cached news from {provider}: {e}")
+                            update_dataset_progress(
+                                dataset_id,
+                                f"Warning: Error loading cached news from {provider}",
+                                task_id
+                            )
+                else:
+                    # Fetch live from API
+                    # Create progress callback for detailed news fetching progress
+                    progress_callback = create_progress_callback(
+                        dataset_id, task_id, "Resolving news URLs"
+                    )
+
+                    for idx, source in enumerate(news_sources):
+                        provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
+                        update_dataset_progress(
+                            dataset_id,
+                            f"Fetching news from {provider} ({idx + 1}/{len(news_sources)})...",
+                            task_id
+                        )
+
+                        try:
+                            articles = sentiment_service.fetch_news_for_ticker(
+                                ticker=ticker,
+                                start_date=start_date if hasattr(start_date, 'to_pydatetime') else start_date,
+                                end_date=end_date if hasattr(end_date, 'to_pydatetime') else end_date,
+                                provider=provider,
+                                enrich_content=sentiment_config.get('enrich_content', True),
+                                progress_callback=progress_callback
+                            )
+                            if articles:
+                                logger.info(f"[Task {task_id}] Fetched {len(articles)} articles from {provider}")
+                                update_dataset_progress(
+                                    dataset_id,
+                                    f"Fetched {len(articles)} articles from {provider}",
+                                    task_id
+                                )
+                                all_articles.extend(articles)
+                        except TypeError:
+                            # Fallback if progress_callback not supported
+                            articles = sentiment_service.fetch_news_for_ticker(
+                                ticker=ticker,
+                                start_date=start_date if hasattr(start_date, 'to_pydatetime') else start_date,
+                                end_date=end_date if hasattr(end_date, 'to_pydatetime') else end_date,
+                                provider=provider,
+                                enrich_content=sentiment_config.get('enrich_content', True)
+                            )
+                            if articles:
+                                all_articles.extend(articles)
+                        except Exception as e:
+                            logger.warning(f"[Task {task_id}] Error fetching from {provider}: {e}")
+                            update_dataset_progress(
+                                dataset_id,
+                                f"Warning: Error fetching from {provider}",
+                                task_id
+                            )
 
                 if all_articles:
                     update_dataset_progress(

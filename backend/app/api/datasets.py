@@ -318,21 +318,35 @@ def _build_dataset_in_background(dataset_id: int, dataset_config: dict):
                     news_sources = [sentiment_config.get('provider', 'fmp')]
 
                 all_articles = []
+                use_cached_news = sentiment_config.get('use_cached_news', False)
+
                 for source in news_sources:
                     source_provider = source.replace('_news', '').replace('_company', '').replace('_global', '')
                     try:
-                        articles = sentiment_service.fetch_news_for_ticker(
-                            ticker=ticker,
-                            start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
-                            end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
-                            provider=source_provider,
-                            enrich_content=sentiment_config.get('enrich_content', True)
-                        )
+                        if use_cached_news:
+                            from app.services.news_cache import NewsCacheService
+                            cache_service = NewsCacheService()
+                            sd = df['Date'].min()
+                            ed = df['Date'].max()
+                            sd = sd.to_pydatetime() if hasattr(sd, 'to_pydatetime') else sd
+                            ed = ed.to_pydatetime() if hasattr(ed, 'to_pydatetime') else ed
+                            articles = cache_service.get_cached_articles_for_ticker(
+                                ticker=ticker, provider=source_provider,
+                                start_date=sd, end_date=ed
+                            )
+                        else:
+                            articles = sentiment_service.fetch_news_for_ticker(
+                                ticker=ticker,
+                                start_date=df['Date'].min() if hasattr(df['Date'].min(), 'to_pydatetime') else start_date,
+                                end_date=df['Date'].max() if hasattr(df['Date'].max(), 'to_pydatetime') else end_date,
+                                provider=source_provider,
+                                enrich_content=sentiment_config.get('enrich_content', True)
+                            )
                         if articles:
-                            logger.info(f"[Thread] Fetched {len(articles)} articles from {source_provider}")
+                            logger.info(f"[Thread] {'Loaded cached' if use_cached_news else 'Fetched'} {len(articles)} articles from {source_provider}")
                             all_articles.extend(articles)
                     except Exception as e:
-                        logger.warning(f"[Thread] Error fetching from {source_provider}: {e}")
+                        logger.warning(f"[Thread] Error {'loading cached' if use_cached_news else 'fetching'} from {source_provider}: {e}")
 
                 if all_articles:
                     logger.info(f"[Thread] Creating sentiment features from {len(all_articles)} articles")
