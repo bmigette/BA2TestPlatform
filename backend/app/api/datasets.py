@@ -797,7 +797,6 @@ async def create_dataset(
             fundamentals_config=dataset_create.fundamentals_config,
             sentiment_config=dataset_create.sentiment_config,
             generation_config=generation_config,
-            normalization_buffer_pct=dataset_create.normalization_buffer_pct,
             labels=dataset_create.labels,
             file_path=str(file_path)
         )
@@ -866,7 +865,6 @@ async def create_batch_datasets(
         technical_indicators = batch_request.get('technical_indicators')
         sentiment_config = batch_request.get('sentiment_config')
         fundamentals_config = batch_request.get('fundamentals_config')
-        normalization_buffer_pct = batch_request.get('normalization_buffer_pct', 0.35)
         indicator_collection_id = batch_request.get('indicator_collection_id')
         user_labels = batch_request.get('labels', [])
         batch_name = batch_request.get('name')
@@ -925,7 +923,6 @@ async def create_batch_datasets(
                 fundamentals_config=fundamentals_config,
                 sentiment_config=sentiment_config,
                 generation_config=generation_config,
-                normalization_buffer_pct=normalization_buffer_pct,
                 labels=combined_labels,
                 file_path=str(file_path)
             )
@@ -2124,7 +2121,6 @@ async def duplicate_dataset(
             fundamentals_config=original.fundamentals_config,
             sentiment_config=original.sentiment_config,
             generation_config=new_gen_config,
-            normalization_buffer_pct=original.normalization_buffer_pct,
             file_path=str(file_path)
         )
 
@@ -2193,10 +2189,6 @@ async def update_dataset(
         if dataset_update.name:
             updates.append(f"name: {dataset.name} -> {dataset_update.name}")
             dataset.name = dataset_update.name
-
-        if dataset_update.normalization_buffer_pct is not None:
-            updates.append(f"normalization_buffer_pct: {dataset.normalization_buffer_pct} -> {dataset_update.normalization_buffer_pct}")
-            dataset.normalization_buffer_pct = dataset_update.normalization_buffer_pct
 
         if dataset_update.technical_indicators is not None:
             updates.append(f"technical_indicators: {len(dataset.technical_indicators or [])} -> {len(dataset_update.technical_indicators)} indicators")

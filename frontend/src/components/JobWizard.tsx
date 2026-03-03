@@ -183,6 +183,7 @@ const getDefaultState = () => ({
   jobType: 'classification' as 'classification' | 'regression',
   predictionModes: ['shift'] as ('shift' | 'multistep')[],
   selectedDatasetIds: [] as number[],
+  multiDatasetMode: 'multi-series' as 'batch' | 'multi-series',
   datasetCompatibility: null as { compatible: boolean; message: string } | null,
   crossValidation: {
     enabled: false,
@@ -655,32 +656,57 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
     setIsSubmitting(true);
     try {
-      const response = await fetch('http://localhost:8000/api/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jobType: state.jobType,
-          datasetIds: state.selectedDatasetIds,
-          crossValidation: state.selectedDatasetIds.length > 1 ? state.crossValidation : undefined,
-          selectedModels: state.selectedModels,
-          parameterRanges: state.parameterRanges,
-          predictionTargets: state.predictionTargets,
-          predictionHorizon: state.predictionHorizon,
-          predictionModes: state.predictionModes,
-          trainTestSplit: state.trainTestSplit,
-          geneticConfig: state.geneticConfig,
-          metricsConfig: state.metricsConfig,
-          trainingDateRange: state.useSubsetDateRange ? state.trainingDateRange : null,
-        }),
-      });
+      const basePayload = {
+        jobType: state.jobType,
+        selectedModels: state.selectedModels,
+        parameterRanges: state.parameterRanges,
+        predictionTargets: state.predictionTargets,
+        predictionHorizon: state.predictionHorizon,
+        predictionModes: state.predictionModes,
+        trainTestSplit: state.trainTestSplit,
+        geneticConfig: state.geneticConfig,
+        metricsConfig: state.metricsConfig,
+        trainingDateRange: state.useSubsetDateRange ? state.trainingDateRange : null,
+      };
 
-      if (!response.ok) {
-        throw new Error('Failed to create job');
+      if (state.multiDatasetMode === 'batch' && state.selectedDatasetIds.length > 1) {
+        // Submit one independent job per dataset in parallel
+        const results = await Promise.allSettled(
+          state.selectedDatasetIds.map(datasetId =>
+            fetch('http://localhost:8000/api/jobs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...basePayload, datasetIds: [datasetId] }),
+            }).then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+          )
+        );
+        const succeeded = results
+          .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
+          .map(r => r.value);
+        const failCount = results.filter(r => r.status === 'rejected').length;
+        if (failCount > 0) {
+          setPreviewError(`${failCount} job(s) failed to create`);
+        }
+        if (succeeded.length > 0) {
+          onComplete(succeeded[0]);
+          onClose();
+        }
+      } else {
+        // Single job: multi-series or single dataset
+        const response = await fetch('http://localhost:8000/api/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...basePayload,
+            datasetIds: state.selectedDatasetIds,
+            crossValidation: state.selectedDatasetIds.length > 1 ? state.crossValidation : undefined,
+          }),
+        });
+        if (!response.ok) throw new Error('Failed to create job');
+        const newJob = await response.json();
+        onComplete(newJob);
+        onClose();
       }
-
-      const newJob = await response.json();
-      onComplete(newJob);
-      onClose();
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : 'Failed to create job');
     } finally {
@@ -1138,6 +1164,45 @@ const Step1Settings: React.FC<Step1Props> = ({
         </div>
       </div>
 
+      {/* Multi-dataset mode toggle */}
+      {state.selectedDatasetIds.length > 1 && (
+        <div className="border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            Multi-Dataset Mode
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setState(prev => ({ ...prev, multiDatasetMode: 'multi-series' }))}
+              className={`flex-1 py-2 px-3 rounded-md text-sm border transition-colors ${
+                state.multiDatasetMode === 'multi-series'
+                  ? 'bg-green-600 text-white border-green-600'
+                  : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+              }`}
+            >
+              <div className="font-medium">Multi-series</div>
+              <div className={`text-xs mt-0.5 ${state.multiDatasetMode === 'multi-series' ? 'text-green-100' : 'text-gray-500 dark:text-gray-400'}`}>
+                One model trained on all datasets
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setState(prev => ({ ...prev, multiDatasetMode: 'batch' }))}
+              className={`flex-1 py-2 px-3 rounded-md text-sm border transition-colors ${
+                state.multiDatasetMode === 'batch'
+                  ? 'bg-green-600 text-white border-green-600'
+                  : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+              }`}
+            >
+              <div className="font-medium">Batch</div>
+              <div className={`text-xs mt-0.5 ${state.multiDatasetMode === 'batch' ? 'text-green-100' : 'text-gray-500 dark:text-gray-400'}`}>
+                {state.selectedDatasetIds.length} independent jobs
+              </div>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Dataset Details */}
       {selectedDatasets.length > 0 && (
         <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
@@ -1541,8 +1606,8 @@ const Step1Settings: React.FC<Step1Props> = ({
         )}
       </div>
 
-      {/* Cross-Validation (multi-dataset only) */}
-      {state.selectedDatasetIds.length > 1 && (
+      {/* Cross-Validation (multi-series mode only) */}
+      {state.selectedDatasetIds.length > 1 && state.multiDatasetMode === 'multi-series' && (
         <div className="border border-gray-200 dark:border-gray-600 rounded-lg p-4">
           <label className="flex items-center space-x-2 cursor-pointer">
             <input

@@ -48,9 +48,6 @@ class Dataset(Base):
     # Labels for organizing/filtering datasets (e.g., ["batch-SP500", "daily"])
     labels = Column(JSON, nullable=True)
 
-    # Normalization buffer percentage for live data headroom (default 35%)
-    normalization_buffer_pct = Column(Float, default=0.35, nullable=False)
-
     # File storage
     file_path = Column(String(500), nullable=False)
 

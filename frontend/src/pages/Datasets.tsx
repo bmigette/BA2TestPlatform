@@ -16,7 +16,6 @@ interface Dataset {
   status: 'pending' | 'building' | 'ready' | 'error';
   error_message: string | null;
   created_at: string;
-  normalization_buffer_pct?: number;
   technical_indicators?: any;
   generation_config?: any;
   labels?: string[];

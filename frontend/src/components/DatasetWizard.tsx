@@ -81,7 +81,6 @@ interface WizardData {
   startDate: string;
   endDate: string;
   dataProvider: string;
-  normalizationBufferPct: number;
   indicators: IndicatorConfig[];
   sentiment: SentimentConfig;
   fundamentals: FundamentalsConfig;
@@ -126,7 +125,6 @@ const getDefaultWizardData = (): WizardData => ({
   startDate: '',
   endDate: '',
   dataProvider: 'yfinance',
-  normalizationBufferPct: 0.35,
   indicators: [],
   sentiment: {
     enabled: false,
@@ -197,7 +195,6 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         startDate,
         endDate,
         dataProvider: initialData.generation_config?.data_provider || 'yfinance',
-        normalizationBufferPct: initialData.normalization_buffer_pct || 0.35,
         indicators,
         sentiment: sentimentConfig,
         fundamentals: fundamentalsConfig
@@ -639,7 +636,6 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             end_date: wizardData.endDate || undefined,
             data_provider: wizardData.dataProvider,
             technical_indicators: technicalIndicators,
-            normalization_buffer_pct: wizardData.normalizationBufferPct,
             sentiment_config: sentimentConfig,
             fundamentals_config: fundamentalsConfig
           }),
@@ -656,7 +652,6 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             start_date: wizardData.startDate || undefined,
             end_date: wizardData.endDate || undefined,
             data_provider: wizardData.dataProvider,
-            normalization_buffer_pct: wizardData.normalizationBufferPct,
             technical_indicators: technicalIndicators,
             sentiment_config: sentimentConfig,
             fundamentals_config: fundamentalsConfig,
@@ -675,7 +670,6 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
             start_date: wizardData.startDate || undefined,
             end_date: wizardData.endDate || undefined,
             data_provider: wizardData.dataProvider,
-            normalization_buffer_pct: wizardData.normalizationBufferPct,
             technical_indicators: technicalIndicators,
             sentiment_config: sentimentConfig,
             fundamentals_config: fundamentalsConfig,
@@ -980,38 +974,6 @@ const DatasetWizard: React.FC<DatasetWizardProps> = ({ isOpen, onClose, onComple
         );})}
       </div>
 
-      {/* Advanced Settings */}
-      <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
-        <details className="group">
-          <summary className="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
-            Advanced Settings
-          </summary>
-          <div className="mt-4 space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-200">
-                Normalization Buffer (%)
-              </label>
-              <p className="text-xs text-gray-500 dark:text-gray-300 mb-2">
-                Extra headroom above/below observed min/max for live trading. Higher values handle more price growth.
-              </p>
-              <div className="flex items-center gap-4">
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  step="5"
-                  value={wizardData.normalizationBufferPct * 100}
-                  onChange={(e) => setWizardData({ ...wizardData, normalizationBufferPct: parseInt(e.target.value) / 100 })}
-                  className="flex-1"
-                />
-                <span className="w-16 text-center font-medium text-gray-900 dark:text-gray-100">
-                  {(wizardData.normalizationBufferPct * 100).toFixed(0)}%
-                </span>
-              </div>
-            </div>
-          </div>
-        </details>
-      </div>
     </div>
   );
 

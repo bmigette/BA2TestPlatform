@@ -42,6 +42,7 @@ class GenerateTrainingDataRequest(BaseModel):
     """Request model for generate-training-data endpoint."""
     targets: List[Dict[str, Any]] = None
     normalize: bool = True
+    buffer_pct: float  # Normalization buffer percentage (required, e.g. 0.35 for 35%)
 
 router = APIRouter()
 
@@ -394,7 +395,7 @@ async def generate_training_data(
         if normalize:
             from app.services.data_preparation import DataPreparationService
 
-            prep_service = DataPreparationService(buffer_pct=dataset.normalization_buffer_pct)
+            prep_service = DataPreparationService(buffer_pct=request.buffer_pct)
 
             # Normalize OHLCV columns
             numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
