@@ -251,15 +251,15 @@ const OHLCVCacheTool: React.FC = () => {
     (async () => {
       try {
         const responses = await Promise.all([
-          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache&status=running'),
-          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache&status=queued'),
+          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache_fetch&status=running'),
+          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache_fetch&status=queued'),
         ]);
         const restored: FetchTask[] = [];
         for (const r of responses) {
           if (r.ok) {
             const d = await r.json();
             for (const t of (d.tasks || [])) {
-              const sym = t.payload?.symbols?.[0] || t.name?.replace('OHLCV Cache: ', '') || '?';
+              const sym = t.payload?.symbol || t.name?.replace('Cache OHLCV: ', '') || '?';
               restored.push({ symbol: sym, task_id: t.task_id, status: t.status, progress: t.progress, progress_message: t.progress_message });
             }
           }
