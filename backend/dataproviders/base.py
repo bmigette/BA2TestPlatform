@@ -6,8 +6,10 @@ that all data providers should inherit from.
 """
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Callable, Optional, List, Dict, Any
+import threading
 import pandas as pd
 from pathlib import Path
 import logging
@@ -193,25 +195,34 @@ class MarketDataProviderInterface(ABC):
         symbol: str,
         start_date: datetime,
         end_date: datetime,
-        interval: str = '1d'
+        interval: str = '1d',
+        progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> pd.DataFrame:
         """
-        Fetch and cache OHLCV data for the requested range using extend-only semantics.
+        Fetch and cache OHLCV data for the requested range using a two-phase approach.
 
-        - Fetches uncovered head/tail portions and merges with existing data.
-        - Also detects and fills internal gaps within the requested range.
-        - Overwrites the cache file with the complete merged result.
+        Phase 1 – Gap filling (parallel, 5 workers):
+            Scans existing cache for internal gaps > 5 calendar days that overlap
+            the requested range, then fetches all gaps concurrently.
+
+        Phase 2 – Range extension (sequential):
+            Fetches any head/tail portions that fall outside the existing cached range.
 
         Args:
             symbol: Ticker symbol
             start_date: Desired range start (inclusive)
             end_date: Desired range end (inclusive)
             interval: Data interval ('1d', '1h', etc.)
+            progress_callback: Optional callable(pct, message) for progress reporting.
 
         Returns:
-            Full merged DataFrame (existing + newly fetched)
+            Full merged DataFrame (existing + newly fetched), saved to cache.
         """
-        cache_file = self._get_cache_file(symbol, interval)
+
+        def _report(pct: float, msg: str) -> None:
+            logger.info(msg)
+            if progress_callback:
+                progress_callback(pct, msg)
 
         def _to_naive_ts(dt: datetime) -> pd.Timestamp:
             ts = pd.Timestamp(dt)
@@ -219,9 +230,13 @@ class MarketDataProviderInterface(ABC):
                 ts = ts.tz_convert('UTC').tz_localize(None)
             return ts
 
+        cache_file = self._get_cache_file(symbol, interval)
         start_ts = _to_naive_ts(start_date)
         end_ts = _to_naive_ts(end_date)
 
+        # ------------------------------------------------------------------ #
+        # Load existing cache                                                  #
+        # ------------------------------------------------------------------ #
         existing = pd.DataFrame()
         if cache_file.exists():
             try:
@@ -231,100 +246,122 @@ class MarketDataProviderInterface(ABC):
                 logger.warning(f"Could not read existing cache {cache_file}: {e}")
                 existing = pd.DataFrame()
 
-        pieces = []
-        if not existing.empty:
-            pieces.append(existing)
-            cache_min = existing['Date'].min()
-            cache_max = existing['Date'].max()
-
-            # Extend left if needed
-            if start_ts < cache_min:
-                logger.info(f"Extending {symbol}/{interval} left: "
-                            f"{start_date.date()} to {cache_min.date()}")
-                left = self._get_ohlcv_data_impl(
-                    symbol, start_date, cache_min.to_pydatetime(), interval
-                )
-                if not left.empty:
-                    left['Date'] = pd.to_datetime(left['Date']).dt.tz_localize(None)
-                    pieces.append(left)
-
-            # Extend right if needed
-            if end_ts > cache_max:
-                logger.info(f"Extending {symbol}/{interval} right: "
-                            f"{cache_max.date()} to {end_date.date()}")
-                right = self._get_ohlcv_data_impl(
-                    symbol, cache_max.to_pydatetime(), end_date, interval
-                )
-                if not right.empty:
-                    right['Date'] = pd.to_datetime(right['Date']).dt.tz_localize(None)
-                    pieces.append(right)
-
-            # Scan for and fill internal gaps within the requested range.
-            # Gaps larger than 5 calendar days (covers weekends + US holidays)
-            # indicate missing data that should be re-fetched.
-            combined_so_far = (
-                pd.concat(pieces, ignore_index=True)
-                  .drop_duplicates(subset=['Date'])
-                  .sort_values('Date')
-                  .reset_index(drop=True)
-            )
-            in_range = combined_so_far[
-                (combined_so_far['Date'] >= start_ts) & (combined_so_far['Date'] <= end_ts)
-            ].reset_index(drop=True)
-
-            if not in_range.empty:
-                gap_threshold = pd.Timedelta('5 days')
-                diffs = in_range['Date'].diff()
-                gap_positions = diffs[diffs > gap_threshold].index.tolist()
-
-                if gap_positions:
-                    logger.info(f"Found {len(gap_positions)} internal gap(s) for "
-                                f"{symbol}/{interval}, attempting to fill...")
-                    for i in gap_positions:
-                        gap_start_dt = in_range.loc[i - 1, 'Date']
-                        gap_end_dt = in_range.loc[i, 'Date']
-                        logger.info(f"  Filling gap: {gap_start_dt.date()} to {gap_end_dt.date()}")
-                        try:
-                            gap_data = self._get_ohlcv_data_impl(
-                                symbol,
-                                gap_start_dt.to_pydatetime(),
-                                gap_end_dt.to_pydatetime(),
-                                interval
-                            )
-                            if not gap_data.empty:
-                                gap_data['Date'] = pd.to_datetime(gap_data['Date']).dt.tz_localize(None)
-                                pieces.append(gap_data)
-                                logger.info(f"  Gap filled with {len(gap_data)} bars")
-                            else:
-                                logger.warning(f"  No data available for gap {symbol}/{interval}: "
-                                               f"{gap_start_dt.date()} to {gap_end_dt.date()}")
-                        except Exception as e:
-                            logger.warning(f"  Failed to fill gap {symbol}/{interval}: {e}")
-        else:
-            # No cache — fetch full range
-            logger.info(f"No cache for {symbol}/{interval}, fetching "
-                        f"{start_date.date()} to {end_date.date()}")
+        if existing.empty:
+            # No cache — fetch the full requested range in one shot
+            _report(5.0, f"{symbol}/{interval}: No cache, fetching full range "
+                         f"{start_date.date()} → {end_date.date()}")
             new_data = self._get_ohlcv_data_impl(symbol, start_date, end_date, interval)
             if not new_data.empty:
                 new_data['Date'] = pd.to_datetime(new_data['Date']).dt.tz_localize(None)
-                pieces.append(new_data)
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                new_data.to_csv(cache_file, index=False)
+                logger.info(f"Saved {len(new_data)} rows to {cache_file}")
+            _report(100.0, f"{symbol}/{interval}: Done — {len(new_data)} rows")
+            return new_data
 
-        if not pieces:
-            return pd.DataFrame()
+        existing = existing.sort_values('Date').reset_index(drop=True)
 
+        # ------------------------------------------------------------------ #
+        # Phase 1 – Identify internal gaps within the requested range          #
+        # ------------------------------------------------------------------ #
+        gap_threshold = pd.Timedelta('5 days')
+        diffs = existing['Date'].diff()
+        gaps_to_fill: List[tuple] = []
+        for idx in diffs[diffs > gap_threshold].index:
+            gap_start_dt = existing.loc[idx - 1, 'Date']
+            gap_end_dt = existing.loc[idx, 'Date']
+            # Only fill gaps that overlap with [start_ts, end_ts]
+            if gap_end_dt > start_ts and gap_start_dt < end_ts:
+                gaps_to_fill.append((gap_start_dt.to_pydatetime(), gap_end_dt.to_pydatetime()))
+
+        _report(5.0, f"{symbol}/{interval}: Found {len(gaps_to_fill)} gap(s) to fill")
+
+        # ------------------------------------------------------------------ #
+        # Phase 1 – Fetch all gaps concurrently (max 5 workers)               #
+        # ------------------------------------------------------------------ #
+        gap_pieces: List[pd.DataFrame] = []
+        if gaps_to_fill:
+            completed_gaps = [0]
+            total_gaps = len(gaps_to_fill)
+            gap_lock = threading.Lock()
+
+            def fetch_gap(gs: datetime, ge: datetime) -> pd.DataFrame:
+                try:
+                    data = self._get_ohlcv_data_impl(symbol, gs, ge, interval)
+                    if not data.empty:
+                        data['Date'] = pd.to_datetime(data['Date']).dt.tz_localize(None)
+                        logger.info(f"  Gap {gs.date()}→{ge.date()}: {len(data)} bars")
+                        return data
+                except Exception as exc:
+                    logger.warning(f"  Failed to fill gap {gs.date()}→{ge.date()}: {exc}")
+                return pd.DataFrame()
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_gap = {
+                    executor.submit(fetch_gap, gs, ge): (gs, ge)
+                    for gs, ge in gaps_to_fill
+                }
+                for future in as_completed(future_to_gap):
+                    data = future.result()
+                    if not data.empty:
+                        gap_pieces.append(data)
+                    with gap_lock:
+                        completed_gaps[0] += 1
+                        pct = 5.0 + (completed_gaps[0] / total_gaps) * 75.0
+                        _report(pct, f"{symbol}/{interval}: Filled {completed_gaps[0]}/{total_gaps} gaps")
+
+        # Merge existing + gap fills
+        all_pieces = [existing] + gap_pieces
         merged = (
-            pd.concat(pieces, ignore_index=True)
+            pd.concat(all_pieces, ignore_index=True)
+              .drop_duplicates(subset=['Date'])
+              .sort_values('Date')
+              .reset_index(drop=True)
+        )
+        cache_min = merged['Date'].min()
+        cache_max = merged['Date'].max()
+
+        # ------------------------------------------------------------------ #
+        # Phase 2 – Extend head/tail to cover the full requested range        #
+        # ------------------------------------------------------------------ #
+        extension_pieces = [merged]
+
+        if start_ts < cache_min:
+            _report(82.0, f"{symbol}/{interval}: Extending left: "
+                          f"{start_date.date()} → {cache_min.date()}")
+            left = self._get_ohlcv_data_impl(
+                symbol, start_date, cache_min.to_pydatetime(), interval
+            )
+            if not left.empty:
+                left['Date'] = pd.to_datetime(left['Date']).dt.tz_localize(None)
+                extension_pieces.append(left)
+            _report(90.0, f"{symbol}/{interval}: Left extension done")
+
+        if end_ts > cache_max:
+            _report(92.0, f"{symbol}/{interval}: Extending right: "
+                          f"{cache_max.date()} → {end_date.date()}")
+            right = self._get_ohlcv_data_impl(
+                symbol, cache_max.to_pydatetime(), end_date, interval
+            )
+            if not right.empty:
+                right['Date'] = pd.to_datetime(right['Date']).dt.tz_localize(None)
+                extension_pieces.append(right)
+            _report(98.0, f"{symbol}/{interval}: Right extension done")
+
+        final = (
+            pd.concat(extension_pieces, ignore_index=True)
               .drop_duplicates(subset=['Date'])
               .sort_values('Date')
               .reset_index(drop=True)
         )
 
-        if not merged.empty:
+        if not final.empty:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
-            merged.to_csv(cache_file, index=False)
-            logger.info(f"Saved {len(merged)} rows to {cache_file}")
+            final.to_csv(cache_file, index=False)
+            logger.info(f"Saved {len(final)} rows to {cache_file}")
 
-        return merged
+        _report(100.0, f"{symbol}/{interval}: Done — {len(final)} rows total")
+        return final
 
     def get_data(
         self,

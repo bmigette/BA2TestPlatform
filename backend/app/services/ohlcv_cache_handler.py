@@ -96,11 +96,18 @@ def handle_ohlcv_cache_fetch(task_id: str, payload: Dict[str, Any]) -> Dict[str,
                     f"{symbol}/{tf}: {cache_msg}"
                 )
 
+            def make_progress_callback(timeframe: str):
+                def callback(pct: float, msg: str) -> None:
+                    with lock:
+                        task_queue.update_progress(task_id, (completed_count[0] / total) * 100, msg)
+                return callback
+
             df = provider.extend_ohlcv_cache(
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date,
-                interval=tf
+                interval=tf,
+                progress_callback=make_progress_callback(tf),
             )
             rows = len(df) if df is not None else 0
             result = {'status': 'success', 'rows': rows}
