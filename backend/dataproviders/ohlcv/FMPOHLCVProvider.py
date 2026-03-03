@@ -60,15 +60,17 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
 
     # Maximum calendar days per API request for each intraday interval.
     #
-    # IMPORTANT: FMP's intraday historical endpoint silently returns only the last
-    # ~88 calendar days of any requested window, regardless of the 'from' date.
-    # Chunks must be STRICTLY BELOW this limit to guarantee complete coverage:
-    # if chunk_size < FMP_limit, FMP returns all data in the chunk.
-    # Verified empirically: 1h data with 730-day chunks produces ~88-day segments
-    # (Oct→Jan) with ~640-day gaps between them.
+    # IMPORTANT: FMP's intraday historical endpoint ignores the 'from' parameter
+    # and returns only the last ~1170 bars ending at 'to', regardless of the range
+    # requested.  For 1min this is ~3 calendar days; forward chunking by 30 days
+    # therefore leaves ~27-day gaps in every chunk.
+    #
+    # The _fetch_intraday_data method now uses backward stepping (to → oldest-1min)
+    # which is correct for ALL intervals and removes the need for a fixed chunk size.
+    # INTRADAY_CHUNK_DAYS is kept only for reference/legacy callers.
     INTRADAY_CHUNK_DAYS: dict = {
-        "1min":  30,
-        "5min":  60,
+        "1min":  3,
+        "5min":  20,
         "15min": 60,
         "30min": 60,
         "1hour": 60,
@@ -281,91 +283,30 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         fmp_interval: str
     ) -> pd.DataFrame:
         """
-        Fetch intraday OHLCV data from FMP API, chunking long date ranges to avoid
-        silent API truncation.
+        Fetch intraday OHLCV data from FMP API using backward stepping.
 
-        FMP's /historical-chart endpoint silently truncates responses beyond ~5 000
-        bars. Chunking by INTRADAY_CHUNK_DAYS ensures complete data is retrieved
-        across any requested date range.
+        FMP's /historical-chart endpoint ignores the 'from' parameter and always
+        returns the last ~1170 bars ending at 'to', regardless of the requested
+        range.  Forward chunking therefore leaves large gaps (e.g. 27-day gaps for
+        1min with 30-day chunks).
+
+        This method steps backward from end_date: each response's oldest bar
+        becomes the next chunk's 'to' date (minus 1 minute), until the oldest bar
+        is at or before start_date or FMP returns no data.
 
         Args:
             symbol: Stock ticker symbol
-            start_date: Start date for data
-            end_date: End date for data
+            start_date: Start date for data (inclusive)
+            end_date: End date for data (inclusive)
             fmp_interval: FMP interval string (1min, 5min, 15min, 30min, 1hour, 4hour)
 
         Returns:
             DataFrame with columns: Date, Open, High, Low, Close, Volume
         """
-        chunk_days = self.INTRADAY_CHUNK_DAYS.get(fmp_interval, 90)
         chunks = []
-        chunk_start = start_date
+        chunk_end = end_date
+        prev_oldest = None
 
-        while chunk_start < end_date:
-            chunk_end = min(chunk_start + timedelta(days=chunk_days), end_date)
-            next_start = chunk_end + timedelta(days=1)  # default advancement
-
-            url = f"{self.BASE_URL}/historical-chart/{fmp_interval}/{symbol}"
-            params = {
-                "apikey": self.api_key,
-                "from": chunk_start.strftime("%Y-%m-%d"),
-                "to": chunk_end.strftime("%Y-%m-%d"),
-            }
-
-            logger.debug(
-                f"FMP intraday chunk {symbol}/{fmp_interval}: "
-                f"{chunk_start.date()} to {chunk_end.date()}"
-            )
-
-            try:
-                response = requests.get(url, params=params, timeout=30)
-                response.raise_for_status()
-                data = response.json()
-
-                if data and isinstance(data, list):
-                    chunk_df = pd.DataFrame(data)
-                    chunk_df = chunk_df.rename(columns={
-                        "date": "Date",
-                        "open": "Open",
-                        "high": "High",
-                        "low": "Low",
-                        "close": "Close",
-                        "volume": "Volume",
-                    })
-                    chunk_df = chunk_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
-                    chunk_df["Date"] = pd.to_datetime(chunk_df["Date"], utc=True)
-                    chunks.append(chunk_df)
-                    logger.debug(f"  Got {len(chunk_df)} bars")
-
-                    # Smart advancement: if FMP returned data significantly short
-                    # of chunk_end, advance from actual data end rather than
-                    # chunk_end to avoid re-requesting dates or missing bars.
-                    actual_end = chunk_df["Date"].max().date()
-                    chunk_end_date = chunk_end.date() if isinstance(chunk_end, datetime) else chunk_end
-                    gap_days = (chunk_end_date - actual_end).days
-                    if gap_days > self.COVERAGE_TOLERANCE_DAYS:
-                        logger.debug(
-                            f"  Coverage gap: data ends {actual_end}, "
-                            f"chunk to {chunk_end_date} (gap={gap_days}d). "
-                            f"Advancing from actual end."
-                        )
-                        next_start = chunk_df["Date"].max() + timedelta(days=1)
-
-            except Exception as e:
-                logger.warning(
-                    f"FMP intraday chunk {chunk_start.date()}-{chunk_end.date()} "
-                    f"failed: {e}"
-                )
-
-            chunk_start = next_start
-
-        if not chunks:
-            return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
-
-        df = pd.concat(chunks, ignore_index=True)
-        df = df.drop_duplicates(subset=["Date"])
-
-        # Filter to exact requested range
         start_ts = (
             pd.Timestamp(start_date).tz_localize("UTC")
             if pd.Timestamp(start_date).tz is None
@@ -376,12 +317,82 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
             if pd.Timestamp(end_date).tz is None
             else pd.Timestamp(end_date).tz_convert("UTC")
         )
-        df = df[(df["Date"] >= start_ts) & (df["Date"] <= end_ts)]
 
+        url = f"{self.BASE_URL}/historical-chart/{fmp_interval}/{symbol}"
+
+        while True:
+            params = {
+                "apikey": self.api_key,
+                "from": start_date.strftime("%Y-%m-%d"),  # hint (FMP may ignore)
+                "to": chunk_end.strftime("%Y-%m-%d") if isinstance(chunk_end, datetime) else str(chunk_end),
+            }
+
+            logger.debug(
+                f"FMP intraday backward {symbol}/{fmp_interval}: "
+                f"to={chunk_end.date() if isinstance(chunk_end, datetime) else chunk_end}"
+            )
+
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+
+                if not data or not isinstance(data, list):
+                    logger.debug(f"  No data returned for to={chunk_end}, stopping")
+                    break
+
+                chunk_df = pd.DataFrame(data)
+                chunk_df = chunk_df.rename(columns={
+                    "date": "Date",
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "volume": "Volume",
+                })
+                chunk_df = chunk_df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+                chunk_df["Date"] = pd.to_datetime(chunk_df["Date"], utc=True)
+
+                oldest = chunk_df["Date"].min()
+                newest = chunk_df["Date"].max()
+                chunks.append(chunk_df)
+                logger.debug(
+                    f"  Got {len(chunk_df)} bars: {oldest.date()} -> {newest.date()}"
+                )
+
+                # Guard against infinite loop (FMP returning same window)
+                if prev_oldest is not None and oldest.date() >= prev_oldest.date():
+                    logger.debug("  Oldest date did not advance, stopping")
+                    break
+                prev_oldest = oldest
+
+                # Stop if we have covered start_date
+                if oldest <= start_ts + pd.Timedelta(days=self.COVERAGE_TOLERANCE_DAYS):
+                    logger.debug("  Covered full range, stopping")
+                    break
+
+                # Step backward: FMP 'to' is date-only, so step back one calendar
+                # day before the oldest bar's date.  This avoids re-fetching the
+                # same day and keeps the date strictly decreasing.
+                chunk_end = (oldest - timedelta(days=1)).to_pydatetime()
+
+            except Exception as e:
+                logger.warning(
+                    f"FMP intraday backward chunk to={chunk_end} failed: {e}"
+                )
+                break
+
+        if not chunks:
+            return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+
+        df = pd.concat(chunks, ignore_index=True)
+        df = df.drop_duplicates(subset=["Date"])
+        df = df[(df["Date"] >= start_ts) & (df["Date"] <= end_ts)]
         df = df.sort_values("Date").reset_index(drop=True)
+
         logger.info(
             f"FMP intraday {symbol}/{fmp_interval}: {len(df)} total bars "
-            f"({len(chunks)} chunk requests)"
+            f"({len(chunks)} backward chunk requests)"
         )
         return df
 
