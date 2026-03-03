@@ -50,16 +50,20 @@ class TaskQueueService:
         status = task_service.get_task_status(task_id)
     """
 
-    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0):
+    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, name: str = "TaskQueue"):
         """
         Initialize task queue service.
 
         Args:
             max_workers: Maximum concurrent task workers
             poll_interval: Seconds between queue polls
+            task_types: If set, only process tasks of these types (None = all types)
+            name: Queue name for logging
         """
         self.max_workers = max_workers
         self.poll_interval = poll_interval
+        self.task_types = task_types
+        self.name = name
         self._handlers: Dict[str, Callable] = {}
         self._running = False
         self._workers: List[threading.Thread] = []
@@ -89,25 +93,56 @@ class TaskQueueService:
         for i in range(self.max_workers):
             worker = threading.Thread(
                 target=self._worker_loop,
-                name=f"TaskWorker-{i}",
+                name=f"{self.name}-Worker-{i}",
                 daemon=True
             )
             worker.start()
             self._workers.append(worker)
 
-        logger.info(f"Started task queue with {self.max_workers} workers")
+        logger.info(f"Started {self.name} with {self.max_workers} workers")
 
     def stop(self):
         """Stop the task queue."""
         self._running = False
-        logger.info("Stopping task queue...")
+        logger.info(f"Stopping {self.name}...")
 
         # Wait for workers to finish
         for worker in self._workers:
             worker.join(timeout=5.0)
 
         self._workers.clear()
-        logger.info("Task queue stopped")
+        logger.info(f"{self.name} stopped")
+
+    def resize_workers(self, max_workers: int):
+        """
+        Resize the worker pool.
+
+        Adding workers takes effect immediately. Reducing workers is advisory —
+        the new limit is respected by idle workers on their next poll cycle,
+        and excess daemon threads will exit gracefully.
+
+        Args:
+            max_workers: New desired worker count (must be >= 1)
+        """
+        max_workers = max(1, max_workers)
+        if max_workers == self.max_workers:
+            return
+
+        old_max = self.max_workers
+        self.max_workers = max_workers
+
+        if max_workers > old_max and self._running:
+            for i in range(old_max, max_workers):
+                worker = threading.Thread(
+                    target=self._worker_loop,
+                    name=f"{self.name}-Worker-{i}",
+                    daemon=True
+                )
+                worker.start()
+                self._workers.append(worker)
+            logger.info(f"{self.name}: added {max_workers - old_max} workers, now {max_workers} total")
+        else:
+            logger.info(f"{self.name}: reduced max_workers from {old_max} to {max_workers} (excess threads will idle)")
 
     def queue_task(
         self,
@@ -438,7 +473,12 @@ class TaskQueueService:
         worker_name = threading.current_thread().name
         logger.debug(f"{worker_name} started")
 
+        worker_idx = int(worker_name.rsplit("-", 1)[-1]) if worker_name[-1].isdigit() else 0
         while self._running:
+            # Exit gracefully if this worker is above the current max_workers limit
+            if worker_idx >= self.max_workers:
+                logger.debug(f"{worker_name} exiting (excess worker, max_workers={self.max_workers})")
+                break
             try:
                 task = self._claim_next_task(worker_name)
                 if task:
@@ -459,14 +499,18 @@ class TaskQueueService:
             with self._lock:
                 # Find next queued task ordered by priority and queue time
                 now = datetime.now()
-                task = db.query(TaskQueue).filter(
-                    and_(
-                        TaskQueue.status == TaskStatus.QUEUED.value,
-                        or_(
-                            TaskQueue.scheduled_at.is_(None),
-                            TaskQueue.scheduled_at <= now
-                        )
+                filters = [
+                    TaskQueue.status == TaskStatus.QUEUED.value,
+                    or_(
+                        TaskQueue.scheduled_at.is_(None),
+                        TaskQueue.scheduled_at <= now
                     )
+                ]
+                # If this queue is restricted to certain task types, filter accordingly
+                if self.task_types:
+                    filters.append(TaskQueue.task_type.in_(self.task_types))
+                task = db.query(TaskQueue).filter(
+                    and_(*filters)
                 ).order_by(
                     TaskQueue.priority.desc(),
                     TaskQueue.queued_at.asc()
@@ -578,7 +622,7 @@ def init_task_queue(max_workers: int = 2):
     """Initialize and start the task queue."""
     import os
     global _task_queue
-    _task_queue = TaskQueueService(max_workers=max_workers)
+    _task_queue = TaskQueueService(max_workers=max_workers, name="MainTaskQueue")
     # Skip starting workers in test mode to avoid race conditions with table creation
     if os.getenv('PYTEST_CURRENT_TEST') is None:
         _task_queue.recover_stuck_tasks()
@@ -586,3 +630,36 @@ def init_task_queue(max_workers: int = 2):
     else:
         logger.info("Test mode detected - skipping task queue worker startup")
     return _task_queue
+
+
+# Dedicated OHLCV task queue — isolated so it can be resized without affecting
+# training jobs, backtests, or other task types.
+_ohlcv_task_queue: Optional[TaskQueueService] = None
+
+
+def get_ohlcv_task_queue() -> TaskQueueService:
+    """Get the dedicated OHLCV task queue instance."""
+    global _ohlcv_task_queue
+    if _ohlcv_task_queue is None:
+        _ohlcv_task_queue = TaskQueueService(
+            max_workers=3,
+            task_types=['ohlcv_cache_fetch'],
+            name="OHLCVTaskQueue"
+        )
+    return _ohlcv_task_queue
+
+
+def init_ohlcv_task_queue(max_workers: int = 3):
+    """Initialize and start the dedicated OHLCV task queue."""
+    import os
+    global _ohlcv_task_queue
+    _ohlcv_task_queue = TaskQueueService(
+        max_workers=max_workers,
+        task_types=['ohlcv_cache_fetch'],
+        name="OHLCVTaskQueue"
+    )
+    if os.getenv('PYTEST_CURRENT_TEST') is None:
+        _ohlcv_task_queue.start()
+    else:
+        logger.info("Test mode detected - skipping OHLCV task queue worker startup")
+    return _ohlcv_task_queue

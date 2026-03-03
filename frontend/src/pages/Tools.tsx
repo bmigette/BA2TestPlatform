@@ -253,8 +253,6 @@ const OHLCVCacheTool: React.FC = () => {
     (async () => {
       try {
         const responses = await Promise.all([
-          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache_batch&status=running'),
-          fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache_batch&status=queued'),
           fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache_fetch&status=running'),
           fetch('http://localhost:8000/api/tasks?task_type=ohlcv_cache_fetch&status=queued'),
         ]);
@@ -263,9 +261,7 @@ const OHLCVCacheTool: React.FC = () => {
           if (r.ok) {
             const d = await r.json();
             for (const t of (d.tasks || [])) {
-              const sym = t.payload?.symbols
-                ? `${t.payload.symbols.length} symbols`
-                : (t.payload?.symbol || t.name?.replace('Cache OHLCV: ', '') || '?');
+              const sym = t.payload?.symbol || t.name?.replace('Cache OHLCV: ', '') || '?';
               restored.push({ symbol: sym, task_id: t.task_id, status: t.status, progress: t.progress, progress_message: t.progress_message });
             }
           }
@@ -395,15 +391,15 @@ const OHLCVCacheTool: React.FC = () => {
 
       if (resp.ok) {
         const data = await resp.json();
-        const newTasks: FetchTask[] = [{
-          symbol: `${data.count} symbols`,
-          task_id: data.task_id,
+        const newTasks: FetchTask[] = (data.task_ids || []).map((t: any) => ({
+          symbol: t.symbol,
+          task_id: t.task_id,
           status: 'queued',
           progress: 0,
           progress_message: 'Queued'
-        }];
+        }));
         setTasks(newTasks);
-        setMessage(`Queued batch task for ${data.count} symbols`);
+        setMessage(`Queued ${data.count} cache fetch tasks`);
       } else {
         const errData = await resp.json();
         setError(errData.detail || 'Failed to queue cache fetch');
@@ -558,7 +554,7 @@ const OHLCVCacheTool: React.FC = () => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Gap-fill Workers
+                Fetch Workers
               </label>
               <input
                 type="number"
@@ -568,7 +564,7 @@ const OHLCVCacheTool: React.FC = () => {
                 onChange={e => setExecutorWorkers(Math.max(1, Number(e.target.value)))}
                 className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Parallel gap fills per symbol</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Parallel fetch workers per symbol</p>
             </div>
           </div>
 

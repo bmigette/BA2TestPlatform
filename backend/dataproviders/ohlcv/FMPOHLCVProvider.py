@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import os
+import time
 import logging
 
 from ..base import MarketDataProviderInterface
@@ -100,6 +101,40 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         else:
             logger.debug("Initialized FMPOHLCVProvider with caching")
     
+    # Seconds to wait before the single retry on any failed FMP request
+    RATE_LIMIT_RETRY_DELAY: int = 15
+
+    def _fmp_get(self, url: str, params: dict) -> requests.Response:
+        """
+        Perform a GET request to the FMP API with a single retry on failure.
+
+        FMP enforces per-minute call limits; if a request fails (network error,
+        429 rate-limit, or any other HTTP error) we wait RATE_LIMIT_RETRY_DELAY
+        seconds and try once more before propagating the exception.
+
+        Args:
+            url: Full endpoint URL
+            params: Query parameters (including apikey)
+
+        Returns:
+            Response object (raise_for_status already called)
+
+        Raises:
+            requests.HTTPError / requests.RequestException on second failure
+        """
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            logger.warning(
+                f"FMP request failed ({exc}), retrying in {self.RATE_LIMIT_RETRY_DELAY}s..."
+            )
+            time.sleep(self.RATE_LIMIT_RETRY_DELAY)
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            return resp
+
     def _get_ohlcv_data_impl(
         self,
         symbol: Annotated[str, "Stock ticker symbol"],
@@ -202,8 +237,7 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
             )
 
             try:
-                response = requests.get(url, params=params, timeout=30)
-                response.raise_for_status()
+                response = self._fmp_get(url, params)
                 data = response.json()
 
                 if "historical" not in data or not data["historical"]:
@@ -337,8 +371,7 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
             )
 
             try:
-                response = requests.get(url, params=params, timeout=30)
-                response.raise_for_status()
+                response = self._fmp_get(url, params)
                 data = response.json()
 
                 if not data or not isinstance(data, list):
