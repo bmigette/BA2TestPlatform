@@ -367,8 +367,14 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         chunk_end = end_date
         prev_oldest = None
         consecutive_failures = 0
-        # After this many back-to-back failures we give up to avoid infinite wait
+        consecutive_empty = 0
+        # After this many back-to-back API failures (exceptions) we give up
         MAX_CONSECUTIVE_FAILURES = 3
+        # After this many consecutive empty windows we give up stepping backward.
+        # At step_days=2 per window, 20 windows = 40 calendar days maximum void.
+        # This lets the backward stepper skip over FMP data voids (e.g. the
+        # monthly ~10-18 day gaps in old historical data) without stopping early.
+        MAX_CONSECUTIVE_EMPTY = 20
 
         start_ts = (
             pd.Timestamp(start_date).tz_localize("UTC")
@@ -401,11 +407,28 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                 data = response.json()
 
                 if not data or not isinstance(data, list):
-                    # FMP returned empty or non-list — this window has no data
-                    # (e.g. before the symbol's listing date). Stop gracefully.
-                    logger.debug(f"  No list data for to={chunk_end_dt.date()}, stopping")
-                    break
+                    # FMP returned empty for this window.  This can mean either
+                    # (a) a temporary data void in FMP's historical records, or
+                    # (b) we've stepped past the symbol's listing date.
+                    # We step backward anyway and only stop after
+                    # MAX_CONSECUTIVE_EMPTY consecutive empty windows, which
+                    # lets us skip over voids of up to step_days*MAX windows.
+                    consecutive_empty += 1
+                    logger.warning(
+                        f"FMP no data for {symbol}/{fmp_interval} to={chunk_end_dt.date()} "
+                        f"— stepping back through void "
+                        f"({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY})"
+                    )
+                    if consecutive_empty >= MAX_CONSECUTIVE_EMPTY:
+                        logger.warning(
+                            f"FMP {symbol}/{fmp_interval}: gave up after "
+                            f"{MAX_CONSECUTIVE_EMPTY} consecutive empty windows"
+                        )
+                        break
+                    chunk_end = chunk_end_dt - timedelta(days=step_days)
+                    continue
 
+                consecutive_empty = 0  # reset on any successful (non-empty) response
                 chunk_df = pd.DataFrame(data)
                 chunk_df = chunk_df.rename(columns={
                     "date": "Date",
