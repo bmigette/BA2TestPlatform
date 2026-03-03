@@ -101,19 +101,18 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         else:
             logger.debug("Initialized FMPOHLCVProvider with caching")
     
-    # Seconds to wait between retries on any failed FMP request
-    RATE_LIMIT_RETRY_DELAY: int = 15
-    # Number of total attempts (1 initial + N-1 retries)
-    RATE_LIMIT_MAX_ATTEMPTS: int = 4
+    # Backoff delays (seconds) for consecutive retries: 15s, 30s, 60s.
+    # Total attempts = len + 1 (initial + one per delay).
+    RATE_LIMIT_RETRY_DELAYS: tuple = (15, 30, 60)
 
     def _fmp_get(self, url: str, params: dict) -> requests.Response:
         """
-        Perform a GET request to the FMP API with up to RATE_LIMIT_MAX_ATTEMPTS-1 retries.
+        Perform a GET request to the FMP API with exponential backoff retries.
 
         FMP returns rate-limit errors as HTTP 200 with a JSON body like
         {"Error Message": "Limit Reach."} rather than a 429 status.  This
         method detects both HTTP errors and FMP JSON error responses, retrying
-        each with a RATE_LIMIT_RETRY_DELAY second pause.
+        with increasing delays (15s, 30s, 60s).
 
         Args:
             url: Full endpoint URL
@@ -125,14 +124,16 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         Raises:
             RuntimeError after all retries are exhausted
         """
+        total_attempts = len(self.RATE_LIMIT_RETRY_DELAYS) + 1
         last_exc: Exception = RuntimeError("No attempts made")
-        for attempt in range(self.RATE_LIMIT_MAX_ATTEMPTS):
+        for attempt in range(total_attempts):
             if attempt > 0:
+                delay = self.RATE_LIMIT_RETRY_DELAYS[attempt - 1]
                 logger.warning(
-                    f"FMP request failed, retrying in {self.RATE_LIMIT_RETRY_DELAY}s "
-                    f"(attempt {attempt + 1}/{self.RATE_LIMIT_MAX_ATTEMPTS})..."
+                    f"FMP request failed, retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{total_attempts})..."
                 )
-                time.sleep(self.RATE_LIMIT_RETRY_DELAY)
+                time.sleep(delay)
             try:
                 resp = requests.get(url, params=params, timeout=30)
                 resp.raise_for_status()
@@ -152,7 +153,7 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
             except Exception as exc:
                 last_exc = exc
         raise RuntimeError(
-            f"FMP request failed after {self.RATE_LIMIT_MAX_ATTEMPTS} attempts: {last_exc}"
+            f"FMP request failed after {total_attempts} attempts: {last_exc}"
         )
 
     def _get_ohlcv_data_impl(
