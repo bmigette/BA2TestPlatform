@@ -101,39 +101,59 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         else:
             logger.debug("Initialized FMPOHLCVProvider with caching")
     
-    # Seconds to wait before the single retry on any failed FMP request
+    # Seconds to wait between retries on any failed FMP request
     RATE_LIMIT_RETRY_DELAY: int = 15
+    # Number of total attempts (1 initial + N-1 retries)
+    RATE_LIMIT_MAX_ATTEMPTS: int = 4
 
     def _fmp_get(self, url: str, params: dict) -> requests.Response:
         """
-        Perform a GET request to the FMP API with a single retry on failure.
+        Perform a GET request to the FMP API with up to RATE_LIMIT_MAX_ATTEMPTS-1 retries.
 
-        FMP enforces per-minute call limits; if a request fails (network error,
-        429 rate-limit, or any other HTTP error) we wait RATE_LIMIT_RETRY_DELAY
-        seconds and try once more before propagating the exception.
+        FMP returns rate-limit errors as HTTP 200 with a JSON body like
+        {"Error Message": "Limit Reach."} rather than a 429 status.  This
+        method detects both HTTP errors and FMP JSON error responses, retrying
+        each with a RATE_LIMIT_RETRY_DELAY second pause.
 
         Args:
             url: Full endpoint URL
             params: Query parameters (including apikey)
 
         Returns:
-            Response object (raise_for_status already called)
+            Response object whose JSON content is a valid (non-error) payload
 
         Raises:
-            requests.HTTPError / requests.RequestException on second failure
+            RuntimeError after all retries are exhausted
         """
-        try:
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            return resp
-        except Exception as exc:
-            logger.warning(
-                f"FMP request failed ({exc}), retrying in {self.RATE_LIMIT_RETRY_DELAY}s..."
-            )
-            time.sleep(self.RATE_LIMIT_RETRY_DELAY)
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            return resp
+        last_exc: Exception = RuntimeError("No attempts made")
+        for attempt in range(self.RATE_LIMIT_MAX_ATTEMPTS):
+            if attempt > 0:
+                logger.warning(
+                    f"FMP request failed, retrying in {self.RATE_LIMIT_RETRY_DELAY}s "
+                    f"(attempt {attempt + 1}/{self.RATE_LIMIT_MAX_ATTEMPTS})..."
+                )
+                time.sleep(self.RATE_LIMIT_RETRY_DELAY)
+            try:
+                resp = requests.get(url, params=params, timeout=30)
+                resp.raise_for_status()
+                # FMP returns rate-limit / API errors as HTTP 200 with a JSON dict.
+                # Detect and raise so the retry loop handles them.
+                try:
+                    payload = resp.json()
+                    if isinstance(payload, dict):
+                        err = (payload.get("Error Message")
+                               or payload.get("message")
+                               or payload.get("error"))
+                        if err:
+                            raise RuntimeError(f"FMP API error: {err}")
+                except (ValueError, KeyError):
+                    pass  # Not JSON or no error key – let the caller handle it
+                return resp
+            except Exception as exc:
+                last_exc = exc
+        raise RuntimeError(
+            f"FMP request failed after {self.RATE_LIMIT_MAX_ATTEMPTS} attempts: {last_exc}"
+        )
 
     def _get_ohlcv_data_impl(
         self,
@@ -240,7 +260,9 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                 response = self._fmp_get(url, params)
                 data = response.json()
 
-                if "historical" not in data or not data["historical"]:
+                # _fmp_get already detects FMP JSON errors (e.g. rate-limit) and raises.
+                # If we still get a dict here, it's an unexpected non-error structure.
+                if not isinstance(data, dict) or "historical" not in data or not data["historical"]:
                     logger.debug(
                         f"  No data in chunk {chunk_start.date()} to {chunk_end.date()}"
                     )
@@ -343,6 +365,9 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         chunks = []
         chunk_end = end_date
         prev_oldest = None
+        consecutive_failures = 0
+        # After this many back-to-back failures we give up to avoid infinite wait
+        MAX_CONSECUTIVE_FAILURES = 3
 
         start_ts = (
             pd.Timestamp(start_date).tz_localize("UTC")
@@ -375,7 +400,9 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                 data = response.json()
 
                 if not data or not isinstance(data, list):
-                    logger.debug(f"  No data returned for to={chunk_end_dt.date()}, stopping")
+                    # FMP returned empty or non-list — this window has no data
+                    # (e.g. before the symbol's listing date). Stop gracefully.
+                    logger.debug(f"  No list data for to={chunk_end_dt.date()}, stopping")
                     break
 
                 chunk_df = pd.DataFrame(data)
@@ -393,6 +420,7 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                 oldest = chunk_df["Date"].min()
                 newest = chunk_df["Date"].max()
                 chunks.append(chunk_df)
+                consecutive_failures = 0  # reset on success
                 logger.debug(
                     f"  Got {len(chunk_df)} bars: {oldest.date()} -> {newest.date()}"
                 )
@@ -412,10 +440,16 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                 chunk_end = chunk_end_dt - timedelta(days=step_days)
 
             except Exception as e:
+                consecutive_failures += 1
                 logger.warning(
-                    f"FMP intraday backward chunk to={chunk_end_dt.date()} failed: {e}"
+                    f"FMP intraday backward chunk to={chunk_end_dt.date()} failed "
+                    f"({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}"
                 )
-                break
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    logger.warning("Too many consecutive failures, stopping backward stepping")
+                    break
+                # Don't advance chunk_end — retry the same window next iteration
+                # (_fmp_get already waited for RATE_LIMIT_RETRY_DELAY per attempt)
 
         if not chunks:
             return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
