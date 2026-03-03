@@ -244,8 +244,8 @@ async def startup_event():
 
     # Initialize task queue
     from app.services.task_queue import init_task_queue, get_task_queue, init_ohlcv_task_queue, get_ohlcv_task_queue
-    init_task_queue(max_workers=8)
-    logger.info("Main task queue initialized with 8 workers")
+    init_task_queue(max_workers=8, exclude_task_types=['ohlcv_cache_fetch'])
+    logger.info("Main task queue initialized with 8 workers (excludes ohlcv_cache_fetch)")
 
     # Register task handlers on the main queue
     from app.services.dataset_handler import handle_dataset_regeneration

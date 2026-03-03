@@ -50,19 +50,22 @@ class TaskQueueService:
         status = task_service.get_task_status(task_id)
     """
 
-    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, name: str = "TaskQueue"):
+    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, exclude_task_types: Optional[List[str]] = None, name: str = "TaskQueue"):
         """
         Initialize task queue service.
 
         Args:
             max_workers: Maximum concurrent task workers
             poll_interval: Seconds between queue polls
-            task_types: If set, only process tasks of these types (None = all types)
+            task_types: If set, ONLY process tasks of these types (whitelist)
+            exclude_task_types: If set, NEVER process tasks of these types (blacklist)
+                                Ignored when task_types is also set.
             name: Queue name for logging
         """
         self.max_workers = max_workers
         self.poll_interval = poll_interval
         self.task_types = task_types
+        self.exclude_task_types = exclude_task_types
         self.name = name
         self._handlers: Dict[str, Callable] = {}
         self._running = False
@@ -506,9 +509,12 @@ class TaskQueueService:
                         TaskQueue.scheduled_at <= now
                     )
                 ]
-                # If this queue is restricted to certain task types, filter accordingly
+                # Whitelist: only claim these task types
                 if self.task_types:
                     filters.append(TaskQueue.task_type.in_(self.task_types))
+                # Blacklist: never claim these task types (ignored when whitelist is set)
+                elif self.exclude_task_types:
+                    filters.append(TaskQueue.task_type.notin_(self.exclude_task_types))
                 task = db.query(TaskQueue).filter(
                     and_(*filters)
                 ).order_by(
@@ -618,11 +624,11 @@ def get_task_queue() -> TaskQueueService:
     return _task_queue
 
 
-def init_task_queue(max_workers: int = 2):
+def init_task_queue(max_workers: int = 2, exclude_task_types: Optional[List[str]] = None):
     """Initialize and start the task queue."""
     import os
     global _task_queue
-    _task_queue = TaskQueueService(max_workers=max_workers, name="MainTaskQueue")
+    _task_queue = TaskQueueService(max_workers=max_workers, exclude_task_types=exclude_task_types, name="MainTaskQueue")
     # Skip starting workers in test mode to avoid race conditions with table creation
     if os.getenv('PYTEST_CURRENT_TEST') is None:
         _task_queue.recover_stuck_tasks()
