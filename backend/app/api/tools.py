@@ -1043,8 +1043,10 @@ async def fetch_ohlcv_cache(request: Dict[str, Any]):
     from app.services.task_queue import get_task_queue
 
     provider = request.get('provider', 'yfinance')
-    symbols = request.get('symbols', [])
+    symbols = [s.strip().upper() for s in request.get('symbols', []) if s.strip()]
     timeframes = request.get('timeframes', ['1d'])
+    parallel_jobs = int(request.get('parallel_jobs', 3))
+    executor_workers = int(request.get('executor_workers', 5))
 
     if not symbols:
         raise HTTPException(
@@ -1059,36 +1061,41 @@ async def fetch_ohlcv_cache(request: Dict[str, Any]):
         )
 
     task_queue = get_task_queue()
-    task_ids = []
 
-    for symbol in symbols:
-        symbol = symbol.strip().upper()
-        if not symbol:
-            continue
+    task_id = task_queue.queue_task(
+        task_type='ohlcv_cache_batch',
+        name=f'Cache OHLCV: {len(symbols)} symbols',
+        payload={
+            'provider': provider,
+            'symbols': symbols,
+            'timeframes': timeframes,
+            'start_date': request.get('start_date'),
+            'end_date': request.get('end_date'),
+            'parallel_jobs': parallel_jobs,
+            'executor_workers': executor_workers,
+        },
+        description=(
+            f'Fetch and cache OHLCV data for {len(symbols)} symbol(s) '
+            f'({", ".join(timeframes)}) — '
+            f'{parallel_jobs} parallel jobs, {executor_workers} gap-fill workers'
+        ),
+        max_retries=1,
+        timeout_seconds=3600,
+    )
 
-        task_id = task_queue.queue_task(
-            task_type='ohlcv_cache_fetch',
-            name=f'Cache OHLCV: {symbol}',
-            payload={
-                'provider': provider,
-                'symbol': symbol,
-                'timeframes': timeframes,
-                'start_date': request.get('start_date'),
-                'end_date': request.get('end_date'),
-            },
-            description=f'Fetch and cache OHLCV data for {symbol} ({", ".join(timeframes)})',
-            max_retries=1,
-            timeout_seconds=600
-        )
-        task_ids.append({'symbol': symbol, 'task_id': task_id})
-
-    logger.info(f"Queued {len(task_ids)} OHLCV cache fetch tasks")
+    logger.info(
+        f"Queued OHLCV batch task for {len(symbols)} symbols "
+        f"(parallel_jobs={parallel_jobs}, executor_workers={executor_workers})"
+    )
 
     return {
-        "task_ids": task_ids,
-        "count": len(task_ids),
+        "task_id": task_id,
+        "count": len(symbols),
+        "symbols": symbols,
         "provider": provider,
-        "timeframes": timeframes
+        "timeframes": timeframes,
+        "parallel_jobs": parallel_jobs,
+        "executor_workers": executor_workers,
     }
 
 

@@ -197,6 +197,7 @@ class MarketDataProviderInterface(ABC):
         end_date: datetime,
         interval: str = '1d',
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        executor_workers: int = 5,
     ) -> pd.DataFrame:
         """
         Fetch and cache OHLCV data for the requested range using a two-phase approach.
@@ -296,7 +297,7 @@ class MarketDataProviderInterface(ABC):
                     logger.warning(f"  Failed to fill gap {gs.date()}→{ge.date()}: {exc}")
                 return pd.DataFrame()
 
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=executor_workers) as executor:
                 future_to_gap = {
                     executor.submit(fetch_gap, gs, ge): (gs, ge)
                     for gs, ge in gaps_to_fill

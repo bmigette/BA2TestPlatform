@@ -58,23 +58,20 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
     # Base URL for FMP API
     BASE_URL = "https://financialmodelingprep.com/api/v3"
 
-    # Maximum calendar days per API request for each intraday interval.
+    # Maximum calendar days returned by FMP per API call for each intraday interval.
+    # Source: FMP developer docs (empirically verified).
     #
-    # IMPORTANT: FMP's intraday historical endpoint ignores the 'from' parameter
-    # and returns only the last ~1170 bars ending at 'to', regardless of the range
-    # requested.  For 1min this is ~3 calendar days; forward chunking by 30 days
-    # therefore leaves ~27-day gaps in every chunk.
-    #
-    # The _fetch_intraday_data method now uses backward stepping (to → oldest-1min)
-    # which is correct for ALL intervals and removes the need for a fixed chunk size.
-    # INTRADAY_CHUNK_DAYS is kept only for reference/legacy callers.
+    # _fetch_intraday_data uses these values to drive backward stepping:
+    # each iteration steps back (max_days - 1) days from the current chunk_end.
+    # The -1 day safety margin creates a 1-day overlap between consecutive
+    # windows, which drop_duplicates removes to ensure no data is missed.
     INTRADAY_CHUNK_DAYS: dict = {
-        "1min":  3,
-        "5min":  20,
-        "15min": 60,
-        "30min": 60,
-        "1hour": 60,
-        "4hour": 60,
+        "1min":   3,
+        "5min":  10,
+        "15min": 45,
+        "30min": 30,
+        "1hour": 90,
+        "4hour": 60,   # not in official docs; conservative estimate
     }
 
     # Chunk size for daily data requests.
@@ -303,6 +300,12 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         Returns:
             DataFrame with columns: Date, Open, High, Low, Close, Volume
         """
+        max_days = self.INTRADAY_CHUNK_DAYS.get(fmp_interval, 3)
+        # Step backward by (max_days - 1) each iteration: the -1 day safety
+        # margin creates a 1-day overlap between consecutive windows so no bar
+        # is ever missed at a day boundary.  drop_duplicates removes the overlap.
+        step_days = max(1, max_days - 1)
+
         chunks = []
         chunk_end = end_date
         prev_oldest = None
@@ -321,15 +324,16 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
         url = f"{self.BASE_URL}/historical-chart/{fmp_interval}/{symbol}"
 
         while True:
+            chunk_end_dt = chunk_end if isinstance(chunk_end, datetime) else chunk_end
             params = {
                 "apikey": self.api_key,
-                "from": start_date.strftime("%Y-%m-%d"),  # hint (FMP may ignore)
-                "to": chunk_end.strftime("%Y-%m-%d") if isinstance(chunk_end, datetime) else str(chunk_end),
+                "from": (chunk_end_dt - timedelta(days=max_days)).strftime("%Y-%m-%d"),
+                "to":   chunk_end_dt.strftime("%Y-%m-%d"),
             }
 
             logger.debug(
                 f"FMP intraday backward {symbol}/{fmp_interval}: "
-                f"to={chunk_end.date() if isinstance(chunk_end, datetime) else chunk_end}"
+                f"to={chunk_end_dt.date()}"
             )
 
             try:
@@ -338,7 +342,7 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                 data = response.json()
 
                 if not data or not isinstance(data, list):
-                    logger.debug(f"  No data returned for to={chunk_end}, stopping")
+                    logger.debug(f"  No data returned for to={chunk_end_dt.date()}, stopping")
                     break
 
                 chunk_df = pd.DataFrame(data)
@@ -360,25 +364,23 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
                     f"  Got {len(chunk_df)} bars: {oldest.date()} -> {newest.date()}"
                 )
 
-                # Guard against infinite loop (FMP returning same window)
+                # Guard against infinite loop (same window returned twice)
                 if prev_oldest is not None and oldest.date() >= prev_oldest.date():
                     logger.debug("  Oldest date did not advance, stopping")
                     break
                 prev_oldest = oldest
 
-                # Stop if we have covered start_date
+                # Stop once we have covered start_date (within tolerance)
                 if oldest <= start_ts + pd.Timedelta(days=self.COVERAGE_TOLERANCE_DAYS):
                     logger.debug("  Covered full range, stopping")
                     break
 
-                # Step backward: FMP 'to' is date-only, so step back one calendar
-                # day before the oldest bar's date.  This avoids re-fetching the
-                # same day and keeps the date strictly decreasing.
-                chunk_end = (oldest - timedelta(days=1)).to_pydatetime()
+                # Step backward by (max_days - 1): fixed, predictable, no day-by-day crawl
+                chunk_end = chunk_end_dt - timedelta(days=step_days)
 
             except Exception as e:
                 logger.warning(
-                    f"FMP intraday backward chunk to={chunk_end} failed: {e}"
+                    f"FMP intraday backward chunk to={chunk_end_dt.date()} failed: {e}"
                 )
                 break
 
