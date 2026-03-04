@@ -2337,13 +2337,6 @@ const Step3Summary: React.FC<Step3Props> = ({
 }) => {
   const hasWarnings = previewData?.targets.some(t => t.warnings.length > 0);
 
-  // (smart defaults are now handled in Step2 — Step3 is read-only)
-  // placeholder to suppress linter; remove when Step3 no longer references previewData hooks
-  React.useEffect(() => {
-    if (previewData && state.jobType === 'classification') {
-      // Distribution shift between train/test is a strong signal for weighted loss
-  }, []); // Step3 is read-only; no state updates here
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
