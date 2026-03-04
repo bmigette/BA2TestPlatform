@@ -16,7 +16,7 @@ import concurrent.futures
 
 from app.models.database import get_db, SessionLocal
 from app.models.dataset import Dataset, DatasetStatus
-from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate, DatasetRegenerate
+from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate, DatasetRegenerate, BatchRegenerateRequest
 from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
@@ -1991,6 +1991,79 @@ async def regenerate_dataset(
     db.refresh(dataset)
     return dataset
 
+
+
+@router.post("/batch-regenerate")
+async def batch_regenerate_datasets(
+    request: BatchRegenerateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Regenerate multiple datasets with the same options.
+
+    Each dataset is submitted to the shared background thread pool (max 5 workers).
+    Datasets are set to BUILDING status immediately; poll GET /datasets/{id} for progress.
+
+    Args:
+        request: List of dataset IDs and regeneration options
+        db: Database session
+
+    Returns:
+        Dict with queued_ids and count
+    """
+    regen_options = request.regenerate_options or DatasetRegenerate()
+    queued: list[tuple[int, dict]] = []  # (dataset_id, regen_config) pairs
+    not_found_ids = []
+
+    for dataset_id in request.dataset_ids:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            not_found_ids.append(dataset_id)
+            continue
+
+        gen_config = (dataset.generation_config or {}).copy()
+
+        if gen_config.get("original_start_date"):
+            start_date = datetime.strptime(gen_config["original_start_date"], "%Y-%m-%d")
+        else:
+            start_date = dataset.start_date
+
+        if gen_config.get("original_end_date"):
+            end_date = datetime.strptime(gen_config["original_end_date"], "%Y-%m-%d")
+        else:
+            end_date = dataset.end_date
+
+        regen_config = {
+            'regen_options': regen_options,
+            'ticker': dataset.ticker,
+            'timeframe': dataset.timeframe,
+            'file_path': dataset.file_path,
+            'technical_indicators': dataset.technical_indicators.copy() if dataset.technical_indicators else None,
+            'fundamentals_config': dataset.fundamentals_config.copy() if dataset.fundamentals_config else None,
+            'sentiment_config': dataset.sentiment_config.copy() if dataset.sentiment_config else None,
+            'gen_config': gen_config,
+            'start_date': start_date,
+            'end_date': end_date,
+        }
+
+        dataset.status = DatasetStatus.BUILDING.value
+        dataset.error_message = None
+        queued.append((dataset_id, regen_config))
+
+    db.commit()
+
+    # Submit each dataset with its own config to the thread pool
+    for dataset_id, regen_config in queued:
+        _dataset_executor.submit(_regenerate_dataset_in_background, dataset_id, regen_config)
+
+    queued_ids = [did for did, _ in queued]
+    logger.info(f"Batch regeneration queued for {len(queued_ids)} datasets: {queued_ids}")
+
+    return {
+        "queued_ids": queued_ids,
+        "count": len(queued_ids),
+        "not_found_ids": not_found_ids,
+    }
 
 
 @router.post("/{dataset_id}/duplicate", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)

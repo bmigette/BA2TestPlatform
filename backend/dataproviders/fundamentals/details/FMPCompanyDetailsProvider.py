@@ -163,7 +163,9 @@ class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
                             "total_shareholder_equity": stmt.get("totalStockholdersEquity"),
                             "retained_earnings": stmt.get("retainedEarnings"),
                             "common_stock": stmt.get("commonStock"),
-                            "common_stock_shares_outstanding": stmt.get("commonStock")  # FMP doesn't have separate field
+                            "common_stock_shares_outstanding": stmt.get("commonStock"),  # FMP doesn't have separate field
+                            "net_debt": stmt.get("netDebt"),
+                            "working_capital": stmt.get("workingCapital")
                         }
                         for stmt in filtered_statements
                     ]

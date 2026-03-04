@@ -6,6 +6,8 @@ import type { IndicatorData, NewsFrequency } from '../components/TradingChart';
 import PredictionTargetsPanel from '../components/PredictionTargetsPanel';
 import TargetSetModal from '../components/TargetSetModal';
 import type { CalculatedTarget, TargetConfig, TrendReversalTarget } from '../types/targets';
+import RegenerateDialog from '../components/RegenerateDialog';
+import type { RegenOptions } from '../components/RegenerateDialog';
 
 interface Dataset {
   id: number;
@@ -137,13 +139,6 @@ const DatasetDetails: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [showRegenerateModal, setShowRegenerateModal] = useState(false);
-  const [regenOptions, setRegenOptions] = useState({
-    regenerate_ohlcv: true,
-    regenerate_technical: true,
-    regenerate_sentiment: true,
-    regenerate_fundamentals: true,
-    regenerate_macro: true,
-  });
 
   // Prediction targets state (legacy - kept for backwards compatibility)
   const [predictionTargets, setPredictionTargets] = useState<PredictionTarget[]>([]);
@@ -274,7 +269,7 @@ const DatasetDetails: React.FC = () => {
   };
 
   // Handle dataset regeneration
-  const handleRegenerate = async () => {
+  const handleRegenerate = async (regenOptions: RegenOptions) => {
     if (!dataset) return;
 
     setIsRegenerating(true);
@@ -1734,159 +1729,11 @@ const DatasetDetails: React.FC = () => {
       />
 
       {/* Regenerate Dataset Modal */}
-      {showRegenerateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md m-4">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <RefreshCw size={20} className="text-orange-500" />
-                Regenerate Dataset
-              </h2>
-              <button
-                onClick={() => setShowRegenerateModal(false)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full"
-              >
-                <X size={20} className="text-gray-500" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                Select which components to regenerate. Unselected components will be preserved from the existing dataset.
-              </p>
-
-              <div className="space-y-3">
-                <label className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={regenOptions.regenerate_ohlcv}
-                    onChange={(e) => setRegenOptions({ ...regenOptions, regenerate_ohlcv: e.target.checked })}
-                    className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">OHLCV Data</span>
-                    <p className="text-xs text-gray-500">Re-fetch price data from provider</p>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={regenOptions.regenerate_technical}
-                    onChange={(e) => setRegenOptions({ ...regenOptions, regenerate_technical: e.target.checked })}
-                    className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">Technical Indicators</span>
-                    <p className="text-xs text-gray-500">Recalculate SMA, RSI, MACD, etc.</p>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={regenOptions.regenerate_sentiment}
-                    onChange={(e) => setRegenOptions({ ...regenOptions, regenerate_sentiment: e.target.checked })}
-                    className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">News & Sentiment</span>
-                    <p className="text-xs text-gray-500">Re-fetch and analyze news articles</p>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={regenOptions.regenerate_fundamentals}
-                    onChange={(e) => setRegenOptions({ ...regenOptions, regenerate_fundamentals: e.target.checked })}
-                    className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">Fundamentals</span>
-                    <p className="text-xs text-gray-500">Re-fetch financial statements & earnings</p>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={regenOptions.regenerate_macro}
-                    onChange={(e) => setRegenOptions({ ...regenOptions, regenerate_macro: e.target.checked })}
-                    className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">Macro Economic Data</span>
-                    <p className="text-xs text-gray-500">Re-fetch GDP, CPI, interest rates, etc.</p>
-                  </div>
-                </label>
-              </div>
-
-              {/* Quick actions */}
-              <div className="flex gap-2 mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <button
-                  onClick={() => setRegenOptions({
-                    regenerate_ohlcv: true,
-                    regenerate_technical: true,
-                    regenerate_sentiment: true,
-                    regenerate_fundamentals: true,
-                    regenerate_macro: true,
-                  })}
-                  className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                >
-                  Select All
-                </button>
-                <span className="text-gray-300 dark:text-gray-600">|</span>
-                <button
-                  onClick={() => setRegenOptions({
-                    regenerate_ohlcv: false,
-                    regenerate_technical: true,
-                    regenerate_sentiment: false,
-                    regenerate_fundamentals: false,
-                    regenerate_macro: true,
-                  })}
-                  className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                >
-                  TA & Macro Only
-                </button>
-                <span className="text-gray-300 dark:text-gray-600">|</span>
-                <button
-                  onClick={() => setRegenOptions({
-                    regenerate_ohlcv: false,
-                    regenerate_technical: false,
-                    regenerate_sentiment: false,
-                    regenerate_fundamentals: false,
-                    regenerate_macro: false,
-                  })}
-                  className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                >
-                  Clear All
-                </button>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-end gap-3 p-4 border-t border-gray-200 dark:border-gray-700">
-              <button
-                onClick={() => setShowRegenerateModal(false)}
-                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRegenerate}
-                disabled={!Object.values(regenOptions).some(v => v)}
-                className="px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                <RefreshCw size={16} />
-                Regenerate
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RegenerateDialog
+        isOpen={showRegenerateModal}
+        onClose={() => setShowRegenerateModal(false)}
+        onConfirm={handleRegenerate}
+      />
     </div>
   );
 };

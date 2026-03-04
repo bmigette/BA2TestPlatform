@@ -4,6 +4,8 @@ import { Plus, Trash2, RefreshCw, Copy, Edit, CheckCircle, AlertCircle, Loader }
 import DatasetWizard from '../components/DatasetWizard';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Toast from '../components/Toast';
+import RegenerateDialog from '../components/RegenerateDialog';
+import type { RegenOptions } from '../components/RegenerateDialog';
 
 interface Dataset {
   id: number;
@@ -36,6 +38,7 @@ const Datasets: React.FC = () => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+  const [batchRegenerateOpen, setBatchRegenerateOpen] = useState(false);
 
   const fetchDatasets = async () => {
     setIsLoading(true);
@@ -113,6 +116,27 @@ const Datasets: React.FC = () => {
     fetchDatasets();
   };
 
+  const handleBatchRegenerate = async (options: RegenOptions) => {
+    setBatchRegenerateOpen(false);
+    const ids = Array.from(selectedIds);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/datasets/batch-regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataset_ids: ids, regenerate_options: options }),
+      });
+
+      if (!response.ok) throw new Error('Batch regeneration failed');
+
+      const result = await response.json();
+      setToast({ message: `Queued ${result.count} dataset(s) for regeneration`, type: 'success' });
+      fetchDatasets();
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : 'An error occurred', type: 'error' });
+    }
+  };
+
   const toggleSelectAll = () => {
     if (selectedIds.size === datasets.length) {
       setSelectedIds(new Set());
@@ -177,13 +201,22 @@ const Datasets: React.FC = () => {
         <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Datasets</h1>
         <div className="flex space-x-2">
           {selectedIds.size > 0 && (
-            <button
-              onClick={() => setBulkDeleteConfirmOpen(true)}
-              className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 flex items-center space-x-2"
-            >
-              <Trash2 size={16} />
-              <span>Delete Selected ({selectedIds.size})</span>
-            </button>
+            <>
+              <button
+                onClick={() => setBatchRegenerateOpen(true)}
+                className="px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600 flex items-center space-x-2"
+              >
+                <RefreshCw size={16} />
+                <span>Regenerate Selected ({selectedIds.size})</span>
+              </button>
+              <button
+                onClick={() => setBulkDeleteConfirmOpen(true)}
+                className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 flex items-center space-x-2"
+              >
+                <Trash2 size={16} />
+                <span>Delete Selected ({selectedIds.size})</span>
+              </button>
+            </>
           )}
           <button
             onClick={fetchDatasets}
@@ -402,6 +435,15 @@ const Datasets: React.FC = () => {
         confirmText="Delete All"
         cancelText="Cancel"
         variant="danger"
+      />
+
+      <RegenerateDialog
+        isOpen={batchRegenerateOpen}
+        onClose={() => setBatchRegenerateOpen(false)}
+        onConfirm={handleBatchRegenerate}
+        title="Regenerate Datasets"
+        description={`${selectedIds.size} dataset(s) selected`}
+        confirmLabel={`Regenerate ${selectedIds.size} Dataset(s)`}
       />
 
       {toast && (

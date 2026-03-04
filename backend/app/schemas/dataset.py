@@ -51,6 +51,12 @@ class DatasetRegenerate(BaseModel):
     regenerate_macro: bool = Field(True, description="Re-fetch macro economic data")
 
 
+class BatchRegenerateRequest(BaseModel):
+    """Schema for batch dataset regeneration"""
+    dataset_ids: List[int] = Field(..., description="List of dataset IDs to regenerate")
+    regenerate_options: Optional[DatasetRegenerate] = Field(None, description="Regeneration options (default: regenerate all)")
+
+
 class DatasetResponse(BaseModel):
     """Schema for dataset response"""
     id: int

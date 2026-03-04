@@ -392,6 +392,8 @@ FMP_BALANCE_SHEET_MAPPING = {
     "common_stock": "common_stock",
     "retained_earnings": "retained_earnings",
     "common_stock_shares_outstanding": "shares_outstanding",
+    "net_debt": "net_debt",
+    "working_capital": "working_capital",
 }
 
 FMP_INCOME_STATEMENT_MAPPING = {
