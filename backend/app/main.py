@@ -243,9 +243,9 @@ async def startup_event():
         logger.warning(f"Could not initialize default collections: {e}")
 
     # Initialize task queue
-    from app.services.task_queue import init_task_queue, get_task_queue, init_ohlcv_task_queue, get_ohlcv_task_queue
-    init_task_queue(max_workers=8, exclude_task_types=['ohlcv_cache_fetch'])
-    logger.info("Main task queue initialized with 8 workers (excludes ohlcv_cache_fetch)")
+    from app.services.task_queue import init_task_queue, get_task_queue, init_ohlcv_task_queue, get_ohlcv_task_queue, init_training_task_queue, get_training_task_queue
+    init_task_queue(max_workers=8, exclude_task_types=['ohlcv_cache_fetch', 'training_job'])
+    logger.info("Main task queue initialized with 8 workers (excludes ohlcv_cache_fetch, training_job)")
 
     # Register task handlers on the main queue
     from app.services.dataset_handler import handle_dataset_regeneration
@@ -254,10 +254,15 @@ async def startup_event():
     from app.services.news_batch_handler import handle_news_batch_fetch
     task_queue = get_task_queue()
     task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
-    task_queue.register_handler('training_job', handle_training_job)
     task_queue.register_handler('backtest', handle_backtest)
     task_queue.register_handler('news_batch_fetch', handle_news_batch_fetch)
-    logger.info("Registered main task handlers: dataset_regeneration, training_job, backtest, news_batch_fetch")
+    logger.info("Registered main task handlers: dataset_regeneration, backtest, news_batch_fetch")
+
+    # Initialize dedicated training queue (2 workers — keeps GPU from being overloaded)
+    init_training_task_queue(max_workers=2)
+    training_queue = get_training_task_queue()
+    training_queue.register_handler('training_job', handle_training_job)
+    logger.info("Training task queue initialized with 2 workers")
 
     # Initialize dedicated OHLCV queue (isolated, resizable, won't affect other task types)
     from app.services.ohlcv_cache_handler import handle_ohlcv_cache_fetch

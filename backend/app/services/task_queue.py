@@ -638,6 +638,38 @@ def init_task_queue(max_workers: int = 2, exclude_task_types: Optional[List[str]
     return _task_queue
 
 
+# Dedicated training task queue — limited to 2 workers to avoid saturating GPU.
+_training_task_queue: Optional[TaskQueueService] = None
+
+
+def get_training_task_queue() -> TaskQueueService:
+    """Get the dedicated training task queue instance."""
+    global _training_task_queue
+    if _training_task_queue is None:
+        _training_task_queue = TaskQueueService(
+            max_workers=2,
+            task_types=['training_job'],
+            name="TrainingTaskQueue"
+        )
+    return _training_task_queue
+
+
+def init_training_task_queue(max_workers: int = 2):
+    """Initialize and start the dedicated training task queue."""
+    import os
+    global _training_task_queue
+    _training_task_queue = TaskQueueService(
+        max_workers=max_workers,
+        task_types=['training_job'],
+        name="TrainingTaskQueue"
+    )
+    if os.getenv('PYTEST_CURRENT_TEST') is None:
+        _training_task_queue.start()
+    else:
+        logger.info("Test mode detected - skipping training task queue worker startup")
+    return _training_task_queue
+
+
 # Dedicated OHLCV task queue — isolated so it can be resized without affecting
 # training jobs, backtests, or other task types.
 _ohlcv_task_queue: Optional[TaskQueueService] = None

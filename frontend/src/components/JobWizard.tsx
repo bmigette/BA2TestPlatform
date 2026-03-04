@@ -2457,7 +2457,10 @@ const Step3Summary: React.FC<Step3Props> = ({
             <Sliders size={16} />
             <span>Threshold Optimization</span>
           </h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+            The probability cutoff at which the model predicts a positive signal (1). The optimizer searches the range [Min, Max] in Step increments and picks the threshold that maximises your chosen metric.
+          </p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
             Smart defaults for {state.metricsConfig.classificationMetric || 'F1'} with{' '}
             {previewData?.targets?.length > 0
               ? `${(previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length).toFixed(1)}%`
