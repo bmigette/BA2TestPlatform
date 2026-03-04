@@ -344,7 +344,7 @@ const Backtesting: React.FC = () => {
           endDate: d.end_date,
           rowsCount: d.rows_count
         }));
-        setDatasets(transformedDatasets);
+        setDatasets(transformedDatasets.slice().sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)));
       }
 
       if (strategiesRes.ok) {

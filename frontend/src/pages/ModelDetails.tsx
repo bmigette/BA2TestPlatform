@@ -186,7 +186,7 @@ const ModelDetails: React.FC = () => {
       const res = await fetch(`${API_BASE}/datasets`);
       if (res.ok) {
         const data = await res.json();
-        setDatasets(data.datasets || []);
+        setDatasets((data.datasets || []).slice().sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)));
       }
     } catch (err) {
       console.error('Failed to fetch datasets:', err);

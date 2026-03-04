@@ -49,7 +49,7 @@ const Datasets: React.FC = () => {
         throw new Error('Failed to fetch datasets');
       }
       const data = await response.json();
-      setDatasets(data.datasets);
+      setDatasets((data.datasets || []).slice().sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)));
       setSelectedIds(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
