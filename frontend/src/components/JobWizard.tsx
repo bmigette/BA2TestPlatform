@@ -1897,19 +1897,29 @@ const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
     return true;
   });
 
-  // Smart defaults: auto-select loss function and threshold range based on data
+  // Smart defaults: auto-select metric, loss function, and threshold range based on data
   React.useEffect(() => {
     if (previewData && state.jobType === 'classification') {
+      // Recommend metric based on average positive class ratio
+      let recommendedMetric: string;
+      if (avgPositivePct >= 42 && avgPositivePct <= 58) {
+        recommendedMetric = 'accuracy'; // well-balanced
+      } else if (avgPositivePct >= 35 && avgPositivePct <= 65) {
+        recommendedMetric = 'balanced_accuracy'; // mild imbalance
+      } else {
+        recommendedMetric = 'f1_score'; // high imbalance
+      }
+
       let recommendedLoss = hasDistributionShift
         ? 'weighted_cross_entropy'
         : isImbalanced ? 'focal_loss' : 'cross_entropy';
       if (isMultistepOnly && recommendedLoss === 'focal_loss') {
         recommendedLoss = isImbalanced ? 'weighted_cross_entropy' : 'cross_entropy';
       }
-      const metric = state.metricsConfig.classificationMetric || 'f1_score';
+      const metric = state.metricsConfig.classificationMetric || recommendedMetric;
       const totalPositive = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0);
       const totalSamples = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0);
-      const positiveRatio = totalSamples > 0 ? totalPositive / totalSamples : 0.1;
+      const positiveRatio = totalSamples > 0 ? totalPositive / totalSamples : 0.5;
       let suggestedThresholdMin: number;
       let suggestedThresholdMax: number;
       if (metric === 'recall') {
@@ -1924,18 +1934,21 @@ const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
       const allLossesValid = currentLossFunctions.every(l => availableLossFunctions.some(a => a.id === l));
       const shouldUpdateLoss = !allLossesValid;
       const shouldUpdateThreshold = state.metricsConfig.thresholdMin === undefined;
-      if (shouldUpdateLoss || shouldUpdateThreshold) {
+      // Only auto-select metric if still at the default (f1_score) — don't override user choice
+      const shouldUpdateMetric = state.metricsConfig.classificationMetric === 'f1_score' || state.metricsConfig.classificationMetric === undefined;
+      if (shouldUpdateLoss || shouldUpdateThreshold || shouldUpdateMetric) {
         setState(prev => ({
           ...prev,
           metricsConfig: {
             ...prev.metricsConfig,
+            ...(shouldUpdateMetric ? { classificationMetric: recommendedMetric, optimizeMetric: recommendedMetric } : {}),
             ...(shouldUpdateLoss ? { lossFunction: recommendedLoss, lossFunctions: [recommendedLoss], optimizeLossFunction: false } : {}),
             ...(shouldUpdateThreshold ? { thresholdMin: suggestedThresholdMin, thresholdMax: suggestedThresholdMax, thresholdStep: 0.1 } : {}),
           }
         }));
       }
     }
-  }, [previewData, isImbalanced, hasDistributionShift, isMultistepOnly, state.metricsConfig.classificationMetric]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewData, isImbalanced, hasDistributionShift, isMultistepOnly, avgPositivePct]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
