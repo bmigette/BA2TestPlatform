@@ -451,7 +451,7 @@ const JobWizard: React.FC<JobWizardProps> = ({
 
   // Refetch preview when prediction targets change (e.g., from loading a profile)
   useEffect(() => {
-    if (currentStep === 3 && state.predictionTargets.length > 0 && state.selectedDatasetIds.length > 0) {
+    if (currentStep === 2 && state.predictionTargets.length > 0 && state.selectedDatasetIds.length > 0) {
       fetchPreview();
     }
   }, [currentStep, state.predictionTargets, state.selectedDatasetIds, fetchPreview]);
@@ -797,17 +797,16 @@ const JobWizard: React.FC<JobWizardProps> = ({
                 state={state}
                 setState={setState}
                 calculateCombinations={calculateCombinations}
+                previewData={previewData}
+                previewLoading={previewLoading}
+                previewError={previewError}
               />
             )}
             {currentStep === 3 && (
               <Step3Summary
                 state={state}
-                setState={setState}
-                selectedDataset={selectedDataset}
                 selectedDatasets={selectedDatasets}
                 previewData={previewData}
-                previewLoading={previewLoading}
-                previewError={previewError}
                 calculateCombinations={calculateCombinations}
                 availableModels={availableModels}
               />
@@ -1870,13 +1869,74 @@ interface Step2GeneticProps {
   state: ReturnType<typeof getDefaultState>;
   setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
   calculateCombinations: () => number;
+  previewData: PreviewResponse | null;
+  previewLoading: boolean;
+  previewError: string | null;
 }
 
 const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
   state,
   setState,
   calculateCombinations,
+  previewData,
+  previewLoading,
+  previewError,
 }) => {
+  const isImbalanced = previewData?.targets.some(t => t.train_positive_pct < 20 || t.train_positive_pct > 80) ?? false;
+  const avgPositivePct = previewData?.targets.length
+    ? previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length
+    : 50;
+  const DISTRIBUTION_SHIFT_THRESHOLD = 15;
+  const targetsWithDistributionShift = previewData?.targets.filter(t =>
+    Math.abs(t.train_positive_pct - t.test_positive_pct) > DISTRIBUTION_SHIFT_THRESHOLD
+  ) ?? [];
+  const hasDistributionShift = targetsWithDistributionShift.length > 0;
+  const isMultistepOnly = state.predictionModes.length === 1 && state.predictionModes.includes('multistep');
+  const availableLossFunctions = LOSS_FUNCTIONS.filter(loss => {
+    if (isMultistepOnly && !loss.supportsMultistep) return false;
+    return true;
+  });
+
+  // Smart defaults: auto-select loss function and threshold range based on data
+  React.useEffect(() => {
+    if (previewData && state.jobType === 'classification') {
+      let recommendedLoss = hasDistributionShift
+        ? 'weighted_cross_entropy'
+        : isImbalanced ? 'focal_loss' : 'cross_entropy';
+      if (isMultistepOnly && recommendedLoss === 'focal_loss') {
+        recommendedLoss = isImbalanced ? 'weighted_cross_entropy' : 'cross_entropy';
+      }
+      const metric = state.metricsConfig.classificationMetric || 'f1_score';
+      const totalPositive = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0);
+      const totalSamples = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0);
+      const positiveRatio = totalSamples > 0 ? totalPositive / totalSamples : 0.1;
+      let suggestedThresholdMin: number;
+      let suggestedThresholdMax: number;
+      if (metric === 'recall') {
+        suggestedThresholdMin = 0.1; suggestedThresholdMax = 0.4;
+      } else if (metric === 'precision') {
+        suggestedThresholdMin = 0.4; suggestedThresholdMax = 0.7;
+      } else {
+        suggestedThresholdMin = Math.max(0.1, Math.round(positiveRatio * 10) / 10);
+        suggestedThresholdMax = Math.min(0.7, suggestedThresholdMin + 0.3);
+      }
+      const currentLossFunctions = state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction || 'focal_loss'];
+      const allLossesValid = currentLossFunctions.every(l => availableLossFunctions.some(a => a.id === l));
+      const shouldUpdateLoss = !allLossesValid;
+      const shouldUpdateThreshold = state.metricsConfig.thresholdMin === undefined;
+      if (shouldUpdateLoss || shouldUpdateThreshold) {
+        setState(prev => ({
+          ...prev,
+          metricsConfig: {
+            ...prev.metricsConfig,
+            ...(shouldUpdateLoss ? { lossFunction: recommendedLoss, lossFunctions: [recommendedLoss], optimizeLossFunction: false } : {}),
+            ...(shouldUpdateThreshold ? { thresholdMin: suggestedThresholdMin, thresholdMax: suggestedThresholdMax, thresholdStep: 0.1 } : {}),
+          }
+        }));
+      }
+    }
+  }, [previewData, isImbalanced, hasDistributionShift, isMultistepOnly, state.metricsConfig.classificationMetric]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="space-y-6">
       {/* Genetic Algorithm Config */}
@@ -2064,130 +2124,233 @@ const Step2GeneticOptimization: React.FC<Step2GeneticProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Dataset Distribution & Loss/Threshold (classification only) */}
+      {state.jobType === 'classification' && (
+        <>
+          {/* Distribution Stats */}
+          <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
+              <Target size={16} />
+              <span>Dataset Distribution</span>
+            </h4>
+            {previewLoading ? (
+              <div className="flex items-center space-x-2 text-gray-500 text-sm py-2">
+                <Loader2 size={16} className="animate-spin" />
+                <span>Analyzing targets...</span>
+              </div>
+            ) : previewError ? (
+              <div className="text-red-500 text-sm">{previewError}</div>
+            ) : previewData ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div><span className="text-gray-500">Total rows:</span> <span className="font-medium">{previewData.dataset_rows.toLocaleString()}</span></div>
+                  <div><span className="text-gray-500">Train:</span> <span className="font-medium">{previewData.train_rows.toLocaleString()}</span></div>
+                  <div><span className="text-gray-500">Test:</span> <span className="font-medium">{previewData.test_rows.toLocaleString()}</span></div>
+                </div>
+                {previewData.targets.map((target, idx) => (
+                  <div key={`${target.name}-${idx}`} className={`p-3 rounded-lg border text-sm ${target.warnings.length > 0 ? 'border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/10' : 'border-gray-200 dark:border-gray-600'}`}>
+                    <div className="font-medium mb-1">{target.label}</div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-gray-500">Train:</span>
+                        <span className={`ml-1 font-medium ${target.train_positive === 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {target.train_positive} pos ({target.train_positive_pct}%)
+                        </span>
+                        <span className="text-gray-400"> / {target.train_negative} neg</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Test:</span>
+                        <span className={`ml-1 font-medium ${target.test_positive === 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {target.test_positive} pos ({target.test_positive_pct}%)
+                        </span>
+                        <span className="text-gray-400"> / {target.test_negative} neg</span>
+                      </div>
+                    </div>
+                    {target.warnings.map((w, wi) => (
+                      <div key={wi} className="flex items-start space-x-1 mt-1 text-xs text-amber-600 dark:text-amber-400">
+                        <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+                        <span>{w}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">Select targets in step 1 to see distribution.</p>
+            )}
+          </div>
+
+          {/* Training Loss Function */}
+          {previewData && (
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
+                <Zap size={16} />
+                <span>Training Loss Function</span>
+                {isImbalanced && (
+                  <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full text-xs">
+                    Imbalanced data detected
+                  </span>
+                )}
+              </h4>
+              <div className="mb-3 p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600 dark:text-gray-400">Average positive rate:</span>
+                  <span className={`font-medium ${avgPositivePct < 20 || avgPositivePct > 80 ? 'text-amber-600' : 'text-green-600'}`}>
+                    {avgPositivePct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  {hasDistributionShift
+                    ? 'Distribution shift detected between train and test. Weighted BCE is recommended.'
+                    : isImbalanced
+                      ? 'Imbalanced data. Focal Loss or Weighted BCE are recommended.'
+                      : 'Balanced data. Standard Cross Entropy should work well.'}
+                </div>
+              </div>
+              {hasDistributionShift && (
+                <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                  <div className="flex items-start gap-2 text-xs">
+                    <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-amber-800 dark:text-amber-200">Train/Test Distribution Shift</p>
+                      {targetsWithDistributionShift.map((t, i) => (
+                        <p key={i} className="text-amber-700 dark:text-amber-300 mt-0.5">
+                          <strong>{t.label}</strong>: Train {t.train_positive_pct.toFixed(1)}% → Test {t.test_positive_pct.toFixed(1)}% (Δ{Math.abs(t.train_positive_pct - t.test_positive_pct).toFixed(1)}%)
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {isMultistepOnly && (
+                <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+                  <strong>Note:</strong> Focal Loss is not available for Multi-Step mode.
+                </div>
+              )}
+              <div className="space-y-2">
+                {availableLossFunctions.map((loss) => {
+                  const isSelected = (state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction]).includes(loss.id);
+                  return (
+                    <label key={loss.id} className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20' : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'}`}>
+                      <input type="checkbox" checked={isSelected} onChange={() => {
+                        setState(prev => {
+                          const currentLosses = prev.metricsConfig.lossFunctions || [prev.metricsConfig.lossFunction || 'focal_loss'];
+                          let newLosses = isSelected ? currentLosses.filter(l => l !== loss.id) : [...currentLosses, loss.id];
+                          if (newLosses.length === 0) newLosses = [loss.id];
+                          return { ...prev, metricsConfig: { ...prev.metricsConfig, lossFunctions: newLosses, lossFunction: newLosses[0], optimizeLossFunction: newLosses.length > 1 } };
+                        });
+                      }} className="mt-1 w-4 h-4 text-purple-600 rounded" />
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-medium text-sm">{loss.name}</span>
+                          {((hasDistributionShift && loss.id === 'weighted_cross_entropy') ||
+                            (!hasDistributionShift && loss.forImbalanced && isImbalanced) ||
+                            (!hasDistributionShift && !loss.forImbalanced && !isImbalanced)) && (
+                            <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">Recommended</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">{loss.description}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              {(state.metricsConfig.lossFunctions?.length || 0) > 1 && (
+                <div className="mt-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded border border-purple-200 dark:border-purple-800 text-xs text-purple-700 dark:text-purple-300 flex items-center space-x-2">
+                  <Info size={14} />
+                  <span>GA will optimize across {state.metricsConfig.lossFunctions?.length} selected loss functions</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Threshold Optimization */}
+          {previewData && (
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center space-x-2">
+                <Sliders size={16} />
+                <span>Threshold Optimization</span>
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                The probability cutoff at which the model predicts a positive signal (1). The optimizer searches the range [Min, Max] in Step increments and picks the threshold that maximises your chosen metric.
+              </p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                Smart defaults for {state.metricsConfig.classificationMetric || 'F1'} with {avgPositivePct.toFixed(1)}% positive class
+              </p>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Min</label>
+                  <select value={state.metricsConfig.thresholdMin || 0.3} onChange={(e) => setState(prev => ({ ...prev, metricsConfig: { ...prev.metricsConfig, thresholdMin: parseFloat(e.target.value) } }))} className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800">
+                    {[0.1, 0.2, 0.3, 0.4, 0.5, 0.6].map(v => <option key={v} value={v}>{v.toFixed(1)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Max</label>
+                  <select value={state.metricsConfig.thresholdMax || 0.6} onChange={(e) => setState(prev => ({ ...prev, metricsConfig: { ...prev.metricsConfig, thresholdMax: parseFloat(e.target.value) } }))} className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800">
+                    {[0.3, 0.4, 0.5, 0.6, 0.7, 0.8].map(v => <option key={v} value={v}>{v.toFixed(1)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Step</label>
+                  <select value={state.metricsConfig.thresholdStep || 0.1} onChange={(e) => setState(prev => ({ ...prev, metricsConfig: { ...prev.metricsConfig, thresholdStep: parseFloat(e.target.value) } }))} className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800">
+                    {[0.05, 0.1, 0.2].map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+              <button type="button" onClick={() => {
+                const metric = state.metricsConfig.classificationMetric || 'f1_score';
+                const totalPos = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0);
+                const totalSamp = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0);
+                const positiveRatio = totalSamp > 0 ? totalPos / totalSamp : 0.1;
+                let min: number, max: number;
+                if (metric === 'recall') { min = 0.1; max = 0.4; }
+                else if (metric === 'precision') { min = 0.4; max = 0.7; }
+                else { min = Math.max(0.1, Math.round(positiveRatio * 10) / 10); max = Math.min(0.7, min + 0.3); }
+                setState(prev => ({ ...prev, metricsConfig: { ...prev.metricsConfig, thresholdMin: min, thresholdMax: max, thresholdStep: 0.1 } }));
+              }} className="mt-3 text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400">
+                Reset to suggested
+              </button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
 
-// Step 3: Summary Component
+// Step 3: Summary Component (read-only review before launch)
 interface Step3Props {
   state: ReturnType<typeof getDefaultState>;
-  setState: React.Dispatch<React.SetStateAction<ReturnType<typeof getDefaultState>>>;
-  selectedDataset: Dataset | undefined;
   selectedDatasets: Dataset[];
   previewData: PreviewResponse | null;
-  previewLoading: boolean;
-  previewError: string | null;
   calculateCombinations: () => number;
   availableModels: Array<{id: string, name: string, description: string}>;
 }
 
 const Step3Summary: React.FC<Step3Props> = ({
   state,
-  setState,
-  selectedDataset,
   selectedDatasets,
   previewData,
-  previewLoading,
-  previewError,
   calculateCombinations,
   availableModels,
 }) => {
   const hasWarnings = previewData?.targets.some(t => t.warnings.length > 0);
 
-  // Calculate overall imbalance from preview data
-  const isImbalanced = previewData?.targets.some(t => t.train_positive_pct < 20 || t.train_positive_pct > 80) ?? false;
-  const avgPositivePct = previewData?.targets.length
-    ? previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length
-    : 50;
-
-  // Detect distribution shift between train and test (>15% difference is significant)
-  const DISTRIBUTION_SHIFT_THRESHOLD = 15;
-  const targetsWithDistributionShift = previewData?.targets.filter(t =>
-    Math.abs(t.train_positive_pct - t.test_positive_pct) > DISTRIBUTION_SHIFT_THRESHOLD
-  ) ?? [];
-  const hasDistributionShift = targetsWithDistributionShift.length > 0;
-
-  // Check if multistep-only mode (focal loss not supported)
-  const isMultistepOnly = state.predictionModes.length === 1 && state.predictionModes.includes('multistep');
-
-  // Filter loss functions based on prediction mode compatibility
-  const availableLossFunctions = LOSS_FUNCTIONS.filter(loss => {
-    if (isMultistepOnly && !loss.supportsMultistep) {
-      return false;
-    }
-    return true;
-  });
-
-  // Auto-select loss function and threshold range based on imbalance and metric
+  // (smart defaults are now handled in Step2 — Step3 is read-only)
+  // placeholder to suppress linter; remove when Step3 no longer references previewData hooks
   React.useEffect(() => {
     if (previewData && state.jobType === 'classification') {
       // Distribution shift between train/test is a strong signal for weighted loss
-      // It means the model will face different class proportions at inference time
-      let recommendedLoss = hasDistributionShift
-        ? 'weighted_cross_entropy'  // Best for distribution shift
-        : isImbalanced ? 'focal_loss' : 'cross_entropy';
-
-      // If focal_loss is not compatible with current mode, fall back
-      if (isMultistepOnly && recommendedLoss === 'focal_loss') {
-        recommendedLoss = isImbalanced ? 'weighted_cross_entropy' : 'cross_entropy';
-      }
-
-      // Calculate smart threshold defaults based on metric and class imbalance
-      const metric = state.metricsConfig.classificationMetric || 'f1_score';
-      // Calculate positive ratio from targets
-      const totalPositive = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0);
-      const totalSamples = previewData.targets.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0);
-      const positiveRatio = totalSamples > 0 ? totalPositive / totalSamples : 0.1;
-
-      let suggestedThresholdMin: number;
-      let suggestedThresholdMax: number;
-
-      if (metric === 'recall') {
-        // Recall: bias low to catch more positives
-        suggestedThresholdMin = 0.1;
-        suggestedThresholdMax = 0.4;
-      } else if (metric === 'precision') {
-        // Precision: bias high for confident predictions
-        suggestedThresholdMin = 0.4;
-        suggestedThresholdMax = 0.7;
-      } else {
-        // F1/Accuracy/MCC: optimize around class ratio
-        suggestedThresholdMin = Math.max(0.1, Math.round(positiveRatio * 10) / 10);
-        suggestedThresholdMax = Math.min(0.7, suggestedThresholdMin + 0.3);
-      }
-
-      // Only update if current selection is invalid or threshold not set
-      const currentLossFunctions = state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction || 'focal_loss'];
-      const allLossesValid = currentLossFunctions.every(l => availableLossFunctions.some(a => a.id === l));
-      const shouldUpdateLoss = !allLossesValid;
-      const shouldUpdateThreshold = state.metricsConfig.thresholdMin === undefined;
-
-      if (shouldUpdateLoss || shouldUpdateThreshold) {
-        setState(prev => ({
-          ...prev,
-          metricsConfig: {
-            ...prev.metricsConfig,
-            ...(shouldUpdateLoss ? {
-              lossFunction: recommendedLoss,
-              lossFunctions: [recommendedLoss],
-              optimizeLossFunction: false,
-            } : {}),
-            ...(shouldUpdateThreshold ? {
-              thresholdMin: suggestedThresholdMin,
-              thresholdMax: suggestedThresholdMax,
-              thresholdStep: 0.1,
-            } : {}),
-          }
-        }));
-      }
-    }
-  }, [previewData, isImbalanced, hasDistributionShift, isMultistepOnly, state.metricsConfig.classificationMetric]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // Step3 is read-only; no state updates here
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Job Summary</h3>
-        {/* Job Type Badge */}
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Job Summary</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Review your settings before starting the optimization.</p>
+        </div>
         <span className={`px-3 py-1 rounded-full text-sm font-medium ${
           state.jobType === 'classification'
             ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
@@ -2197,20 +2360,18 @@ const Step3Summary: React.FC<Step3Props> = ({
         </span>
       </div>
 
-      {/* Dataset */}
+      {/* Datasets */}
       <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
         <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center space-x-2">
           <Database size={16} />
           <span>Dataset{selectedDatasets.length > 1 ? 's' : ''}</span>
         </h4>
-        {selectedDatasets.length > 0 && (
-          <div className="grid grid-cols-4 gap-4 text-sm">
-            <div><span className="text-gray-500">Datasets:</span> <span className="font-medium">{selectedDatasets.length}</span></div>
-            <div><span className="text-gray-500">Tickers:</span> <span className="font-medium">{[...new Set(selectedDatasets.map(d => d.ticker))].join(', ')}</span></div>
-            <div><span className="text-gray-500">Total Rows:</span> <span className="font-medium">{selectedDatasets.reduce((sum, d) => sum + d.rows_count, 0).toLocaleString()}</span></div>
-            <div><span className="text-gray-500">Split:</span> <span className="font-medium">{state.trainTestSplit}% / {100 - state.trainTestSplit}%</span></div>
-          </div>
-        )}
+        <div className="grid grid-cols-4 gap-3 text-sm">
+          <div><span className="text-gray-500">Count:</span> <span className="font-medium">{selectedDatasets.length}</span></div>
+          <div><span className="text-gray-500">Tickers:</span> <span className="font-medium">{[...new Set(selectedDatasets.map(d => d.ticker))].join(', ')}</span></div>
+          <div><span className="text-gray-500">Rows:</span> <span className="font-medium">{selectedDatasets.reduce((sum, d) => sum + d.rows_count, 0).toLocaleString()}</span></div>
+          <div><span className="text-gray-500">Split:</span> <span className="font-medium">{state.trainTestSplit}% / {100 - state.trainTestSplit}%</span></div>
+        </div>
       </div>
 
       {/* Models */}
@@ -2235,9 +2396,9 @@ const Step3Summary: React.FC<Step3Props> = ({
         </div>
       </div>
 
-      {/* Prediction Targets Preview */}
+      {/* Targets */}
       <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
+        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center space-x-2">
           <Target size={16} />
           <span>Prediction Targets ({previewData?.targets?.length || state.predictionTargets.length})</span>
           {hasWarnings && (
@@ -2248,298 +2409,42 @@ const Step3Summary: React.FC<Step3Props> = ({
           )}
         </h4>
 
-        {previewLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="animate-spin text-gray-400" size={24} />
-            <span className="ml-2 text-gray-500">Analyzing targets...</span>
-          </div>
-        ) : previewError ? (
-          <div className="text-red-500 text-sm">{previewError}</div>
-        ) : previewData ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4 text-sm">
-              <div><span className="text-gray-500">Total Rows:</span> <span className="font-medium">{previewData.dataset_rows.toLocaleString()}</span></div>
-              <div><span className="text-gray-500">Train:</span> <span className="font-medium">{previewData.train_rows.toLocaleString()}</span></div>
-              <div><span className="text-gray-500">Test:</span> <span className="font-medium">{previewData.test_rows.toLocaleString()}</span></div>
-            </div>
-
-            {previewData.targets.map((target, idx) => (
-              <div key={`${target.name}-${idx}`} className={`p-4 rounded-lg border ${target.warnings.length > 0 ? 'border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/10' : 'border-gray-200 dark:border-gray-600'}`}>
-                <div className="font-medium text-sm mb-2">{target.label}</div>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-500">Train:</span>
-                    <span className={`ml-2 font-medium ${target.train_positive === 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {target.train_positive} positive ({target.train_positive_pct}%)
-                    </span>
-                    <span className="text-gray-400 ml-1">/ {target.train_negative} negative</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Test:</span>
-                    <span className={`ml-2 font-medium ${target.test_positive === 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {target.test_positive} positive ({target.test_positive_pct}%)
-                    </span>
-                    <span className="text-gray-400 ml-1">/ {target.test_negative} negative</span>
-                  </div>
-                </div>
-                {target.warnings.length > 0 && (
-                  <div className="mt-3 space-y-1">
-                    {target.warnings.map((warning, warnIdx) => (
-                      <div key={warnIdx} className="flex items-start space-x-2 text-sm text-amber-600 dark:text-amber-400">
-                        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
-                        <span>{warning}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-gray-500 text-sm">No preview data</div>
-        )}
+        <div className="flex flex-wrap gap-2 mt-1">
+          {(previewData?.targets || []).map((t, i) => (
+            <span key={i} className="px-2 py-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-300">
+              {t.label}
+            </span>
+          ))}
+        </div>
       </div>
 
-      {/* Training Loss Function - Classification Only */}
-      {state.jobType === 'classification' && previewData && (
+      {/* Optimization Summary (read-only) */}
+      {state.jobType === 'classification' && (
         <>
         <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
           <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center space-x-2">
             <Zap size={16} />
-            <span>Training Loss Function</span>
-            {isImbalanced && (
-              <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full text-xs">
-                Imbalanced data detected
-              </span>
-            )}
+            <span>Optimization</span>
           </h4>
 
-          {/* Data balance indicator */}
-          <div className="mb-4 p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600 dark:text-gray-400">Average positive rate:</span>
-              <span className={`font-medium ${
-                avgPositivePct < 20 || avgPositivePct > 80
-                  ? 'text-amber-600'
-                  : 'text-green-600'
-              }`}>
-                {avgPositivePct.toFixed(1)}%
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div><span className="text-gray-500">Metric:</span> <span className="font-medium">{state.metricsConfig.classificationMetric || 'f1_score'}</span></div>
+            <div>
+              <span className="text-gray-500">Loss:</span>{' '}
+              <span className="font-medium">
+                {(state.metricsConfig.lossFunctions?.length || 0) > 1
+                  ? `${state.metricsConfig.lossFunctions?.join(', ')} (GA optimized)`
+                  : (state.metricsConfig.lossFunction || 'focal_loss')}
               </span>
             </div>
-            <div className="mt-2 text-xs text-gray-500">
-              {hasDistributionShift
-                ? 'Distribution shift detected between train and test sets. Weighted BCE is recommended.'
-                : isImbalanced
-                  ? 'Your data is imbalanced. Focal Loss or Weighted BCE are recommended to handle rare positive samples.'
-                  : 'Your data appears balanced. Standard Cross Entropy should work well.'}
+            <div>
+              <span className="text-gray-500">Threshold:</span>{' '}
+              <span className="font-medium">
+                {state.metricsConfig.thresholdMin ?? 0.3} – {state.metricsConfig.thresholdMax ?? 0.6}
+                {' '}(step {state.metricsConfig.thresholdStep ?? 0.1})
+              </span>
             </div>
           </div>
-
-          {/* Distribution shift warning - when train/test have different class distributions */}
-          {hasDistributionShift && (
-            <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                <div className="text-xs">
-                  <p className="font-medium text-amber-800 dark:text-amber-200">Train/Test Distribution Shift Detected</p>
-                  <p className="text-amber-700 dark:text-amber-300 mt-1">
-                    The following targets have significantly different positive rates between train and test sets:
-                  </p>
-                  <ul className="mt-2 space-y-1">
-                    {targetsWithDistributionShift.map((t, idx) => (
-                      <li key={idx} className="text-amber-700 dark:text-amber-300">
-                        <strong>{t.label}</strong>: Train {t.train_positive_pct.toFixed(1)}% → Test {t.test_positive_pct.toFixed(1)}%
-                        <span className="text-amber-600 dark:text-amber-400 ml-1">
-                          (Δ{Math.abs(t.train_positive_pct - t.test_positive_pct).toFixed(1)}%)
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="mt-2 text-amber-700 dark:text-amber-200">
-                    <strong>Weighted BCE</strong> is recommended as it applies class weights that help the model generalize better when test data has different class proportions.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Note when loss functions are filtered */}
-          {isMultistepOnly && (
-            <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
-              <strong>Note:</strong> Focal Loss is not available for Multi-Step mode (not compatible with multi-label classification).
-              {isImbalanced && ' Weighted BCE is recommended for your imbalanced data.'}
-            </div>
-          )}
-
-          {/* Loss function options - multi-select checkboxes */}
-          <div className="space-y-2">
-            {availableLossFunctions.map((loss) => {
-              const isSelected = (state.metricsConfig.lossFunctions || [state.metricsConfig.lossFunction]).includes(loss.id);
-              return (
-                <label
-                  key={loss.id}
-                  className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                    isSelected
-                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
-                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => {
-                      setState(prev => {
-                        const currentLosses = prev.metricsConfig.lossFunctions || [prev.metricsConfig.lossFunction || 'focal_loss'];
-                        let newLosses: string[];
-                        if (isSelected) {
-                          // Remove (but keep at least one)
-                          newLosses = currentLosses.filter(l => l !== loss.id);
-                          if (newLosses.length === 0) newLosses = [loss.id];
-                        } else {
-                          // Add
-                          newLosses = [...currentLosses, loss.id];
-                        }
-                        return {
-                          ...prev,
-                          metricsConfig: {
-                            ...prev.metricsConfig,
-                            lossFunctions: newLosses,
-                            lossFunction: newLosses[0], // Keep backward compatibility
-                            // Auto-enable optimization when multiple selected, disable when single
-                            optimizeLossFunction: newLosses.length > 1,
-                          }
-                        };
-                      });
-                    }}
-                    className="mt-1 w-4 h-4 text-purple-600 rounded"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-medium text-sm">{loss.name}</span>
-                      {/* Distribution shift: recommend Weighted BCE */}
-                      {hasDistributionShift && loss.id === 'weighted_cross_entropy' && (
-                        <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
-                          Recommended
-                        </span>
-                      )}
-                      {/* Imbalanced (no shift): recommend Focal or Weighted */}
-                      {!hasDistributionShift && loss.forImbalanced && isImbalanced && (
-                        <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
-                          Recommended
-                        </span>
-                      )}
-                      {/* Balanced (no shift): recommend Cross Entropy */}
-                      {!hasDistributionShift && !loss.forImbalanced && !isImbalanced && (
-                        <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded text-xs">
-                          Recommended
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">{loss.description}</p>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-
-          {/* Info message when multiple loss functions selected */}
-          {(state.metricsConfig.lossFunctions?.length || 0) > 1 && (
-            <div className="mt-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded border border-purple-200 dark:border-purple-800 text-xs text-purple-700 dark:text-purple-300 flex items-center space-x-2">
-              <Info size={14} />
-              <span>GA will optimize across {state.metricsConfig.lossFunctions?.length} selected loss functions</span>
-            </div>
-          )}
-        </div>
-
-        {/* Threshold Optimization */}
-        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-          <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center space-x-2">
-            <Sliders size={16} />
-            <span>Threshold Optimization</span>
-          </h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-            The probability cutoff at which the model predicts a positive signal (1). The optimizer searches the range [Min, Max] in Step increments and picks the threshold that maximises your chosen metric.
-          </p>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
-            Smart defaults for {state.metricsConfig.classificationMetric || 'F1'} with{' '}
-            {previewData?.targets?.length > 0
-              ? `${(previewData.targets.reduce((sum, t) => sum + t.train_positive_pct, 0) / previewData.targets.length).toFixed(1)}%`
-              : '~10%'} positive class
-          </p>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Min</label>
-              <select
-                value={state.metricsConfig.thresholdMin || 0.3}
-                onChange={(e) => setState(prev => ({
-                  ...prev,
-                  metricsConfig: { ...prev.metricsConfig, thresholdMin: parseFloat(e.target.value) }
-                }))}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
-              >
-                {[0.1, 0.2, 0.3, 0.4, 0.5, 0.6].map(v => (
-                  <option key={v} value={v}>{v.toFixed(1)}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Max</label>
-              <select
-                value={state.metricsConfig.thresholdMax || 0.6}
-                onChange={(e) => setState(prev => ({
-                  ...prev,
-                  metricsConfig: { ...prev.metricsConfig, thresholdMax: parseFloat(e.target.value) }
-                }))}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
-              >
-                {[0.3, 0.4, 0.5, 0.6, 0.7, 0.8].map(v => (
-                  <option key={v} value={v}>{v.toFixed(1)}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Step</label>
-              <select
-                value={state.metricsConfig.thresholdStep || 0.1}
-                onChange={(e) => setState(prev => ({
-                  ...prev,
-                  metricsConfig: { ...prev.metricsConfig, thresholdStep: parseFloat(e.target.value) }
-                }))}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
-              >
-                {[0.05, 0.1, 0.2].map(v => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              // Recalculate suggested thresholds
-              const metric = state.metricsConfig.classificationMetric || 'f1_score';
-              // Calculate positive ratio from targets
-              const totalPos = previewData?.targets?.reduce((sum, t) => sum + t.train_positive + t.test_positive, 0) || 0;
-              const totalSamp = previewData?.targets?.reduce((sum, t) => sum + t.train_positive + t.train_negative + t.test_positive + t.test_negative, 0) || 0;
-              const positiveRatio = totalSamp > 0 ? totalPos / totalSamp : 0.1;
-              let min: number, max: number;
-              if (metric === 'recall') {
-                min = 0.1; max = 0.4;
-              } else if (metric === 'precision') {
-                min = 0.4; max = 0.7;
-              } else {
-                min = Math.max(0.1, Math.round(positiveRatio * 10) / 10);
-                max = Math.min(0.7, min + 0.3);
-              }
-              setState(prev => ({
-                ...prev,
-                metricsConfig: { ...prev.metricsConfig, thresholdMin: min, thresholdMax: max, thresholdStep: 0.1 }
-              }));
-            }}
-            className="mt-3 text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400"
-          >
-            Reset to suggested
-          </button>
         </div>
         </>
       )}

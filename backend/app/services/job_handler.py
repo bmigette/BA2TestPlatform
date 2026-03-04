@@ -1825,7 +1825,7 @@ def train_single_model(
     Returns:
         Training result dictionary
     """
-    from app.services.task_queue import get_task_queue
+    from app.services.task_queue import get_task_queue, get_training_task_queue
 
     # Initialize services
     ml_service = MLModelsService()
@@ -1919,9 +1919,10 @@ def train_single_model(
 
     def check_cancelled() -> bool:
         """Check if task was cancelled - uses short-lived DB session."""
-        task_queue = get_task_queue()
+        task_queue = get_training_task_queue()
         status = task_queue.get_task_status(task_id)
-        if status and status.get('status') in ['cancelled', 'paused']:
+        # Treat deleted task (status is None) the same as cancelled
+        if status is None or status.get('status') in ['cancelled', 'paused']:
             progress_state['cancelled'] = True
             return True
         return False
