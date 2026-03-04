@@ -103,7 +103,14 @@ def apply_technical_indicators(df: pd.DataFrame, indicators: list) -> pd.DataFra
     indicators_dict = {}
     for ind in indicators:
         ind_type = ind.get('type', ind.get('name', 'unknown'))
-        ind_name = ind.get('name', f"{ind_type}_{ind.get('period', '')}")
+        period = ind.get('period')
+        timeframe = ind.get('timeframe', '')
+        if period is not None:
+            ind_name = f"{ind_type}_{period}"
+        elif timeframe:
+            ind_name = f"{ind_type}_{timeframe}"
+        else:
+            ind_name = ind_type
         indicators_dict[ind_name] = ind
 
     return TechnicalIndicators.add_indicators_to_dataframe(df, indicators_dict)

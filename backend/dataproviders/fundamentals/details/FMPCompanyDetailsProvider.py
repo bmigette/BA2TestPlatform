@@ -165,7 +165,11 @@ class FMPCompanyDetailsProvider(CompanyFundamentalsDetailsInterface):
                             "common_stock": stmt.get("commonStock"),
                             "common_stock_shares_outstanding": stmt.get("commonStock"),  # FMP doesn't have separate field
                             "net_debt": stmt.get("netDebt"),
-                            "working_capital": stmt.get("workingCapital")
+                            "working_capital": (
+                                stmt["totalCurrentAssets"] - stmt["totalCurrentLiabilities"]
+                                if stmt.get("totalCurrentAssets") is not None and stmt.get("totalCurrentLiabilities") is not None
+                                else None
+                            )
                         }
                         for stmt in filtered_statements
                     ]

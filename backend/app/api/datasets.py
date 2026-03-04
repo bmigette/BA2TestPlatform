@@ -1663,7 +1663,7 @@ async def get_dataset_columns(dataset_id: int, db: Session = Depends(get_db)):
                              'OBV', 'VWAP', 'STOCH', 'WILLR', 'WILLIAMS', 'ROC', 'MOM', 'TRIX',
                              'DX', 'PLUS_DI', 'MINUS_DI', 'AROON', 'CMO', 'PPO', 'UO',
                              'SLOWK', 'SLOWD', 'FASTK', 'FASTD', 'UPPER', 'MIDDLE', 'LOWER',
-                             'REAL', 'BBAND']
+                             'REAL', 'BBAND', 'SAR', 'ZIGZAG', 'PIVOT', 'DONCHIAN', 'ADX_']
         fundamental_patterns = ['fundamental_', 'PE', 'EPS', 'FCF', 'Revenue', 'Debt', 'ROE', 'ROA',
                                'BookValue', 'Dividend', 'MarketCap', 'PB', 'PS',
                                'days_to', 'last_', 'next_']

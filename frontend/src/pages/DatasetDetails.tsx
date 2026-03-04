@@ -1200,6 +1200,7 @@ const DatasetDetails: React.FC = () => {
             predictionPreview={predictionPreview}
             calculatedTargets={calculatedTargets}
             indicatorData={indicatorData}
+            enabledIndicators={enabledIndicators}
             height={500}
             showAllTargets={showAllTargets}
           />

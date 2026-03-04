@@ -73,9 +73,15 @@ export interface TradingChartProps {
   } | null;
   calculatedTargets?: CalculatedTarget[];
   indicatorData?: IndicatorData;
+  enabledIndicators?: Set<string>;
   height?: number;
   showAllTargets?: boolean; // Show all target markers vs only transitions (default: false = transitions only)
 }
+
+const DYNAMIC_INDICATOR_COLORS = [
+  '#3B82F6', '#F97316', '#10B981', '#8B5CF6', '#EC4899',
+  '#06B6D4', '#F59E0B', '#6366F1', '#84CC16', '#EF4444',
+];
 
 const TradingChart: React.FC<TradingChartProps> = ({
   data,
@@ -84,6 +90,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
   trendData = [],
   calculatedTargets = [],
   indicatorData,
+  enabledIndicators,
   height = 500,
   showAllTargets = false, // Default: show only transitions (existing behavior)
 }) => {
@@ -724,6 +731,29 @@ const TradingChart: React.FC<TradingChartProps> = ({
       });
     }
 
+    // Dynamic indicator overlays from dataset columns
+    if (enabledIndicators && enabledIndicators.size > 0) {
+      let colorIdx = 0;
+      enabledIndicators.forEach(colName => {
+        const seriesData: LineData[] = data
+          .filter(d => d[colName] !== null && d[colName] !== undefined && !isNaN(Number(d[colName])))
+          .map(d => ({
+            time: toTime(d.Date),
+            value: d[colName] as number,
+          }));
+        if (seriesData.length === 0) return;
+        const dynSeries = chart.addSeries(LineSeries, {
+          color: DYNAMIC_INDICATOR_COLORS[colorIdx % DYNAMIC_INDICATOR_COLORS.length],
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          title: colName,
+        });
+        dynSeries.setData(seriesData);
+        colorIdx++;
+      });
+    }
+
     // Fit content
     chart.timeScale().fitContent();
 
@@ -746,7 +776,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       console.error('TradingChart error:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [data, indicators, height, toTime, calculateSMA, calculateBollinger, newsFrequencyByDate, trendData, calculatedTargets, indicatorData, showAllTargets]);
+  }, [data, indicators, height, toTime, calculateSMA, calculateBollinger, newsFrequencyByDate, trendData, calculatedTargets, indicatorData, enabledIndicators, showAllTargets]);
 
   if (error) {
     return (
