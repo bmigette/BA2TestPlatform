@@ -69,6 +69,9 @@ interface Model {
   threshold?: number; // Classification threshold (default 0.5)
   predictionTargets?: PredictionTarget[];
   predictionHorizon?: number;
+  datasetId?: number;
+  datasetName?: string;
+  symbol?: string;
   performanceMetrics: {
     accuracy: number;
     sharpeRatio: number | null;
@@ -185,6 +188,10 @@ const Backtesting: React.FC = () => {
   const [backtests, setBacktests] = useState<Backtest[]>([]);
 
   // Form state
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('');
+  const [selectedDatasetId, setSelectedDatasetId] = useState<number | ''>('');
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [showAllModels, setShowAllModels] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [predictionDatasetId, setPredictionDatasetId] = useState<number | ''>('');
   const [executionDatasetId, setExecutionDatasetId] = useState<number | ''>('');
@@ -366,13 +373,13 @@ const Backtesting: React.FC = () => {
   };
 
   const runBacktest = async () => {
-    if (!selectedModel) {
-      setError('Please select a model');
+    if (selectedModels.size === 0) {
+      setError('Please select at least one model');
       return;
     }
 
     if (!predictionDatasetId) {
-      setError('Please select a prediction dataset');
+      setError('Please select a dataset');
       return;
     }
 
@@ -425,12 +432,6 @@ const Backtesting: React.FC = () => {
       setRunning(true);
       setError(null);
 
-      // Get model numeric ID
-      const model = models.find(m => m.id === selectedModel);
-      if (!model) {
-        throw new Error('Selected model not found');
-      }
-
       // Build strategy params from current form state
       const strategyParams = {
         buyEntryConditions,
@@ -458,41 +459,47 @@ const Backtesting: React.FC = () => {
         initialSlStep: initialSlOptimize ? initialSlStep : null
       };
 
-      // Generate a random name for the backtest
-      const autoName = generateBacktestName();
+      // Submit one backtest per selected model
+      const modelIds = [...selectedModels];
+      let lastBacktest: Backtest | null = null;
 
-      const res = await fetch(`${API_BASE}/backtests`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: autoName,
-          model_id: selectedModel,  // String model ID like "mdl-abc123"
-          prediction_dataset_id: predictionDatasetId,
-          execution_dataset_id: executionDatasetId,
-          strategy_params: strategyParams,
-          start_date: startDate,
-          end_date: endDate,
-          initial_capital: initialCapital,
-          position_sizing_type: positionSizingType,
-          position_sizing_value: positionSizingValue,
-          commission,
-          slippage
-        })
-      });
+      for (const modelId of modelIds) {
+        const autoName = generateBacktestName();
+        const res = await fetch(`${API_BASE}/backtests`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: autoName,
+            model_id: modelId,
+            prediction_dataset_id: predictionDatasetId,
+            execution_dataset_id: executionDatasetId,
+            strategy_params: strategyParams,
+            start_date: startDate,
+            end_date: endDate,
+            initial_capital: initialCapital,
+            position_sizing_type: positionSizingType,
+            position_sizing_value: positionSizingValue,
+            commission,
+            slippage
+          })
+        });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to run backtest');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Failed to run backtest for model ${modelId}`);
+        }
+
+        const backtest = await res.json();
+        const detailsRes = await fetch(`${API_BASE}/backtests/${backtest.id}`);
+        if (detailsRes.ok) {
+          const details = await detailsRes.json();
+          setBacktests(prev => [details, ...prev]);
+          lastBacktest = details;
+        }
       }
 
-      const backtest = await res.json();
-
-      // Fetch full details with results
-      const detailsRes = await fetch(`${API_BASE}/backtests/${backtest.id}`);
-      if (detailsRes.ok) {
-        const details = await detailsRes.json();
-        setSelectedBacktest(details);
-        setBacktests(prev => [details, ...prev]);
+      if (lastBacktest) {
+        setSelectedBacktest(lastBacktest);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run backtest');
@@ -790,52 +797,131 @@ const Backtesting: React.FC = () => {
 
             {backtestCardTab === 'new' ? (
             <div className="space-y-4">
-              {/* Model Selection */}
+              {/* Step 1: Symbol Selection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  <Brain className="w-4 h-4 inline mr-1" />
-                  Select Model
+                  <TrendingUp className="w-4 h-4 inline mr-1" />
+                  Symbol
                 </label>
                 <select
-                  value={selectedModel}
-                  onChange={e => setSelectedModel(e.target.value)}
+                  value={selectedSymbol}
+                  onChange={e => {
+                    setSelectedSymbol(e.target.value);
+                    setSelectedDatasetId('');
+                    setSelectedModels(new Set());
+                    setSelectedModel('');
+                    setPredictionDatasetId('');
+                    setExecutionDatasetId('');
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  <option value="">-- Select a model --</option>
-                  {models.map(model => (
-                    <option key={model.id} value={model.id}>
-                      {model.name} ({model.modelType})
-                    </option>
+                  <option value="">-- Select a symbol --</option>
+                  {[...new Set(datasets.map(d => d.ticker))].sort().map(ticker => (
+                    <option key={ticker} value={ticker}>{ticker}</option>
                   ))}
                 </select>
               </div>
 
-              {/* Dual Dataset Selection */}
-              <div className="space-y-3 border-t border-gray-200 dark:border-gray-700 pt-4">
-                <h3 className="text-sm font-semibold flex items-center gap-2 text-gray-900 dark:text-gray-100">
-                  <Database className="w-4 h-4 text-blue-500" />
-                  Dataset Selection
-                </h3>
-
+              {/* Step 2: Dataset Selection */}
+              {selectedSymbol && (
                 <div>
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                    Prediction Dataset (for model signals)
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    <Database className="w-4 h-4 inline mr-1" />
+                    Dataset
                   </label>
                   <select
-                    value={predictionDatasetId}
-                    onChange={e => setPredictionDatasetId(e.target.value ? parseInt(e.target.value) : '')}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={selectedDatasetId}
+                    onChange={e => {
+                      const dsId = e.target.value ? parseInt(e.target.value) : '';
+                      setSelectedDatasetId(dsId);
+                      setPredictionDatasetId(dsId);
+                      setExecutionDatasetId(dsId);
+                      setSelectedModels(new Set());
+                      setSelectedModel('');
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
-                    <option value="">-- Select prediction dataset --</option>
-                    {datasets.map(ds => (
+                    <option value="">-- Select a dataset --</option>
+                    {datasets.filter(d => d.ticker === selectedSymbol).map(ds => (
                       <option key={ds.id} value={ds.id}>
-                        {ds.name} ({ds.ticker} {ds.timeframe})
+                        {ds.name} ({ds.timeframe})
                       </option>
                     ))}
                   </select>
                 </div>
+              )}
 
-                <div>
+              {/* Step 3: Model Selection */}
+              {selectedDatasetId !== '' && (() => {
+                const datasetModels = models.filter(m => m.datasetId === selectedDatasetId);
+                const allCompatibleModels = showAllModels
+                  ? models.filter(m => m.symbol === selectedSymbol)
+                  : datasetModels;
+                return (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <Brain className="w-4 h-4 inline mr-1" />
+                        Models ({allCompatibleModels.length})
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={showAllModels}
+                          onChange={e => {
+                            setShowAllModels(e.target.checked);
+                            setSelectedModels(new Set());
+                            setSelectedModel('');
+                          }}
+                          className="rounded"
+                        />
+                        Show all models for {selectedSymbol}
+                      </label>
+                    </div>
+                    {allCompatibleModels.length === 0 ? (
+                      <p className="text-sm text-gray-400 dark:text-gray-500 italic">No models found.</p>
+                    ) : (
+                      <div className="space-y-1 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg p-2">
+                        {allCompatibleModels.map(model => {
+                          const isFromDataset = model.datasetId === selectedDatasetId;
+                          return (
+                            <label
+                              key={model.id}
+                              className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                                selectedModels.has(model.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedModels.has(model.id)}
+                                onChange={e => {
+                                  const next = new Set(selectedModels);
+                                  if (e.target.checked) next.add(model.id);
+                                  else next.delete(model.id);
+                                  setSelectedModels(next);
+                                  // Keep selectedModel in sync (use first selected)
+                                  const arr = [...next];
+                                  setSelectedModel(arr[0] || '');
+                                }}
+                                className="rounded"
+                              />
+                              <span className="flex-1 text-sm text-gray-800 dark:text-gray-200">{model.name}</span>
+                              <span className="text-xs text-gray-400 dark:text-gray-500">{model.modelType}</span>
+                              {!isFromDataset && (
+                                <span className="text-xs px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded">other dataset</span>
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Execution Dataset (override) */}
+              {selectedDatasetId !== '' && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                     Execution Dataset (for price simulation)
                   </label>
@@ -844,24 +930,15 @@ const Backtesting: React.FC = () => {
                     onChange={e => setExecutionDatasetId(e.target.value ? parseInt(e.target.value) : '')}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                   >
-                    <option value="">-- Select execution dataset --</option>
-                    {datasets.map(ds => (
+                    {datasets.filter(d => d.ticker === selectedSymbol).map(ds => (
                       <option key={ds.id} value={ds.id}>
-                        {ds.name} ({ds.ticker} {ds.timeframe})
+                        {ds.name} ({ds.timeframe})
                       </option>
                     ))}
                   </select>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Defaults to the selected dataset above</p>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setExecutionDatasetId(predictionDatasetId)}
-                  disabled={!predictionDatasetId}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
-                >
-                  Use same dataset for both
-                </button>
-              </div>
+              )}
 
               {/* Date Range */}
               <div className="grid grid-cols-2 gap-3">
@@ -1157,18 +1234,18 @@ const Backtesting: React.FC = () => {
               {/* Run Button */}
               <button
                 onClick={runBacktest}
-                disabled={running || !selectedModel || !predictionDatasetId || !executionDatasetId}
+                disabled={running || selectedModels.size === 0 || !predictionDatasetId || !executionDatasetId}
                 className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {running ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    Running Backtest...
+                    Running...
                   </>
                 ) : (
                   <>
                     <Play className="w-5 h-5" />
-                    Run Backtest
+                    {selectedModels.size > 1 ? `Run ${selectedModels.size} Backtests` : 'Run Backtest'}
                   </>
                 )}
               </button>
