@@ -97,10 +97,19 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
         duration = time.time() - start_time
 
         if should_log:
-            logger.info(
+            level = "info"
+            tag = ""
+            if duration > 4.0:
+                level = "warning"
+                tag = " [SLOW]"
+            elif duration > 1.0:
+                tag = " [medium]"
+
+            msg = (
                 f"API Response: {request.method} {path} - "
-                f"Status: {response.status_code} - Duration: {duration:.3f}s"
+                f"Status: {response.status_code} - Duration: {duration:.3f}s{tag}"
             )
+            getattr(logger, level)(msg)
 
         return response
 

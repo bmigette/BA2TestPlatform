@@ -26,6 +26,7 @@ from app.services.strategy_executor import evaluate_condition_tree, Confirmation
 from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 from app.services.job_handler import ffill_sparse_indicators
+from app.services.perf import perf_timer
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +414,7 @@ def run_backtest(
     else:
         features = pred_df[feature_cols].values
 
-    # Create sliding windows for prediction
+    # Create sliding windows for prediction (timed)
     n_samples = len(features) - seq_len + 1
     if n_samples <= 0:
         logger.error(f"Not enough data for seq_len={seq_len}")
@@ -434,7 +435,7 @@ def run_backtest(
         result['status'] = 'failed'
         return result
 
-    # Load the trained model
+    # Load the trained model (timed)
     training_service = TSAITrainingService()
     file_path = model.file_path
     if not file_path:
@@ -496,15 +497,16 @@ def run_backtest(
 
     # Run predictions on CPU to avoid MPS compatibility issues with some architectures
     try:
-        model_obj = model_obj.cpu()
-        model_obj.train(False)  # Set to evaluation mode
-        X_tensor = torch.tensor(X, dtype=torch.float32)
-        with torch.no_grad():
-            outputs = model_obj(X_tensor)
-            if prediction_mode == 'multistep':
-                predictions = torch.sigmoid(outputs).numpy()
-            else:
-                predictions = torch.softmax(outputs, dim=1).numpy()
+        with perf_timer("backtest.model_inference"):
+            model_obj = model_obj.cpu()
+            model_obj.train(False)  # Set to evaluation mode
+            X_tensor = torch.tensor(X, dtype=torch.float32)
+            with torch.no_grad():
+                outputs = model_obj(X_tensor)
+                if prediction_mode == 'multistep':
+                    predictions = torch.sigmoid(outputs).numpy()
+                else:
+                    predictions = torch.softmax(outputs, dim=1).numpy()
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
         import traceback
@@ -645,7 +647,8 @@ def _run_strategy_backtest(
     )
 
     try:
-        stats = bt.run()
+        with perf_timer(f"backtest.strategy_simulation ({len(bt_data)} bars)"):
+            stats = bt.run()
     except Exception as e:
         logger.error(f"Backtest execution failed: {e}")
         return _empty_results(initial_capital)
@@ -1092,9 +1095,10 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
         # Load prediction dataset
         try:
-            pred_df = pd.read_csv(pred_dataset.file_path)
-            if 'Date' in pred_df.columns:
-                pred_df['Date'] = pd.to_datetime(pred_df['Date'])
+            with perf_timer(f"backtest.load_pred_csv ({pred_dataset.file_path})"):
+                pred_df = pd.read_csv(pred_dataset.file_path)
+                if 'Date' in pred_df.columns:
+                    pred_df['Date'] = pd.to_datetime(pred_df['Date'])
         except Exception as e:
             backtest.status = 'failed'
             backtest.error_message = f'Failed to load prediction dataset: {e}'
@@ -1103,9 +1107,10 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
         # Load execution dataset
         try:
-            exec_df = pd.read_csv(exec_dataset.file_path)
-            if 'Date' in exec_df.columns:
-                exec_df['Date'] = pd.to_datetime(exec_df['Date'])
+            with perf_timer(f"backtest.load_exec_csv ({exec_dataset.file_path})"):
+                exec_df = pd.read_csv(exec_dataset.file_path)
+                if 'Date' in exec_df.columns:
+                    exec_df['Date'] = pd.to_datetime(exec_df['Date'])
         except Exception as e:
             backtest.status = 'failed'
             backtest.error_message = f'Failed to load execution dataset: {e}'
@@ -1189,7 +1194,8 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         backtest.drawdown_curve = results['drawdown_curve']
         backtest.trades = results['trades']
 
-        db.commit()
+        with perf_timer("backtest.db_commit"):
+            db.commit()
 
         logger.info(f"Backtest {backtest_id} completed: {results['total_trades']} trades")
 
