@@ -940,6 +940,13 @@ const Training: React.FC = () => {
                       <div className="text-sm text-gray-500 dark:text-gray-400">
                         {job.selectedModels.length} model{job.selectedModels.length !== 1 ? 's' : ''} |
                         Created: {new Date(job.createdAt).toLocaleString()}
+                        {job.status === 'completed' && job.startedAt && job.completedAt && (() => {
+                          const ms = new Date(job.completedAt!).getTime() - new Date(job.startedAt!).getTime();
+                          const totalMin = Math.floor(ms / 60000);
+                          const h = Math.floor(totalMin / 60);
+                          const m = totalMin % 60;
+                          return <span className="ml-2">| Duration: {h > 0 ? `${h}h ${m}m` : `${m}m`}</span>;
+                        })()}
                         {job.status === 'running' && job.currentGeneration !== undefined && (
                           <span className="ml-2">| Gen {job.currentGeneration}/{job.totalGenerations || 50}</span>
                         )}
