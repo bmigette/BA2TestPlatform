@@ -904,37 +904,37 @@ def register_models_commands(subparsers):
 
     # get
     p = actions.add_parser("get", help="Get model by ID")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID (e.g. mdl-abc123)")
 
     # delete
     p = actions.add_parser("delete", help="Delete a model")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
 
     # clone
     p = actions.add_parser("clone", help="Clone a model")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
 
     # export
     p = actions.add_parser("export", help="Export a model")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
     p.add_argument("--format", choices=["pytorch", "onnx"], default="pytorch")
 
     # predict
     p = actions.add_parser("predict", help="Run predictions with a model")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
     p.add_argument("--dataset-id", required=True, type=int)
 
     # predictions
     p = actions.add_parser("predictions", help="Get model predictions")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
 
     # confusion-matrix
     p = actions.add_parser("confusion-matrix", help="Get confusion matrix")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
 
     # fields
     p = actions.add_parser("fields", help="Get prediction fields")
-    p.add_argument("id", type=int)
+    p.add_argument("id", help="Model ID")
 
 
 def handle_models(args):
