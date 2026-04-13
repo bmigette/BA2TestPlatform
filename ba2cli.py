@@ -117,6 +117,26 @@ def format_output(data, human=False, table_fn=None):
 
 
 # ---------------------------------------------------------------------------
+# List extraction helper
+# ---------------------------------------------------------------------------
+
+def extract_list(data):
+    """Extract a list from an API response.
+
+    Many endpoints return ``{"items": [...], "total": N}`` where the key varies
+    (datasets, jobs, strategies, etc.).  This helper finds the first list value
+    in a dict, or returns *data* unchanged if it is already a list.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+    return []
+
+
+# ---------------------------------------------------------------------------
 # JSON argument helper
 # ---------------------------------------------------------------------------
 
@@ -242,13 +262,13 @@ def handle_datasets(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d if isinstance(d, list) else [],
+                extract_list(d),
                 [
                     ("ID", "id", 6),
                     ("Name", "name", 28),
                     ("Ticker", "ticker", 10),
                     ("Timeframe", "timeframe", 12),
-                    ("Rows", "row_count", 8),
+                    ("Rows", "rows_count", 8),
                     ("Status", "status", 12),
                 ],
             ),
@@ -650,13 +670,13 @@ def handle_jobs(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d if isinstance(d, list) else [],
+                extract_list(d),
                 [
                     ("ID", "id", 10),
                     ("Status", "status", 14),
-                    ("Models", "selected_models", 20),
-                    ("Generation", "current_generation", 12),
-                    ("Best Fitness", "best_fitness", 14),
+                    ("Models", "selectedModels", 20),
+                    ("Generation", "currentGeneration", 12),
+                    ("Best Fitness", "bestFitness", 14),
                 ],
             ),
         )
@@ -812,7 +832,7 @@ def handle_profiles(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d if isinstance(d, list) else [],
+                extract_list(d),
                 [
                     ("ID", "id", 6),
                     ("Name", "name", 28),
@@ -937,14 +957,14 @@ def handle_models(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d if isinstance(d, list) else [],
+                extract_list(d),
                 [
                     ("ID", "id", 6),
                     ("Name", "name", 28),
-                    ("Type", "model_type", 14),
+                    ("Type", "modelType", 14),
                     ("Status", "status", 12),
-                    ("Fitness", "best_fitness", 10),
-                    ("Created", "created_at", 20),
+                    ("Fitness", "fitness", 10),
+                    ("Created", "createdAt", 20),
                 ],
             ),
         )
@@ -1141,13 +1161,13 @@ def handle_strategies(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d if isinstance(d, list) else [],
+                extract_list(d),
                 [
                     ("ID", "id", 6),
                     ("Name", "name", 28),
                     ("Description", "description", 30),
-                    ("TP%", "initial_tp_percent", 8),
-                    ("SL%", "initial_sl_percent", 8),
+                    ("TP%", "initialTpPercent", 8),
+                    ("SL%", "initialSlPercent", 8),
                 ],
             ),
         )
@@ -1243,7 +1263,7 @@ def handle_backtests(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d if isinstance(d, list) else [],
+                extract_list(d),
                 [
                     ("ID", "id", 6),
                     ("Name", "name", 24),
@@ -1332,7 +1352,7 @@ def handle_cache(args):
             data,
             human=args.human,
             table_fn=lambda d: print_table(
-                d.get("cache_files", []) if isinstance(d, dict) else (d if isinstance(d, list) else []),
+                extract_list(d),
                 [
                     ("Provider", "provider", 12),
                     ("Symbol", "symbol", 10),
@@ -2002,7 +2022,19 @@ def main():
     register_logs_commands(resource_parsers)
     register_help_commands(resource_parsers)
 
-    args = parser.parse_args()
+    # Allow global flags (--human, --host, --port, --token) to appear anywhere
+    # in the command line, not just before the resource subcommand.
+    argv = sys.argv[1:]
+    global_flags = {}
+    if "--human" in argv:
+        argv.remove("--human")
+        global_flags["human"] = True
+
+    args = parser.parse_args(argv)
+
+    # Merge pre-extracted global flags
+    for key, val in global_flags.items():
+        setattr(args, key, val)
 
     if not args.resource:
         parser.print_help()
