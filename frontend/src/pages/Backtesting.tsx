@@ -1473,6 +1473,48 @@ const Backtesting: React.FC = () => {
                 </div>
               </div>
 
+              {/* Strategy Details */}
+              {selectedBacktest.strategyParams && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Strategy Details</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">TP: </span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">
+                        {selectedBacktest.strategyParams.initialTpPercent ?? selectedBacktest.strategyParams.initial_tp_percent ?? '—'}%
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">SL: </span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">
+                        {selectedBacktest.strategyParams.initialSlPercent ?? selectedBacktest.strategyParams.initial_sl_percent ?? '—'}%
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">Buy: </span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">
+                        {selectedBacktest.strategyParams.buyEntryConditions?.conditions?.length ?? 0} condition(s)
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">Sell: </span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">
+                        {selectedBacktest.strategyParams.sellEntryConditions?.conditions?.length ?? 0} condition(s)
+                      </span>
+                    </div>
+                  </div>
+                  {/* Show condition details */}
+                  <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
+                    {selectedBacktest.strategyParams.buyEntryConditions?.conditions?.map((c: any, i: number) => (
+                      <div key={i}>Buy: {c.field} {c.comparison} {c.value}</div>
+                    ))}
+                    {selectedBacktest.strategyParams.sellEntryConditions?.conditions?.map((c: any, i: number) => (
+                      <div key={i}>Sell: {c.field} {c.comparison} {c.value}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Chart Tabs */}
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
                 <div className="border-b border-gray-200 dark:border-gray-700">
