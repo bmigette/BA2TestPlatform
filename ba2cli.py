@@ -1641,6 +1641,327 @@ def handle_logs(args):
 
 
 # ===================================================================
+# Resource: help
+# ===================================================================
+
+_MANUAL = {}
+
+_MANUAL["overview"] = """\
+BA2 ML Test Platform CLI
+========================
+
+ba2cli.py is the command-line interface for the BA2 ML Test Platform.  It wraps
+the FastAPI backend into a scriptable tool designed for both human operators and
+autonomous LLM agents.
+
+Every command follows the pattern:
+
+    ba2cli.py [global-options] <resource> <action> [arguments]
+
+Output is JSON by default (ideal for programmatic consumption).  Pass --human
+for aligned text tables where supported.
+"""
+
+_MANUAL["global_options"] = """\
+Global Options
+--------------
+
+  --host HOST    API host (default: 127.0.0.1)
+  --port PORT    API port (default: 8000)
+  --human        Human-readable table output instead of JSON
+  --token TOKEN  Auth token (default: $BA2_ADMIN_TOKEN env var)
+"""
+
+_MANUAL["quick_reference"] = """\
+Quick Reference
+---------------
+
+Resource      Actions
+----------    ---------------------------------------------------------------
+datasets      list | get | create | delete | rename | duplicate | regenerate
+              | preview | stats | columns | export
+targets       list | get | create | update | delete | preview
+indicators    list | get | create | update | delete | supported
+jobs          list | get | create | prepare | delete | progress | pause
+              | resume | cancel | logs | generations | individuals
+              | elite-models | save-model
+profiles      list | get | create | update | delete | apply | export | import
+models        list | get | delete | clone | export | predict | predictions
+              | confusion-matrix | fields
+strategies    list | get | create | update | delete | compatible | fields
+backtests     list | get | run | delete | save | export | compare
+cache         ohlcv-status | ohlcv-gaps | ohlcv-providers | news-status
+              | news-providers
+workers       list | get | enable | disable | status
+tasks         list | get | cancel | stats
+settings      get | update | gpu-info | system-info
+server        health | update
+ml            models | classification-models | system-info | gpu-status
+dashboard     stats
+logs          info | error | debug
+help          [topic]
+"""
+
+_MANUAL["json_input"] = """\
+JSON Input
+----------
+
+Many commands accept JSON arguments (targets, param-ranges, genetic-config,
+etc.).  You can provide them in two ways:
+
+  Inline JSON:
+    ba2cli.py targets create --name "t1" --targets '[{"type":"binary_up","threshold":0.5}]'
+
+  File reference (prefix with @):
+    ba2cli.py targets create --name "t1" --targets @targets.json
+
+The @file syntax works for any argument documented as "JSON string or @file".
+"""
+
+_MANUAL["workflow"] = """\
+Agentic Workflow
+----------------
+
+A typical autonomous optimization loop follows these steps:
+
+  1. Check cached data
+       ba2cli.py cache ohlcv-status
+
+  2. Create a dataset
+       ba2cli.py datasets create --ticker AAPL --timeframe 1d \\
+           --indicator-collection-id 1
+
+  3. Preview targets on the dataset
+       ba2cli.py targets preview --dataset-id 1 \\
+           --targets '[{"type":"binary_up","threshold":0.5,"horizon":3}]'
+
+  4. Prepare a job (calculate targets, get metric recommendations)
+       ba2cli.py jobs prepare --dataset-id 1 \\
+           --targets '[{"type":"binary_up","threshold":0.5,"horizon":3}]'
+
+  5. Create a training job
+       ba2cli.py jobs create --dataset-id 1 \\
+           --model-types LSTM,GRU \\
+           --targets '[{"type":"binary_up","threshold":0.5,"horizon":3}]' \\
+           --train-test-split 80 \\
+           --param-ranges '{"epochs":{"min":50,"max":200},"batch_size":{"min":16,"max":64}}' \\
+           --genetic-config '{"populationSize":20,"generations":10}' \\
+           --metrics-config '{"metric":"f1_score","loss_function":"focal_loss"}'
+
+  6. Poll progress until completion
+       ba2cli.py jobs progress <job-id>
+
+  7. Save the best model
+       ba2cli.py jobs save-model <job-id> --rank 1 --name "model_v1"
+
+  8. Create a trading strategy
+       ba2cli.py strategies create --name "v1" \\
+           --buy-conditions '[{"field":"model:class_1","comparison":"is_true"}]' \\
+           --sell-conditions '[{"field":"model:class_0","comparison":"is_true"}]' \\
+           --tp 2.0 --sl 1.0
+
+  9. Run a backtest
+       ba2cli.py backtests run --name "test1" \\
+           --model-id mdl-xxx \\
+           --prediction-dataset-id 1 --execution-dataset-id 1 \\
+           --start-date 2024-01-01 --end-date 2024-12-31
+
+ 10. Check results and compare
+       ba2cli.py backtests get <id>
+       ba2cli.py backtests compare --ids 1,2,3
+"""
+
+_MANUAL["conditions"] = """\
+Strategy Conditions Reference
+-----------------------------
+
+Field Type          Fields                                          Comparisons
+----------------    --------------------------------------------    ---------------------------
+model_class         model:class_0, model:class_1                    is_true, is_false
+model_probability   model:probability_0, model:probability_1        gt, gte, lt, lte, eq, neq,
+                                                                    between
+position            position:in_position, position:is_buy,          is_true / is_false (bools)
+                    position:is_sell, position:position_pnl,        gt, gte, lt, lte (numerics)
+                    position:bars_in_position, position:buy_count,
+                    position:sell_count, position:total_count
+trade               trade:bars_since_last_buy,                      gt, gte, lt, lte, eq, neq
+                    trade:bars_since_last_sell,
+                    trade:days_since_last_buy,
+                    trade:days_since_last_sell
+time                time:hour (0-23), time:day_of_week (0=Mon)      gt, gte, lt, lte, eq, neq,
+                                                                    between
+price               price:change_pct                                gt, gte, lt, lte, eq, neq
+
+Optimization:   Set optimize_enabled=true with value_min, value_max, value_step
+                on any condition to let the genetic optimizer search its value.
+
+Confirmation:   Set confirmation_required=N, confirmation_bars=M to require
+                N true signals within the last M bars before the condition fires.
+
+Example condition JSON:
+  {
+    "field": "model:probability_1",
+    "comparison": "gt",
+    "value": 0.6,
+    "optimize_enabled": true,
+    "value_min": 0.5,
+    "value_max": 0.9,
+    "value_step": 0.05
+  }
+"""
+
+_MANUAL["jobs_reference"] = """\
+Job Configuration Reference
+----------------------------
+
+ParameterRanges (--param-ranges):
+  {
+    "epochs":             {"min": 50,   "max": 200},
+    "batch_size":         {"min": 16,   "max": 128},
+    "learning_rate":      {"min": 1e-4, "max": 1e-2},
+    "hidden_size":        {"min": 32,   "max": 256},
+    "num_layers":         {"min": 1,    "max": 4},
+    "dropout":            {"min": 0.1,  "max": 0.5},
+    "sequence_length":    {"min": 10,   "max": 60}
+  }
+  Each field is an object with "min" and "max" (integers or floats).
+  The genetic optimizer samples uniformly within these ranges.
+
+GeneticConfig (--genetic-config):
+  {
+    "populationSize":     20,       // individuals per generation
+    "generations":        10,       // number of generations
+    "crossoverRate":      0.8,      // probability of crossover
+    "mutationRate":       0.2,      // probability of mutation
+    "eliteCount":         2,        // individuals preserved unchanged
+    "tournamentSize":     3         // tournament selection size
+  }
+
+MetricsConfig (--metrics-config):
+  {
+    "metric":         "f1_score",       // fitness metric to optimize
+    "loss_function":  "focal_loss",     // loss function for training
+    "threshold":      0.5              // classification threshold
+  }
+  Supported metrics: accuracy, balanced_accuracy, f1_score, precision,
+                     recall, roc_auc, mcc
+  Supported losses:  cross_entropy, focal_loss, weighted_cross_entropy
+
+CrossValidation (--cross-validation):
+  {
+    "enabled":  true,
+    "folds":    5,
+    "method":   "time_series"       // time_series or stratified
+  }
+"""
+
+_MANUAL["strategies"] = _MANUAL["conditions"]
+
+_MANUAL["backtests"] = """\
+Backtests Reference
+-------------------
+
+Running a backtest:
+  ba2cli.py backtests run --name "test1" \\
+      --model-id mdl-xxx \\
+      --prediction-dataset-id 1 \\
+      --execution-dataset-id 1 \\
+      --strategy-id 5 \\
+      --start-date 2024-01-01 --end-date 2024-12-31 \\
+      --initial-capital 10000 \\
+      --position-sizing fixed --position-value 1000 \\
+      --commission 0.1 --slippage 0.05
+
+  --model-id              Saved model ID (e.g. mdl-abc123)
+  --prediction-dataset-id Dataset used for generating predictions
+  --execution-dataset-id  Dataset used for trade execution (can differ in
+                          timeframe from prediction dataset)
+  --strategy-id           ID of a saved strategy (or use --strategy-file)
+  --strategy-file         Path to a JSON file with inline strategy params
+  --position-sizing       "fixed" (absolute $) or "percent" (% of equity)
+  --fitness-metric        Metric used to rank backtest results
+
+Comparing backtests:
+  ba2cli.py backtests compare --ids 1,2,3
+
+  Returns a side-by-side comparison of key metrics (return, Sharpe ratio,
+  max drawdown, win rate, total trades, etc.)
+"""
+
+_MANUAL["cache"] = """\
+Cache Reference
+---------------
+
+The cache resource lets you inspect locally cached market data.
+
+  ba2cli.py cache ohlcv-status       Show cached OHLCV files with date ranges
+  ba2cli.py cache ohlcv-gaps         Check for gaps in OHLCV cache
+  ba2cli.py cache ohlcv-providers    List available OHLCV data providers
+  ba2cli.py cache news-status        Show cached news data
+  ba2cli.py cache news-providers     List available news providers
+
+Before creating a dataset, check the cache to see if the required data is
+already available.  This avoids unnecessary downloads.
+"""
+
+_TOPIC_ALIASES = {
+    "strategy": "strategies",
+    "condition": "conditions",
+    "fields": "conditions",
+    "job": "jobs_reference",
+    "jobs": "jobs_reference",
+    "backtest": "backtests",
+    "workflow": "workflow",
+    "cache": "cache",
+    "strategies": "strategies",
+    "conditions": "conditions",
+    "backtests": "backtests",
+    "json": "json_input",
+    "options": "global_options",
+    "reference": "quick_reference",
+}
+
+
+def register_help_commands(subparsers):
+    hp = subparsers.add_parser("help", help="Show manual and help topics")
+    hp.add_argument(
+        "topic",
+        nargs="?",
+        default=None,
+        help="Topic: strategies, jobs, backtests, workflow, conditions, cache",
+    )
+
+
+def handle_help(args):
+    topic = getattr(args, "topic", None)
+    if topic is None:
+        # Print the full manual
+        sections = [
+            "overview",
+            "global_options",
+            "quick_reference",
+            "json_input",
+            "workflow",
+            "conditions",
+            "jobs_reference",
+        ]
+        for section in sections:
+            print(_MANUAL[section])
+    else:
+        key = _TOPIC_ALIASES.get(topic)
+        if key is None:
+            print("Unknown help topic: {}".format(topic), file=sys.stderr)
+            print("", file=sys.stderr)
+            print(
+                "Available topics: strategies, jobs, backtests, workflow, "
+                "conditions, cache, json, options, reference",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(_MANUAL[key])
+
+
+# ===================================================================
 # Main / arg-parse wiring
 # ===================================================================
 
@@ -1681,6 +2002,7 @@ def main():
     register_ml_commands(resource_parsers)
     register_dashboard_commands(resource_parsers)
     register_logs_commands(resource_parsers)
+    register_help_commands(resource_parsers)
 
     args = parser.parse_args()
 
@@ -1706,6 +2028,7 @@ def main():
         "ml": handle_ml,
         "dashboard": handle_dashboard,
         "logs": handle_logs,
+        "help": handle_help,
     }
 
     handler = handlers.get(args.resource)
