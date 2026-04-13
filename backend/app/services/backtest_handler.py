@@ -1112,6 +1112,12 @@ def handle_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             db.commit()
             return {'status': 'failed', 'error': backtest.error_message}
 
+        # Strip timezone from Date columns to avoid comparison issues with naive datetimes
+        if 'Date' in pred_df.columns and pred_df['Date'].dt.tz is not None:
+            pred_df['Date'] = pred_df['Date'].dt.tz_localize(None)
+        if 'Date' in exec_df.columns and exec_df['Date'].dt.tz is not None:
+            exec_df['Date'] = exec_df['Date'].dt.tz_localize(None)
+
         # Filter by date range
         if backtest.start_date:
             pred_df = pred_df[pred_df['Date'] >= backtest.start_date]
