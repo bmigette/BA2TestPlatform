@@ -1599,6 +1599,48 @@ def handle_dashboard(args):
 
 
 # ===================================================================
+# Resource: logs
+# ===================================================================
+
+def register_logs_commands(subparsers):
+    lg = subparsers.add_parser("logs", help="Read server log files")
+    actions = lg.add_subparsers(dest="action")
+
+    # info
+    p = actions.add_parser("info", help="Read info log")
+    p.add_argument("--lines", type=int, default=100, help="Number of lines (default: 100)")
+    p.add_argument("--search", help="Filter lines containing this string")
+
+    # error
+    p = actions.add_parser("error", help="Read error log")
+    p.add_argument("--lines", type=int, default=100, help="Number of lines (default: 100)")
+    p.add_argument("--search", help="Filter lines containing this string")
+
+    # debug
+    p = actions.add_parser("debug", help="Read debug log")
+    p.add_argument("--lines", type=int, default=100, help="Number of lines (default: 100)")
+    p.add_argument("--search", help="Filter lines containing this string")
+
+
+def handle_logs(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py logs <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action in ("info", "error", "debug"):
+        path = "/api/admin/logs/{}?lines={}".format(action, args.lines)
+        if args.search:
+            path += "&search={}".format(args.search)
+        data = api_call(args, "GET", path)
+        if args.human and data and isinstance(data, dict) and "lines" in data:
+            for line in data["lines"]:
+                print(line)
+        else:
+            format_output(data, human=args.human)
+
+
+# ===================================================================
 # Main / arg-parse wiring
 # ===================================================================
 
@@ -1638,6 +1680,7 @@ def main():
     register_server_commands(resource_parsers)
     register_ml_commands(resource_parsers)
     register_dashboard_commands(resource_parsers)
+    register_logs_commands(resource_parsers)
 
     args = parser.parse_args()
 
@@ -1662,6 +1705,7 @@ def main():
         "server": handle_server,
         "ml": handle_ml,
         "dashboard": handle_dashboard,
+        "logs": handle_logs,
     }
 
     handler = handlers.get(args.resource)

@@ -1,7 +1,8 @@
 """
 Admin API endpoints.
 
-Provides a secure endpoint for CLI-driven server updates (git pull + restart).
+Provides secure endpoints for CLI-driven server updates (git pull + restart)
+and log file reading.
 Protected by a bearer token configured via BA2_ADMIN_TOKEN environment variable.
 """
 
@@ -10,8 +11,9 @@ import os
 import subprocess
 import sys
 import threading
+from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -20,6 +22,43 @@ router = APIRouter()
 
 # Project root is three levels up from this file: admin.py -> api/ -> app/ -> backend/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+# Backend root (where logs/ directory lives)
+BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def verify_admin_token(authorization: str):
+    """Validate the Authorization header against BA2_ADMIN_TOKEN.
+
+    Raises HTTPException on failure.
+    """
+    admin_token = os.environ.get("BA2_ADMIN_TOKEN")
+
+    if not admin_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin token is not configured on the server (BA2_ADMIN_TOKEN not set).",
+        )
+
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header.",
+        )
+
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Authorization header format. Expected 'Bearer <token>'.",
+        )
+
+    token = parts[1]
+    if token != admin_token:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid admin token.",
+        )
 
 
 def _schedule_restart():
@@ -38,36 +77,7 @@ async def update_server(authorization: str = Header(default=None)):
     Requires BA2_ADMIN_TOKEN to be set in the environment.
     The request must include an Authorization: Bearer <token> header.
     """
-    admin_token = os.environ.get("BA2_ADMIN_TOKEN")
-
-    # Token not configured on the server side
-    if not admin_token:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin token is not configured on the server (BA2_ADMIN_TOKEN not set).",
-        )
-
-    # Missing Authorization header
-    if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing Authorization header.",
-        )
-
-    # Parse and validate Bearer token
-    parts = authorization.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Authorization header format. Expected 'Bearer <token>'.",
-        )
-
-    token = parts[1]
-    if token != admin_token:
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid admin token.",
-        )
+    verify_admin_token(authorization)
 
     # Run git pull in the project root
     logger.info(f"Running git pull in {PROJECT_ROOT}")
@@ -100,4 +110,63 @@ async def update_server(authorization: str = Header(default=None)):
         "git_pull": git_output,
         "restart": "scheduled",
         "message": "Server will restart in ~1 second.",
+    }
+
+
+@router.get("/logs/{level}")
+async def read_logs(
+    level: str,
+    lines: int = Query(default=100),
+    search: Optional[str] = Query(default=None),
+    authorization: str = Header(default=None),
+):
+    """
+    Read the last N lines from a log file.
+
+    *level* must be one of ``info``, ``error``, or ``debug``.
+    Optionally filter lines with a case-insensitive *search* string.
+    """
+    verify_admin_token(authorization)
+
+    valid_levels = ("info", "error", "debug")
+    if level not in valid_levels:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid log level '{}'. Must be one of: {}".format(
+                level, ", ".join(valid_levels)
+            ),
+        )
+
+    log_file = BACKEND_ROOT / "logs" / "{}.log".format(level)
+
+    if not log_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Log file not found: logs/{}.log".format(level),
+        )
+
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+            all_lines = fh.readlines()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to read log file: {}".format(str(exc)),
+        )
+
+    # Strip trailing newlines
+    all_lines = [line.rstrip("\n") for line in all_lines]
+
+    if search:
+        search_lower = search.lower()
+        all_lines = [line for line in all_lines if search_lower in line.lower()]
+
+    total = len(all_lines)
+    result_lines = all_lines[-lines:] if lines < total else all_lines
+
+    return {
+        "level": level,
+        "lines": result_lines,
+        "total_lines": total,
+        "file": "logs/{}.log".format(level),
     }
