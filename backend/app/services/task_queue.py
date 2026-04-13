@@ -436,6 +436,45 @@ class TaskQueueService:
         finally:
             db.close()
 
+    def clear_completed_results(self, days: int = 1) -> int:
+        """
+        Clear the result column for completed/failed tasks older than N days.
+
+        The result data is typically already persisted in domain tables (backtests,
+        trained_models), so keeping it in the task queue is redundant and wastes
+        significant space (can be hundreds of MB for backtests with equity curves).
+
+        Returns:
+            Number of tasks cleared
+        """
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now() - timedelta(days=days)
+            tasks = db.query(TaskQueue).filter(
+                and_(
+                    TaskQueue.status.in_([TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value]),
+                    TaskQueue.completed_at < cutoff,
+                    TaskQueue.result.isnot(None)
+                )
+            ).all()
+
+            count = 0
+            for task in tasks:
+                task.result = None
+                count += 1
+
+            if count > 0:
+                db.commit()
+                logger.info(f"Cleared result data from {count} completed tasks (space reclaimed)")
+            return count
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to clear completed results: {e}")
+            return 0
+        finally:
+            db.close()
+
     def cleanup_old_tasks(self, days: int = 30) -> int:
         """
         Remove completed/failed tasks older than specified days.

@@ -1544,6 +1544,9 @@ def register_server_commands(subparsers):
     # update
     actions.add_parser("update", help="Trigger server update")
 
+    # db-cleanup
+    actions.add_parser("db-cleanup", help="Clean up DB: clear stale results, VACUUM")
+
 
 def handle_server(args):
     action = getattr(args, "action", None)
@@ -1557,6 +1560,10 @@ def handle_server(args):
 
     elif action == "update":
         data = api_call(args, "POST", "/api/admin/update")
+        format_output(data, human=args.human)
+
+    elif action == "db-cleanup":
+        data = api_call(args, "POST", "/api/admin/db-cleanup")
         format_output(data, human=args.human)
 
 

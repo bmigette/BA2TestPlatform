@@ -197,3 +197,50 @@ async def read_logs(
         "total_lines": total,
         "file": "logs/{}.log".format(level),
     }
+
+
+@router.post("/db-cleanup")
+async def db_cleanup(authorization: str = Header(default=None)):
+    """
+    Clean up the database: clear stale task results, VACUUM to reclaim space.
+
+    This can reclaim hundreds of MB from completed backtest/training results
+    that are already stored in their respective domain tables.
+    """
+    verify_admin_token(authorization)
+
+    from app.services.task_queue import get_task_queue
+    from app.models.database import engine
+
+    task_queue = get_task_queue()
+    cleared = task_queue.clear_completed_results(days=0)
+
+    # Run VACUUM to reclaim space (SQLite doesn't free pages until VACUUM)
+    db_path = None
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            # Get DB file size before
+            result = conn.execute(text("PRAGMA page_count"))
+            pages_before = result.scalar()
+            page_size = conn.execute(text("PRAGMA page_size")).scalar()
+            size_before_mb = (pages_before * page_size) / (1024 * 1024)
+
+            conn.execute(text("VACUUM"))
+            conn.commit()
+
+            result = conn.execute(text("PRAGMA page_count"))
+            pages_after = result.scalar()
+            size_after_mb = (pages_after * page_size) / (1024 * 1024)
+
+        return {
+            "cleared_results": cleared,
+            "size_before_mb": round(size_before_mb, 1),
+            "size_after_mb": round(size_after_mb, 1),
+            "reclaimed_mb": round(size_before_mb - size_after_mb, 1),
+        }
+    except Exception as e:
+        return {
+            "cleared_results": cleared,
+            "vacuum_error": str(e),
+        }

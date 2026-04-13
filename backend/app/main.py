@@ -274,6 +274,9 @@ async def startup_event():
     # Recover interrupted jobs (crashed while running)
     recover_interrupted_jobs()
 
+    # Clear stale result data from completed tasks to reclaim DB space
+    task_queue.clear_completed_results(days=1)
+
     logger.info("Application startup complete")
 
 
