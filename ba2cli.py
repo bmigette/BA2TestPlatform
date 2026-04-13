@@ -752,35 +752,850 @@ def handle_jobs(args):
 
 
 # ===================================================================
-# Stub registrations for remaining resources (placeholder subparsers)
+# Resource: profiles
 # ===================================================================
 
-_STUB_RESOURCES = [
-    "profiles",
-    "models",
-    "strategies",
-    "backtests",
-    "cache",
-    "workers",
-    "tasks",
-    "settings",
-    "server",
-    "ml",
-    "dashboard",
-]
+def register_profiles_commands(subparsers):
+    ps = subparsers.add_parser("profiles", help="Manage job profiles")
+    actions = ps.add_subparsers(dest="action")
+
+    # list
+    actions.add_parser("list", help="List all profiles")
+
+    # get
+    p = actions.add_parser("get", help="Get profile by ID")
+    p.add_argument("id", type=int)
+
+    # create
+    p = actions.add_parser("create", help="Create a profile")
+    p.add_argument("--name", required=True)
+    p.add_argument("--description")
+    p.add_argument("--json", dest="json_body", help="JSON string or @file for full profile body")
+
+    # update
+    p = actions.add_parser("update", help="Update a profile")
+    p.add_argument("id", type=int)
+    p.add_argument("--name")
+    p.add_argument("--description")
+    p.add_argument("--json", dest="json_body", help="JSON string or @file for full profile body")
+
+    # delete
+    p = actions.add_parser("delete", help="Delete a profile")
+    p.add_argument("id", type=int)
+
+    # apply
+    p = actions.add_parser("apply", help="Apply profile to a dataset")
+    p.add_argument("id", type=int)
+    p.add_argument("--dataset-id", required=True, type=int)
+
+    # export
+    p = actions.add_parser("export", help="Export a profile")
+    p.add_argument("id", type=int)
+
+    # import
+    p = actions.add_parser("import", help="Import a profile from file")
+    p.add_argument("--file", required=True, help="Path to JSON file")
 
 
-def _register_stub(subparsers, name):
-    p = subparsers.add_parser(name, help="Manage {} (not yet implemented)".format(name))
-    p.add_subparsers(dest="action")
+def handle_profiles(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py profiles <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "list":
+        data = api_call(args, "GET", "/api/jobs/profiles")
+        format_output(
+            data,
+            human=args.human,
+            table_fn=lambda d: print_table(
+                d if isinstance(d, list) else [],
+                [
+                    ("ID", "id", 6),
+                    ("Name", "name", 28),
+                    ("Job Type", "job_type", 16),
+                    ("Models", "models", 24),
+                    ("Created", "created_at", 20),
+                ],
+            ),
+        )
+
+    elif action == "get":
+        data = api_call(args, "GET", "/api/jobs/profiles/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "create":
+        body = {"name": args.name}
+        if args.json_body is not None:
+            body.update(parse_json_arg(args.json_body))
+            body["name"] = args.name  # ensure name is not overridden
+        if args.description is not None:
+            body["description"] = args.description
+        data = api_call(args, "POST", "/api/jobs/profiles", data=body)
+        format_output(data, human=args.human)
+
+    elif action == "update":
+        body = {}
+        if args.json_body is not None:
+            body.update(parse_json_arg(args.json_body))
+        if args.name is not None:
+            body["name"] = args.name
+        if args.description is not None:
+            body["description"] = args.description
+        data = api_call(args, "PUT", "/api/jobs/profiles/{}".format(args.id), data=body)
+        format_output(data, human=args.human)
+
+    elif action == "delete":
+        data = api_call(args, "DELETE", "/api/jobs/profiles/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "apply":
+        body = {"datasetId": args.dataset_id}
+        data = api_call(
+            args, "POST", "/api/jobs/profiles/{}/apply".format(args.id), data=body
+        )
+        format_output(data, human=args.human)
+
+    elif action == "export":
+        data = api_call(args, "GET", "/api/jobs/profiles/{}/export".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "import":
+        with open(args.file, "r") as fh:
+            body = json.load(fh)
+        data = api_call(args, "POST", "/api/jobs/profiles/import", data=body)
+        format_output(data, human=args.human)
 
 
-def _handle_stub(args, name):
-    print(
-        json.dumps({"error": "{} commands not yet implemented".format(name)}, indent=2),
-        file=sys.stderr,
-    )
-    sys.exit(1)
+# ===================================================================
+# Resource: models
+# ===================================================================
+
+def register_models_commands(subparsers):
+    ms = subparsers.add_parser("models", help="Manage trained models")
+    actions = ms.add_subparsers(dest="action")
+
+    # list
+    p = actions.add_parser("list", help="List all models")
+    p.add_argument("--model-type", help="Filter by model type")
+    p.add_argument("--status", help="Filter by status")
+
+    # get
+    p = actions.add_parser("get", help="Get model by ID")
+    p.add_argument("id", type=int)
+
+    # delete
+    p = actions.add_parser("delete", help="Delete a model")
+    p.add_argument("id", type=int)
+
+    # clone
+    p = actions.add_parser("clone", help="Clone a model")
+    p.add_argument("id", type=int)
+
+    # export
+    p = actions.add_parser("export", help="Export a model")
+    p.add_argument("id", type=int)
+    p.add_argument("--format", choices=["pytorch", "onnx"], default="pytorch")
+
+    # predict
+    p = actions.add_parser("predict", help="Run predictions with a model")
+    p.add_argument("id", type=int)
+    p.add_argument("--dataset-id", required=True, type=int)
+
+    # predictions
+    p = actions.add_parser("predictions", help="Get model predictions")
+    p.add_argument("id", type=int)
+
+    # confusion-matrix
+    p = actions.add_parser("confusion-matrix", help="Get confusion matrix")
+    p.add_argument("id", type=int)
+
+    # fields
+    p = actions.add_parser("fields", help="Get prediction fields")
+    p.add_argument("id", type=int)
+
+
+def handle_models(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py models <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "list":
+        params = []
+        if getattr(args, "model_type", None):
+            params.append("model_type={}".format(args.model_type))
+        if getattr(args, "status", None):
+            params.append("status={}".format(args.status))
+        path = "/api/models"
+        if params:
+            path += "?" + "&".join(params)
+        data = api_call(args, "GET", path)
+        format_output(
+            data,
+            human=args.human,
+            table_fn=lambda d: print_table(
+                d if isinstance(d, list) else [],
+                [
+                    ("ID", "id", 6),
+                    ("Name", "name", 28),
+                    ("Type", "model_type", 14),
+                    ("Status", "status", 12),
+                    ("Fitness", "best_fitness", 10),
+                    ("Created", "created_at", 20),
+                ],
+            ),
+        )
+
+    elif action == "get":
+        data = api_call(args, "GET", "/api/models/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "delete":
+        data = api_call(args, "DELETE", "/api/models/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "clone":
+        data = api_call(args, "POST", "/api/models/{}/clone".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "export":
+        path = "/api/models/{}/export/{}".format(args.id, args.format)
+        data = api_call(args, "POST", path)
+        format_output(data, human=args.human)
+
+    elif action == "predict":
+        body = {"dataset_id": args.dataset_id}
+        data = api_call(
+            args, "POST", "/api/models/{}/run-predictions".format(args.id), data=body
+        )
+        format_output(data, human=args.human)
+
+    elif action == "predictions":
+        data = api_call(args, "GET", "/api/models/{}/predictions".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "confusion-matrix":
+        data = api_call(
+            args, "GET", "/api/models/{}/confusion-matrix".format(args.id)
+        )
+        format_output(data, human=args.human)
+
+    elif action == "fields":
+        data = api_call(
+            args, "GET", "/api/models/{}/prediction-fields".format(args.id)
+        )
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: strategies
+# ===================================================================
+
+def register_strategies_commands(subparsers):
+    ss = subparsers.add_parser("strategies", help="Manage trading strategies")
+    actions = ss.add_subparsers(dest="action")
+
+    # list
+    p = actions.add_parser("list", help="List all strategies")
+    p.add_argument("--search", help="Search filter")
+
+    # get
+    p = actions.add_parser("get", help="Get strategy by ID")
+    p.add_argument("id", type=int)
+
+    # create
+    p = actions.add_parser("create", help="Create a strategy")
+    p.add_argument("--name", required=True)
+    p.add_argument("--description")
+    p.add_argument("--buy-conditions", help="JSON string or @file")
+    p.add_argument("--sell-conditions", help="JSON string or @file")
+    p.add_argument("--exit-conditions", help="JSON array string or @file")
+    p.add_argument("--conditions-file", help="Path to JSON file with all condition fields")
+    p.add_argument("--tp", type=float, help="Initial take-profit percent")
+    p.add_argument("--sl", type=float, help="Initial stop-loss percent")
+    p.add_argument("--tp-optimize", action="store_true", help="Enable TP optimization")
+    p.add_argument("--sl-optimize", action="store_true", help="Enable SL optimization")
+    p.add_argument("--tp-min", type=float)
+    p.add_argument("--tp-max", type=float)
+    p.add_argument("--tp-step", type=float)
+    p.add_argument("--sl-min", type=float)
+    p.add_argument("--sl-max", type=float)
+    p.add_argument("--sl-step", type=float)
+
+    # update
+    p = actions.add_parser("update", help="Update a strategy")
+    p.add_argument("id", type=int)
+    p.add_argument("--name")
+    p.add_argument("--description")
+    p.add_argument("--buy-conditions", help="JSON string or @file")
+    p.add_argument("--sell-conditions", help="JSON string or @file")
+    p.add_argument("--exit-conditions", help="JSON array string or @file")
+    p.add_argument("--conditions-file", help="Path to JSON file with all condition fields")
+    p.add_argument("--tp", type=float, help="Initial take-profit percent")
+    p.add_argument("--sl", type=float, help="Initial stop-loss percent")
+    p.add_argument("--tp-optimize", action="store_true", help="Enable TP optimization")
+    p.add_argument("--sl-optimize", action="store_true", help="Enable SL optimization")
+    p.add_argument("--tp-min", type=float)
+    p.add_argument("--tp-max", type=float)
+    p.add_argument("--tp-step", type=float)
+    p.add_argument("--sl-min", type=float)
+    p.add_argument("--sl-max", type=float)
+    p.add_argument("--sl-step", type=float)
+
+    # delete
+    p = actions.add_parser("delete", help="Delete a strategy")
+    p.add_argument("id", type=int)
+
+    # compatible
+    p = actions.add_parser("compatible", help="List strategies compatible with a model")
+    p.add_argument("--model-id", required=True, type=int)
+
+    # fields
+    actions.add_parser("fields", help="Show condition field reference")
+
+
+def _build_strategy_body(args, require_name=False):
+    """Build strategy body from args, shared between create and update."""
+    body = {}
+    if require_name:
+        body["name"] = args.name
+    conditions_file = getattr(args, "conditions_file", None)
+    if conditions_file:
+        body.update(parse_json_arg("@" + conditions_file))
+    if require_name:
+        body["name"] = args.name  # ensure name is not overridden
+    name = getattr(args, "name", None)
+    if not require_name and name is not None:
+        body["name"] = name
+    description = getattr(args, "description", None)
+    if description is not None:
+        body["description"] = description
+    buy_conditions = getattr(args, "buy_conditions", None)
+    if buy_conditions is not None:
+        body["buy_entry_conditions"] = parse_json_arg(buy_conditions)
+    sell_conditions = getattr(args, "sell_conditions", None)
+    if sell_conditions is not None:
+        body["sell_entry_conditions"] = parse_json_arg(sell_conditions)
+    exit_conditions = getattr(args, "exit_conditions", None)
+    if exit_conditions is not None:
+        body["exit_conditions"] = parse_json_arg(exit_conditions)
+    if getattr(args, "tp", None) is not None:
+        body["initial_tp_percent"] = args.tp
+    if getattr(args, "sl", None) is not None:
+        body["initial_sl_percent"] = args.sl
+    if getattr(args, "tp_optimize", False):
+        body["initial_tp_optimize"] = True
+    if getattr(args, "sl_optimize", False):
+        body["initial_sl_optimize"] = True
+    if getattr(args, "tp_min", None) is not None:
+        body["tp_min"] = args.tp_min
+    if getattr(args, "tp_max", None) is not None:
+        body["tp_max"] = args.tp_max
+    if getattr(args, "tp_step", None) is not None:
+        body["tp_step"] = args.tp_step
+    if getattr(args, "sl_min", None) is not None:
+        body["sl_min"] = args.sl_min
+    if getattr(args, "sl_max", None) is not None:
+        body["sl_max"] = args.sl_max
+    if getattr(args, "sl_step", None) is not None:
+        body["sl_step"] = args.sl_step
+    return body
+
+
+_STRATEGY_FIELDS_REFERENCE = """\
+Field Type          Fields                                          Comparisons
+model_class         model:class_0, model:class_1                    is_true, is_false
+model_probability   model:probability_0, model:probability_1        gt, gte, lt, lte, eq, neq, between
+position            position:in_position, position:is_buy,          is_true/is_false (booleans)
+                    position:is_sell, position:position_pnl,        gt, gte, lt, lte (numerics)
+                    position:bars_in_position, position:buy_count,
+                    position:sell_count, position:total_count
+trade               trade:bars_since_last_buy,                      gt, gte, lt, lte, eq, neq
+                    trade:bars_since_last_sell,
+                    trade:days_since_last_buy,
+                    trade:days_since_last_sell
+time                time:hour (0-23), time:day_of_week (0=Mon)      gt, gte, lt, lte, eq, neq, between
+price               price:change_pct                                gt, gte, lt, lte, eq, neq
+
+Optimization: Set optimize_enabled=true with value_min, value_max, value_step on any condition.
+Confirmation: Set confirmation_required=N, confirmation_bars=M to require N true signals in M bars.
+"""
+
+
+def handle_strategies(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py strategies <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "list":
+        path = "/api/strategies"
+        search = getattr(args, "search", None)
+        if search:
+            path += "?search={}".format(search)
+        data = api_call(args, "GET", path)
+        format_output(
+            data,
+            human=args.human,
+            table_fn=lambda d: print_table(
+                d if isinstance(d, list) else [],
+                [
+                    ("ID", "id", 6),
+                    ("Name", "name", 28),
+                    ("Description", "description", 30),
+                    ("TP%", "initial_tp_percent", 8),
+                    ("SL%", "initial_sl_percent", 8),
+                ],
+            ),
+        )
+
+    elif action == "get":
+        data = api_call(args, "GET", "/api/strategies/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "create":
+        body = _build_strategy_body(args, require_name=True)
+        data = api_call(args, "POST", "/api/strategies", data=body)
+        format_output(data, human=args.human)
+
+    elif action == "update":
+        body = _build_strategy_body(args, require_name=False)
+        data = api_call(args, "PUT", "/api/strategies/{}".format(args.id), data=body)
+        format_output(data, human=args.human)
+
+    elif action == "delete":
+        data = api_call(args, "DELETE", "/api/strategies/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "compatible":
+        data = api_call(
+            args, "GET", "/api/strategies/compatible/{}".format(args.model_id)
+        )
+        format_output(data, human=args.human)
+
+    elif action == "fields":
+        print(_STRATEGY_FIELDS_REFERENCE)
+
+
+# ===================================================================
+# Resource: backtests
+# ===================================================================
+
+def register_backtests_commands(subparsers):
+    bs = subparsers.add_parser("backtests", help="Manage backtests")
+    actions = bs.add_subparsers(dest="action")
+
+    # list
+    actions.add_parser("list", help="List all backtests")
+
+    # get
+    p = actions.add_parser("get", help="Get backtest by ID")
+    p.add_argument("id", type=int)
+
+    # run
+    p = actions.add_parser("run", help="Run a new backtest")
+    p.add_argument("--name", required=True)
+    p.add_argument("--model-id", required=True, help="Model ID (e.g. mdl-abc123)")
+    p.add_argument("--prediction-dataset-id", required=True, type=int)
+    p.add_argument("--execution-dataset-id", required=True, type=int)
+    p.add_argument("--strategy-id", type=int, help="Strategy ID")
+    p.add_argument("--strategy-file", help="Path to JSON file with strategy params")
+    p.add_argument("--start-date", required=True, help="YYYY-MM-DD")
+    p.add_argument("--end-date", required=True, help="YYYY-MM-DD")
+    p.add_argument("--initial-capital", type=float, default=10000)
+    p.add_argument("--position-sizing", choices=["fixed", "percent"], default="fixed")
+    p.add_argument("--position-value", type=float, default=1000)
+    p.add_argument("--commission", type=float, default=0.1)
+    p.add_argument("--slippage", type=float, default=0.05)
+    p.add_argument("--fitness-metric", help="Fitness metric name")
+
+    # delete
+    p = actions.add_parser("delete", help="Delete a backtest")
+    p.add_argument("id", type=int)
+
+    # save
+    p = actions.add_parser("save", help="Save a backtest")
+    p.add_argument("id", type=int)
+    p.add_argument("--name", required=True)
+
+    # export
+    p = actions.add_parser("export", help="Export backtest results")
+    p.add_argument("id", type=int)
+    p.add_argument("--format", choices=["csv", "json"], default="csv")
+
+    # compare
+    p = actions.add_parser("compare", help="Compare backtests")
+    p.add_argument("--ids", required=True, help="Comma-separated backtest IDs")
+
+
+def handle_backtests(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py backtests <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "list":
+        data = api_call(args, "GET", "/api/backtests")
+        format_output(
+            data,
+            human=args.human,
+            table_fn=lambda d: print_table(
+                d if isinstance(d, list) else [],
+                [
+                    ("ID", "id", 6),
+                    ("Name", "name", 24),
+                    ("Status", "status", 12),
+                    ("Return%", "totalReturn", 10),
+                    ("Sharpe", "sharpeRatio", 8),
+                    ("MaxDD%", "maxDrawdown", 10),
+                    ("Trades", "totalTrades", 8),
+                ],
+            ),
+        )
+
+    elif action == "get":
+        data = api_call(args, "GET", "/api/backtests/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "run":
+        body = {
+            "name": args.name,
+            "model_id": args.model_id,
+            "prediction_dataset_id": args.prediction_dataset_id,
+            "execution_dataset_id": args.execution_dataset_id,
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+            "initial_capital": args.initial_capital,
+            "position_sizing_type": args.position_sizing,
+            "position_sizing_value": args.position_value,
+            "commission": args.commission,
+            "slippage": args.slippage,
+        }
+        if args.strategy_id:
+            body["strategy_id"] = args.strategy_id
+        if args.strategy_file:
+            with open(args.strategy_file, "r") as fh:
+                body["strategy_params"] = json.load(fh)
+        if args.fitness_metric:
+            body["fitness_metric"] = args.fitness_metric
+        data = api_call(args, "POST", "/api/backtests", data=body)
+        format_output(data, human=args.human)
+
+    elif action == "delete":
+        data = api_call(args, "DELETE", "/api/backtests/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "save":
+        body = {"name": args.name}
+        data = api_call(
+            args, "POST", "/api/backtests/{}/save".format(args.id), data=body
+        )
+        format_output(data, human=args.human)
+
+    elif action == "export":
+        path = "/api/backtests/{}/export?format={}".format(args.id, args.format)
+        data = api_call(args, "POST", path)
+        format_output(data, human=args.human)
+
+    elif action == "compare":
+        ids = [int(x.strip()) for x in args.ids.split(",")]
+        data = api_call(args, "POST", "/api/backtests/compare", data=ids)
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: cache
+# ===================================================================
+
+def register_cache_commands(subparsers):
+    cs = subparsers.add_parser("cache", help="Cache and data provider tools")
+    actions = cs.add_subparsers(dest="action")
+
+    actions.add_parser("ohlcv-status", help="OHLCV cache status")
+    actions.add_parser("ohlcv-gaps", help="Check OHLCV cache gaps")
+    actions.add_parser("ohlcv-providers", help="List OHLCV providers")
+    actions.add_parser("news-status", help="News cache status")
+    actions.add_parser("news-providers", help="List news providers")
+
+
+def handle_cache(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py cache <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "ohlcv-status":
+        data = api_call(args, "GET", "/api/tools/ohlcv/cache-status")
+        format_output(
+            data,
+            human=args.human,
+            table_fn=lambda d: print_table(
+                d.get("cache_files", []) if isinstance(d, dict) else (d if isinstance(d, list) else []),
+                [
+                    ("Provider", "provider", 12),
+                    ("Symbol", "symbol", 10),
+                    ("Interval", "interval", 10),
+                    ("Rows", "rows", 8),
+                    ("Date From", "date_from", 12),
+                    ("Date To", "date_to", 12),
+                    ("Size MB", "file_size_mb", 10),
+                ],
+            ),
+        )
+
+    elif action == "ohlcv-gaps":
+        data = api_call(args, "GET", "/api/tools/ohlcv/check-gaps")
+        format_output(data, human=args.human)
+
+    elif action == "ohlcv-providers":
+        data = api_call(args, "GET", "/api/tools/ohlcv/providers")
+        format_output(data, human=args.human)
+
+    elif action == "news-status":
+        data = api_call(args, "GET", "/api/tools/news/cache-status")
+        format_output(data, human=args.human)
+
+    elif action == "news-providers":
+        data = api_call(args, "GET", "/api/tools/news/providers")
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: workers
+# ===================================================================
+
+def register_workers_commands(subparsers):
+    ws = subparsers.add_parser("workers", help="Manage workers")
+    actions = ws.add_subparsers(dest="action")
+
+    # list
+    actions.add_parser("list", help="List all workers")
+
+    # get
+    p = actions.add_parser("get", help="Get worker by ID")
+    p.add_argument("id")
+
+    # enable
+    p = actions.add_parser("enable", help="Enable a worker")
+    p.add_argument("id")
+
+    # disable
+    p = actions.add_parser("disable", help="Disable a worker")
+    p.add_argument("id")
+
+    # status
+    p = actions.add_parser("status", help="Get worker status")
+    p.add_argument("id")
+
+
+def handle_workers(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py workers <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "list":
+        data = api_call(args, "GET", "/api/workers")
+        format_output(data, human=args.human)
+
+    elif action == "get":
+        data = api_call(args, "GET", "/api/workers/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "enable":
+        data = api_call(args, "POST", "/api/workers/{}/enable".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "disable":
+        data = api_call(args, "POST", "/api/workers/{}/disable".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "status":
+        data = api_call(args, "GET", "/api/workers/{}/status".format(args.id))
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: tasks
+# ===================================================================
+
+def register_tasks_commands(subparsers):
+    ts = subparsers.add_parser("tasks", help="Manage tasks")
+    actions = ts.add_subparsers(dest="action")
+
+    # list
+    actions.add_parser("list", help="List all tasks")
+
+    # get
+    p = actions.add_parser("get", help="Get task by ID")
+    p.add_argument("id")
+
+    # cancel
+    p = actions.add_parser("cancel", help="Cancel a task")
+    p.add_argument("id")
+
+    # stats
+    actions.add_parser("stats", help="Get task statistics summary")
+
+
+def handle_tasks(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py tasks <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "list":
+        data = api_call(args, "GET", "/api/tasks")
+        format_output(data, human=args.human)
+
+    elif action == "get":
+        data = api_call(args, "GET", "/api/tasks/{}".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "cancel":
+        data = api_call(args, "POST", "/api/tasks/{}/cancel".format(args.id))
+        format_output(data, human=args.human)
+
+    elif action == "stats":
+        data = api_call(args, "GET", "/api/tasks/stats/summary")
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: settings
+# ===================================================================
+
+def register_settings_commands(subparsers):
+    ss = subparsers.add_parser("settings", help="Manage settings")
+    actions = ss.add_subparsers(dest="action")
+
+    # get
+    actions.add_parser("get", help="Get current settings")
+
+    # update
+    p = actions.add_parser("update", help="Update settings")
+    p.add_argument("--json", dest="json_body", required=True,
+                   help="JSON string or @file")
+
+    # gpu-info
+    actions.add_parser("gpu-info", help="Get GPU information")
+
+    # system-info
+    actions.add_parser("system-info", help="Get system information")
+
+
+def handle_settings(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py settings <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "get":
+        data = api_call(args, "GET", "/api/settings")
+        format_output(data, human=args.human)
+
+    elif action == "update":
+        body = parse_json_arg(args.json_body)
+        data = api_call(args, "PUT", "/api/settings", data=body)
+        format_output(data, human=args.human)
+
+    elif action == "gpu-info":
+        data = api_call(args, "GET", "/api/settings/gpu-info")
+        format_output(data, human=args.human)
+
+    elif action == "system-info":
+        data = api_call(args, "GET", "/api/settings/system-info")
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: server
+# ===================================================================
+
+def register_server_commands(subparsers):
+    sv = subparsers.add_parser("server", help="Server administration")
+    actions = sv.add_subparsers(dest="action")
+
+    # health
+    actions.add_parser("health", help="Check server health")
+
+    # update
+    actions.add_parser("update", help="Trigger server update")
+
+
+def handle_server(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py server <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "health":
+        data = api_call(args, "GET", "/health")
+        format_output(data, human=args.human)
+
+    elif action == "update":
+        data = api_call(args, "POST", "/api/admin/update")
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: ml
+# ===================================================================
+
+def register_ml_commands(subparsers):
+    ml = subparsers.add_parser("ml", help="ML engine information")
+    actions = ml.add_subparsers(dest="action")
+
+    actions.add_parser("models", help="List available ML model types")
+    actions.add_parser("classification-models", help="List classification model types")
+    actions.add_parser("system-info", help="Get ML system info")
+    actions.add_parser("gpu-status", help="Get GPU status")
+
+
+def handle_ml(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py ml <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "models":
+        data = api_call(args, "GET", "/api/ml/models")
+        format_output(data, human=args.human)
+
+    elif action == "classification-models":
+        data = api_call(args, "GET", "/api/ml/classification-models")
+        format_output(data, human=args.human)
+
+    elif action == "system-info":
+        data = api_call(args, "GET", "/api/ml/system-info")
+        format_output(data, human=args.human)
+
+    elif action == "gpu-status":
+        data = api_call(args, "GET", "/api/ml/gpu-status")
+        format_output(data, human=args.human)
+
+
+# ===================================================================
+# Resource: dashboard
+# ===================================================================
+
+def register_dashboard_commands(subparsers):
+    db = subparsers.add_parser("dashboard", help="Dashboard data")
+    actions = db.add_subparsers(dest="action")
+
+    actions.add_parser("stats", help="Get dashboard statistics")
+
+
+def handle_dashboard(args):
+    action = getattr(args, "action", None)
+    if not action:
+        print("Usage: ba2cli.py dashboard <action>", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "stats":
+        data = api_call(args, "GET", "/api/dashboard/stats")
+        format_output(data, human=args.human)
 
 
 # ===================================================================
@@ -807,15 +1622,22 @@ def main():
 
     resource_parsers = parser.add_subparsers(dest="resource")
 
-    # Register implemented resources
+    # Register all resources
     register_datasets_commands(resource_parsers)
     register_targets_commands(resource_parsers)
     register_indicators_commands(resource_parsers)
     register_jobs_commands(resource_parsers)
-
-    # Register stub resources
-    for name in _STUB_RESOURCES:
-        _register_stub(resource_parsers, name)
+    register_profiles_commands(resource_parsers)
+    register_models_commands(resource_parsers)
+    register_strategies_commands(resource_parsers)
+    register_backtests_commands(resource_parsers)
+    register_cache_commands(resource_parsers)
+    register_workers_commands(resource_parsers)
+    register_tasks_commands(resource_parsers)
+    register_settings_commands(resource_parsers)
+    register_server_commands(resource_parsers)
+    register_ml_commands(resource_parsers)
+    register_dashboard_commands(resource_parsers)
 
     args = parser.parse_args()
 
@@ -829,13 +1651,22 @@ def main():
         "targets": handle_targets,
         "indicators": handle_indicators,
         "jobs": handle_jobs,
+        "profiles": handle_profiles,
+        "models": handle_models,
+        "strategies": handle_strategies,
+        "backtests": handle_backtests,
+        "cache": handle_cache,
+        "workers": handle_workers,
+        "tasks": handle_tasks,
+        "settings": handle_settings,
+        "server": handle_server,
+        "ml": handle_ml,
+        "dashboard": handle_dashboard,
     }
 
     handler = handlers.get(args.resource)
     if handler:
         handler(args)
-    elif args.resource in _STUB_RESOURCES:
-        _handle_stub(args, args.resource)
     else:
         parser.print_help()
         sys.exit(1)
