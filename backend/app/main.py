@@ -262,7 +262,7 @@ async def startup_event():
     init_training_task_queue(max_workers=2)
     training_queue = get_training_task_queue()
     training_queue.register_handler('training_job', handle_training_job)
-    logger.info("Training task queue initialized with 2 workers")
+    logger.info("Training task queue initialized with 2 workers (subprocess mode — training runs in separate process)")
 
     # Initialize dedicated OHLCV queue (isolated, resizable, won't affect other task types)
     from app.services.ohlcv_cache_handler import handle_ohlcv_cache_fetch

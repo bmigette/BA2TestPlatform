@@ -6,10 +6,13 @@ Tasks are processed by background threads within the same application.
 """
 
 import logging
+import subprocess
+import sys
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -50,7 +53,7 @@ class TaskQueueService:
         status = task_service.get_task_status(task_id)
     """
 
-    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, exclude_task_types: Optional[List[str]] = None, name: str = "TaskQueue"):
+    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, exclude_task_types: Optional[List[str]] = None, name: str = "TaskQueue", use_subprocess: bool = False):
         """
         Initialize task queue service.
 
@@ -61,17 +64,22 @@ class TaskQueueService:
             exclude_task_types: If set, NEVER process tasks of these types (blacklist)
                                 Ignored when task_types is also set.
             name: Queue name for logging
+            use_subprocess: If True, run task handlers in separate processes
+                            to avoid GIL contention. The subprocess handles its
+                            own DB updates; the worker thread just monitors it.
         """
         self.max_workers = max_workers
         self.poll_interval = poll_interval
         self.task_types = task_types
         self.exclude_task_types = exclude_task_types
         self.name = name
+        self.use_subprocess = use_subprocess
         self._handlers: Dict[str, Callable] = {}
         self._running = False
         self._workers: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._active_tasks: Dict[str, threading.Thread] = {}
+        self._active_processes: Dict[str, 'subprocess.Popen'] = {}
 
     def register_handler(self, task_type: str, handler: Callable):
         """
@@ -108,6 +116,12 @@ class TaskQueueService:
         """Stop the task queue."""
         self._running = False
         logger.info(f"Stopping {self.name}...")
+
+        # Terminate active subprocesses
+        for task_id, proc in list(self._active_processes.items()):
+            if proc.poll() is None:
+                logger.info(f"Terminating subprocess for task {task_id}")
+                proc.terminate()
 
         # Wait for workers to finish
         for worker in self._workers:
@@ -252,6 +266,12 @@ class TaskQueueService:
             task.status = TaskStatus.CANCELLED.value
             task.completed_at = datetime.now()
             db.commit()
+
+            # Terminate subprocess if running in subprocess mode
+            proc = self._active_processes.get(task_id)
+            if proc and proc.poll() is None:
+                logger.info(f"Terminating subprocess for cancelled task {task_id}")
+                proc.terminate()
 
             logger.info(f"Cancelled task {task_id}")
             return True
@@ -550,6 +570,101 @@ class TaskQueueService:
         # Track active task
         self._active_tasks[task_id] = threading.current_thread()
 
+        if self.use_subprocess:
+            self._process_task_subprocess(task, worker_name)
+        else:
+            self._process_task_inline(task, worker_name)
+
+    def _process_task_subprocess(self, task: TaskQueue, worker_name: str):
+        """Process a task by spawning a separate Python process.
+
+        This avoids GIL contention — the worker thread sleeps while the
+        subprocess does the heavy lifting in its own interpreter.
+        The subprocess handles DB updates (progress, status) directly.
+        """
+        task_id = task.task_id
+
+        # Find the training_worker.py script
+        backend_dir = Path(__file__).resolve().parent.parent.parent
+        worker_script = backend_dir / "training_worker.py"
+
+        if not worker_script.exists():
+            logger.error(f"Training worker script not found: {worker_script}")
+            self._fail_task(task_id, f"Worker script not found: {worker_script}")
+            return
+
+        # Spawn subprocess using the same Python interpreter
+        cmd = [sys.executable, str(worker_script), task_id]
+        logger.info(f"{worker_name} spawning subprocess for task {task_id}: {' '.join(cmd)}")
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(backend_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self._active_processes[task_id] = proc
+
+            # Wait for the subprocess, sleeping to release GIL
+            while proc.poll() is None:
+                time.sleep(2.0)
+                # Check if we should stop
+                if not self._running:
+                    logger.warning(f"Queue stopping, terminating subprocess for task {task_id}")
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                    break
+
+            exit_code = proc.returncode
+            stdout = proc.stdout.read().decode('utf-8', errors='replace') if proc.stdout else ''
+            stderr = proc.stderr.read().decode('utf-8', errors='replace') if proc.stderr else ''
+
+            if exit_code != 0:
+                logger.error(f"Subprocess for task {task_id} exited with code {exit_code}")
+                if stderr:
+                    logger.error(f"Subprocess stderr: {stderr[-500:]}")
+                # Check if the subprocess already updated the status
+                db = SessionLocal()
+                try:
+                    db_task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+                    if db_task and db_task.status == 'running':
+                        # Subprocess crashed without updating status
+                        db_task.status = TaskStatus.FAILED.value
+                        db_task.error_message = f"Worker process crashed (exit code {exit_code}): {stderr[-200:]}"
+                        db_task.completed_at = datetime.now()
+                        db.commit()
+                finally:
+                    db.close()
+            else:
+                logger.info(f"Subprocess for task {task_id} completed (exit code 0)")
+
+        except Exception as e:
+            logger.error(f"Failed to spawn/monitor subprocess for task {task_id}: {e}")
+            self._fail_task(task_id, f"Subprocess error: {str(e)}")
+
+        finally:
+            self._active_processes.pop(task_id, None)
+            self._active_tasks.pop(task_id, None)
+
+    def _fail_task(self, task_id: str, error_message: str):
+        """Mark a task as failed in the database."""
+        db = SessionLocal()
+        try:
+            db_task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if db_task:
+                db_task.status = TaskStatus.FAILED.value
+                db_task.error_message = error_message
+                db_task.completed_at = datetime.now()
+                db.commit()
+        finally:
+            db.close()
+
+    def _process_task_inline(self, task: TaskQueue, worker_name: str):
+        """Process a task inline in the current thread (original behavior)."""
+        task_id = task.task_id
+        task_type = task.task_type
+
         db = SessionLocal()
         try:
             # Get handler
@@ -655,13 +770,19 @@ def get_training_task_queue() -> TaskQueueService:
 
 
 def init_training_task_queue(max_workers: int = 2):
-    """Initialize and start the dedicated training task queue."""
+    """Initialize and start the dedicated training task queue.
+
+    Uses subprocess mode to run training jobs in separate Python processes,
+    avoiding GIL contention that would block the API event loop during
+    CPU/GPU-intensive training.
+    """
     import os
     global _training_task_queue
     _training_task_queue = TaskQueueService(
         max_workers=max_workers,
         task_types=['training_job'],
-        name="TrainingTaskQueue"
+        name="TrainingTaskQueue",
+        use_subprocess=True,
     )
     if os.getenv('PYTEST_CURRENT_TEST') is None:
         _training_task_queue.start()
