@@ -66,9 +66,26 @@ def verify_admin_token(authorization: str):
 def _schedule_restart():
     """Replace the current process after a short delay to allow the response to be sent."""
     import time
-    time.sleep(1)
-    logger.info("Restarting server via os.execv...")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    time.sleep(2)
+    logger.info("Restarting server...")
+
+    # Rebuild the command using -m uvicorn to work on both Windows and Unix.
+    # sys.argv[0] may be a script path (e.g. .../venv/bin/uvicorn) that is not
+    # directly executable on Windows.
+    uvicorn_args = []
+    skip_next = False
+    for i, arg in enumerate(sys.argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if i == 0:
+            # Skip the script path (e.g. uvicorn), we'll use -m uvicorn instead
+            continue
+        uvicorn_args.append(arg)
+
+    cmd = [sys.executable, "-m", "uvicorn"] + uvicorn_args
+    logger.info("Restart command: %s", " ".join(cmd))
+    os.execv(sys.executable, cmd)
 
 
 @router.post("/update")
