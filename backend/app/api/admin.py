@@ -6,6 +6,8 @@ and log file reading.
 Protected by a bearer token configured via BA2_ADMIN_TOKEN environment variable.
 """
 
+import collections
+import hmac
 import logging
 import os
 import subprocess
@@ -54,7 +56,7 @@ def verify_admin_token(authorization: str):
         )
 
     token = parts[1]
-    if token != admin_token:
+    if not hmac.compare_digest(token, admin_token):
         raise HTTPException(
             status_code=403,
             detail="Invalid admin token.",
@@ -90,6 +92,13 @@ async def update_server(authorization: str = Header(default=None)):
             timeout=30,
         )
         git_output = result.stdout.strip() or result.stderr.strip()
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail="git pull failed (exit code {}): {}".format(
+                    result.returncode, result.stderr.strip() or git_output
+                ),
+            )
     except subprocess.TimeoutExpired:
         raise HTTPException(
             status_code=504,
@@ -116,7 +125,7 @@ async def update_server(authorization: str = Header(default=None)):
 @router.get("/logs/{level}")
 async def read_logs(
     level: str,
-    lines: int = Query(default=100),
+    lines: int = Query(default=100, ge=1, le=10000),
     search: Optional[str] = Query(default=None),
     authorization: str = Header(default=None),
 ):
@@ -147,22 +156,23 @@ async def read_logs(
 
     try:
         with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
-            all_lines = fh.readlines()
+            if search:
+                search_lower = search.lower()
+                all_lines = [
+                    line.rstrip("\n") for line in fh
+                    if search_lower in line.lower()
+                ]
+            else:
+                all_lines = collections.deque(fh, maxlen=lines)
+                all_lines = [line.rstrip("\n") for line in all_lines]
     except OSError as exc:
         raise HTTPException(
             status_code=500,
             detail="Failed to read log file: {}".format(str(exc)),
         )
 
-    # Strip trailing newlines
-    all_lines = [line.rstrip("\n") for line in all_lines]
-
-    if search:
-        search_lower = search.lower()
-        all_lines = [line for line in all_lines if search_lower in line.lower()]
-
     total = len(all_lines)
-    result_lines = all_lines[-lines:] if lines < total else all_lines
+    result_lines = all_lines[-lines:] if lines < total else list(all_lines)
 
     return {
         "level": level,

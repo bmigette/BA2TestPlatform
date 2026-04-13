@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -104,6 +105,8 @@ def format_output(data, human=False, table_fn=None):
     a table.  If *human* is True and *table_fn* is provided it will be called;
     otherwise we fall back to indented JSON.
     """
+    if data is None:
+        data = {"status": "ok"}
     if human and table_fn is not None:
         try:
             table_fn(data)
@@ -861,8 +864,7 @@ def handle_profiles(args):
         format_output(data, human=args.human)
 
     elif action == "import":
-        with open(args.file, "r") as fh:
-            body = json.load(fh)
+        body = parse_json_arg("@" + args.file)
         data = api_call(args, "POST", "/api/jobs/profiles/import", data=body)
         format_output(data, human=args.human)
 
@@ -1133,7 +1135,7 @@ def handle_strategies(args):
         path = "/api/strategies"
         search = getattr(args, "search", None)
         if search:
-            path += "?search={}".format(search)
+            path += "?search={}".format(urllib.parse.quote(search, safe=""))
         data = api_call(args, "GET", path)
         format_output(
             data,
@@ -1275,8 +1277,7 @@ def handle_backtests(args):
         if args.strategy_id:
             body["strategy_id"] = args.strategy_id
         if args.strategy_file:
-            with open(args.strategy_file, "r") as fh:
-                body["strategy_params"] = json.load(fh)
+            body["strategy_params"] = parse_json_arg("@" + args.strategy_file)
         if args.fitness_metric:
             body["fitness_metric"] = args.fitness_metric
         data = api_call(args, "POST", "/api/backtests", data=body)
@@ -1631,7 +1632,7 @@ def handle_logs(args):
     if action in ("info", "error", "debug"):
         path = "/api/admin/logs/{}?lines={}".format(action, args.lines)
         if args.search:
-            path += "&search={}".format(args.search)
+            path += "&search={}".format(urllib.parse.quote(args.search, safe=""))
         data = api_call(args, "GET", path)
         if args.human and data and isinstance(data, dict) and "lines" in data:
             for line in data["lines"]:
@@ -1966,9 +1967,6 @@ def handle_help(args):
 # ===================================================================
 
 # Map resource name -> (register_fn, handle_fn)
-_RESOURCE_REGISTRY = {}
-
-
 def main():
     parser = argparse.ArgumentParser(
         prog="ba2cli",
