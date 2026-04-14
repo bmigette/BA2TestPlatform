@@ -73,9 +73,10 @@ After Run 1 completes for all 3 symbols, explore different target types:
   - Test **ALL elite models** (not just top 2-3)
   - Sweep **TP/SL combinations**: match TP/SL width to the prediction horizon (e.g., 15-day targets need wider TP/SL than 3-day targets). Tight SL on a long-horizon prediction will stop out before the move plays out.
   - Try **probability thresholds**: only trade when model confidence > 0.6, 0.7, 0.8
-  - Try **long-only strategies** (no shorts) for trending assets
+  - **Always test BOTH buy AND sell strategies** — never long-only or short-only. Strategies must work in both bull and bear markets. Long-only results are biased by market direction and don't validate model quality.
   - Try **no TP/SL** (exit when model signal reverses instead)
   - Try **different strategy conditions**: combine model classes with exit rules
+  - **Compare against buy-and-hold** to verify model adds alpha over the underlying trend
 - **Sanity check**: if the strategy loses money even on the training period, something is wrong with the strategy design, not the model. Investigate before moving on.
 - Match strategy style to the target the model was trained on:
   - **Intraday target** → tight TP/SL ~1-3%, short hold
@@ -86,6 +87,12 @@ After Run 1 completes for all 3 symbols, explore different target types:
 - Keep top 20 profitable strategies, delete the rest.
 - Save best strategies and backtests in database.
 - Document results in `.claudebtcache/best_results.md`.
+- **Generate/update HTML report** in `.claudebtcache/report.html` after each backtest loop:
+  - Summary table of all profitable strategies across all symbols/targets
+  - Top strategies sorted by profit factor
+  - Key metrics: return%, PF, win rate, trades, max DD
+  - Embed equity curve data (inline chart if possible)
+  - Each loop/target gets its own section, cumulative across runs
 
 ### Step 7 - Cleanup
 - Remove models, strategies, and backtests that are not in the top 20 profitable.
