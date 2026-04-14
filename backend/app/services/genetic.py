@@ -58,7 +58,8 @@ class GeneticOptimizer:
         crossover_prob: float = 0.7,
         mutation_prob: float = 0.2,
         early_stopping_generations: int = 3,
-        elitism_percent: float = 10.0
+        elitism_percent: float = 10.0,
+        parallel_individuals: int = 1
     ):
         """
         Initialize GeneticOptimizer.
@@ -82,6 +83,7 @@ class GeneticOptimizer:
         self.mutation_prob = mutation_prob
         self.early_stopping_generations = early_stopping_generations
         self.elitism_percent = elitism_percent
+        self.parallel_individuals = max(1, parallel_individuals)
 
         self.toolbox = None
         self.best_individual = None
@@ -382,7 +384,15 @@ class GeneticOptimizer:
             # This prevents re-evaluating elites which would give different results
             # due to stochastic neural network training
             invalid_ind = [ind for ind in population if not ind.fitness.valid]
-            fitnesses = list(map(self.toolbox.evaluate, invalid_ind))
+
+            if self.parallel_individuals > 1:
+                # Parallel evaluation — overlaps CPU data prep with GPU training
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=self.parallel_individuals) as executor:
+                    fitnesses = list(executor.map(self.toolbox.evaluate, invalid_ind))
+            else:
+                fitnesses = list(map(self.toolbox.evaluate, invalid_ind))
+
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
 

@@ -1922,6 +1922,7 @@ def train_single_model(
     mutation_prob = genetic_config['mutationProb']
     early_stopping = genetic_config['earlyStoppingGenerations']
     elitism_percent = genetic_config['elitismPercent']
+    parallel_individuals = genetic_config.get('parallelIndividuals', 1)
 
     # Optimize metric - required
     optimize_metric = metrics_config.get('optimizeMetric')
@@ -2134,7 +2135,8 @@ def train_single_model(
         crossover_prob=crossover_prob,
         mutation_prob=mutation_prob,
         early_stopping_generations=early_stopping,
-        elitism_percent=elitism_percent
+        elitism_percent=elitism_percent,
+        parallel_individuals=parallel_individuals,
     )
 
     try:
@@ -2713,7 +2715,8 @@ def train_classification_optimization(
         crossover_prob=genetic_config['crossoverProb'],
         mutation_prob=genetic_config['mutationProb'],
         elitism_percent=genetic_config['elitismPercent'],
-        early_stopping_generations=genetic_config['earlyStoppingGenerations']
+        early_stopping_generations=genetic_config['earlyStoppingGenerations'],
+        parallel_individuals=genetic_config.get('parallelIndividuals', 1),
     )
 
     try:
@@ -2901,6 +2904,7 @@ def train_unified_optimization(
     early_stopping = genetic_config['earlyStoppingGenerations']
     elitism_percent = genetic_config['elitismPercent']
     training_epochs = genetic_config['trainingEpochs']
+    parallel_individuals = genetic_config.get('parallelIndividuals', 1)
 
     optimize_metric = metrics_config.get('optimizeMetric')
     if optimize_metric is None:
@@ -3225,7 +3229,8 @@ def train_unified_optimization(
         crossover_prob=crossover_prob,
         mutation_prob=mutation_prob,
         early_stopping_generations=early_stopping,
-        elitism_percent=elitism_percent
+        elitism_percent=elitism_percent,
+        parallel_individuals=parallel_individuals,
     )
 
     # Restore optimizer state if resuming
