@@ -410,22 +410,23 @@ class GeneticOptimizer:
             if checkpoint_callback:
                 checkpoint_callback(gen, population)
 
-            # Update best overall
+            # Update best overall and track early stopping
             if self.best_fitness is None or best_fit > self.best_fitness:
                 self.best_fitness = best_fit
                 self.best_individual = list(best_ind)
+                no_improvement_count = 0
+            else:
+                no_improvement_count += 1
 
-            # Early stopping check
+            # Early stopping: stop if overall best hasn't improved for N generations
+            if no_improvement_count >= self.early_stopping_generations:
+                logger.info(
+                    f"Early stopping at generation {gen} — no improvement for "
+                    f"{no_improvement_count} generations (best={self.best_fitness:.4f})"
+                )
+                break
+
             best_fitness_history.append(best_fit)
-            if len(best_fitness_history) > self.early_stopping_generations:
-                recent = best_fitness_history[-self.early_stopping_generations:]
-                if max(recent) == min(recent):
-                    no_improvement_count += 1
-                    if no_improvement_count >= 2:
-                        logger.info(f"Early stopping at generation {gen} - no improvement")
-                        break
-                else:
-                    no_improvement_count = 0
 
             # ELITISM: Preserve the best individuals unchanged
             n_elite = max(1, int((self.elitism_percent / 100.0) * len(population)))
