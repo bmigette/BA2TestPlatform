@@ -232,7 +232,7 @@ const Backtesting: React.FC = () => {
 
   // Results view
   const [selectedBacktest, setSelectedBacktest] = useState<Backtest | null>(null);
-  const [activeTab, setActiveTab] = useState<'equity' | 'drawdown' | 'trades'>('equity');
+  const [activeTab, setActiveTab] = useState<'equity' | 'drawdown' | 'trades' | 'strategy'>('equity');
   const [tradeFilter, setTradeFilter] = useState<'all' | 'profit' | 'loss'>('all');
   const [tradeSortField, setTradeSortField] = useState<'pnl' | 'date' | 'duration'>('date');
   const [tradeSortAsc, setTradeSortAsc] = useState(false);
@@ -1473,48 +1473,6 @@ const Backtesting: React.FC = () => {
                 </div>
               </div>
 
-              {/* Strategy Details */}
-              {selectedBacktest.strategyParams && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Strategy Details</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">TP: </span>
-                      <span className="font-medium text-gray-900 dark:text-gray-100">
-                        {selectedBacktest.strategyParams.initialTpPercent ?? selectedBacktest.strategyParams.initial_tp_percent ?? '—'}%
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">SL: </span>
-                      <span className="font-medium text-gray-900 dark:text-gray-100">
-                        {selectedBacktest.strategyParams.initialSlPercent ?? selectedBacktest.strategyParams.initial_sl_percent ?? '—'}%
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">Buy: </span>
-                      <span className="font-medium text-gray-900 dark:text-gray-100">
-                        {selectedBacktest.strategyParams.buyEntryConditions?.conditions?.length ?? 0} condition(s)
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">Sell: </span>
-                      <span className="font-medium text-gray-900 dark:text-gray-100">
-                        {selectedBacktest.strategyParams.sellEntryConditions?.conditions?.length ?? 0} condition(s)
-                      </span>
-                    </div>
-                  </div>
-                  {/* Show condition details */}
-                  <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
-                    {selectedBacktest.strategyParams.buyEntryConditions?.conditions?.map((c: any, i: number) => (
-                      <div key={i}>Buy: {c.field} {c.comparison} {c.value}</div>
-                    ))}
-                    {selectedBacktest.strategyParams.sellEntryConditions?.conditions?.map((c: any, i: number) => (
-                      <div key={i}>Sell: {c.field} {c.comparison} {c.value}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* Description / Notes */}
               {selectedBacktest.description && (
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
@@ -1530,11 +1488,12 @@ const Backtesting: React.FC = () => {
                     {[
                       { id: 'equity', label: 'Equity Curve', icon: TrendingUp },
                       { id: 'drawdown', label: 'Drawdown', icon: TrendingDown },
-                      { id: 'trades', label: 'Trade List', icon: Activity }
+                      { id: 'trades', label: 'Trade List', icon: Activity },
+                      { id: 'strategy', label: 'Strategy', icon: Award }
                     ].map(tab => (
                       <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'trades')}
+                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'trades' | 'strategy')}
                         className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors text-sm ${
                           activeTab === tab.id
                             ? 'border-blue-500 text-blue-600'
@@ -1704,6 +1663,83 @@ const Backtesting: React.FC = () => {
                           </tbody>
                         </table>
                       </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'strategy' && (
+                    <div className="p-4 space-y-4">
+                      {/* Strategy info from strategyParams or strategyId */}
+                      {(() => {
+                        const sp = selectedBacktest.strategyParams;
+                        if (!sp && !selectedBacktest.strategyId) {
+                          return <p className="text-sm text-gray-500 dark:text-gray-400">No strategy information available for this backtest.</p>;
+                        }
+                        const tp = sp?.initialTpPercent ?? sp?.initial_tp_percent;
+                        const sl = sp?.initialSlPercent ?? sp?.initial_sl_percent;
+                        const buyConditions = sp?.buyEntryConditions?.conditions || [];
+                        const sellConditions = sp?.sellEntryConditions?.conditions || [];
+                        const exitConditions = sp?.exitConditions || [];
+                        const stratName = sp?.strategyName;
+                        return (
+                          <>
+                            {stratName && (
+                              <div className="text-sm">
+                                <span className="text-gray-500 dark:text-gray-400">Strategy: </span>
+                                <span className="font-medium text-gray-900 dark:text-gray-100">{stratName}</span>
+                              </div>
+                            )}
+                            {!sp && selectedBacktest.strategyId && (
+                              <p className="text-sm text-gray-500 dark:text-gray-400">Strategy ID: {selectedBacktest.strategyId} (details not embedded — created before strategy copy feature)</p>
+                            )}
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit</div>
+                                <div className="text-lg font-bold text-green-600">{tp != null ? `${tp}%` : 'None'}</div>
+                              </div>
+                              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Stop Loss</div>
+                                <div className="text-lg font-bold text-red-600">{sl != null ? `${sl}%` : 'None'}</div>
+                              </div>
+                            </div>
+                            {buyConditions.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-green-600 mb-2">Buy Entry Conditions ({buyConditions.length})</h4>
+                                <div className="space-y-1">
+                                  {buyConditions.map((c: any, i: number) => (
+                                    <div key={i} className="text-sm bg-green-50 dark:bg-green-900/20 rounded px-3 py-1.5 text-green-800 dark:text-green-300">
+                                      {c.field} <span className="font-mono">{c.comparison}</span> {c.value}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {sellConditions.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-red-600 mb-2">Sell Entry Conditions ({sellConditions.length})</h4>
+                                <div className="space-y-1">
+                                  {sellConditions.map((c: any, i: number) => (
+                                    <div key={i} className="text-sm bg-red-50 dark:bg-red-900/20 rounded px-3 py-1.5 text-red-800 dark:text-red-300">
+                                      {c.field} <span className="font-mono">{c.comparison}</span> {c.value}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {exitConditions.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-yellow-600 mb-2">Exit Conditions ({exitConditions.length})</h4>
+                                <div className="space-y-1">
+                                  {exitConditions.map((rule: any, i: number) => (
+                                    <div key={i} className="text-sm bg-yellow-50 dark:bg-yellow-900/20 rounded px-3 py-1.5 text-yellow-800 dark:text-yellow-300">
+                                      {rule.name || `Exit Rule ${i + 1}`}: {rule.conditions?.conditions?.map((c: any) => `${c.field} ${c.comparison} ${c.value}`).join(' AND ') || 'N/A'}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
