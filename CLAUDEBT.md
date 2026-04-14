@@ -11,6 +11,7 @@
 - CLI: `python ba2cli.py --host 192.168.1.150 --port 8000`
 - Admin token (for restart): `BA2_ADMIN_TOKEN=DSIOQDIOUHIOSQVjicpodqs`
 - Remote OS: Windows, Python 3.12, GPU 24GB VRAM
+- **Timezone: CEST** (both server and local). Use `date` command to get current time — don't guess.
 
 ## Guidelines
 - Max Population: 70 individuals
