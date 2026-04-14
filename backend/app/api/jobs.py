@@ -430,6 +430,27 @@ def sync_job_from_task(job_id: str) -> Optional[Dict[str, Any]]:
             if "test_positives_pct" in result:
                 jobs_store[job_id]["testPositivesPct"] = result["test_positives_pct"]
 
+    # Read training state from checkpoint_data (written by subprocess workers)
+    try:
+        from app.models.database import SessionLocal
+        from app.models.task_queue import TaskQueue
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == job_id).first()
+            if task and task.checkpoint_data:
+                cp = task.checkpoint_data
+                for key in ("currentGeneration", "totalGenerations", "currentIndividual",
+                            "populationSize", "currentModelType", "currentEpoch",
+                            "totalEpochs", "bestFitness", "errorCount", "successCount",
+                            "trainRows", "testRows", "targetColumn",
+                            "trainPositives", "testPositives", "trainPositivesPct", "testPositivesPct"):
+                    if key in cp:
+                        jobs_store[job_id][key] = cp[key]
+        finally:
+            db.close()
+    except Exception:
+        pass
+
     return jobs_store.get(job_id)
 
 

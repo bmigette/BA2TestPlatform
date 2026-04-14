@@ -447,31 +447,48 @@ def update_job_training_state(
     epoch_metrics: Dict[str, float] = None,
     reset_epoch_history: bool = False
 ):
-    """Update job training state for real-time progress tracking."""
+    """Update job training state for real-time progress tracking.
+
+    Writes to BOTH the in-memory jobs_store (for same-process mode)
+    AND the database checkpoint_data (for subprocess mode).
+    """
+    # Build state dict for DB persistence
+    state_update = {}
+    if current_generation is not None: state_update["currentGeneration"] = current_generation
+    if total_generations is not None: state_update["totalGenerations"] = total_generations
+    if current_individual is not None: state_update["currentIndividual"] = current_individual
+    if population_size is not None: state_update["populationSize"] = population_size
+    if current_model_type is not None: state_update["currentModelType"] = current_model_type
+    if current_epoch is not None: state_update["currentEpoch"] = current_epoch
+    if total_epochs is not None: state_update["totalEpochs"] = total_epochs
+    if best_fitness is not None: state_update["bestFitness"] = best_fitness
+    if error_count is not None: state_update["errorCount"] = error_count
+    if success_count is not None: state_update["successCount"] = success_count
+
+    # Write to database (works across processes)
+    if state_update:
+        try:
+            from app.models.database import SessionLocal
+            from app.models.task_queue import TaskQueue
+            db = SessionLocal()
+            try:
+                task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+                if task:
+                    existing = task.checkpoint_data or {}
+                    existing.update(state_update)
+                    task.checkpoint_data = existing
+                    db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.debug(f"Failed to persist training state to DB: {e}")
+
+    # Also update in-memory store (for same-process mode / backward compat)
     try:
         from app.api.jobs import jobs_store
         if task_id in jobs_store:
             job = jobs_store[task_id]
-            if current_generation is not None:
-                job["currentGeneration"] = current_generation
-            if total_generations is not None:
-                job["totalGenerations"] = total_generations
-            if current_individual is not None:
-                job["currentIndividual"] = current_individual
-            if population_size is not None:
-                job["populationSize"] = population_size
-            if current_model_type is not None:
-                job["currentModelType"] = current_model_type
-            if current_epoch is not None:
-                job["currentEpoch"] = current_epoch
-            if total_epochs is not None:
-                job["totalEpochs"] = total_epochs
-            if best_fitness is not None:
-                job["bestFitness"] = best_fitness
-            if error_count is not None:
-                job["errorCount"] = error_count
-            if success_count is not None:
-                job["successCount"] = success_count
+            job.update(state_update)
             if current_model_params is not None:
                 job["currentModelParams"] = current_model_params
             # Reset epoch history when starting a new individual/model
@@ -1586,21 +1603,40 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
             prediction_horizon=prediction_horizon
         )
 
-        # Update job store with dataset statistics immediately (so UI can show them while training)
+        # Update dataset statistics (persisted to DB for subprocess mode)
+        dataset_stats = {
+            "trainRows": len(train_df),
+            "testRows": len(test_df),
+            "targetColumn": target_column,
+            "trainPositives": train_positives,
+            "testPositives": test_positives,
+            "trainPositivesPct": round(train_positives / len(train_df) * 100, 2) if len(train_df) > 0 else 0,
+            "testPositivesPct": round(test_positives / len(test_df) * 100, 2) if len(test_df) > 0 else 0,
+        }
+        # Write to DB checkpoint_data
+        try:
+            from app.models.database import SessionLocal
+            from app.models.task_queue import TaskQueue
+            _db = SessionLocal()
+            try:
+                _task = _db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+                if _task:
+                    existing = _task.checkpoint_data or {}
+                    existing.update(dataset_stats)
+                    _task.checkpoint_data = existing
+                    _db.commit()
+            finally:
+                _db.close()
+        except Exception as e:
+            logger.warning(f"Failed to persist dataset stats to DB: {e}")
+        # Also update in-memory store
         try:
             from app.api.jobs import jobs_store
             if task_id in jobs_store:
-                jobs_store[task_id]["trainRows"] = len(train_df)
-                jobs_store[task_id]["testRows"] = len(test_df)
-                jobs_store[task_id]["targetColumn"] = target_column
-                jobs_store[task_id]["targetColumns"] = all_target_columns  # All generated target column names
-                jobs_store[task_id]["trainPositives"] = train_positives
-                jobs_store[task_id]["testPositives"] = test_positives
-                jobs_store[task_id]["trainPositivesPct"] = round(train_positives / len(train_df) * 100, 2) if len(train_df) > 0 else 0
-                jobs_store[task_id]["testPositivesPct"] = round(test_positives / len(test_df) * 100, 2) if len(test_df) > 0 else 0
-                logger.info(f"Updated job store with dataset stats: train={len(train_df)}, test={len(test_df)}, target_columns={all_target_columns}")
-        except Exception as e:
-            logger.warning(f"Failed to update job store with dataset stats: {e}")
+                jobs_store[task_id].update(dataset_stats)
+                jobs_store[task_id]["targetColumns"] = all_target_columns
+        except Exception:
+            pass
 
         # Get timeframe from first dataset (for frequency inference)
         timeframe = dataset_infos[0].get('timeframe', 'daily') if dataset_infos else 'daily'
