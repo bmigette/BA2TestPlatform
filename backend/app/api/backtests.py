@@ -51,21 +51,26 @@ async def list_backtests(
 
     # Use raw SQL to avoid loading huge blob columns (equity_curve, drawdown_curve, trades
     # can be 2-5MB each; with 200+ backtests the ORM query loads 1GB+ even with defer)
-    result = db.execute(text("""
+    # Check if description column exists (migration may not have run yet)
+    col_check = db.execute(text("PRAGMA table_info(backtests)"))
+    columns = [r[1] for r in col_check]
+    has_description = 'description' in columns
+
+    desc_col = ", description" if has_description else ""
+    result = db.execute(text(f"""
         SELECT id, name, model_id, prediction_dataset_id, execution_dataset_id,
                strategy_id, start_date, end_date, initial_capital, fitness_metric,
                status, total_return, sharpe_ratio, max_drawdown, win_rate,
                profit_factor, total_trades, avg_trade_duration, final_equity,
-               best_trade, worst_trade, error_message, is_saved, created_at, completed_at,
-               description
+               best_trade, worst_trade, error_message, is_saved, created_at, completed_at
+               {desc_col}
         FROM backtests
         ORDER BY created_at DESC
     """))
 
     backtests = []
     for row in result:
-        # Raw SQL returns strings for datetime columns in SQLite
-        backtests.append({
+        bt = {
             "id": row[0], "name": row[1], "modelId": row[2],
             "predictionDatasetId": row[3], "executionDatasetId": row[4],
             "strategyId": row[5],
@@ -81,8 +86,9 @@ async def list_backtests(
             "isSaved": row[22] or False,
             "createdAt": str(row[23]) if row[23] else None,
             "completedAt": str(row[24]) if row[24] else None,
-            "description": row[25],
-        })
+            "description": row[25] if has_description else None,
+        }
+        backtests.append(bt)
 
     return {"backtests": backtests, "total": len(backtests)}
 
