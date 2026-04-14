@@ -637,11 +637,14 @@ class TaskQueueService:
         logger.info(f"{worker_name} spawning subprocess for task {task_id}: {' '.join(cmd)}")
 
         try:
+            # Redirect stdout/stderr to DEVNULL — all logging goes through the
+            # logging module to files. Using PIPE would deadlock when the buffer
+            # fills (subprocess blocks on write, parent never reads).
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(backend_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             self._active_processes[task_id] = proc
 
@@ -656,13 +659,9 @@ class TaskQueueService:
                     break
 
             exit_code = proc.returncode
-            stdout = proc.stdout.read().decode('utf-8', errors='replace') if proc.stdout else ''
-            stderr = proc.stderr.read().decode('utf-8', errors='replace') if proc.stderr else ''
 
             if exit_code != 0:
                 logger.error(f"Subprocess for task {task_id} exited with code {exit_code}")
-                if stderr:
-                    logger.error(f"Subprocess stderr: {stderr[-500:]}")
                 # Check if the subprocess already updated the status
                 db = SessionLocal()
                 try:
