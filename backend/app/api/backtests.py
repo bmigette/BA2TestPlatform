@@ -47,18 +47,41 @@ async def list_backtests(
     db: Session = Depends(get_db)
 ):
     """List all backtests (summary only, no curves/trades)."""
-    backtests = db.query(Backtest).options(
-        defer(Backtest.equity_curve),
-        defer(Backtest.drawdown_curve),
-        defer(Backtest.trades),
-        defer(Backtest.results),
-        defer(Backtest.strategy_params),
-    ).order_by(Backtest.created_at.desc()).all()
+    from sqlalchemy import text
 
-    return BacktestListResponse(
-        backtests=[bt.to_summary_dict() for bt in backtests],
-        total=len(backtests)
-    )
+    # Use raw SQL to avoid loading huge blob columns (equity_curve, drawdown_curve, trades
+    # can be 2-5MB each; with 200+ backtests the ORM query loads 1GB+ even with defer)
+    result = db.execute(text("""
+        SELECT id, name, model_id, prediction_dataset_id, execution_dataset_id,
+               strategy_id, start_date, end_date, initial_capital, fitness_metric,
+               status, total_return, sharpe_ratio, max_drawdown, win_rate,
+               profit_factor, total_trades, avg_trade_duration, final_equity,
+               best_trade, worst_trade, error_message, is_saved, created_at, completed_at
+        FROM backtests
+        ORDER BY created_at DESC
+    """))
+
+    backtests = []
+    for row in result:
+        backtests.append({
+            "id": row[0], "name": row[1], "modelId": row[2],
+            "predictionDatasetId": row[3], "executionDatasetId": row[4],
+            "strategyId": row[5],
+            "startDate": row[6].isoformat() if row[6] else None,
+            "endDate": row[7].isoformat() if row[7] else None,
+            "initialCapital": row[8], "fitnessMetric": row[9],
+            "status": row[10], "totalReturn": row[11],
+            "sharpeRatio": row[12], "maxDrawdown": row[13],
+            "winRate": row[14], "profitFactor": row[15],
+            "totalTrades": row[16], "avgTradeDuration": row[17],
+            "finalEquity": row[18], "bestTrade": row[19],
+            "worstTrade": row[20], "errorMessage": row[21],
+            "isSaved": row[22] or False,
+            "createdAt": row[23].isoformat() if row[23] else None,
+            "completedAt": row[24].isoformat() if row[24] else None,
+        })
+
+    return {"backtests": backtests, "total": len(backtests)}
 
 
 @router.post("")
