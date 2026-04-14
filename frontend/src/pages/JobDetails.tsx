@@ -430,22 +430,17 @@ const JobDetails: React.FC = () => {
   // Always poll via HTTP — subprocess training doesn't push via WebSocket
   useEffect(() => {
     if (job?.status === 'running' || job?.status === 'paused') {
-      // Poll job progress and resources every 5 seconds
+      // Poll job progress, resources, and all data every 5 seconds
       const progressInterval = setInterval(() => {
         fetchJob();
         fetchResources();
-      }, 5000);
-
-      // Slower refresh for generations, individuals, and elite models (10s)
-      const slowInterval = setInterval(() => {
         fetchGenerations();
         fetchIndividuals();
         fetchEliteModels();
-      }, 10000);
+      }, 5000);
 
       return () => {
         clearInterval(progressInterval);
-        clearInterval(slowInterval);
       };
     }
   }, [job?.status, wsConnected, fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
