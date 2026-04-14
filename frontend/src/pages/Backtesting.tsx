@@ -1293,7 +1293,7 @@ const Backtesting: React.FC = () => {
                         </div>
                       </div>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                        {models.find(m => m.id === bt.modelId)?.name || `Model #${bt.modelId}`}{bt.createdAt ? ' · ' + new Date(bt.createdAt).toLocaleDateString() : ''}
+                        {(bt as any).modelName || `Model #${bt.modelId}`}{bt.createdAt ? ' · ' + new Date(bt.createdAt).toLocaleDateString() : ''}
                       </p>
                       {bt.status === 'completed' && (
                         <div className="flex items-center gap-3 text-xs">

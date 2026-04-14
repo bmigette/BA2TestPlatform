@@ -58,15 +58,17 @@ async def list_backtests(
 
     desc_col = ", description" if has_description else ""
     result = db.execute(text(f"""
-        SELECT id, name, model_id, prediction_dataset_id, execution_dataset_id,
-               strategy_id, start_date, end_date, initial_capital, fitness_metric,
-               status, total_return, sharpe_ratio, max_drawdown, win_rate,
-               profit_factor, total_trades, winning_trades, losing_trades,
-               avg_trade_duration, final_equity,
-               best_trade, worst_trade, error_message, is_saved, created_at, completed_at
+        SELECT b.id, b.name, b.model_id, b.prediction_dataset_id, b.execution_dataset_id,
+               b.strategy_id, b.start_date, b.end_date, b.initial_capital, b.fitness_metric,
+               b.status, b.total_return, b.sharpe_ratio, b.max_drawdown, b.win_rate,
+               b.profit_factor, b.total_trades, b.winning_trades, b.losing_trades,
+               b.avg_trade_duration, b.final_equity,
+               b.best_trade, b.worst_trade, b.error_message, b.is_saved, b.created_at, b.completed_at,
+               m.name as model_name
                {desc_col}
-        FROM backtests
-        ORDER BY created_at DESC
+        FROM backtests b
+        LEFT JOIN trained_models m ON b.model_id = m.id
+        ORDER BY b.created_at DESC
     """))
 
     backtests = []
@@ -88,7 +90,8 @@ async def list_backtests(
             "isSaved": row[24] or False,
             "createdAt": str(row[25]) if row[25] else None,
             "completedAt": str(row[26]) if row[26] else None,
-            "description": row[27] if has_description else None,
+            "modelName": row[27],
+            "description": row[28] if has_description else None,
         }
         backtests.append(bt)
 
