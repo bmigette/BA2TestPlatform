@@ -63,12 +63,13 @@ async def list_backtests(
 
     backtests = []
     for row in result:
+        # Raw SQL returns strings for datetime columns in SQLite
         backtests.append({
             "id": row[0], "name": row[1], "modelId": row[2],
             "predictionDatasetId": row[3], "executionDatasetId": row[4],
             "strategyId": row[5],
-            "startDate": row[6].isoformat() if row[6] else None,
-            "endDate": row[7].isoformat() if row[7] else None,
+            "startDate": str(row[6]) if row[6] else None,
+            "endDate": str(row[7]) if row[7] else None,
             "initialCapital": row[8], "fitnessMetric": row[9],
             "status": row[10], "totalReturn": row[11],
             "sharpeRatio": row[12], "maxDrawdown": row[13],
@@ -77,8 +78,8 @@ async def list_backtests(
             "finalEquity": row[18], "bestTrade": row[19],
             "worstTrade": row[20], "errorMessage": row[21],
             "isSaved": row[22] or False,
-            "createdAt": row[23].isoformat() if row[23] else None,
-            "completedAt": row[24].isoformat() if row[24] else None,
+            "createdAt": str(row[23]) if row[23] else None,
+            "completedAt": str(row[24]) if row[24] else None,
         })
 
     return {"backtests": backtests, "total": len(backtests)}
