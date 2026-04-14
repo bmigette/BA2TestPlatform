@@ -7,6 +7,7 @@ import {
   Library,
   TrendingUp,
   Wrench,
+  Archive,
   Settings
 } from 'lucide-react';
 
@@ -20,6 +21,7 @@ const Sidebar: React.FC = () => {
     { path: '/models', label: 'Models', icon: Library },
     { path: '/backtesting', label: 'Backtesting', icon: TrendingUp },
     { path: '/tools', label: 'Tools', icon: Wrench },
+    { path: '/saved-data', label: 'Saved Data', icon: Archive },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
