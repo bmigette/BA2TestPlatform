@@ -427,26 +427,24 @@ const JobDetails: React.FC = () => {
   }, [fetchJob, fetchGenerations, fetchIndividuals, fetchResources, fetchEliteModels]);
 
   // Auto-refresh for running jobs
-  // When WebSocket is connected, we get real-time job progress and system resources
-  // Only fallback polling when WS is disconnected
+  // Always poll via HTTP — subprocess training doesn't push via WebSocket
   useEffect(() => {
     if (job?.status === 'running' || job?.status === 'paused') {
-      // Fallback polling when WebSocket is not connected
-      const fallbackInterval = wsConnected ? null : setInterval(() => {
+      // Poll job progress and resources every 5 seconds
+      const progressInterval = setInterval(() => {
         fetchJob();
         fetchResources();
-      }, 2000);
+      }, 5000);
 
-      // Slower refresh for generations, individuals, and elite models (5s)
-      // These are not streamed via WebSocket
+      // Slower refresh for generations, individuals, and elite models (10s)
       const slowInterval = setInterval(() => {
         fetchGenerations();
         fetchIndividuals();
         fetchEliteModels();
-      }, 5000);
+      }, 10000);
 
       return () => {
-        if (fallbackInterval) clearInterval(fallbackInterval);
+        clearInterval(progressInterval);
         clearInterval(slowInterval);
       };
     }
