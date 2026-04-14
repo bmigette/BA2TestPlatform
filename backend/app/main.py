@@ -235,6 +235,15 @@ async def startup_event():
     from app.models.model import TrainedModel  # noqa: F401
     init_db()
 
+    # Run pending database migrations (ALTER TABLE etc.)
+    try:
+        import subprocess as _sp
+        _sp.run([sys.executable, "scripts/migrate_db.py"], timeout=30,
+                capture_output=True, text=True, cwd=str(Path(__file__).parent.parent))
+        logger.info("Database migrations checked")
+    except Exception as e:
+        logger.warning(f"Migration check failed (non-fatal): {e}")
+
     # Initialize default indicator collections
     from app.models.database import SessionLocal
     from app.models.indicator_collection import IndicatorCollection
