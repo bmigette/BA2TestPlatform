@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models import get_db, Backtest, Strategy, TrainedModel, Dataset
 
@@ -46,8 +46,14 @@ class BacktestListResponse(BaseModel):
 async def list_backtests(
     db: Session = Depends(get_db)
 ):
-    """List all backtests."""
-    backtests = db.query(Backtest).order_by(Backtest.created_at.desc()).all()
+    """List all backtests (summary only, no curves/trades)."""
+    backtests = db.query(Backtest).options(
+        defer(Backtest.equity_curve),
+        defer(Backtest.drawdown_curve),
+        defer(Backtest.trades),
+        defer(Backtest.results),
+        defer(Backtest.strategy_params),
+    ).order_by(Backtest.created_at.desc()).all()
 
     return BacktestListResponse(
         backtests=[bt.to_summary_dict() for bt in backtests],
