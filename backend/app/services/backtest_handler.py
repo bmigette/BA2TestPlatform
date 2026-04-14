@@ -123,19 +123,40 @@ class MLStrategy(Strategy):
         return probs, is_new_bar
 
     def next(self):
-        """Called for each bar - evaluate conditions and place orders."""
+        """Called for each bar - evaluate conditions and place orders.
+
+        Optimized for dual-timeframe: only builds full context and evaluates
+        entry/exit conditions when there's work to do. On bars without a new
+        prediction and no open position, this is essentially a no-op (TP/SL
+        are handled by backtesting.py internally).
+        """
         current_date = self.data.index[-1]
-        current_price = self.data.Close[-1]
 
         # Get prediction for this bar (supports dual-timeframe)
         probs, is_new_prediction_bar = self._get_prediction_for_time(current_date)
 
         if probs is None:
             self.bar_idx += 1
-            next_evaluation_bar()
             return
 
-        # Build context for condition evaluation
+        # Fast path: no position and not a new prediction bar → nothing to do
+        # (TP/SL for existing orders are checked by backtesting.py internally)
+        has_position = bool(self.position)
+        has_exit_conditions = bool(self.exit_conditions)
+
+        if not has_position and not is_new_prediction_bar:
+            self.bar_idx += 1
+            return
+
+        # Only check exit conditions when in position and on prediction bars
+        # (TP/SL are handled by backtesting.py on every bar automatically)
+        if has_position and has_exit_conditions and not is_new_prediction_bar:
+            self.bar_idx += 1
+            return
+
+        current_price = self.data.Close[-1]
+
+        # Build context (only when needed)
         predicted_class = int(np.argmax(probs))
         max_prob = float(np.max(probs))
 

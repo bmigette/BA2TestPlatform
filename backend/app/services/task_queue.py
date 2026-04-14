@@ -53,7 +53,7 @@ class TaskQueueService:
         status = task_service.get_task_status(task_id)
     """
 
-    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, exclude_task_types: Optional[List[str]] = None, name: str = "TaskQueue", use_subprocess: bool = False):
+    def __init__(self, max_workers: int = 2, poll_interval: float = 1.0, task_types: Optional[List[str]] = None, exclude_task_types: Optional[List[str]] = None, name: str = "TaskQueue", use_subprocess: bool = False, worker_script: str = None):
         """
         Initialize task queue service.
 
@@ -67,6 +67,9 @@ class TaskQueueService:
             use_subprocess: If True, run task handlers in separate processes
                             to avoid GIL contention. The subprocess handles its
                             own DB updates; the worker thread just monitors it.
+            worker_script: Name of the worker script in the backend dir
+                           (e.g. "training_worker.py", "backtest_worker.py").
+                           Required when use_subprocess=True.
         """
         self.max_workers = max_workers
         self.poll_interval = poll_interval
@@ -74,6 +77,7 @@ class TaskQueueService:
         self.exclude_task_types = exclude_task_types
         self.name = name
         self.use_subprocess = use_subprocess
+        self.worker_script = worker_script
         self._handlers: Dict[str, Callable] = {}
         self._running = False
         self._workers: List[threading.Thread] = []
@@ -623,12 +627,13 @@ class TaskQueueService:
         """
         task_id = task.task_id
 
-        # Find the training_worker.py script
+        # Find the worker script
         backend_dir = Path(__file__).resolve().parent.parent.parent
-        worker_script = backend_dir / "training_worker.py"
+        script_name = self.worker_script or "training_worker.py"
+        worker_script = backend_dir / script_name
 
         if not worker_script.exists():
-            logger.error(f"Training worker script not found: {worker_script}")
+            logger.error(f"Worker script not found: {worker_script}")
             self._fail_task(task_id, f"Worker script not found: {worker_script}")
             return
 
@@ -821,12 +826,52 @@ def init_training_task_queue(max_workers: int = 2):
         task_types=['training_job'],
         name="TrainingTaskQueue",
         use_subprocess=True,
+        worker_script="training_worker.py",
     )
     if os.getenv('PYTEST_CURRENT_TEST') is None:
         _training_task_queue.start()
     else:
         logger.info("Test mode detected - skipping training task queue worker startup")
     return _training_task_queue
+
+
+# Dedicated backtest task queue — subprocess mode to avoid GIL contention.
+_backtest_task_queue: Optional[TaskQueueService] = None
+
+
+def get_backtest_task_queue() -> TaskQueueService:
+    """Get the dedicated backtest task queue instance."""
+    global _backtest_task_queue
+    if _backtest_task_queue is None:
+        _backtest_task_queue = TaskQueueService(
+            max_workers=2,
+            task_types=['backtest'],
+            name="BacktestTaskQueue",
+            use_subprocess=True,
+            worker_script="backtest_worker.py",
+        )
+    return _backtest_task_queue
+
+
+def init_backtest_task_queue(max_workers: int = 2):
+    """Initialize and start the dedicated backtest task queue.
+
+    Uses subprocess mode so CPU-intensive backtests don't block the API.
+    """
+    import os
+    global _backtest_task_queue
+    _backtest_task_queue = TaskQueueService(
+        max_workers=max_workers,
+        task_types=['backtest'],
+        name="BacktestTaskQueue",
+        use_subprocess=True,
+        worker_script="backtest_worker.py",
+    )
+    if os.getenv('PYTEST_CURRENT_TEST') is None:
+        _backtest_task_queue.start()
+    else:
+        logger.info("Test mode detected - skipping backtest task queue worker startup")
+    return _backtest_task_queue
 
 
 # Dedicated OHLCV task queue — isolated so it can be resized without affecting

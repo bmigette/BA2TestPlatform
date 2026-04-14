@@ -41,3 +41,14 @@ Quality Diversity (QD) algorithms aim to find a diverse collection of high-perfo
 
 
 Check price that is used for target predictions
+
+## Backtest Strategy Engine
+- [ ] **Multiple open trades**: Support `max_open_trades` setting to allow opening new positions while existing ones are active. Currently limited to 1 position at a time.
+- [ ] **Trade open delay**: Configurable minimum bars/time between trades to avoid overtrading.
+- [ ] **Per-bar evaluation for multi-trade**: When multiple trades enabled, condition evaluation on every execution bar is needed (currently optimized to skip non-prediction bars in single-trade mode).
+- [ ] **Backtest optimization engine**: Backend endpoint that sweeps TP/SL/strategy params in a single request (load model once, predict once, sweep params) instead of one backtest per combination.
+
+## Performance
+- [ ] **SQLite → PostgreSQL**: Large blob columns (equity_curve, drawdown_curve) cause page fragmentation. PostgreSQL with TOAST would handle better.
+- [ ] **Backtest curve storage**: Store equity/drawdown curves in files or compress them instead of raw JSON blobs in DB.
+- [ ] **Uvicorn workers**: Test `--workers N` on Windows for API concurrency.
