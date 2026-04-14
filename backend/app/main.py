@@ -283,8 +283,9 @@ async def startup_event():
     # Recover interrupted jobs (crashed while running)
     recover_interrupted_jobs()
 
-    # Clear stale result data from completed tasks to reclaim DB space
-    task_queue.clear_completed_results(days=1)
+    # NOTE: DB cleanup (clear_completed_results) is NOT run on startup — it can
+    # take minutes on large databases and block the server from starting.
+    # Use the POST /api/admin/db-cleanup endpoint instead.
 
     logger.info("Application startup complete")
 
