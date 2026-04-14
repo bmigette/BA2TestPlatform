@@ -2,7 +2,7 @@
 Backtest model for storing backtest results
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Float, Boolean
+from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, ForeignKey, Float, Boolean
 from sqlalchemy.sql import func
 from .database import Base
 
