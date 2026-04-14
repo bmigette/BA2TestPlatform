@@ -443,7 +443,8 @@ def sync_job_from_task(job_id: str) -> Optional[Dict[str, Any]]:
                             "populationSize", "currentModelType", "currentEpoch",
                             "totalEpochs", "bestFitness", "errorCount", "successCount",
                             "trainRows", "testRows", "targetColumn",
-                            "trainPositives", "testPositives", "trainPositivesPct", "testPositivesPct"):
+                            "trainPositives", "testPositives", "trainPositivesPct", "testPositivesPct",
+                            "epochHistory"):
                     if key in cp:
                         jobs_store[job_id][key] = cp[key]
         finally:

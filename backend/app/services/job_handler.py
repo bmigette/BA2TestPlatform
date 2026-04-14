@@ -452,7 +452,7 @@ def update_job_training_state(
     Writes to BOTH the in-memory jobs_store (for same-process mode)
     AND the database checkpoint_data (for subprocess mode).
     """
-    # Build state dict for DB persistence
+    # Build state dict — all fields for in-memory, subset for DB
     state_update = {}
     if current_generation is not None: state_update["currentGeneration"] = current_generation
     if total_generations is not None: state_update["totalGenerations"] = total_generations
@@ -465,7 +465,8 @@ def update_job_training_state(
     if error_count is not None: state_update["errorCount"] = error_count
     if success_count is not None: state_update["successCount"] = success_count
 
-    # Write to database (works across processes)
+    # Write to database (works across processes).
+    # Persist on every call — epoch-level updates included for real-time UI.
     if state_update:
         try:
             from app.models.database import SessionLocal
@@ -476,6 +477,16 @@ def update_job_training_state(
                 if task:
                     existing = task.checkpoint_data or {}
                     existing.update(state_update)
+                    # Also persist epoch history for loss charts
+                    if epoch_metrics:
+                        history = existing.get("epochHistory", [])
+                        history.append({
+                            "epoch": current_epoch or len(history) + 1,
+                            **epoch_metrics
+                        })
+                        existing["epochHistory"] = history
+                    if reset_epoch_history:
+                        existing["epochHistory"] = []
                     task.checkpoint_data = existing
                     db.commit()
             finally:
