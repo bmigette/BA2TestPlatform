@@ -61,7 +61,8 @@ async def list_backtests(
         SELECT id, name, model_id, prediction_dataset_id, execution_dataset_id,
                strategy_id, start_date, end_date, initial_capital, fitness_metric,
                status, total_return, sharpe_ratio, max_drawdown, win_rate,
-               profit_factor, total_trades, avg_trade_duration, final_equity,
+               profit_factor, total_trades, winning_trades, losing_trades,
+               avg_trade_duration, final_equity,
                best_trade, worst_trade, error_message, is_saved, created_at, completed_at
                {desc_col}
         FROM backtests
@@ -80,13 +81,14 @@ async def list_backtests(
             "status": row[10], "totalReturn": row[11],
             "sharpeRatio": row[12], "maxDrawdown": row[13],
             "winRate": row[14], "profitFactor": row[15],
-            "totalTrades": row[16], "avgTradeDuration": row[17],
-            "finalEquity": row[18], "bestTrade": row[19],
-            "worstTrade": row[20], "errorMessage": row[21],
-            "isSaved": row[22] or False,
-            "createdAt": str(row[23]) if row[23] else None,
-            "completedAt": str(row[24]) if row[24] else None,
-            "description": row[25] if has_description else None,
+            "totalTrades": row[16], "winningTrades": row[17], "losingTrades": row[18],
+            "avgTradeDuration": row[19],
+            "finalEquity": row[20], "bestTrade": row[21],
+            "worstTrade": row[22], "errorMessage": row[23],
+            "isSaved": row[24] or False,
+            "createdAt": str(row[25]) if row[25] else None,
+            "completedAt": str(row[26]) if row[26] else None,
+            "description": row[27] if has_description else None,
         }
         backtests.append(bt)
 

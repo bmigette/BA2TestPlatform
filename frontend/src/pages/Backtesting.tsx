@@ -156,6 +156,8 @@ interface Backtest {
   winRate: number | null;
   profitFactor: number | null;
   totalTrades: number | null;
+  winningTrades: number | null;
+  losingTrades: number | null;
   avgTradeDuration: number | null;
   bestTrade: number | null;
   worstTrade: number | null;
@@ -1296,7 +1298,7 @@ const Backtesting: React.FC = () => {
                             {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
                           </span>
                           <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
-                          <span className="text-gray-500">{bt.totalTrades} trades</span>
+                          <span className="text-gray-500">{bt.totalTrades} trades{bt.winningTrades != null ? ` (${bt.winningTrades}W/${bt.losingTrades}L)` : ''}</span>
                         </div>
                       )}
                     </div>
@@ -1373,7 +1375,7 @@ const Backtesting: React.FC = () => {
                       {bt.status === 'pending' ? 'Pending...' :
                        bt.status === 'running' ? 'Running...' :
                        bt.status === 'failed' ? 'Failed' :
-                       `Model #${bt.modelId}`}
+                       `Model #${bt.modelId}${bt.createdAt ? ' · ' + new Date(bt.createdAt).toLocaleDateString() : ''}`}
                     </p>
                     {bt.status === 'failed' && bt.errorMessage && (
                       <p className="text-xs text-red-400 mb-2 truncate" title={bt.errorMessage}>
@@ -1386,7 +1388,7 @@ const Backtesting: React.FC = () => {
                           {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
                         </span>
                         <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
-                        <span className="text-gray-500">{bt.totalTrades} trades</span>
+                        <span className="text-gray-500">{bt.totalTrades} trades{bt.winningTrades != null ? ` (${bt.winningTrades}W/${bt.losingTrades}L)` : ''}</span>
                       </div>
                     )}
                   </div>
@@ -1670,7 +1672,21 @@ const Backtesting: React.FC = () => {
                     <div className="p-4 space-y-4">
                       {/* Strategy info from strategyParams or strategyId */}
                       {(() => {
-                        const sp = selectedBacktest.strategyParams;
+                        // Try strategyParams first, fall back to loading from strategies list
+                        let sp = selectedBacktest.strategyParams as any;
+                        if (!sp && selectedBacktest.strategyId) {
+                          const strat = strategies.find(s => s.id === selectedBacktest.strategyId);
+                          if (strat) {
+                            sp = {
+                              initialTpPercent: strat.initialTpPercent,
+                              initialSlPercent: strat.initialSlPercent,
+                              buyEntryConditions: strat.buyEntryConditions,
+                              sellEntryConditions: strat.sellEntryConditions,
+                              exitConditions: strat.exitConditions,
+                              strategyName: strat.name,
+                            };
+                          }
+                        }
                         if (!sp && !selectedBacktest.strategyId) {
                           return <p className="text-sm text-gray-500 dark:text-gray-400">No strategy information available for this backtest.</p>;
                         }
@@ -1689,7 +1705,7 @@ const Backtesting: React.FC = () => {
                               </div>
                             )}
                             {!sp && selectedBacktest.strategyId && (
-                              <p className="text-sm text-gray-500 dark:text-gray-400">Strategy ID: {selectedBacktest.strategyId} (details not embedded — created before strategy copy feature)</p>
+                              <p className="text-sm text-gray-500 dark:text-gray-400">Strategy ID: {selectedBacktest.strategyId} (strategy not found)</p>
                             )}
                             <div className="grid grid-cols-2 gap-4">
                               <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
