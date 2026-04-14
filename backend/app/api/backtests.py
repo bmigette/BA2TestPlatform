@@ -50,7 +50,7 @@ async def list_backtests(
     backtests = db.query(Backtest).order_by(Backtest.created_at.desc()).all()
 
     return BacktestListResponse(
-        backtests=[bt.to_dict() for bt in backtests],
+        backtests=[bt.to_summary_dict() for bt in backtests],
         total=len(backtests)
     )
 

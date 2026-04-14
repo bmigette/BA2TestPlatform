@@ -113,8 +113,38 @@ class Backtest(Base):
             })
         return transformed
 
+    def to_summary_dict(self):
+        """Convert to lightweight dictionary for list endpoints (no curves/trades)."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "modelId": self.model_id,
+            "predictionDatasetId": self.prediction_dataset_id,
+            "executionDatasetId": self.execution_dataset_id,
+            "strategyId": self.strategy_id,
+            "startDate": self.start_date.isoformat() if self.start_date else None,
+            "endDate": self.end_date.isoformat() if self.end_date else None,
+            "initialCapital": self.initial_capital,
+            "fitnessMetric": self.fitness_metric,
+            "status": self.status,
+            "totalReturn": self.total_return,
+            "sharpeRatio": self.sharpe_ratio,
+            "maxDrawdown": self.max_drawdown,
+            "winRate": self.win_rate,
+            "profitFactor": self.profit_factor,
+            "totalTrades": self.total_trades,
+            "avgTradeDuration": self.avg_trade_duration,
+            "finalEquity": self.final_equity,
+            "bestTrade": self.best_trade,
+            "worstTrade": self.worst_trade,
+            "errorMessage": self.error_message,
+            "isSaved": self.is_saved or False,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+            "completedAt": self.completed_at.isoformat() if self.completed_at else None,
+        }
+
     def to_dict(self):
-        """Convert to dictionary for API response"""
+        """Convert to full dictionary for detail endpoints (includes curves/trades)."""
         # Transform trades to frontend format
         transformed_trades = self._transform_trades_for_frontend()
 
