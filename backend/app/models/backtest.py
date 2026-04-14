@@ -33,6 +33,7 @@ class Backtest(Base):
     commission = Column(Float, default=0.1)
     slippage = Column(Float, default=0.05)
     fitness_metric = Column(String(50), nullable=True)
+    description = Column(Text, nullable=True)  # User/agent notes about the backtest
 
     # Results
     status = Column(String(50), default="pending")  # pending/running/completed/failed
@@ -138,6 +139,7 @@ class Backtest(Base):
             "bestTrade": self.best_trade,
             "worstTrade": self.worst_trade,
             "errorMessage": self.error_message,
+            "description": self.description,
             "isSaved": self.is_saved or False,
             "createdAt": self.created_at.isoformat() if self.created_at else None,
             "completedAt": self.completed_at.isoformat() if self.completed_at else None,
@@ -203,6 +205,7 @@ class Backtest(Base):
             "avgTrade": self.avg_trade,
             "equityPeak": self.equity_peak,
             "errorMessage": self.error_message,
+            "description": self.description,
             "isSaved": self.is_saved or False,
             "createdAt": self.created_at.isoformat() if self.created_at else None,
             "startedAt": self.started_at.isoformat() if self.started_at else None,

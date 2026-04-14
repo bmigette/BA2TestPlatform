@@ -1515,6 +1515,14 @@ const Backtesting: React.FC = () => {
                 </div>
               )}
 
+              {/* Description / Notes */}
+              {selectedBacktest.description && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Notes</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{selectedBacktest.description}</p>
+                </div>
+              )}
+
               {/* Chart Tabs */}
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
                 <div className="border-b border-gray-200 dark:border-gray-700">

@@ -56,7 +56,8 @@ async def list_backtests(
                strategy_id, start_date, end_date, initial_capital, fitness_metric,
                status, total_return, sharpe_ratio, max_drawdown, win_rate,
                profit_factor, total_trades, avg_trade_duration, final_equity,
-               best_trade, worst_trade, error_message, is_saved, created_at, completed_at
+               best_trade, worst_trade, error_message, is_saved, created_at, completed_at,
+               description
         FROM backtests
         ORDER BY created_at DESC
     """))
@@ -80,6 +81,7 @@ async def list_backtests(
             "isSaved": row[22] or False,
             "createdAt": str(row[23]) if row[23] else None,
             "completedAt": str(row[24]) if row[24] else None,
+            "description": row[25],
         })
 
     return {"backtests": backtests, "total": len(backtests)}
@@ -119,6 +121,19 @@ async def create_backtest(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
 
+    # Copy strategy params into backtest record for persistence
+    # (so backtest results are self-contained even if strategy is later deleted)
+    strategy_params = backtest.strategy_params or {}
+    if strategy and not strategy_params:
+        strategy_params = {
+            'initialTpPercent': strategy.initial_tp_percent,
+            'initialSlPercent': strategy.initial_sl_percent,
+            'buyEntryConditions': strategy.buy_entry_conditions,
+            'sellEntryConditions': strategy.sell_entry_conditions,
+            'exitConditions': strategy.exit_conditions,
+            'strategyName': strategy.name,
+        }
+
     # Create backtest record (use integer id for database FK)
     db_backtest = Backtest(
         name=backtest.name,
@@ -126,7 +141,7 @@ async def create_backtest(
         prediction_dataset_id=backtest.prediction_dataset_id,
         execution_dataset_id=backtest.execution_dataset_id,
         strategy_id=backtest.strategy_id,
-        strategy_params=backtest.strategy_params,
+        strategy_params=strategy_params,
         start_date=start_date,
         end_date=end_date,
         initial_capital=backtest.initial_capital,
@@ -157,6 +172,25 @@ async def create_backtest(
     logger.info(f"Queued backtest task: {task_id}")
 
     return db_backtest.to_dict()
+
+
+@router.patch("/{backtest_id}")
+async def update_backtest(
+    backtest_id: int,
+    update: dict,
+    db: Session = Depends(get_db)
+):
+    """Update backtest fields (description, name)."""
+    backtest = db.query(Backtest).filter(Backtest.id == backtest_id).first()
+    if not backtest:
+        raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
+
+    if 'description' in update:
+        backtest.description = update['description']
+    if 'name' in update:
+        backtest.name = update['name']
+    db.commit()
+    return {"status": "updated", "id": backtest_id}
 
 
 @router.get("/{backtest_id}")
