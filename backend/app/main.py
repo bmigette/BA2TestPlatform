@@ -253,8 +253,10 @@ async def startup_event():
 
     # Initialize task queue
     from app.services.task_queue import init_task_queue, get_task_queue, init_ohlcv_task_queue, get_ohlcv_task_queue, init_training_task_queue, get_training_task_queue
-    init_task_queue(max_workers=8, exclude_task_types=['ohlcv_cache_fetch', 'training_job'])
-    logger.info("Main task queue initialized with 8 workers (excludes ohlcv_cache_fetch, training_job)")
+    # Main queue: 2 workers (not 8 — backtests are CPU-intensive and hold the GIL,
+    # so more workers just creates more GIL contention blocking the API event loop)
+    init_task_queue(max_workers=2, exclude_task_types=['ohlcv_cache_fetch', 'training_job'])
+    logger.info("Main task queue initialized with 2 workers (excludes ohlcv_cache_fetch, training_job)")
 
     # Register task handlers on the main queue
     from app.services.dataset_handler import handle_dataset_regeneration
