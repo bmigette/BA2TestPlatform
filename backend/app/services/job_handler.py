@@ -475,11 +475,13 @@ def update_job_training_state(
             try:
                 task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
                 if task:
-                    existing = task.checkpoint_data or {}
+                    # Copy to new dict — SQLAlchemy won't detect in-place
+                    # mutations on the same JSON object reference
+                    existing = dict(task.checkpoint_data or {})
                     existing.update(state_update)
                     # Also persist epoch history for loss charts
                     if epoch_metrics:
-                        history = existing.get("epochHistory", [])
+                        history = list(existing.get("epochHistory", []))
                         history.append({
                             "epoch": current_epoch or len(history) + 1,
                             **epoch_metrics
@@ -1632,7 +1634,7 @@ def handle_training_job(task_id: str, payload: Dict[str, Any], dry_run: bool = F
             try:
                 _task = _db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
                 if _task:
-                    existing = _task.checkpoint_data or {}
+                    existing = dict(_task.checkpoint_data or {})
                     existing.update(dataset_stats)
                     _task.checkpoint_data = existing
                     _db.commit()
