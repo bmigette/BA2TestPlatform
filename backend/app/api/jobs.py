@@ -1341,7 +1341,22 @@ async def get_job_individuals(job_id: str, generation: Optional[int] = None, mod
     if job_id in jobs_store and "allIndividuals" in jobs_store[job_id]:
         all_individuals = jobs_store[job_id]["allIndividuals"]
 
-    # If not in jobs_store, check task queue result (for completed jobs)
+    # Check checkpoint_data (for subprocess mode — real-time during training)
+    if not all_individuals:
+        try:
+            from app.models.database import SessionLocal
+            from app.models.task_queue import TaskQueue
+            db = SessionLocal()
+            try:
+                task = db.query(TaskQueue).filter(TaskQueue.task_id == job_id).first()
+                if task and task.checkpoint_data:
+                    all_individuals = task.checkpoint_data.get("allIndividuals", [])
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+    # If not in checkpoint_data, check task queue result (for completed jobs)
     if not all_individuals:
         task_queue = get_task_queue()
         task_status = task_queue.get_task_status(job_id)

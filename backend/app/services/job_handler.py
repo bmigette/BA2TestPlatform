@@ -538,6 +538,27 @@ def get_epoch_history(task_id: str) -> List[Dict[str, Any]]:
 
 def add_individual_to_job(task_id: str, individual_record: Dict[str, Any]):
     """Add an evaluated individual to the job store for real-time UI access."""
+    # Persist to DB (for subprocess mode)
+    try:
+        from app.models.database import SessionLocal
+        from app.models.task_queue import TaskQueue
+        db = SessionLocal()
+        try:
+            task = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if task:
+                existing = dict(task.checkpoint_data or {})
+                individuals = list(existing.get("allIndividuals", []))
+                individuals.append(individual_record)
+                existing["allIndividuals"] = individuals
+                existing["individualsCount"] = len(individuals)
+                task.checkpoint_data = existing
+                db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"Failed to persist individual to DB: {e}")
+
+    # Also update in-memory store
     try:
         from app.api.jobs import jobs_store
         if task_id in jobs_store:
@@ -545,7 +566,6 @@ def add_individual_to_job(task_id: str, individual_record: Dict[str, Any]):
             if "allIndividuals" not in job:
                 job["allIndividuals"] = []
             job["allIndividuals"].append(individual_record)
-            # Also update the individuals count
             job["individualsCount"] = len(job["allIndividuals"])
     except Exception as e:
         logger.warning(f"Failed to add individual to job store: {e}")
