@@ -66,12 +66,44 @@ def verify_admin_token(authorization: str):
 def _schedule_restart():
     """Replace the current process after a short delay to allow the response to be sent."""
     import time
+    import signal
     time.sleep(2)
     logger.info("Restarting server...")
 
+    # Stop all task queues (terminates subprocess workers)
+    try:
+        from app.services.task_queue import get_task_queue, get_training_task_queue, get_backtest_task_queue, get_ohlcv_task_queue
+        for queue_getter in [get_training_task_queue, get_backtest_task_queue, get_task_queue, get_ohlcv_task_queue]:
+            try:
+                q = queue_getter()
+                q.stop()
+            except Exception:
+                pass
+        logger.info("All task queues stopped")
+    except Exception as e:
+        logger.warning(f"Failed to stop task queues: {e}")
+
+    # Kill any remaining child processes (orphan prevention)
+    import psutil
+    try:
+        current = psutil.Process()
+        children = current.children(recursive=True)
+        for child in children:
+            logger.info(f"Terminating child process {child.pid}: {child.name()}")
+            child.terminate()
+        # Wait briefly for graceful termination
+        psutil.wait_procs(children, timeout=5)
+        # Force kill any survivors
+        for child in current.children(recursive=True):
+            logger.warning(f"Force killing child process {child.pid}")
+            child.kill()
+    except ImportError:
+        # psutil not available — fall back to no child cleanup
+        logger.warning("psutil not available — child processes may survive restart")
+    except Exception as e:
+        logger.warning(f"Child process cleanup error: {e}")
+
     # Rebuild the command using -m uvicorn to work on both Windows and Unix.
-    # sys.argv[0] may be a script path (e.g. .../venv/bin/uvicorn) that is not
-    # directly executable on Windows.
     uvicorn_args = []
     skip_next = False
     for i, arg in enumerate(sys.argv):
@@ -79,7 +111,6 @@ def _schedule_restart():
             skip_next = False
             continue
         if i == 0:
-            # Skip the script path (e.g. uvicorn), we'll use -m uvicorn instead
             continue
         uvicorn_args.append(arg)
 
