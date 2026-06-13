@@ -23,6 +23,12 @@ class Backtest(Base):
     prediction_dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
     execution_dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
 
+    # Engine discriminator (Task 7 / migration 013): distinguishes the two backtest
+    # engines that share this one table. 'ml' = legacy model-driven backtesting.py runs
+    # (model_id set); 'daily_expert' = Phase-2 daily expert engine (model_id=None). The
+    # daily route sets this to 'daily_expert'; everything else defaults to 'ml'.
+    engine_type = Column(String(50), default="ml")
+
     # Strategy
     strategy_id = Column(Integer, ForeignKey("strategies.id"), nullable=True)
     strategy_params = Column(JSON, nullable=True)  # Specific param values used
@@ -129,6 +135,7 @@ class Backtest(Base):
         return {
             "id": self.id,
             "name": self.name,
+            "engineType": self.engine_type or "ml",
             "modelId": self.model_id,
             "predictionDatasetId": self.prediction_dataset_id,
             "executionDatasetId": self.execution_dataset_id,

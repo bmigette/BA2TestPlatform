@@ -132,7 +132,10 @@ interface BacktestResults {
 interface Backtest {
   id: number;
   name: string;
-  modelId: number;
+  // 'ml' = legacy model-driven backtesting.py run (modelId set);
+  // 'daily_expert' = Phase-2 daily multi-asset expert engine (modelId null).
+  engineType?: string;
+  modelId: number | null;
   predictionDatasetId: number;
   executionDatasetId: number;
   strategyId: number | null;
@@ -1130,6 +1133,7 @@ const Backtesting: React.FC = () => {
                       {bt.status === 'pending' ? 'Pending...' :
                        bt.status === 'running' ? 'Running...' :
                        bt.status === 'failed' ? 'Failed' :
+                       bt.engineType === 'daily_expert' ? 'Daily expert (multi-asset)' :
                        `Model #${bt.modelId}`}
                     </p>
                     {bt.status === 'failed' && bt.errorMessage && (
@@ -1157,6 +1161,21 @@ const Backtesting: React.FC = () => {
         <div className="xl:col-span-2 space-y-4">
           {selectedBacktest ? (
             <>
+              {/* Header: name + engine-type badge (daily expert = multi-asset; ml = model-driven) */}
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
+                  {selectedBacktest.name}
+                </h3>
+                {selectedBacktest.engineType === 'daily_expert' ? (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                    Daily expert &middot; multi-asset
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                    ML strategy{selectedBacktest.modelId != null ? ` · Model #${selectedBacktest.modelId}` : ''}
+                  </span>
+                )}
+              </div>
               {/* Metrics Summary */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">

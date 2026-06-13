@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import get_db, Worker
 from app.models.dataset import Dataset
+from app.models.backtest import Backtest
 from app.api.jobs import jobs_store
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,26 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
             ))
     except Exception as e:
         logger.warning(f"Could not fetch datasets for activity: {e}")
+
+    # Add backtest activities (both legacy ML runs and Phase-2 daily expert runs).
+    # The engine_type discriminator (migration 013) lets us label which engine produced
+    # each run so daily multi-asset expert backtests surface alongside ML backtests.
+    try:
+        backtests = db.query(Backtest).order_by(Backtest.created_at.desc()).limit(20).all()
+        for bt in backtests:
+            engine_type = (bt.engine_type or "ml")
+            kind = "Daily expert backtest" if engine_type == "daily_expert" else "Backtest"
+            ts = (bt.completed_at or bt.started_at or bt.created_at)
+            activities.append(ActivityItem(
+                id=f"backtest-{bt.id}",
+                type="backtest",
+                action=bt.status or "pending",
+                title=f"{kind} '{bt.name}'",
+                timestamp=ts.isoformat() if ts else datetime.now().isoformat(),
+                status=bt.status or "pending",
+            ))
+    except Exception as e:
+        logger.warning(f"Could not fetch backtests for activity: {e}")
 
     # Sort by timestamp descending and limit to 20
     activities.sort(key=lambda x: x.timestamp, reverse=True)

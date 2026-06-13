@@ -166,8 +166,9 @@ async def create_daily_backtest(
     """Create + queue a daily multi-asset (expert) backtest.
 
     Creates a ``Backtest`` results row (``status="pending"``, ``model_id=None`` — the daily
-    engine is not model-driven; ``engine_type="daily_expert"`` once the Task-7 migration lands)
-    and queues a ``daily_backtest`` task whose payload carries the run config + the new row id.
+    engine is not model-driven; ``engine_type="daily_expert"`` to distinguish it from legacy
+    ML runs) and queues a ``daily_backtest`` task whose payload carries the run config + the
+    new row id.
     The ``daily_backtest`` handler runs the engine and persists the results onto the row.
     """
     # Validate fail-early (no defaults).
@@ -192,11 +193,8 @@ async def create_daily_backtest(
         slippage=request.slippage,
         fitness_metric=request.fitness_metric,
         status="pending",
+        engine_type="daily_expert",  # discriminates from legacy ML runs (migration 013)
     )
-    # engine_type is added by the Task-7 migration; set it only if the column exists so the
-    # route works both before and after that migration.
-    if hasattr(Backtest, "engine_type"):
-        db_backtest.engine_type = "daily_expert"
 
     db.add(db_backtest)
     db.commit()
