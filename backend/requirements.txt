@@ -1,3 +1,12 @@
+# BA2 Trade packages (Phase-0 extraction) — installed editable from sibling repos.
+# These provide ba2_common (interfaces/models/seams), ba2_providers (data providers),
+# and ba2_experts (the FMP experts) consumed by the backtest engine. A fresh
+# `pip install -r requirements.txt` from BA2TestPlatform/backend reproduces the
+# editable installs (relative to this file at BA2TestPlatform/backend/requirements.txt).
+-e ../../BA2TradeCommon
+-e ../../BA2TradeProviders
+-e ../../BA2TradeExperts
+
 # Core API Framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
