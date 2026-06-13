@@ -113,6 +113,13 @@ class BacktestAccount(AccountInterface):
         self._equity_snapshots: List[Dict[str, Any]] = []
         # Monotonic synthetic broker-order-id counter.
         self._broker_seq = 0
+        # order-id -> SIMULATED fill date (the virtual bar an order filled on). The
+        # TradingOrder row's ``created_at`` is stamped by the DB with wall-clock
+        # ``datetime.now()`` at row creation, which is NON-deterministic across runs; the
+        # filled-trade history must use the SIMULATED clock instead so two identical runs
+        # produce a byte-identical trade list (the reproducibility gate). Populated in
+        # ``_apply_fill`` and read by ``_order_to_trade``.
+        self._fill_dates: Dict[int, datetime] = {}
 
     # ======================================================================
     # Settings
@@ -649,6 +656,9 @@ class BacktestAccount(AccountInterface):
         order.open_price = fill_px
         order.status = OrderStatus.FILLED
         update_instance(order)
+        # Record the SIMULATED fill bar (not wall-clock) so the trade history is deterministic.
+        if order.id is not None:
+            self._fill_dates[order.id] = as_of
 
     # ======================================================================
     # TP/SL/OCO leg helpers
@@ -757,11 +767,19 @@ class BacktestAccount(AccountInterface):
                 update_instance(o)
 
     def _order_to_trade(self, order, qty: float) -> Dict[str, Any]:
-        """Map a filled ``TradingOrder`` row to the documented filled-trade dict shape."""
+        """Map a filled ``TradingOrder`` row to the documented filled-trade dict shape.
+
+        ``date`` is the SIMULATED fill bar (from ``_fill_dates``), NOT ``order.created_at``
+        (which the DB stamps with wall-clock ``datetime.now()`` and would make the trade
+        history non-deterministic run-to-run). Falls back to ``created_at`` only if a fill
+        date was not recorded (e.g. an order that fills outside the engine loop in a unit
+        test) so the field is never None for a filled order.
+        """
+        fill_date = self._fill_dates.get(order.id) if order.id is not None else None
         return {
             "symbol": order.symbol,
             "qty": abs(float(qty)),
             "side": order.side.value if order.side else None,
-            "date": order.created_at,
+            "date": fill_date if fill_date is not None else order.created_at,
             "price": order.open_price,
         }

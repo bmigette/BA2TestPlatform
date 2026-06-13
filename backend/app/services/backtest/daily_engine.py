@@ -40,7 +40,7 @@ Reuses (does NOT redefine):
 from __future__ import annotations
 
 import random
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -205,7 +205,14 @@ class DailyBacktestEngine:
         total = max(len(days), 1)
 
         for i, as_of in enumerate(days):
-            as_of_dt = datetime(as_of.year, as_of.month, as_of.day)
+            # Tz-AWARE UTC midnight — the SAME contract the live path assumes: the experts'
+            # _process does ``now = as_of or datetime.now(timezone.utc)`` and then subtracts
+            # tz-aware report/transaction dates, so a NAIVE as_of would raise
+            # "can't subtract offset-naive and offset-aware datetimes". Using aware UTC here
+            # makes the backtest clock byte-identical to the live ``datetime.now(timezone.utc)``
+            # the experts were written against. The price source normalises to a calendar
+            # date key (time/tz dropped), so bar lookups are unaffected.
+            as_of_dt = datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc)
 
             # 1. advance the clock + bust the per-account price cache (the gotcha).
             self.price.set_clock(as_of_dt)
