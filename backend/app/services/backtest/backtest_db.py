@@ -102,3 +102,50 @@ def seed_account_definition(
         description=description or f"Backtest simulated broker (run account {account_id})",
     )
     return add_instance(row)
+
+
+def seed_expert_instance(
+    *,
+    account_id: int,
+    expert_class_name: str,
+    enter_market_ruleset_id: int,
+    open_positions_ruleset_id: Optional[int] = None,
+    virtual_equity_pct: float = 100.0,
+    instance_id: Optional[int] = None,
+) -> int:
+    """Insert an ``ExpertInstance`` row for a backtest expert and return its id.
+
+    The packaged decision path resolves the expert by id in several places — the inherited
+    ``_create_transaction_for_order`` reads the recommendation's ``instance_id`` to set
+    ``Transaction.expert_id``; ``TradeRiskManagement.review_and_prioritize_pending_orders``
+    loads the ``ExpertInstance`` (for the account_id + ruleset ids) and the resolver-provided
+    expert object (for settings/balance). So the row MUST exist (with the enter_market ruleset
+    linked) before the engine drives the loop.
+
+    Args:
+        account_id: the BacktestAccount's AccountDefinition id (FK).
+        expert_class_name: the ba2_experts class name (stored in ``ExpertInstance.expert``),
+            e.g. ``"FMPEarningsDrift"``.
+        enter_market_ruleset_id: the seeded enter ruleset id (see ``default_rulesets``).
+        open_positions_ruleset_id: optional open-positions ruleset id (v1: usually None).
+        virtual_equity_pct: the expert's share of the account equity (default 100%).
+        instance_id: optional explicit PK (so callers can pin the id); auto-assigned if None.
+
+    Returns:
+        the ExpertInstance row id.
+    """
+    from ba2_common.core.models import ExpertInstance
+    from ba2_common.core.db import add_instance
+
+    row = ExpertInstance(
+        id=instance_id,
+        account_id=int(account_id),
+        expert=expert_class_name,
+        enabled=True,
+        virtual_equity_pct=float(virtual_equity_pct),
+        enter_market_ruleset_id=int(enter_market_ruleset_id),
+        open_positions_ruleset_id=(
+            int(open_positions_ruleset_id) if open_positions_ruleset_id is not None else None
+        ),
+    )
+    return add_instance(row)
