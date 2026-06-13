@@ -16,7 +16,10 @@ class Backtest(Base):
     name = Column(String(255), nullable=False)
 
     # Model and datasets
-    model_id = Column(Integer, ForeignKey("trained_models.id"), nullable=False)
+    # nullable=True (Decision 3a): daily expert (non-ML) backtests are NOT model-driven, so
+    # they store model_id=None. The legacy ML path always sets a real model_id. The matching
+    # migration that flips this on EXISTING populated DBs is Task 7 (db_migrate revision 013).
+    model_id = Column(Integer, ForeignKey("trained_models.id"), nullable=True)
     prediction_dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
     execution_dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
 

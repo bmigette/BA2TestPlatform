@@ -36,6 +36,35 @@ class BacktestCreate(BaseModel):
     fitness_metric: Optional[str] = None
 
 
+class DailyExpertSpec(BaseModel):
+    """One expert in a daily backtest: a ba2_experts class name + optional setting overrides."""
+    class_name: str  # serialised as "class" below via alias
+    settings: Optional[dict] = None
+
+    class Config:
+        fields = {"class_name": "class"}
+
+
+class DailyBacktestCreate(BaseModel):
+    """Request model for creating a daily multi-asset (expert) backtest.
+
+    No-defaults rule: every trading parameter is explicit. ``experts`` is a list of either
+    bare class-name strings or ``{"class": ..., "settings": {...}}`` objects. Datasets/model
+    are NOT used by the daily engine (the universe is ``enabled_instruments``)."""
+    name: str
+    enabled_instruments: List[str]
+    experts: List[dict]  # [{"class": "FMPEarningsDrift", "settings": {...}}] or ["FMPEarningsDrift"]
+    start_date: str
+    end_date: str
+    initial_capital: float
+    commission: float        # flat $ per fill (BacktestAccount commission_per_trade)
+    slippage: float          # slippage in basis points (BacktestAccount slippage_bps)
+    fill_model: str          # "next_bar_open" | "same_bar_close"
+    seed: int
+    fitness_metric: Optional[str] = None
+    warmup_days: Optional[int] = None
+
+
 class BacktestListResponse(BaseModel):
     """List of backtests."""
     backtests: List[dict]
@@ -127,6 +156,79 @@ async def create_backtest(
     logger.info(f"Queued backtest task: {task_id}")
 
     return db_backtest.to_dict()
+
+
+@router.post("/daily")
+async def create_daily_backtest(
+    request: DailyBacktestCreate,
+    db: Session = Depends(get_db)
+):
+    """Create + queue a daily multi-asset (expert) backtest.
+
+    Creates a ``Backtest`` results row (``status="pending"``, ``model_id=None`` — the daily
+    engine is not model-driven; ``engine_type="daily_expert"`` once the Task-7 migration lands)
+    and queues a ``daily_backtest`` task whose payload carries the run config + the new row id.
+    The ``daily_backtest`` handler runs the engine and persists the results onto the row.
+    """
+    # Validate fail-early (no defaults).
+    if not request.enabled_instruments:
+        raise HTTPException(status_code=400, detail="enabled_instruments must be non-empty")
+    if not request.experts:
+        raise HTTPException(status_code=400, detail="experts must be non-empty")
+
+    try:
+        start_date = datetime.fromisoformat(request.start_date)
+        end_date = datetime.fromisoformat(request.end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+
+    db_backtest = Backtest(
+        name=request.name,
+        model_id=None,  # daily expert runs are not model-driven (Task-7 migration makes this nullable)
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=request.initial_capital,
+        commission=request.commission,
+        slippage=request.slippage,
+        fitness_metric=request.fitness_metric,
+        status="pending",
+    )
+    # engine_type is added by the Task-7 migration; set it only if the column exists so the
+    # route works both before and after that migration.
+    if hasattr(Backtest, "engine_type"):
+        db_backtest.engine_type = "daily_expert"
+
+    db.add(db_backtest)
+    db.commit()
+    db.refresh(db_backtest)
+
+    logger.info(f"Created daily backtest: {db_backtest.name} (id={db_backtest.id})")
+
+    from app.services.task_queue import get_task_queue
+    task_queue = get_task_queue()
+    task_id = task_queue.queue_task(
+        task_type='daily_backtest',
+        name=f'Daily Backtest: {db_backtest.name}',
+        payload={
+            'backtest_id': db_backtest.id,
+            'name': request.name,
+            'enabled_instruments': request.enabled_instruments,
+            'experts': request.experts,
+            'start_date': request.start_date,
+            'end_date': request.end_date,
+            'initial_capital': request.initial_capital,
+            'commission': request.commission,
+            'slippage': request.slippage,
+            'fill_model': request.fill_model,
+            'seed': request.seed,
+            'warmup_days': request.warmup_days,
+        },
+        description=f'Daily expert backtest over {len(request.enabled_instruments)} instruments',
+    )
+
+    logger.info(f"Queued daily backtest task: {task_id}")
+
+    return {"taskId": task_id, "backtestId": db_backtest.id, **db_backtest.to_dict()}
 
 
 @router.get("/{backtest_id}")

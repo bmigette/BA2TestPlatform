@@ -255,6 +255,14 @@ class DailyBacktestEngine:
         created_any = False
 
         for symbol in universe:
+            # The per-symbol expert decision: ``analyze_as_of`` -> ``_gather`` reads
+            # ``self._gather_symbol`` (the live ``run_analysis`` sets it before _gather), so
+            # the engine must pin the symbol on the shared expert object each iteration.
+            # The STUB experts in the unit tests ignore it; the real ba2_experts require it.
+            try:
+                expert._gather_symbol = symbol
+            except Exception:  # noqa: BLE001 — a stub without the attr is fine
+                pass
             ctx = BacktestContext(
                 providers=providers,
                 settings=settings,

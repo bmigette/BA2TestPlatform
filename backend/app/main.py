@@ -251,11 +251,13 @@ async def startup_event():
     from app.services.dataset_handler import handle_dataset_regeneration
     from app.services.job_handler import handle_training_job
     from app.services.backtest_handler import handle_backtest
+    from app.services.backtest.daily_backtest_handler import handle_daily_backtest
     task_queue = get_task_queue()
     task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
     task_queue.register_handler('training_job', handle_training_job)
     task_queue.register_handler('backtest', handle_backtest)
-    logger.info("Registered task handlers: dataset_regeneration, training_job, backtest")
+    task_queue.register_handler('daily_backtest', handle_daily_backtest)
+    logger.info("Registered task handlers: dataset_regeneration, training_job, backtest, daily_backtest")
 
     # Recover interrupted jobs (crashed while running)
     recover_interrupted_jobs()
