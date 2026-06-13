@@ -18,9 +18,25 @@ This module (Phase 2 Task 2) implements:
 
 The 6 trading abstracts (``_submit_order_impl``, ``cancel_order``, ``modify_order``,
 ``adjust_tp``/``adjust_sl``/``adjust_tp_sl``) plus the ``refresh_orders`` FILL ENGINE
-are implemented here with working baseline bodies and expanded into the full per-bar
-fill / TP-SL / OCO engine in Phase 2 Task 3. All 18 abstracts are concrete now so the
-class instantiates (``__abstractmethods__`` is empty).
+implement the full per-bar fill / TP-SL / OCO engine (Phase 2 Task 3). All 18 abstracts
+are concrete so the class instantiates (``__abstractmethods__`` is empty).
+
+The fill engine (``refresh_orders``) is the heart of the simulator. Each invocation:
+  1. ACTIVATES dependent WAITING_TRIGGER legs whose parent order has reached its trigger
+     status (the inherited ``submit_order`` stages TP/SL/OCO legs as WAITING_TRIGGER with
+     ``depends_on_order``/``depends_order_status_trigger`` exactly like AlpacaAccount);
+  2. EVALUATES every working order against the chosen bar — MARKET fills at next-bar
+     open (±slippage), LIMIT fills only when the bar's range crosses the limit, STOP
+     triggers when the bar's range crosses the stop (then fills at stop ±slippage);
+  3. APPLIES fills to the cash/position ledger (commission charged per fill);
+  4. CANCELS the OCO sibling when one OCO leg fills (so the transaction closes on the
+     first leg and the other does not also execute).
+
+Transaction lifecycle (WAITING->OPENED->CLOSED) is NOT re-implemented here: the inherited
+``refresh_transactions`` derives it from order states. The engine calls
+``refresh_orders()`` then ``refresh_transactions()`` per bar. ``refresh_transactions``
+recognises a TP/SL close via ``"OCO-" in comment`` or ``order_type == OrderType.OCO`` on a
+filled dependent leg, so our legs MUST carry that marker.
 
 Field/enum names verified against the installed ba2_common:
   * TradingOrder cols: id, account_id, symbol, quantity, side (OrderDirection),
@@ -28,19 +44,22 @@ Field/enum names verified against the installed ba2_common:
     stop_price, broker_order_id, depends_on_order, depends_order_status_trigger,
     transaction_id, comment, created_at, ...
   * OrderStatus has classmethods get_terminal_statuses()/get_executed_statuses()/
-    get_active_statuses() (NOT get_open_order_statuses — that one does not exist).
+    get_active_statuses()/get_unfilled_statuses() (NOT get_open_order_statuses — that one
+    does not exist). WAITING_TRIGGER is in get_active_statuses() but NOT get_unfilled_statuses().
   * AccountDefinition cols: id, name, provider, description.
+  * Transaction has NO entry_order_id column; the market-entry order is the TradingOrder
+    with transaction_id == txn.id AND depends_on_order IS NULL.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ba2_common.core.interfaces.AccountInterface import AccountInterface
-from ba2_common.core.models import TradingOrder
-from ba2_common.core.types import OrderStatus, OrderType, OrderDirection
-from ba2_common.core.db import get_db, update_instance
+from ba2_common.core.models import TradingOrder, Transaction
+from ba2_common.core.types import OrderStatus, OrderType, OrderDirection, OrderOpenType
+from ba2_common.core.db import get_db, get_instance, add_instance, update_instance
 
 from .price_source import AsOfPriceSource
 
@@ -292,21 +311,58 @@ class BacktestAccount(AccountInterface):
         return True
 
     def refresh_orders(self) -> bool:
-        """Per-bar fill engine.
+        """Per-bar fill engine (THE core of the simulator).
 
-        Baseline implementation (Task 2): fill working MARKET orders against the chosen
-        bar so the ledger/equity are exercised end-to-end. Task 3 expands this into the
-        full LIMIT/STOP/TP/SL/OCO per-bar evaluation. Returns True.
+        Called by the engine once per simulated bar (after ``set_clock``). Steps:
+
+          1. ACTIVATE dependent WAITING_TRIGGER legs whose parent reached its trigger
+             status — they become ACCEPTED (live) so they can fill on later bars.
+          2. EVALUATE every working order against the chosen bar and FILL it if triggered:
+             MARKET -> next-bar open (±slippage); LIMIT -> only if the bar crosses the
+             limit; STOP -> only if the bar crosses the stop (then fills at stop ±slippage).
+          3. CANCEL the OCO sibling when one OCO/TP/SL leg fills (first-leg-wins close).
+
+        Activation runs first so a leg whose parent filled on THIS same bar (a same-bar
+        MARKET entry) can be evaluated against the next bar on the following call — never
+        on the entry bar (no look-ahead within a bar). Returns True.
         """
         as_of = self._price.now()
+        self._activate_triggered_dependents()
+
         active = OrderStatus.get_active_statuses()
-        working = [o for o in self.get_orders() if o.status in active]
+        # Re-read AFTER activation so newly-activated legs are seen this bar.
+        working = [
+            o
+            for o in self.get_orders()
+            if o.status in active and o.status != OrderStatus.WAITING_TRIGGER
+        ]
         for o in working:
-            fill = self._try_fill(o, as_of)
-            if fill is None:
+            fill_px = self._evaluate_fill(o, as_of)
+            if fill_px is None:
                 continue
-            self._apply_fill(o, fill, as_of)
+            self._apply_fill(o, fill_px, as_of)
+            self._cancel_oco_sibling(o)
         return True
+
+    def _activate_triggered_dependents(self) -> None:
+        """Promote WAITING_TRIGGER legs to ACCEPTED once their parent hits the trigger.
+
+        A leg created by ``adjust_tp``/``adjust_sl``/``adjust_tp_sl`` waits with
+        ``depends_on_order`` = the entry order id and ``depends_order_status_trigger`` =
+        FILLED. When the parent reaches that status the leg goes live (ACCEPTED) so the
+        fill engine evaluates it. Legs with no parent / unmet trigger are left waiting.
+        """
+        waiting = [o for o in self.get_orders() if o.status == OrderStatus.WAITING_TRIGGER]
+        for leg in waiting:
+            if leg.depends_on_order is None:
+                continue
+            parent = get_instance(TradingOrder, leg.depends_on_order)
+            if parent is None:
+                continue
+            trigger = leg.depends_order_status_trigger or OrderStatus.FILLED
+            if parent.status == trigger:
+                leg.status = OrderStatus.ACCEPTED
+                update_instance(leg)
 
     def get_dividends(
         self,
@@ -382,9 +438,19 @@ class BacktestAccount(AccountInterface):
         Assign a synthetic broker id and mark the order working; the per-bar fill engine
         (``refresh_orders``) decides when/whether it fills. We do NOT reimplement
         ``submit_order`` (it is inherited and exercises the real validation path).
+
+        Idempotency guard (mirrors AlpacaAccount): an order that already carries a
+        broker_order_id was already "sent" — never re-stamp it.
+
+        A WAITING_TRIGGER dependent leg keeps its WAITING_TRIGGER status (it must wait for
+        its parent to reach the trigger status before becoming live); everything else
+        becomes ACCEPTED (working / active per get_active_statuses()).
         """
+        if trading_order.broker_order_id:
+            return trading_order
         trading_order.broker_order_id = self._next_broker_id()
-        trading_order.status = OrderStatus.ACCEPTED  # working / active per get_active_statuses()
+        if trading_order.status != OrderStatus.WAITING_TRIGGER:
+            trading_order.status = OrderStatus.ACCEPTED
         update_instance(trading_order)
         return trading_order
 
@@ -398,33 +464,93 @@ class BacktestAccount(AccountInterface):
         return o
 
     def modify_order(self, order_id: str) -> Any:
-        """Modify hook. Baseline: returns the (non-terminal) order unchanged.
+        """In-place pre-fill edit of a working order.
 
-        The live signature is ``modify_order(self, order_id)`` (no trading_order param);
-        Task 3 wires in the in-place pre-fill price/qty edit.
+        The live ``modify_order`` signature is ``modify_order(self, order_id)`` (no
+        trading_order param) — the caller mutates the order row, then calls this to
+        "push" the change to the broker. In the sim there is no broker round-trip, so we
+        simply re-persist the (non-terminal) order. A terminal order cannot be modified.
         """
         o = self.get_order(order_id)
         if o is None or o.status in OrderStatus.get_terminal_statuses():
             return None
+        update_instance(o)
         return o
 
-    def adjust_tp(self, transaction, new_tp_price: float, source: str = "") -> bool:
-        """TP leg adjustment. Full SELL_LIMIT(long)/BUY_LIMIT(short) leg lands in Task 3."""
-        raise NotImplementedError("adjust_tp is implemented in Phase 2 Task 3 (fill engine)")
+    def adjust_tp(self, transaction: Transaction, new_tp_price: float, source: str = "") -> bool:
+        """Create/replace a TP leg for a transaction.
 
-    def adjust_sl(self, transaction, new_sl_price: float, source: str = "") -> bool:
-        """SL leg adjustment. Full SELL_STOP(long)/BUY_STOP(short) leg lands in Task 3."""
-        raise NotImplementedError("adjust_sl is implemented in Phase 2 Task 3 (fill engine)")
+        TP for a LONG (BUY) transaction is a SELL_LIMIT above entry; for a SHORT (SELL)
+        transaction it is a BUY_LIMIT below entry. The leg is created WAITING_TRIGGER on
+        the entry order's FILL (mirrors AlpacaAccount). Returns False if the entry order
+        cannot be found or the price is invalid.
+        """
+        if not new_tp_price or new_tp_price <= 0:
+            return False
+        entry = self._entry_order_for_transaction(transaction)
+        if entry is None:
+            return False
+        is_long = entry.side == OrderDirection.BUY
+        leg_type = OrderType.SELL_LIMIT if is_long else OrderType.BUY_LIMIT
+        self._replace_leg(transaction, entry, leg="TP", order_type=leg_type,
+                          limit_price=new_tp_price, stop_price=None, source=source)
+        transaction.take_profit = new_tp_price
+        update_instance(transaction)
+        return True
+
+    def adjust_sl(self, transaction: Transaction, new_sl_price: float, source: str = "") -> bool:
+        """Create/replace an SL leg for a transaction.
+
+        SL for a LONG (BUY) transaction is a SELL_STOP below entry; for a SHORT (SELL)
+        transaction it is a BUY_STOP above entry. WAITING_TRIGGER on the entry's FILL.
+        """
+        if not new_sl_price or new_sl_price <= 0:
+            return False
+        entry = self._entry_order_for_transaction(transaction)
+        if entry is None:
+            return False
+        is_long = entry.side == OrderDirection.BUY
+        leg_type = OrderType.SELL_STOP if is_long else OrderType.BUY_STOP
+        self._replace_leg(transaction, entry, leg="SL", order_type=leg_type,
+                          limit_price=None, stop_price=new_sl_price, source=source)
+        transaction.stop_loss = new_sl_price
+        update_instance(transaction)
+        return True
 
     def adjust_tp_sl(
         self,
-        transaction,
+        transaction: Transaction,
         new_tp_price: Optional[float] = None,
         new_sl_price: Optional[float] = None,
         source: str = "",
     ) -> bool:
-        """Paired TP+SL (OCO). Full implementation lands in Task 3."""
-        raise NotImplementedError("adjust_tp_sl is implemented in Phase 2 Task 3 (fill engine)")
+        """Set a paired TP+SL as an OCO bracket (one-cancels-other).
+
+        When BOTH prices are given we create a single ``OrderType.OCO`` leg carrying both
+        ``limit_price`` (TP) and ``stop_price`` (SL); the fill engine fills it at whichever
+        side the bar crosses first and ``refresh_transactions`` recognises the close via
+        the ``OrderType.OCO`` / ``"OCO-"`` marker. When only one price is given we fall
+        back to a single TP or SL leg.
+        """
+        if new_tp_price is not None and new_sl_price is not None:
+            if new_tp_price <= 0 or new_sl_price <= 0:
+                return False
+            entry = self._entry_order_for_transaction(transaction)
+            if entry is None:
+                return False
+            self._replace_leg(transaction, entry, leg="TPSL", order_type=OrderType.OCO,
+                              limit_price=new_tp_price, stop_price=new_sl_price, source=source)
+            transaction.take_profit = new_tp_price
+            transaction.stop_loss = new_sl_price
+            update_instance(transaction)
+            return True
+
+        ok = True
+        if new_tp_price is not None:
+            ok &= self.adjust_tp(transaction, new_tp_price, source=source)
+        if new_sl_price is not None:
+            ok &= self.adjust_sl(transaction, new_sl_price, source=source)
+        return ok
 
     # ======================================================================
     # Fill helpers (baseline MARKET path; Task 3 adds LIMIT/STOP/OCO branches)
@@ -440,20 +566,75 @@ class BacktestAccount(AccountInterface):
         bps = float(self._cfg["slippage_bps"]) / 10_000.0
         return px * (1.0 + bps) if side_is_buy else px * (1.0 - bps)
 
-    def _try_fill(self, order, as_of: datetime) -> Optional[float]:
-        """Return the fill price for MARKET orders this bar, else None.
+    def _evaluate_fill(self, order, as_of: datetime) -> Optional[float]:
+        """Return the fill price for ``order`` against the chosen bar, or None if untriggered.
 
-        Task 2 baseline only fills MARKET orders (LIMIT/STOP/OCO trigger logic is added
-        in Task 3). This is enough to exercise the ledger/equity end to end.
+        Per-type rules (the bar's [low, high] range is the day's traded range):
+          * MARKET            -> fills at the bar's open (or close for same_bar_close),
+                                 worsened by slippage.
+          * BUY_LIMIT         -> fills at the limit iff bar.low  <= limit (price traded down to it).
+          * SELL_LIMIT        -> fills at the limit iff bar.high >= limit (price traded up to it).
+          * BUY_STOP          -> triggers iff bar.high >= stop; fills at stop +slippage.
+          * SELL_STOP         -> triggers iff bar.low  <= stop; fills at stop -slippage.
+          * OCO (TP+SL leg)   -> evaluate TP (limit) and SL (stop) sides; fill the side the
+                                 bar crosses (SL preferred when the bar straddles both, the
+                                 conservative assumption that the stop hit first).
         """
-        if order.order_type != OrderType.MARKET:
-            return None
         bar = self._bar_for_fill(order, as_of)
         if bar is None:
             return None
-        ref = bar["open"] if self._cfg["fill_model"] != "same_bar_close" else bar["close"]
-        is_buy = order.side == OrderDirection.BUY
-        return self._slip(ref, is_buy)
+        ot = order.order_type
+
+        if ot == OrderType.MARKET:
+            ref = bar["close"] if self._cfg["fill_model"] == "same_bar_close" else bar["open"]
+            return self._slip(ref, order.side == OrderDirection.BUY)
+
+        if ot == OrderType.BUY_LIMIT:
+            return order.limit_price if bar["low"] <= order.limit_price else None
+        if ot == OrderType.SELL_LIMIT:
+            return order.limit_price if bar["high"] >= order.limit_price else None
+
+        if ot == OrderType.BUY_STOP:
+            return self._slip(order.stop_price, True) if bar["high"] >= order.stop_price else None
+        if ot == OrderType.SELL_STOP:
+            return self._slip(order.stop_price, False) if bar["low"] <= order.stop_price else None
+
+        if ot == OrderType.OCO:
+            return self._evaluate_oco_fill(order, bar)
+
+        return None
+
+    def _evaluate_oco_fill(self, order, bar: Dict[str, float]) -> Optional[float]:
+        """Fill price for an OCO leg (limit_price=TP, stop_price=SL) against ``bar``.
+
+        The OCO closes the position, so its ``side`` is opposite the entry:
+          * SELL OCO (closing a LONG):  TP = SELL_LIMIT @ limit (bar.high >= TP),
+                                        SL = SELL_STOP  @ stop  (bar.low  <= SL).
+          * BUY  OCO (closing a SHORT): TP = BUY_LIMIT  @ limit (bar.low  <= TP),
+                                        SL = BUY_STOP   @ stop  (bar.high >= SL).
+        When a single bar's range crosses BOTH legs we fill the STOP (loss) side — the
+        conservative, no-look-ahead assumption (intrabar order is unknown).
+        """
+        tp = order.limit_price
+        sl = order.stop_price
+        is_sell = order.side == OrderDirection.SELL  # closing a long
+
+        if is_sell:
+            sl_hit = sl is not None and bar["low"] <= sl
+            tp_hit = tp is not None and bar["high"] >= tp
+            if sl_hit:
+                return self._slip(sl, False)   # SELL_STOP fills at stop -slippage
+            if tp_hit:
+                return tp                       # SELL_LIMIT fills at limit (no slippage)
+            return None
+        else:
+            sl_hit = sl is not None and bar["high"] >= sl
+            tp_hit = tp is not None and bar["low"] <= tp
+            if sl_hit:
+                return self._slip(sl, True)    # BUY_STOP fills at stop +slippage
+            if tp_hit:
+                return tp                       # BUY_LIMIT fills at limit
+            return None
 
     def _apply_fill(self, order, fill_px: float, as_of: datetime) -> None:
         """Apply a fill to cash + ledger and mark the order FILLED."""
@@ -468,6 +649,112 @@ class BacktestAccount(AccountInterface):
         order.open_price = fill_px
         order.status = OrderStatus.FILLED
         update_instance(order)
+
+    # ======================================================================
+    # TP/SL/OCO leg helpers
+    # ======================================================================
+    def _entry_order_for_transaction(self, transaction: Transaction) -> Optional[TradingOrder]:
+        """The market-entry order of a transaction: transaction_id matches + no parent.
+
+        (Transaction has no entry_order_id column; the entry order is the one with
+        ``depends_on_order IS NULL``. If several exist — e.g. scaled entries — the oldest
+        is returned so legs depend on the original entry.)
+        """
+        from sqlmodel import select, Session
+
+        with Session(get_db().bind) as session:
+            rows = session.exec(
+                select(TradingOrder).where(
+                    TradingOrder.transaction_id == transaction.id,
+                    TradingOrder.account_id == self.id,
+                    TradingOrder.depends_on_order.is_(None),
+                )
+            ).all()
+        if not rows:
+            return None
+        rows.sort(key=lambda o: (o.created_at or datetime.min.replace(tzinfo=timezone.utc), o.id or 0))
+        return rows[0]
+
+    def _existing_legs(self, transaction: Transaction) -> List[TradingOrder]:
+        """All non-terminal dependent (TP/SL/OCO) legs for a transaction."""
+        terminal = OrderStatus.get_terminal_statuses()
+        legs: List[TradingOrder] = []
+        for o in self.get_orders():
+            if (
+                o.transaction_id == transaction.id
+                and o.depends_on_order is not None
+                and o.status not in terminal
+            ):
+                legs.append(o)
+        return legs
+
+    def _replace_leg(
+        self,
+        transaction: Transaction,
+        entry: TradingOrder,
+        leg: str,
+        order_type: OrderType,
+        limit_price: Optional[float],
+        stop_price: Optional[float],
+        source: str,
+    ) -> TradingOrder:
+        """Cancel any existing protective leg(s) and create a fresh WAITING_TRIGGER leg.
+
+        The new leg is the side that CLOSES the position (opposite the entry side), carries
+        an ``OCO-`` comment marker + (for paired) ``OrderType.OCO`` so the inherited
+        ``refresh_transactions`` recognises a TP/SL close, and depends on the entry order
+        reaching FILLED before going live. Quantity is synced to the entry order's quantity.
+        """
+        # Cancel any existing non-terminal legs (single TP/SL replaced; OCO supersedes both).
+        for old in self._existing_legs(transaction):
+            old.status = OrderStatus.CANCELED
+            update_instance(old)
+
+        close_side = OrderDirection.SELL if entry.side == OrderDirection.BUY else OrderDirection.BUY
+        ts = int(datetime.now(timezone.utc).timestamp())
+        comment = f"{ts}-OCO-{leg}-[PARENT:{entry.id}/BROKER:{entry.broker_order_id}]"
+
+        leg_order = TradingOrder(
+            account_id=self.id,
+            symbol=entry.symbol,
+            quantity=entry.quantity,
+            side=close_side,
+            order_type=order_type,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            transaction_id=transaction.id,
+            status=OrderStatus.WAITING_TRIGGER,
+            depends_on_order=entry.id,
+            depends_order_status_trigger=OrderStatus.FILLED,
+            open_type=OrderOpenType.AUTOMATIC,
+            broker_order_id=self._next_broker_id(),
+            expert_recommendation_id=entry.expert_recommendation_id,
+            comment=comment,
+            created_at=datetime.now(timezone.utc),
+        )
+        add_instance(leg_order)
+        return leg_order
+
+    def _cancel_oco_sibling(self, filled_order) -> None:
+        """When an OCO/TP/SL leg fills, cancel the sibling protective leg(s).
+
+        A single ``OrderType.OCO`` leg has both TP+SL internally (no sibling). For the
+        separate-TP + separate-SL case, the two legs share the same transaction and
+        ``depends_on_order``; filling one cancels the other so the position closes once.
+        """
+        if filled_order.transaction_id is None or filled_order.depends_on_order is None:
+            return
+        terminal = OrderStatus.get_terminal_statuses()
+        for o in self.get_orders():
+            if (
+                o.id != filled_order.id
+                and o.transaction_id == filled_order.transaction_id
+                and o.depends_on_order is not None
+                and o.status not in terminal
+                and o.status != OrderStatus.FILLED
+            ):
+                o.status = OrderStatus.CANCELED
+                update_instance(o)
 
     def _order_to_trade(self, order, qty: float) -> Dict[str, Any]:
         """Map a filled ``TradingOrder`` row to the documented filled-trade dict shape."""
