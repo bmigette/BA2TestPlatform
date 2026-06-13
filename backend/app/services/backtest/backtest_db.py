@@ -50,10 +50,15 @@ def backtest_trading_db(run_id: int | str) -> Iterator[str]:
     and yield the file path.
 
     A FRESH file per run (the previous file for this run id, if any, is deleted) so
-    the run is hermetic and reproducible. The file is intentionally LEFT on disk after
-    the context exits (post-mortem debugging); the engine is reset the next time
-    ``configure_db`` is called for another run.
+    the run is hermetic and reproducible. The sqlite FILE is intentionally LEFT on disk
+    after the context exits (post-mortem debugging), but the global ba2_common DB engine
+    is RESTORED to whatever it pointed at before entering — otherwise any code that runs
+    after the context (other tests, or live-flavoured provider construction such as
+    FMPOHLCVProvider reading FMP_API_KEY from the app-settings table) would silently
+    read/write the backtest DB instead of the live one. We capture ``_db_file`` and
+    re-``configure_db`` it on exit so the seam is properly hermetic.
     """
+    prior_db_file = common_db._db_file  # noqa: SLF001 (intentional: save/restore the global)
     path = backtest_db_path(run_id)
     if path.exists():
         path.unlink()
@@ -62,8 +67,9 @@ def backtest_trading_db(run_id: int | str) -> Iterator[str]:
     try:
         yield str(path)
     finally:
-        # Keep the file; the next configure_db() resets the engine for the next run.
-        pass
+        # Keep the sqlite file (debugging) but restore the previous DB engine target so
+        # the backtest DB never leaks into subsequent (live) code paths or other tests.
+        common_db.configure_db(prior_db_file)
 
 
 def seed_account_definition(
