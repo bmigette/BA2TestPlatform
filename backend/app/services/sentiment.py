@@ -651,6 +651,29 @@ class SentimentService:
 
         logger.debug(f"Initializing news provider: {provider}")
 
+        # Secondary re-source seam (Phase 5, Task 6): when FEATURES_SOURCE=ba2_providers
+        # is explicitly selected, route the news fetch through the shared ba2_providers
+        # cache (category "news"; names alpaca/alphavantage/finnhub/fmp/google). The
+        # returned provider exposes the same get_company_news/get_global_news contract
+        # the legacy dataproviders.news clients do, so fetch_news_for_ticker / output
+        # news_* columns are UNCHANGED. DEFAULT is legacy; verification is deferred to
+        # plan Task 8 (do NOT flip the default until per-block equivalence is documented).
+        # Any failure falls through to the legacy client below. 'localfiles' has no
+        # ba2_providers equivalent, so it always uses the legacy path.
+        from app.services.features_source import use_ba2_providers, get_ba2_provider
+
+        if use_ba2_providers() and provider != "localfiles":
+            ba2_provider = get_ba2_provider("news", provider)
+            if ba2_provider is not None:
+                logger.info(
+                    f"FEATURES_SOURCE=ba2_providers: news provider '{provider}' via ba2_providers"
+                )
+                return ba2_provider
+            logger.warning(
+                f"FEATURES_SOURCE=ba2_providers: ba2_providers news '{provider}' unavailable; "
+                f"falling back to legacy client"
+            )
+
         if provider == "fmp":
             from dataproviders.news import FMPNewsProvider
             if FMPNewsProvider is None:

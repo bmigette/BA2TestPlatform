@@ -84,6 +84,65 @@ class FundamentalsService:
     ]
 
     @staticmethod
+    def _build_provider_service(provider_list: List[str]):
+        """Construct the statement provider-service for the dataset builder.
+
+        Secondary re-source seam (Phase 5, Task 6), parallel to the OHLCV seam:
+        when ``FEATURES_SOURCE=ba2_providers`` is explicitly selected, statements
+        are intended to be sourced through ba2_providers' shared cache (category
+        ``fundamentals_details``; names alphavantage/fmp/yfinance). DEFAULT is
+        ``legacy`` so nothing changes; verification is DEFERRED to plan Task 8 (do
+        NOT flip the default until per-block equivalence of bs_/is_/cf_/earn_
+        columns is documented).
+
+        The legacy ``dataproviders.fundamentals.service.FundamentalsService`` is a
+        multi-provider ORCHESTRATOR whose surface (``get_balance_sheet`` /
+        ``get_income_statement`` / ``get_cash_flow`` / ``get_earnings_merged``)
+        differs from a single ba2_providers ``fundamentals_details`` provider
+        (``get_cashflow_statement``, no merged-earnings, etc.). A real cutover
+        therefore needs an orchestrator-shaped adapter over ba2_providers, which is
+        the deferred Task-8 work. Here we only WIRE the flag: when selected we probe
+        ba2_providers (so a misconfiguration surfaces) and then fall back to the
+        legacy orchestrator, which remains the actual fetch path. Returns the
+        constructed provider-service or ``None`` on import/init failure (callers
+        treat ``None`` as "no statement features").
+        """
+        from app.services.features_source import use_ba2_providers, get_ba2_provider
+
+        if use_ba2_providers():
+            # Probe ba2_providers for the first requested name so a flag/config
+            # error is visible; the legacy orchestrator below is still used until
+            # Task 8 lands the orchestrator-shaped adapter (deferred verification).
+            probe_name = (provider_list or ['fmp'])[0]
+            probe = get_ba2_provider("fundamentals_details", probe_name)
+            if probe is not None:
+                logger.info(
+                    "FEATURES_SOURCE=ba2_providers: fundamentals_details '%s' available "
+                    "(verification deferred to Task 8; using legacy orchestrator for the "
+                    "statement fetch this phase)",
+                    probe_name,
+                )
+            else:
+                logger.warning(
+                    "FEATURES_SOURCE=ba2_providers: fundamentals_details '%s' unavailable; "
+                    "using legacy orchestrator",
+                    probe_name,
+                )
+
+        try:
+            from dataproviders.fundamentals.service import (
+                FundamentalsService as ProviderService,
+            )
+        except ImportError as e:
+            logger.error(f"Failed to import provider service: {e}")
+            return None
+        try:
+            return ProviderService(providers=provider_list)
+        except Exception as e:
+            logger.error(f"Failed to initialize provider service: {e}")
+            return None
+
+    @staticmethod
     def get_fundamental_data(ticker: str) -> Dict[str, Any]:
         """
         Fetch fundamental data for a ticker using yfinance.
@@ -394,19 +453,11 @@ class FundamentalsService:
 
         logger.info(f"Processing statement types: {valid_statement_types}")
 
-        # Import the provider-based service
-        try:
-            from dataproviders.fundamentals.service import FundamentalsService as ProviderService
-        except ImportError as e:
-            logger.error(f"Failed to import provider service: {e}")
-            return result_df
-
-        # Initialize the provider service
+        # Initialize the statement provider-service via the FEATURES_SOURCE seam
+        # (default legacy; ba2_providers route wired but verification deferred).
         provider_list = providers or ['yfinance']
-        try:
-            provider_service = ProviderService(providers=provider_list)
-        except Exception as e:
-            logger.error(f"Failed to initialize provider service: {e}")
+        provider_service = FundamentalsService._build_provider_service(provider_list)
+        if provider_service is None:
             return result_df
 
         # Get the date range - fetch enough historical data for lookback
@@ -604,18 +655,11 @@ class FundamentalsService:
         if not valid_statement_types:
             return result_df
 
-        # Import the provider-based service
-        try:
-            from dataproviders.fundamentals.service import FundamentalsService as ProviderService
-        except ImportError as e:
-            logger.error(f"Failed to import provider service: {e}")
-            return result_df
-
+        # Initialize the statement provider-service via the FEATURES_SOURCE seam
+        # (default legacy; ba2_providers route wired but verification deferred).
         provider_list = providers or ['yfinance']
-        try:
-            provider_service = ProviderService(providers=provider_list)
-        except Exception as e:
-            logger.error(f"Failed to initialize provider service: {e}")
+        provider_service = FundamentalsService._build_provider_service(provider_list)
+        if provider_service is None:
             return result_df
 
         min_date = result_df['Date'].min()
