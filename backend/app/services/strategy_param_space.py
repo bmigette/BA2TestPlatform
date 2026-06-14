@@ -120,6 +120,10 @@ def _walk_condition_nodes(cond: Optional[Dict[str, Any]], out: Dict[str, Any]) -
             cond.get("confirmation_bars_min"), cond.get("confirmation_bars_max"),
             cond.get("confirmation_bars_step"), is_int=True,
         )
+    # ON/OFF toggle: a 0/1 gene the optimizer flips to enable/disable this condition
+    # (a "step" the optimizer can turn on or off). Marked via toggle_optimize=True.
+    if cond.get("toggle_optimize"):
+        out[f"cond:{cid}:enabled"] = _range_entry(0, 1, 1, is_int=True)
 
 
 def _collect_conditions(strategy) -> Dict[str, Any]:
@@ -138,6 +142,9 @@ def _collect_conditions(strategy) -> Dict[str, Any]:
                 exit_rule.get("action_value_min"), exit_rule.get("action_value_max"),
                 exit_rule.get("action_value_step"), is_int=False,
             )
+        # ON/OFF toggle for the whole exit rule (optimizer can drop it entirely).
+        if eid and exit_rule.get("toggle_optimize"):
+            out[f"exit:{eid}:enabled"] = _range_entry(0, 1, 1, is_int=True)
         # exit rules may also carry an optimizable condition sub-tree
         _walk_condition_nodes(exit_rule.get("conditions"), out)
     return out
@@ -197,8 +204,17 @@ def _apply_to_tree(tree: Optional[Dict[str, Any]], by_id: Dict[str, Dict[str, An
     def _recurse(node):
         if not isinstance(node, dict):
             return
-        for child in (node.get("conditions") or []):
-            _recurse(child)
+        kids = node.get("conditions")
+        if kids:
+            kept = []
+            for child in kids:
+                ccid = child.get("id") if isinstance(child, dict) else None
+                # ON/OFF toggle: a child whose 'enabled' gene decoded to 0 is dropped.
+                if ccid and by_id.get(ccid, {}).get("enabled") == 0:
+                    continue
+                _recurse(child)
+                kept.append(child)
+            node["conditions"] = kept
         cid = node.get("id")
         if cid and cid in by_id:
             sub = by_id[cid]
@@ -241,6 +257,7 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     # Partition flat keys by namespace
     cond_by_id: Dict[str, Dict[str, Any]] = {}
     exit_action_by_id: Dict[str, Any] = {}
+    exit_enabled_by_id: Dict[str, Any] = {}
     rm: Dict[str, Any] = {}
     expert_overrides: Dict[str, Any] = {}
     tp = getattr(strategy, "initial_tp_percent", None)
@@ -259,8 +276,11 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
             _, cid, field = key.split(":", 2)
             cond_by_id.setdefault(cid, {})[field] = val
         elif key.startswith("exit:"):
-            _, eid, field = key.split(":", 2)  # field == 'action_value'
-            exit_action_by_id[eid] = val
+            _, eid, field = key.split(":", 2)  # 'action_value' | 'enabled'
+            if field == "enabled":
+                exit_enabled_by_id[eid] = val
+            else:
+                exit_action_by_id[eid] = val
         else:
             raise ValueError(f"Unknown decoded param namespace: {key!r}")
 
@@ -271,15 +291,20 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     buy_tree = _apply_to_tree(getattr(strategy, "buy_entry_conditions", None), cond_by_id)
     sell_tree = _apply_to_tree(getattr(strategy, "sell_entry_conditions", None), cond_by_id)
 
-    exit_rules = copy.deepcopy(getattr(strategy, "exit_conditions", None) or [])
-    for rule in exit_rules:
+    exit_rules = []
+    for rule in copy.deepcopy(getattr(strategy, "exit_conditions", None) or []):
         if not isinstance(rule, dict):
+            exit_rules.append(rule)
             continue
         eid = rule.get("id")
+        # ON/OFF toggle: an exit rule whose 'enabled' gene decoded to 0 is dropped entirely.
+        if eid in exit_enabled_by_id and exit_enabled_by_id[eid] == 0:
+            continue
         if eid in exit_action_by_id:
             rule["action_value"] = exit_action_by_id[eid]
         if rule.get("conditions"):
             rule["conditions"] = _apply_to_tree(rule["conditions"], cond_by_id)
+        exit_rules.append(rule)
 
     return {
         "tp": tp, "sl": sl, "rm": rm_full,
