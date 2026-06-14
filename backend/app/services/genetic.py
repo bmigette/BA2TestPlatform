@@ -24,6 +24,22 @@ except ImportError:
     logger.warning("DEAP not available. Install with: pip install deap")
 
 
+def _np_state_to_jsonable(state):
+    """Convert a numpy random state tuple to a JSON-serializable list.
+
+    numpy's get_state() returns (name, ndarray[uint32], pos, has_gauss, cached);
+    the ndarray must be turned into a plain list for JSON checkpoint storage.
+    """
+    name, keys, pos, has_gauss, cached = state
+    return [name, keys.tolist(), int(pos), int(has_gauss), float(cached)]
+
+
+def _jsonable_to_np_state(s):
+    """Inverse of _np_state_to_jsonable: rebuild a numpy random state tuple."""
+    name, keys, pos, has_gauss, cached = s
+    return (name, np.array(keys, dtype=np.uint32), int(pos), int(has_gauss), float(cached))
+
+
 class GeneticOptimizer:
     """
     Genetic algorithm optimizer for model hyperparameters.
@@ -291,6 +307,14 @@ class GeneticOptimizer:
             except Exception as e:
                 logger.warning(f"Could not restore random state: {e}")
 
+        # Restore numpy random state if available (backward-compatible: older
+        # checkpoints lack np_random_state and simply skip this restore).
+        if 'np_random_state' in checkpoint:
+            try:
+                np.random.set_state(_jsonable_to_np_state(checkpoint['np_random_state']))
+            except Exception as e:
+                logger.warning(f"Could not restore numpy random state: {e}")
+
         logger.info(f"Resuming from generation {checkpoint.get('generation', 0)}")
         return checkpoint.get('generation', 0) + 1, checkpoint.get('population', [])
 
@@ -312,6 +336,7 @@ class GeneticOptimizer:
             'best_fitness': self.best_fitness,
             'history': self.history,
             'random_state': list(random.getstate()),
+            'np_random_state': _np_state_to_jsonable(np.random.get_state()),
         }
 
     def optimize(
