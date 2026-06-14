@@ -69,11 +69,20 @@ except Exception:  # noqa: BLE001 — dotenv is optional; absence just means env
 def _has_fmp_key() -> bool:
     """True iff an FMP API key is configured.
 
-    Backend resolves the key solely via ``os.getenv('FMP_API_KEY')`` (app/api/tools.py,
-    FMPOHLCVProvider) -- there is no DB app-settings table holding it -- so env (after the
-    ``.env`` load above) is the single source of truth.
+    Two sources are checked (matching where the real providers actually read the key):
+      * ``os.getenv('FMP_API_KEY')`` -- env / ``.env`` (loaded above);
+      * ``get_app_setting('FMP_API_KEY')`` -- the live BA2Trade app-settings DB, which is what
+        ``FMPOHLCVProvider`` itself resolves the key from. The per-run backtest DB carries this
+        key forward (see backtest_db.backtest_trading_db) so the provider sees it inside the run.
     """
-    return bool(os.getenv("FMP_API_KEY"))
+    if os.getenv("FMP_API_KEY"):
+        return True
+    try:
+        from ba2_common.config import get_app_setting
+
+        return bool(get_app_setting("FMP_API_KEY"))
+    except Exception:  # noqa: BLE001 — DB not ready -> treat as no key (hermetic smoke)
+        return False
 
 
 def _parse_args(argv: list) -> argparse.Namespace:

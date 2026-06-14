@@ -44,6 +44,46 @@ def backtest_db_path(run_id: int | str) -> pathlib.Path:
     return backtest_db_root() / f"run_{run_id}.sqlite"
 
 
+# Credential app-settings carried from the live app DB into each throwaway run DB so that
+# live-flavoured providers constructed inside the run (e.g. FMPOHLCVProvider, which reads
+# get_app_setting("FMP_API_KEY")) resolve their keys. Only credentials needed by the OHLCV /
+# data providers — never trading config. Absent keys are skipped (hermetic runs carry nothing).
+_CARRIED_APP_SETTINGS = ("FMP_API_KEY",)
+
+
+def _read_carry_settings(keys: tuple[str, ...]) -> Dict[str, str]:
+    """Read the given AppSetting keys from the CURRENTLY-active ba2_common DB (the live DB,
+    before the engine is switched to the run sqlite). Missing keys are omitted. Any error
+    (DB not ready, no AppSetting table) yields an empty dict — a real run then fails loudly at
+    provider construction, and a hermetic run carries nothing, both of which are correct."""
+    out: Dict[str, str] = {}
+    try:
+        from ba2_common.config import get_app_setting
+
+        for k in keys:
+            v = get_app_setting(k)
+            if v:
+                out[k] = v
+    except Exception:  # noqa: BLE001 — best-effort carry; absence is handled downstream
+        return {}
+    return out
+
+
+def _seed_carry_settings(settings: Dict[str, str]) -> None:
+    """Insert the carried credential settings into the now-active run DB's AppSetting table so
+    in-run providers resolve them via get_app_setting. No-op when nothing was carried."""
+    if not settings:
+        return
+    try:
+        from ba2_common.core.models import AppSetting
+        from ba2_common.core.db import add_instance
+
+        for key, value in settings.items():
+            add_instance(AppSetting(key=key, value_str=value))
+    except Exception:  # noqa: BLE001 — if seeding fails, provider construction reports it clearly
+        pass
+
+
 @contextmanager
 def backtest_trading_db(run_id: int | str) -> Iterator[str]:
     """Configure ba2_common.core.db at a fresh sqlite for this run, create the schema,
@@ -59,11 +99,20 @@ def backtest_trading_db(run_id: int | str) -> Iterator[str]:
     re-``configure_db`` it on exit so the seam is properly hermetic.
     """
     prior_db_file = common_db._db_file  # noqa: SLF001 (intentional: save/restore the global)
+    # Read credential app-settings (e.g. FMP_API_KEY) from the LIVE app DB BEFORE we switch the
+    # engine target. A REAL-data run constructs FMPOHLCVProvider INSIDE this context, and the
+    # provider resolves its key via get_app_setting("FMP_API_KEY") -> ba2_common.core.db. Once the
+    # engine is pointed at the throwaway run sqlite that key would be invisible (the run DB has no
+    # AppSetting rows), so the provider would raise "FMP API key not configured". We capture the
+    # key here (from whatever DB is currently active) and re-seed it into the run DB after init so
+    # real-data runs work; hermetic runs (no key configured) simply carry nothing forward.
+    carried_settings = _read_carry_settings(_CARRIED_APP_SETTINGS)
     path = backtest_db_path(run_id)
     if path.exists():
         path.unlink()
     common_db.configure_db(str(path))  # Phase-0 DB seam: point the engine at this file
     common_db.init_db()                # SQLModel.metadata.create_all(get_engine())
+    _seed_carry_settings(carried_settings)
     try:
         yield str(path)
     finally:
