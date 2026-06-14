@@ -22,6 +22,8 @@ Run from the backend dir:
 """
 from __future__ import annotations
 
+import contextlib
+import importlib
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
@@ -33,6 +35,57 @@ from ba2_common.core.types import Recommendation
 
 
 NOW = datetime(2026, 6, 13, tzinfo=timezone.utc)
+
+
+# --------------------------------------------------------------------------- #
+# Wall-clock determinism: the LIVE golden path calls ``_process(..., as_of=None)``,
+# and an expert resolves ``now = as_of or datetime.now(timezone.utc)`` (e.g.
+# FMPEarningsDrift.py:158). With ``as_of=None`` that ``now`` is the REAL wall
+# clock, while the ENGINE path is anchored to the fixed ``NOW`` below. On any
+# calendar day other than ``NOW``'s date the two paths compute a different
+# ``days_since_report`` (off-by-one over a midnight boundary), which perturbs the
+# confidence and breaks the comparison -- a pure date-rollover flake, NOT a logic
+# drift. We pin the live path's ``now`` to ``NOW`` so the golden comparison is
+# deterministic on every day. The engine path is unaffected (it already passes a
+# concrete ``as_of``); the time-invariant fixtures keep the decision identical.
+# --------------------------------------------------------------------------- #
+_FROZEN_EXPERT_MODULES = (
+    "ba2_experts.FMPEarningsDrift",
+    "ba2_experts.FMPInsiderClusterBuy",
+)
+
+
+class _FrozenDatetime(datetime):
+    """``datetime`` whose ``now``/``utcnow`` return the fixed ``NOW`` instant."""
+
+    @classmethod
+    def now(cls, tz=None):  # noqa: D401 - mirror datetime.now signature
+        return NOW if tz is not None else NOW.replace(tzinfo=None)
+
+    @classmethod
+    def utcnow(cls):
+        return NOW.replace(tzinfo=None)
+
+
+@contextlib.contextmanager
+def _frozen_clock():
+    """Freeze ``datetime.now``/``utcnow`` to ``NOW`` inside the expert modules so
+    the live ``as_of=None`` path is wall-clock independent."""
+    saved = {}
+    for mod_name in _FROZEN_EXPERT_MODULES:
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception:
+            continue
+        saved[mod_name] = getattr(mod, "datetime", None)
+        mod.datetime = _FrozenDatetime
+    try:
+        yield
+    finally:
+        for mod_name, original in saved.items():
+            mod = importlib.import_module(mod_name)
+            if original is not None:
+                mod.datetime = original
 
 
 # --------------------------------------------------------------------------- #
@@ -132,9 +185,12 @@ def test_engine_context_analyze_equals_golden(name):
     """analyze_as_of via the engine's context == the Phase-1 live golden recommendation."""
     expert, settings, get_provider = CLEAN_EXPERTS[name]()
 
-    # Phase-1 live path: _gather(live, None) + _process.
-    bundle_live = expert._gather(LiveProviderBundle(get_provider), as_of=None)
-    rec_live = expert._process(bundle_live, settings, as_of=None)
+    # Phase-1 live path: _gather(live, None) + _process. The live path resolves
+    # ``now`` from the wall clock (as_of=None); freeze it to NOW so the golden
+    # comparison is deterministic on every calendar day (see _frozen_clock).
+    with _frozen_clock():
+        bundle_live = expert._gather(LiveProviderBundle(get_provider), as_of=None)
+        rec_live = expert._process(bundle_live, settings, as_of=None)
 
     # Backtest path through the ENGINE's context construction.
     ctx = _engine_context(get_provider, settings, symbol="AAPL")
