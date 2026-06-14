@@ -29,6 +29,12 @@ class Backtest(Base):
     # daily route sets this to 'daily_expert'; everything else defaults to 'ml'.
     engine_type = Column(String(50), default="ml")
 
+    # Grouping/stats: the expert this run backtested, and the optimization job (if any)
+    # it belongs to. Lets runs be filtered per expert (best-N retention) and per opt job
+    # (group stats). Both nullable: legacy/manual runs may have neither.
+    expert_name = Column(String(100), nullable=True, index=True)
+    optimization_id = Column(Integer, nullable=True, index=True)
+
     # Strategy
     strategy_id = Column(Integer, ForeignKey("strategies.id"), nullable=True)
     strategy_params = Column(JSON, nullable=True)  # Specific param values used
@@ -129,6 +135,8 @@ class Backtest(Base):
             "id": self.id,
             "name": self.name,
             "engineType": self.engine_type or "ml",
+            "expertName": self.expert_name,
+            "optimizationId": self.optimization_id,
             "modelId": self.model_id,
             "predictionDatasetId": self.prediction_dataset_id,
             "executionDatasetId": self.execution_dataset_id,
@@ -172,6 +180,8 @@ class Backtest(Base):
             "id": self.id,
             "name": self.name,
             "engineType": self.engine_type or "ml",
+            "expertName": self.expert_name,
+            "optimizationId": self.optimization_id,
             "modelId": self.model_id,
             "predictionDatasetId": self.prediction_dataset_id,
             "executionDatasetId": self.execution_dataset_id,

@@ -343,12 +343,16 @@ def _persist_tracked(config: dict, results: dict, *, saved: bool) -> int:
 
     init_db()  # ensure the results schema exists (same call the platform makes on startup)
     acct = config["account_settings"]
+    experts = config.get("experts") or []
+    first = experts[0] if experts else None
+    expert_name = (first.get("class") if isinstance(first, dict) else first) if first else None
     db = SessionLocal()
     try:
         bt = Backtest(
             name=config["name"],
             model_id=None,  # daily expert runs are not model-driven
             engine_type="daily_expert",
+            expert_name=expert_name,
             start_date=config["start_date"],
             end_date=config["end_date"],
             initial_capital=float(config["initial_capital"]),
