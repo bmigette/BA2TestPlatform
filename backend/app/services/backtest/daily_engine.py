@@ -57,16 +57,21 @@ from app.services.backtest.seam_wiring import make_indicator_provider
 # ---------------------------------------------------------------------------
 # Clock + universe hooks
 # ---------------------------------------------------------------------------
-def trading_days(start: datetime, end: datetime, price_source) -> List[date]:
-    """The daily clock = the union of dataset trading days in ``[start, end]``.
+def trading_days(start: datetime, end: datetime, price_source) -> List[Any]:
+    """The backtest clock = the union of dataset bar keys in ``[start, end]``.
 
-    Using the price source's own bar dates (not a synthetic calendar) keeps the clock
-    aligned to available data: no phantom bars on days nothing traded. Returns sorted
-    ``date`` keys (the price source indexes bars by calendar date).
+    Using the price source's own bar keys (not a synthetic calendar) keeps the clock
+    aligned to available data: no phantom bars when nothing traded. Returns sorted bar
+    keys — ``date`` for a daily source, ``datetime`` for an intraday source (so the
+    loop steps once per intraday bar). Filtering is done on datetimes so a date key and
+    a datetime key compare consistently against the ``[start, end]`` bounds.
     """
-    lo = _as_date(start)
-    hi = _as_date(end)
-    return [d for d in price_source.all_dates() if lo <= d <= hi]
+    lo = _to_dt(start)
+    hi_intraday = getattr(price_source, "is_intraday", False)
+    # For an intraday source compare to the exact end timestamp; for a daily source
+    # keep the inclusive end-of-day bound (a date key compares within [lo_date, hi_date]).
+    hi = _to_dt(end) if hi_intraday else _to_dt(end).replace(hour=23, minute=59, second=59)
+    return [d for d in price_source.all_dates() if lo <= _to_dt(d) <= hi]
 
 
 def resolve_universe(as_of: datetime, config: Dict[str, Any], price_source) -> List[str]:
@@ -78,6 +83,21 @@ def resolve_universe(as_of: datetime, config: Dict[str, Any], price_source) -> L
     """
     universe = config["enabled_instruments"]
     return [s for s in universe if price_source.bar_at(s, as_of) is not None]
+
+
+def _to_dt(d: Any) -> datetime:
+    """Normalise a date/datetime/str bar key to a tz-naive ``datetime`` for comparison.
+
+    A ``date`` key becomes that day's midnight; a tz-aware datetime is converted to
+    naive UTC. Lets daily (date) and intraday (datetime) clocks be range-filtered uniformly.
+    """
+    if isinstance(d, datetime):
+        return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
+    if isinstance(d, date):
+        return datetime(d.year, d.month, d.day)
+    if isinstance(d, str):
+        return _to_dt(datetime.fromisoformat(d))
+    raise TypeError(f"Cannot normalise {d!r} ({type(d)}) to a datetime")
 
 
 def _as_date(d: Any) -> date:
@@ -208,14 +228,17 @@ class DailyBacktestEngine:
         total = max(len(days), 1)
 
         for i, as_of in enumerate(days):
-            # Tz-AWARE UTC midnight — the SAME contract the live path assumes: the experts'
+            # Tz-AWARE UTC clock — the SAME contract the live path assumes: the experts'
             # _process does ``now = as_of or datetime.now(timezone.utc)`` and then subtracts
             # tz-aware report/transaction dates, so a NAIVE as_of would raise
             # "can't subtract offset-naive and offset-aware datetimes". Using aware UTC here
-            # makes the backtest clock byte-identical to the live ``datetime.now(timezone.utc)``
-            # the experts were written against. The price source normalises to a calendar
-            # date key (time/tz dropped), so bar lookups are unaffected.
-            as_of_dt = datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc)
+            # makes the backtest clock byte-identical to the live ``datetime.now(timezone.utc)``.
+            # A daily key (date) becomes midnight UTC (historical behaviour); an intraday key
+            # (datetime) keeps its time component so the bar timestamp is preserved.
+            if isinstance(as_of, datetime):
+                as_of_dt = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+            else:
+                as_of_dt = datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc)
 
             # 1. advance the clock + bust the per-account price cache (the gotcha).
             self.price.set_clock(as_of_dt)

@@ -26,19 +26,48 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 
-def _norm(d: Any) -> date:
-    """Normalise a datetime/date/Timestamp/ISO-string to a calendar ``date`` key.
+def _is_intraday(interval: str) -> bool:
+    """True for sub-daily bar intervals (1m/5m/15m/30m/1h/...). Daily and coarser
+    (1d/1wk/1mo) are False — those keep calendar-date bar keys."""
+    iv = (interval or "1d").lower()
+    return iv.endswith("m") or iv.endswith("h") or iv.endswith("min")
 
-    Daily bars are anchored to the calendar day; the time component (and timezone)
-    of the virtual clock is irrelevant for a daily backtest. Raises loudly on an
-    unparseable value rather than silently returning a wrong key.
+
+def _to_datetime(d: Any) -> datetime:
+    """Parse a datetime/date/Timestamp/ISO-string to a tz-naive UTC ``datetime``."""
+    if isinstance(d, datetime):
+        dt = d
+    elif isinstance(d, date):
+        dt = datetime(d.year, d.month, d.day)
+    elif hasattr(d, "to_pydatetime"):           # pandas.Timestamp
+        dt = d.to_pydatetime()
+    elif isinstance(d, str):
+        dt = datetime.fromisoformat(d)
+    else:
+        raise TypeError(f"Cannot normalise {d!r} ({type(d)}) to a datetime")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _norm(d: Any, interval: str = "1d") -> Any:
+    """Normalise a datetime/date/Timestamp/ISO-string to the bar-store key.
+
+    The key type depends on the execution interval (so daily backtests keep their
+    historical behaviour and the same code serves intraday):
+      * daily / coarser (1d, 1wk, 1mo) -> calendar ``date`` (time/tz dropped), as before.
+      * intraday (1m..1h)              -> tz-naive UTC ``datetime`` (the full bar
+                                          timestamp), so multiple bars per day are distinct.
+    All keys within one run share a type because the source carries one interval.
+    Raises loudly on an unparseable value rather than silently returning a wrong key.
     """
+    if _is_intraday(interval):
+        return _to_datetime(d)
+    # Daily path — unchanged from the original date-keyed behaviour.
     if isinstance(d, datetime):
         return d.date()
     if isinstance(d, date):
         return d
-    # pandas.Timestamp has a .date() method (and is not a datetime subclass in all
-    # versions of the comparison above on some builds), and ISO strings are parsed.
     if hasattr(d, "date") and callable(getattr(d, "date")):
         return d.date()
     if isinstance(d, str):
@@ -75,8 +104,17 @@ class AsOfPriceSource:
         self._ohlcv = ohlcv_provider          # ba2_providers OHLCV provider (or None for pre-seeded fixtures)
         self._interval = interval
         self._clock: Optional[datetime] = None
-        # symbol -> {date -> bar dict}
-        self._bars: Dict[str, Dict[date, Dict[str, float]]] = {}
+        # symbol -> {bar_key -> bar dict}. The key is a calendar ``date`` for daily/
+        # coarser intervals and a tz-naive UTC ``datetime`` for intraday (see ``_norm``).
+        self._bars: Dict[str, Dict[Any, Dict[str, float]]] = {}
+
+    @property
+    def interval(self) -> str:
+        return self._interval
+
+    @property
+    def is_intraday(self) -> bool:
+        return _is_intraday(self._interval)
 
     # ---- virtual clock -----------------------------------------------------
     def set_clock(self, as_of: datetime) -> None:
@@ -125,9 +163,9 @@ class AsOfPriceSource:
         Used by ``preload`` and directly by fixtures/tests (hand-built bar series).
         Each row must carry a date (``Date``/``date``) and OHLC(V) fields.
         """
-        indexed: Dict[date, Dict[str, float]] = {}
+        indexed: Dict[Any, Dict[str, float]] = {}
         for row in rows:
-            d = _norm(row.get("Date", row.get("date")))
+            d = _norm(row.get("Date", row.get("date")), self._interval)
             indexed[d] = _bar_from_row(row)
         self._bars[symbol] = indexed
 
@@ -136,8 +174,8 @@ class AsOfPriceSource:
         return symbol in self._bars and len(self._bars[symbol]) > 0
 
     def bar_at(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[Dict[str, float]]:
-        """The bar for ``symbol`` on the as-of day (or current clock day), or None."""
-        d = _norm(as_of if as_of is not None else self.now())
+        """The bar for ``symbol`` on the as-of bar (or current clock bar), or None."""
+        d = _norm(as_of if as_of is not None else self.now(), self._interval)
         return self._bars.get(symbol, {}).get(d)
 
     def close_at(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[float]:
@@ -147,21 +185,24 @@ class AsOfPriceSource:
 
     def next_bar(self, symbol: str, after: datetime) -> Optional[Dict[str, float]]:
         """The NEXT trading bar strictly after ``after`` (for next-bar fills)."""
-        cutoff = _norm(after)
+        cutoff = _norm(after, self._interval)
         cand = [d for d in self._bars.get(symbol, {}) if d > cutoff]
         if not cand:
             return None
         return self._bars[symbol][min(cand)]
 
-    def next_bar_date(self, symbol: str, after: datetime) -> Optional[date]:
-        """The date of the next trading bar strictly after ``after`` (or None)."""
-        cutoff = _norm(after)
+    def next_bar_date(self, symbol: str, after: datetime) -> Optional[Any]:
+        """The key of the next trading bar strictly after ``after`` (date or datetime), or None."""
+        cutoff = _norm(after, self._interval)
         cand = [d for d in self._bars.get(symbol, {}) if d > cutoff]
         return min(cand) if cand else None
 
-    def all_dates(self) -> List[date]:
-        """Sorted union of all bar dates across every loaded symbol (the trading clock)."""
-        seen: set[date] = set()
+    def all_dates(self) -> List[Any]:
+        """Sorted union of all bar keys across every loaded symbol (the trading clock).
+
+        Keys are ``date`` for daily/coarser intervals and ``datetime`` for intraday.
+        """
+        seen: set = set()
         for bars in self._bars.values():
             seen.update(bars.keys())
         return sorted(seen)

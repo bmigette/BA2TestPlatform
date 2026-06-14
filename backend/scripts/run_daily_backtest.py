@@ -128,6 +128,12 @@ def _parse_args(argv: list) -> argparse.Namespace:
         help="History preloaded before start_date (fetch-window sizing, not a trade param).",
     )
     p.add_argument(
+        "--interval",
+        default="1d",
+        help="Execution bar interval for the fill clock (1d default; e.g. 1h, 15m for finer "
+             "open/close fill detection). Experts still fetch any interval they need separately.",
+    )
+    p.add_argument(
         "--name", default=None, help="Optional run name (defaults to expert+date stamp)."
     )
     p.add_argument(
@@ -175,6 +181,7 @@ def _build_real_config(args: argparse.Namespace) -> dict:
             "fill_model": str(args.fill_model),
         },
         "warmup_days": int(args.warmup_days),
+        "execution_interval": str(args.interval),
         "seed": int(args.seed),
         "subtype": "daily_expert",
     }

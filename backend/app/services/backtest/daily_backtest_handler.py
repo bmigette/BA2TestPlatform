@@ -231,8 +231,11 @@ def run_daily_backtest(
         seed_account_definition(account_id, config["account_settings"])
 
         # Time-machine price source backed by the FMP OHLCV provider (as_of-aware).
+        # execution_interval governs the FILL clock granularity (default 1d). Intraday
+        # values (e.g. "1h", "15m") give finer open/close fill detection; it is decoupled
+        # from whatever interval the experts request via the provider seam in _gather.
         ohlcv = get_provider("ohlcv", "fmp")
-        ps = AsOfPriceSource(ohlcv_provider=ohlcv)
+        ps = AsOfPriceSource(ohlcv_provider=ohlcv, interval=config.get("execution_interval", "1d"))
         ps.preload(
             config["enabled_instruments"],
             config["start_date"],
