@@ -42,6 +42,11 @@ try:
     logger.info("tsai training service available")
 except ImportError as e:
     logger.warning(f"tsai training not available: {e}")
+    # Fallback base so module-level class definitions (e.g. EpochProgressCallback)
+    # can still be imported when the heavy ML stack (torch/fastai) is absent.
+    # The real fastai Callback is bound above when the import succeeds; this only
+    # prevents a NameError at import time in non-ML environments (e.g. the backtest host).
+    Callback = object
 
 from app.services.model_interface import ITrainingService
 from app.services.tsai_models import DEVICE, MPS_AVAILABLE, CUDA_AVAILABLE

@@ -92,6 +92,34 @@ class MacroService:
         if not self.api_key:
             logger.warning("FRED API key not set. Macro data will use fallback values.")
 
+        # Secondary re-source seam (Phase 5, Task 6), parallel to the OHLCV seam:
+        # when FEATURES_SOURCE=ba2_providers is explicitly selected, macro series are
+        # intended to be sourced through ba2_providers' shared cache (category
+        # "macro"; name "fred"). DEFAULT is legacy (direct FRED HTTP below) so nothing
+        # changes; verification is DEFERRED to plan Task 8 (do NOT flip the default
+        # until macro_* column equivalence is documented). We resolve the provider
+        # here so a flag/config error surfaces at construction; the legacy
+        # _fetch_fred_data path remains the actual fetch this phase.
+        self._ba2_provider = None
+        try:
+            from app.services.features_source import use_ba2_providers, get_ba2_provider
+
+            if use_ba2_providers():
+                self._ba2_provider = get_ba2_provider("macro", "fred")
+                if self._ba2_provider is not None:
+                    logger.info(
+                        "FEATURES_SOURCE=ba2_providers: macro 'fred' available "
+                        "(verification deferred to Task 8; using legacy FRED fetch this phase)"
+                    )
+                else:
+                    logger.warning(
+                        "FEATURES_SOURCE=ba2_providers: macro 'fred' unavailable; "
+                        "using legacy FRED fetch"
+                    )
+        except Exception as e:  # never let the seam break construction
+            logger.warning(f"FEATURES_SOURCE macro seam init skipped: {e}")
+            self._ba2_provider = None
+
     def _fetch_fred_data(
         self,
         series_id: str,

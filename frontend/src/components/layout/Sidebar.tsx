@@ -8,6 +8,7 @@ import {
   TrendingUp,
   Wrench,
   Archive,
+  HardDrive,
   Settings
 } from 'lucide-react';
 
@@ -22,6 +23,7 @@ const Sidebar: React.FC = () => {
     { path: '/backtesting', label: 'Backtesting', icon: TrendingUp },
     { path: '/tools', label: 'Tools', icon: Wrench },
     { path: '/saved-data', label: 'Saved Data', icon: Archive },
+    { path: '/cache', label: 'Cache', icon: HardDrive },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 

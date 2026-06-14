@@ -271,10 +271,20 @@ async def startup_event():
     from app.services.job_handler import handle_training_job
     from app.services.backtest_handler import handle_backtest
     from app.services.news_batch_handler import handle_news_batch_fetch
+    # Daily-expert backtest + joint strategy optimizer run IN-PROCESS on the main queue
+    # (Decision: they were in-process originally; torch is lazy-imported only on the
+    # engine=='ml' path inside the handlers). They are NOT routed to the dedicated
+    # subprocess backtest/training queues, whose worker scripts only call handle_backtest /
+    # handle_training_job and whitelist task_types ['backtest']/['training_job']. The main
+    # queue does NOT exclude 'daily_backtest'/'strategy_optimization', so it consumes them.
+    from app.services.backtest.daily_backtest_handler import handle_daily_backtest
+    from app.services.strategy_optimization_handler import handle_strategy_optimization
     task_queue = get_task_queue()
     task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
     task_queue.register_handler('news_batch_fetch', handle_news_batch_fetch)
-    logger.info("Registered main task handlers: dataset_regeneration, news_batch_fetch")
+    task_queue.register_handler('daily_backtest', handle_daily_backtest)
+    task_queue.register_handler('strategy_optimization', handle_strategy_optimization)
+    logger.info("Registered main task handlers: dataset_regeneration, news_batch_fetch, daily_backtest, strategy_optimization")
 
     # Initialize dedicated training queue (2 workers — keeps GPU from being overloaded)
     init_training_task_queue(max_workers=2)
@@ -369,7 +379,7 @@ async def global_exception_handler(request, exc):
 
 
 # Import and include routers
-from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools, target_sets, strategies, admin
+from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools, target_sets, strategies, admin, cache
 
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
@@ -386,6 +396,7 @@ app.include_router(indicator_collections.router, prefix="/api/indicator-collecti
 app.include_router(target_sets.router, prefix="/api/target-sets", tags=["target-sets"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["strategies"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(cache.router, prefix="/api/cache", tags=["cache"])
 
 # Additional routers (will be added as we build features)
 # from app.api import models, backtests, profiles, providers, settings

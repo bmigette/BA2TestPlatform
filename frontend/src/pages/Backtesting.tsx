@@ -23,7 +23,8 @@ import {
   Save,
   X,
   Database,
-  Layers
+  Layers,
+  Sliders
 } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -107,9 +108,80 @@ interface Strategy {
   initialSlMin: number | null;
   initialSlMax: number | null;
   initialSlStep: number | null;
+  // Classic-RM params with optimization ranges (Phase 4 joint optimizer)
+  rmRiskPerTradePct?: number;
+  rmRiskPerTradePctOptimize?: boolean;
+  rmRiskPerTradePctMin?: number | null;
+  rmRiskPerTradePctMax?: number | null;
+  rmRiskPerTradePctStep?: number | null;
+  rmPerInstrumentCapPct?: number;
+  rmPerInstrumentCapPctOptimize?: boolean;
+  rmPerInstrumentCapPctMin?: number | null;
+  rmPerInstrumentCapPctMax?: number | null;
+  rmPerInstrumentCapPctStep?: number | null;
+  rmMinStopPct?: number;
+  rmMinStopPctOptimize?: boolean;
+  rmMinStopPctMin?: number | null;
+  rmMinStopPctMax?: number | null;
+  rmMinStopPctStep?: number | null;
+  rmAtrStopMult?: number;
+  rmAtrStopMultOptimize?: boolean;
+  rmAtrStopMultMin?: number | null;
+  rmAtrStopMultMax?: number | null;
+  rmAtrStopMultStep?: number | null;
+  rmMaxConcurrentPositions?: number;
+  rmMaxConcurrentPositionsOptimize?: boolean;
+  rmMaxConcurrentPositionsMin?: number | null;
+  rmMaxConcurrentPositionsMax?: number | null;
+  rmMaxConcurrentPositionsStep?: number | null;
   createdAt: string;
   updatedAt: string | null;
 }
+
+// One classic-RM param's editable optimize range (mirrors the TP/SL control group).
+interface RmParamState {
+  value: number;
+  optimize: boolean;
+  min: number;
+  max: number;
+  step: number;
+}
+
+// The five classic-RM params (design §5), with snake_case API keys + camelCase
+// Strategy.to_dict() keys + UI labels. Drives both rendering and serialization so
+// each param is declared exactly once (no per-param hand-written blocks).
+const RM_PARAMS: Array<{
+  key: string;          // snake_case base used in StrategyCreate/Update request fields
+  camel: string;        // PascalCase suffix used in Strategy.to_dict() (rm<Camel>...)
+  label: string;
+  isInt: boolean;
+}> = [
+  { key: 'risk_per_trade_pct', camel: 'RiskPerTradePct', label: 'Risk / Trade %', isInt: false },
+  { key: 'per_instrument_cap_pct', camel: 'PerInstrumentCapPct', label: 'Per-Instrument Cap %', isInt: false },
+  { key: 'min_stop_pct', camel: 'MinStopPct', label: 'Min Stop %', isInt: false },
+  { key: 'atr_stop_mult', camel: 'AtrStopMult', label: 'ATR Stop Mult', isInt: false },
+  { key: 'max_concurrent_positions', camel: 'MaxConcurrentPositions', label: 'Max Concurrent Positions', isInt: true },
+];
+
+const RM_DEFAULTS: Record<string, RmParamState> = {
+  risk_per_trade_pct: { value: 1.0, optimize: false, min: 0.5, max: 3.0, step: 0.25 },
+  per_instrument_cap_pct: { value: 20.0, optimize: false, min: 5.0, max: 50.0, step: 5.0 },
+  min_stop_pct: { value: 2.0, optimize: false, min: 1.0, max: 5.0, step: 0.5 },
+  atr_stop_mult: { value: 2.0, optimize: false, min: 1.0, max: 4.0, step: 0.5 },
+  max_concurrent_positions: { value: 5, optimize: false, min: 1, max: 10, step: 1 },
+};
+
+// Fitness metrics map 1:1 onto the backend strategy_fitness._FITNESS_KEYS.
+const FITNESS_METRICS: Array<{ value: string; label: string }> = [
+  { value: 'sharpe', label: 'Sharpe Ratio' },
+  { value: 'return', label: 'Total Return' },
+  { value: 'profit_factor', label: 'Profit Factor' },
+  { value: 'win_rate', label: 'Win Rate' },
+  { value: 'sortino', label: 'Sortino Ratio' },
+  { value: 'calmar', label: 'Calmar Ratio' },
+  { value: 'sqn', label: 'SQN' },
+  { value: 'max_drawdown', label: 'Max Drawdown (minimize)' },
+];
 
 interface Trade {
   id: string | number;
@@ -135,7 +207,10 @@ interface BacktestResults {
 interface Backtest {
   id: number;
   name: string;
-  modelId: number;
+  // 'ml' = legacy model-driven backtesting.py run (modelId set);
+  // 'daily_expert' = Phase-2 daily multi-asset expert engine (modelId null).
+  engineType?: string;
+  modelId: number | null;
   predictionDatasetId: number;
   executionDatasetId: number;
   strategyId: number | null;
@@ -214,6 +289,32 @@ const Backtesting: React.FC = () => {
   const [initialSlMin, setInitialSlMin] = useState(1.0);
   const [initialSlMax, setInitialSlMax] = useState(10.0);
   const [initialSlStep, setInitialSlStep] = useState(0.5);
+
+  // Classic-RM optimize controls (Phase 4 joint optimizer). One RmParamState per
+  // param, keyed by the snake_case base. Seeded from RM_DEFAULTS.
+  const [rmParams, setRmParams] = useState<Record<string, RmParamState>>(
+    () => structuredClone(RM_DEFAULTS)
+  );
+
+  // The saved strategy currently loaded into the editor — required to target
+  // POST /api/strategies/{id}/optimize. Cleared whenever the editor is edited away
+  // from a saved strategy is NOT tracked (optimization always runs against the saved row).
+  const [loadedStrategyId, setLoadedStrategyId] = useState<number | null>(null);
+  const [loadedStrategyName, setLoadedStrategyName] = useState<string>('');
+
+  // Run Joint Optimization dialog state
+  const [showOptimizeDialog, setShowOptimizeDialog] = useState(false);
+  const [optFitnessMetric, setOptFitnessMetric] = useState('sharpe');
+  const [optType, setOptType] = useState<'genetic' | 'brute_force'>('genetic');
+  const [optPopulationSize, setOptPopulationSize] = useState(20);
+  const [optGenerations, setOptGenerations] = useState(10);
+  const [optCrossoverProb, setOptCrossoverProb] = useState(0.7);
+  const [optMutationProb, setOptMutationProb] = useState(0.2);
+  const [optEarlyStopping, setOptEarlyStopping] = useState(5);
+  const [optElitismPercent, setOptElitismPercent] = useState(10.0);
+  const [optSeed, setOptSeed] = useState(42);
+  const [launchingOpt, setLaunchingOpt] = useState(false);
+  const [optNotice, setOptNotice] = useState<string | null>(null);
 
   // Backtest settings
   const [initialCapital, setInitialCapital] = useState(10000);
@@ -620,7 +721,9 @@ const Backtesting: React.FC = () => {
           initial_sl_optimize: initialSlOptimize,
           initial_sl_min: initialSlOptimize ? initialSlMin : null,
           initial_sl_max: initialSlOptimize ? initialSlMax : null,
-          initial_sl_step: initialSlOptimize ? initialSlStep : null
+          initial_sl_step: initialSlOptimize ? initialSlStep : null,
+          // Classic-RM optimize fields (Phase 4 joint optimizer)
+          ...rmRequestFields()
         })
       });
 
@@ -630,6 +733,11 @@ const Backtesting: React.FC = () => {
 
       const saved = await res.json();
       setStrategies(prev => [saved, ...prev]);
+      // Track the freshly-saved strategy so it can be optimized immediately.
+      if (typeof saved.id === 'number') {
+        setLoadedStrategyId(saved.id);
+        setLoadedStrategyName(saved.name);
+      }
       setShowSaveDialog(false);
       setSaveStrategyName('');
       setSaveStrategyDescription('');
@@ -738,6 +846,110 @@ const Backtesting: React.FC = () => {
     setInitialSlMin(strategy.initialSlMin ?? 1.0);
     setInitialSlMax(strategy.initialSlMax ?? 10.0);
     setInitialSlStep(strategy.initialSlStep ?? 0.5);
+
+    // Load classic-RM optimize controls (fall back to defaults per param/field)
+    const next: Record<string, RmParamState> = structuredClone(RM_DEFAULTS);
+    for (const p of RM_PARAMS) {
+      const d = RM_DEFAULTS[p.key];
+      const s = strategy as unknown as Record<string, number | boolean | null | undefined>;
+      next[p.key] = {
+        value: (s[`rm${p.camel}`] as number) ?? d.value,
+        optimize: (s[`rm${p.camel}Optimize`] as boolean) ?? false,
+        min: (s[`rm${p.camel}Min`] as number) ?? d.min,
+        max: (s[`rm${p.camel}Max`] as number) ?? d.max,
+        step: (s[`rm${p.camel}Step`] as number) ?? d.step,
+      };
+    }
+    setRmParams(next);
+
+    // Track which saved strategy is loaded so "Run Joint Optimization" can target it
+    setLoadedStrategyId(strategy.id);
+    setLoadedStrategyName(strategy.name);
+  };
+
+  // Launch a joint genetic optimization for the loaded strategy. Builds the GA
+  // config + a backtest block from the current form, then POSTs to
+  // /api/strategies/{id}/optimize. The route folds the strategy's RM ranges in.
+  const runOptimization = async () => {
+    if (loadedStrategyId == null) {
+      setOptNotice('Load or save a strategy first, then run optimization against it.');
+      return;
+    }
+    try {
+      setLaunchingOpt(true);
+      setOptNotice(null);
+      const body: Record<string, unknown> = {
+        name: `Optimize ${loadedStrategyName} (${optFitnessMetric})`,
+        fitness_metric: optFitnessMetric,
+        optimization_type: optType,
+        optimization_config: {
+          populationSize: optPopulationSize,
+          generations: optGenerations,
+          crossoverProb: optCrossoverProb,
+          mutationProb: optMutationProb,
+          earlyStoppingGenerations: optEarlyStopping,
+          elitismPercent: optElitismPercent,
+          seed: optSeed,
+          backtest: {
+            // ML engine when a model is selected; daily multi-asset expert engine otherwise.
+            engine: selectedModel ? 'ml' : 'daily',
+            model_id: selectedModel || null,
+            prediction_dataset_id: predictionDatasetId || null,
+            execution_dataset_id: executionDatasetId || null,
+            start_date: startDate,
+            end_date: endDate,
+            initial_capital: initialCapital,
+            position_sizing_type: positionSizingType,
+            position_sizing_value: positionSizingValue,
+            commission,
+            slippage,
+          },
+        },
+      };
+
+      const res = await fetch(`${API_BASE}/strategies/${loadedStrategyId}/optimize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to launch optimization');
+      }
+      const data = await res.json();
+      setShowOptimizeDialog(false);
+      setOptNotice(null);
+      setError(null);
+      // Surface the queued job; results land on the StrategyOptimization row + tasks.
+      alert(
+        `Joint optimization #${data.optimizationId} queued (task ${data.taskId}).\n` +
+        `Metric: ${optFitnessMetric} · ${optType} · seed ${optSeed}.`
+      );
+    } catch (err) {
+      setOptNotice(err instanceof Error ? err.message : 'Failed to launch optimization');
+    } finally {
+      setLaunchingOpt(false);
+    }
+  };
+
+  // Update one RM param's optimize field in state.
+  const updateRmParam = (key: string, field: keyof RmParamState, val: number | boolean) => {
+    setRmParams(prev => ({ ...prev, [key]: { ...prev[key], [field]: val } }));
+  };
+
+  // Serialize the RM params to the snake_case request fields the strategy
+  // create/update endpoints accept. Ranges are sent only when optimize=true.
+  const rmRequestFields = (): Record<string, number | boolean | null> => {
+    const out: Record<string, number | boolean | null> = {};
+    for (const p of RM_PARAMS) {
+      const r = rmParams[p.key];
+      out[`rm_${p.key}`] = r.value;
+      out[`rm_${p.key}_optimize`] = r.optimize;
+      out[`rm_${p.key}_min`] = r.optimize ? r.min : null;
+      out[`rm_${p.key}_max`] = r.optimize ? r.max : null;
+      out[`rm_${p.key}_step`] = r.optimize ? r.step : null;
+    }
+    return out;
   };
 
   if (loading) {
@@ -1142,7 +1354,73 @@ const Backtesting: React.FC = () => {
                     </div>
                 </div>
 
-              {/* Save Strategy Button */}
+              {/* Classic Risk Management (Phase 4 joint optimizer) */}
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                  <Sliders className="w-4 h-4 text-amber-500" />
+                  Risk Management
+                </h4>
+                <div className="space-y-2">
+                  {RM_PARAMS.map(p => {
+                    const r = rmParams[p.key];
+                    const numStep = p.isInt ? '1' : '0.1';
+                    return (
+                      <div key={p.key}>
+                        <div className="flex items-center gap-2">
+                          <label className="flex-1 text-xs text-gray-500 dark:text-gray-400">{p.label}</label>
+                          <input
+                            type="number"
+                            step={numStep}
+                            value={r.value}
+                            onChange={e => updateRmParam(p.key, 'value', parseFloat(e.target.value))}
+                            className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          />
+                          <label className="flex items-center gap-1 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={r.optimize}
+                              onChange={e => updateRmParam(p.key, 'optimize', e.target.checked)}
+                              className="rounded"
+                            />
+                            Opt
+                          </label>
+                        </div>
+                        {r.optimize && (
+                          <div className="flex items-center gap-1 mt-1 justify-end">
+                            <input
+                              type="number"
+                              step={numStep}
+                              value={r.min}
+                              onChange={e => updateRmParam(p.key, 'min', parseFloat(e.target.value))}
+                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Min"
+                            />
+                            <span className="text-xs text-gray-500">-</span>
+                            <input
+                              type="number"
+                              step={numStep}
+                              value={r.max}
+                              onChange={e => updateRmParam(p.key, 'max', parseFloat(e.target.value))}
+                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Max"
+                            />
+                            <input
+                              type="number"
+                              step={numStep}
+                              value={r.step}
+                              onChange={e => updateRmParam(p.key, 'step', parseFloat(e.target.value))}
+                              className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+                              placeholder="Step"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Save Strategy + Run Joint Optimization */}
               <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
                 <Tooltip content="Save current strategy configuration for later use">
                   <button
@@ -1151,6 +1429,18 @@ const Backtesting: React.FC = () => {
                   >
                     <Save className="w-4 h-4" />
                     Save Strategy
+                  </button>
+                </Tooltip>
+                <Tooltip content={loadedStrategyId == null
+                  ? 'Load or save a strategy first to optimize it'
+                  : `Run joint genetic optimization for "${loadedStrategyName}"`}>
+                  <button
+                    onClick={() => { setOptNotice(null); setShowOptimizeDialog(true); }}
+                    disabled={loadedStrategyId == null}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-amber-500 rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <Sliders className="w-4 h-4" />
+                    Run Joint Optimization
                   </button>
                 </Tooltip>
               </div>
@@ -1378,6 +1668,7 @@ const Backtesting: React.FC = () => {
                       {bt.status === 'pending' ? 'Pending...' :
                        bt.status === 'running' ? 'Running...' :
                        bt.status === 'failed' ? 'Failed' :
+                       bt.engineType === 'daily_expert' ? 'Daily expert (multi-asset)' :
                        `Model #${bt.modelId}${bt.createdAt ? ' · ' + new Date(bt.createdAt).toLocaleDateString() : ''}`}
                     </p>
                     {bt.status === 'failed' && bt.errorMessage && (
@@ -1405,6 +1696,21 @@ const Backtesting: React.FC = () => {
         <div className="xl:col-span-2 space-y-4">
           {selectedBacktest ? (
             <>
+              {/* Header: name + engine-type badge (daily expert = multi-asset; ml = model-driven) */}
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
+                  {selectedBacktest.name}
+                </h3>
+                {selectedBacktest.engineType === 'daily_expert' ? (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                    Daily expert &middot; multi-asset
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                    ML strategy{selectedBacktest.modelId != null ? ` · Model #${selectedBacktest.modelId}` : ''}
+                  </span>
+                )}
+              </div>
               {/* Metrics Summary */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
@@ -1936,6 +2242,166 @@ const Backtesting: React.FC = () => {
                     <>
                       <Save className="w-4 h-4" />
                       Save
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Run Joint Optimization Dialog */}
+      {showOptimizeDialog && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+            onClick={() => setShowOptimizeDialog(false)}
+          />
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6">
+              <button
+                onClick={() => setShowOptimizeDialog(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center gap-2">
+                <Sliders className="w-5 h-5 text-amber-500" />
+                Run Joint Optimization
+              </h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                Optimizes the saved strategy "{loadedStrategyName}" over its enabled
+                expert / RM / TP-SL / condition ranges, scored by one backtest metric.
+              </p>
+
+              {optNotice && (
+                <div className="mb-3 text-sm text-red-600 dark:text-red-400 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" />
+                  {optNotice}
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Fitness Metric</label>
+                    <select
+                      value={optFitnessMetric}
+                      onChange={e => setOptFitnessMetric(e.target.value)}
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    >
+                      {FITNESS_METRICS.map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Search</label>
+                    <select
+                      value={optType}
+                      onChange={e => setOptType(e.target.value as 'genetic' | 'brute_force')}
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    >
+                      <option value="genetic">Genetic</option>
+                      <option value="brute_force">Brute Force</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-3">
+                  <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Genetic Algorithm
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Population Size</label>
+                      <input
+                        type="number" min="2" step="1" value={optPopulationSize}
+                        onChange={e => setOptPopulationSize(parseInt(e.target.value) || 0)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Generations</label>
+                      <input
+                        type="number" min="1" step="1" value={optGenerations}
+                        onChange={e => setOptGenerations(parseInt(e.target.value) || 0)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Crossover Prob</label>
+                      <input
+                        type="number" min="0" max="1" step="0.05" value={optCrossoverProb}
+                        onChange={e => setOptCrossoverProb(parseFloat(e.target.value))}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Mutation Prob</label>
+                      <input
+                        type="number" min="0" max="1" step="0.05" value={optMutationProb}
+                        onChange={e => setOptMutationProb(parseFloat(e.target.value))}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Early Stopping</label>
+                      <input
+                        type="number" min="1" step="1" value={optEarlyStopping}
+                        onChange={e => setOptEarlyStopping(parseInt(e.target.value) || 0)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Elitism %</label>
+                      <input
+                        type="number" min="0" max="100" step="1" value={optElitismPercent}
+                        onChange={e => setOptElitismPercent(parseFloat(e.target.value))}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Seed (determinism)</label>
+                      <input
+                        type="number" step="1" value={optSeed}
+                        onChange={e => setOptSeed(parseInt(e.target.value) || 0)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Backtest window {startDate} → {endDate}, capital ${initialCapital.toLocaleString()},
+                  engine {selectedModel ? 'ML (model-driven)' : 'daily expert (multi-asset)'}.
+                  Adjust these in the New Backtest form before launching.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setShowOptimizeDialog(false)}
+                  className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={runOptimization}
+                  disabled={launchingOpt}
+                  className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {launchingOpt ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Launching...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4" />
+                      Launch
                     </>
                   )}
                 </button>

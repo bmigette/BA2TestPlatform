@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 import logging
+import os
 from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
@@ -34,7 +35,41 @@ from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
 
 
 def get_ohlcv_provider(provider_name: str = "yfinance"):
-    """Get the appropriate OHLCV provider based on config."""
+    """Get the appropriate OHLCV provider based on config.
+
+    OHLCV_SOURCE=ba2_providers routes the fetch through ba2_providers' shared
+    cache (the same cache the experts read point-in-time slices from), returning
+    the SAME List[MarketDataPoint] contract via BA2ProvidersOHLCVAdapter so the
+    dataset builder (_build_dataset_in_background) is untouched. as_of maps to
+    end_date.
+
+    Default is 'legacy' (today's direct YFinance/FMP path) so nothing changes
+    for existing training until the flag is explicitly flipped after the
+    byte-equality gate. If the ba2_providers path cannot be constructed (missing
+    package, provider constructor raising e.g. on a missing API key), this logs
+    and falls back to the legacy provider.
+    """
+    source = os.getenv("OHLCV_SOURCE", "legacy").lower()
+    if source == "ba2_providers":
+        try:
+            from dataproviders.ba2providers_adapter import BA2ProvidersOHLCVAdapter
+            # ba2_providers registry keys are lowercase; map yf/yfinance and fall
+            # back to fmp for anything else so as_of caching is available.
+            name = provider_name.lower()
+            if name in ("yfinance", "yf"):
+                ba2_name = "yfinance"
+            elif name == "fmp":
+                ba2_name = "fmp"
+            else:
+                ba2_name = name
+            return BA2ProvidersOHLCVAdapter(ba2_name)
+        except Exception as e:
+            logger.error(
+                f"OHLCV_SOURCE=ba2_providers failed to initialize ({e}); "
+                f"falling back to legacy provider",
+                exc_info=True,
+            )
+
     provider_map = {
         "yfinance": YFinanceDataProvider,
         "yf": YFinanceDataProvider,
