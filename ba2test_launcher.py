@@ -157,6 +157,98 @@ _METRIC_COL = {
 }
 
 
+def _cmd_report(args) -> int:
+    """Write an HTML summary of tracked backtests: per-expert best performer + counts,
+    overall leaderboard, and per-optimization-job stats."""
+    import html as _html
+    from app.models.backtest import Backtest
+    db = _runs_db()
+    try:
+        rows = (db.query(Backtest).filter(Backtest.status == "completed")
+                .order_by(Backtest.sharpe_ratio.desc()).all())
+    finally:
+        db.close()
+
+    def esc(v):
+        return _html.escape(str(v)) if v is not None else "-"
+
+    def num(v, n=2):
+        return f"{v:.{n}f}" if isinstance(v, (int, float)) else "-"
+
+    # Per-expert grouping.
+    by_expert: dict = {}
+    for r in rows:
+        by_expert.setdefault(r.expert_name or "(untagged)", []).append(r)
+
+    parts = [
+        "<!doctype html><meta charset='utf-8'><title>BA2 Backtest Report</title>",
+        "<style>body{font:14px/1.5 system-ui,Segoe UI,Arial;margin:24px;color:#1e293b}"
+        "h1{margin:0 0 4px}h2{margin:24px 0 8px;border-bottom:2px solid #e2e8f0;padding-bottom:4px}"
+        "table{border-collapse:collapse;width:100%;margin:8px 0}"
+        "th,td{border:1px solid #e2e8f0;padding:6px 10px;text-align:right}"
+        "th:first-child,td:first-child,td.l{text-align:left}"
+        "th{background:#f1f5f9}tr:nth-child(even){background:#f8fafc}"
+        ".pos{color:#16a34a}.neg{color:#dc2626}.muted{color:#64748b}</style>",
+        f"<h1>BA2 Backtest Optimization Report</h1>",
+        f"<div class='muted'>Generated {datetime.now():%Y-%m-%d %H:%M} · "
+        f"{len(rows)} completed run(s) · {len(by_expert)} expert(s)</div>",
+    ]
+
+    # Per-expert best performer + counts.
+    parts.append("<h2>Per-expert summary (best by Sharpe)</h2>")
+    parts.append("<table><tr><th>Expert</th><th>Runs</th><th>Best Sharpe</th>"
+                 "<th>Best Return %</th><th>Best run</th><th>Trades</th></tr>")
+    for expert, group in sorted(by_expert.items()):
+        best = max(group, key=lambda r: (r.sharpe_ratio if r.sharpe_ratio is not None else -1e9))
+        rc = "pos" if (best.total_return or 0) >= 0 else "neg"
+        parts.append(
+            f"<tr><td class='l'>{esc(expert)}</td><td>{len(group)}</td>"
+            f"<td>{num(best.sharpe_ratio)}</td><td class='{rc}'>{num(best.total_return)}</td>"
+            f"<td class='l'>#{best.id} {esc(best.name)}</td><td>{esc(best.total_trades)}</td></tr>")
+    parts.append("</table>")
+
+    # Overall leaderboard (top 20 by Sharpe).
+    parts.append("<h2>Leaderboard (top 20 by Sharpe)</h2>")
+    parts.append("<table><tr><th>#</th><th>Expert</th><th>Opt</th><th>Sharpe</th><th>Return %</th>"
+                 "<th>MaxDD %</th><th>Win %</th><th>PF</th><th>Trades</th><th>Saved</th><th>Name</th></tr>")
+    for r in rows[:20]:
+        rc = "pos" if (r.total_return or 0) >= 0 else "neg"
+        parts.append(
+            f"<tr><td>{r.id}</td><td class='l'>{esc(r.expert_name)}</td>"
+            f"<td>{esc(r.optimization_id)}</td><td>{num(r.sharpe_ratio)}</td>"
+            f"<td class='{rc}'>{num(r.total_return)}</td><td>{num(r.max_drawdown)}</td>"
+            f"<td>{num(r.win_rate,1)}</td><td>{num(r.profit_factor)}</td>"
+            f"<td>{esc(r.total_trades)}</td><td>{'★' if r.is_saved else ''}</td>"
+            f"<td class='l'>{esc(r.name)}</td></tr>")
+    parts.append("</table>")
+
+    # Per optimization-job stats.
+    by_opt: dict = {}
+    for r in rows:
+        if r.optimization_id is not None:
+            by_opt.setdefault(r.optimization_id, []).append(r)
+    if by_opt:
+        parts.append("<h2>Per optimization job</h2>")
+        parts.append("<table><tr><th>Opt #</th><th>Expert</th><th>Trials</th>"
+                     "<th>Best Sharpe</th><th>Avg Sharpe</th><th>Best Return %</th></tr>")
+        for oid, group in sorted(by_opt.items()):
+            shp = [r.sharpe_ratio for r in group if r.sharpe_ratio is not None]
+            ret = [r.total_return for r in group if r.total_return is not None]
+            exp = group[0].expert_name
+            parts.append(
+                f"<tr><td>{oid}</td><td class='l'>{esc(exp)}</td><td>{len(group)}</td>"
+                f"<td>{num(max(shp)) if shp else '-'}</td>"
+                f"<td>{num(sum(shp)/len(shp)) if shp else '-'}</td>"
+                f"<td>{num(max(ret)) if ret else '-'}</td></tr>")
+        parts.append("</table>")
+
+    out = args.out or "C:\\Users\\basti\\Documents\\dev\\ba2_backtest_report.html"
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(parts))
+    print(f"wrote report -> {out} ({len(rows)} runs, {len(by_expert)} experts)")
+    return 0
+
+
 def _cmd_runs(args) -> int:
     from app.models.backtest import Backtest
     db = _runs_db()
@@ -331,6 +423,9 @@ def main(argv: "list | None" = None) -> int:
     rst.add_argument("--expert", default=None, help="Filter to one expert.")
     rst.add_argument("--group", type=int, default=None, help="Group by optimization_id (this job).")
 
+    rep = sub.add_parser("report", help="Write an HTML summary of tracked backtests.")
+    rep.add_argument("--out", default=None, help="Output HTML path (default: dev\\ba2_backtest_report.html).")
+
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":
         return _cmd_backtest(argv[1:])
@@ -343,6 +438,7 @@ def main(argv: "list | None" = None) -> int:
         "cache-usage": lambda: _cmd_cache_usage(args),
         "cache-clear": lambda: _cmd_cache_clear(args),
         "runs": lambda: _cmd_runs(args),
+        "report": lambda: _cmd_report(args),
     }[args.cmd]()
 
 
