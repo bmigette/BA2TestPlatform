@@ -48,6 +48,18 @@ def _enter_backend() -> str:
         load_dotenv(os.path.join(repo_root, ".env"))
     except Exception:  # noqa: BLE001 — dotenv optional
         pass
+    # The test platform's legacy OHLCV providers read FMP_API_KEY from the ENV, but the key is
+    # configured in the trade app-settings DB (ba2_common). Mirror it into the env (in-process
+    # only — never written to disk) so fetch-cache/fetch-screener resolve it, matching how the
+    # backtest path forwards the key. No-op if already set or unavailable.
+    if not os.getenv("FMP_API_KEY"):
+        try:
+            from ba2_common.config import get_app_setting
+            _k = get_app_setting("FMP_API_KEY")
+            if _k:
+                os.environ["FMP_API_KEY"] = _k
+        except Exception:  # noqa: BLE001 — best-effort; absence just means env-only resolution
+            pass
     return backend
 
 
