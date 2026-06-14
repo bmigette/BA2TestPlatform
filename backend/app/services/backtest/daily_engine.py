@@ -155,7 +155,10 @@ class DailyBacktestEngine:
             tuples. ``expert_instance`` is a ba2_experts object (e.g. ``FMPEarningsDrift``)
             registered on the resolver under ``expert_instance_id``; ``expert_settings`` is the
             resolved settings dict fed to ``_process`` (the optimizer-override seam);
-            ``ruleset_id`` is the enter_market ruleset to evaluate (seeded in the backtest DB).
+            ``ruleset_id`` is the enter_market ruleset to evaluate (seeded in the backtest DB);
+            it is ignored (and may be ``None``) for a BYPASS expert that declares
+            ``bypasses_classic_rm`` — such an expert rebalances to target weights via its own
+            FactorPortfolioManager instead of the enter/exit ruleset + classic RM.
         price_source: the ``AsOfPriceSource`` (the virtual clock + bar store).
         config: the run config dict (validated fail-early by the handler). Required keys read
             here: ``start_date``, ``end_date``, ``enabled_instruments``, ``seed``. Optional:
@@ -222,7 +225,16 @@ class DailyBacktestEngine:
             universe = resolve_universe(as_of_dt, self.config, self.price)
 
             # 3. each expert: analyze_as_of -> persist rec -> ruleset -> RM -> submit.
+            #    BYPASS experts (piece 1b): an expert that declares ``bypasses_classic_rm``
+            #    (e.g. FactorRanker) does NOT use the enter/exit ruleset OR the classic risk
+            #    manager. It emits {symbol: weight} target weights once per bar and rebalances
+            #    via its own FactorPortfolioManager — so we route its targets DIRECTLY to the
+            #    portfolio manager (which itself prices + submits orders), SKIPPING
+            #    TradeActionEvaluator/TradeConditions, TradeRiskManagement and position_sizing.
             for expert, expert_id, settings, ruleset_id in self.experts:
+                if getattr(expert, "bypasses_classic_rm", False):
+                    self._run_bypass_expert_bar(expert, expert_id, settings, as_of_dt)
+                    continue
                 created_any = self._run_expert_bar(
                     expert, expert_id, settings, ruleset_id, universe, as_of_dt
                 )
@@ -321,6 +333,56 @@ class DailyBacktestEngine:
                 continue
 
         return created_any
+
+    def _run_bypass_expert_bar(
+        self,
+        expert: Any,
+        expert_id: int,
+        settings: Dict[str, Any],
+        as_of: datetime,
+    ) -> None:
+        """Run ONE bar for a BYPASS expert (piece 1b): rebalance to target weights.
+
+        A bypass expert (``getattr(expert, 'bypasses_classic_rm', False)`` is True, e.g.
+        FactorRanker) resolves its OWN universe internally, so ``analyze_as_of`` is called
+        ONCE for the bar (not per-symbol). The returned recommendation carries
+        ``raw_outputs['targets']`` — the ``{symbol: weight}`` book — which is routed DIRECTLY
+        through ``FactorPortfolioManager(expert_id).rebalance(targets)``. That manager prices
+        each name off the account, diffs the targets against the expert's current holdings, and
+        calls ``account.submit_order`` for each delta. The classic decision path is SKIPPED in
+        full: NO TradeActionEvaluator/TradeConditions, NO ExpertRecommendation row, NO
+        TradeRiskManagement / position_sizing.
+
+        A skip / empty-targets recommendation is a no-op for the bar (nothing to rebalance).
+        A per-bar failure is logged and swallowed (one bad bar must not abort the run), matching
+        the classic path's per-bar try/except.
+        """
+        ctx = BacktestContext(
+            providers=self._provider_bundle(),
+            settings=settings,
+            as_of=as_of,
+            account=self.account,
+            subtype=self.config.get("subtype"),
+        )
+        try:
+            rec = expert.analyze_as_of(as_of, ctx)
+        except Exception as e:  # noqa: BLE001 — one bar must not abort the run
+            self._log(f"bypass analyze_as_of failed @ {as_of:%Y-%m-%d}: {e}")
+            return
+
+        if getattr(rec, "skip", False):
+            return
+        raw = getattr(rec, "raw_outputs", None) or {}
+        targets = raw.get("targets")
+        if not targets:
+            return  # no target weights this bar -> nothing to rebalance.
+
+        from ba2_experts.FactorRanker.portfolio import FactorPortfolioManager
+
+        try:
+            FactorPortfolioManager(expert_id).rebalance(targets)
+        except Exception as e:  # noqa: BLE001 — a rebalance failure must not kill the run
+            self._log(f"bypass rebalance failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
 
     def _size_and_submit(self, expert_id: int, indicator_provider: Any) -> None:
         """Classic RM sizes the PENDING orders, then submit each sized order to the sim.

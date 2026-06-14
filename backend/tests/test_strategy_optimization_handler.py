@@ -375,3 +375,59 @@ def test_build_daily_trial_config_maps_rm_and_overrides():
     for k in ("backtest_id", "account_settings", "enabled_instruments",
               "start_date", "end_date", "warmup_days", "experts", "seed"):
         assert k in cfg
+
+
+# ---------------------------------------------------------------------------
+# BYPASS expert (piece 1c): the optimizer drops rm:*/tp/sl/cond:*/exit:*
+# ---------------------------------------------------------------------------
+def test_is_bypass_expert_detects_factorranker_and_clean_experts():
+    """``_is_bypass_expert`` is True for a FactorRanker backtest_cfg and False for a clean one
+    (the real ba2_experts class-level ``bypasses_classic_rm`` marker drives the branch)."""
+    fr_cfg = {"engine": "daily", "experts": [{"class": "FactorRanker", "settings": {}}]}
+    clean_cfg = {"engine": "daily", "experts": [{"class": "FMPEarningsDrift", "settings": {}}]}
+    assert H._is_bypass_expert(fr_cfg) is True
+    assert H._is_bypass_expert(clean_cfg) is False
+    # A plain string spec (not a dict) is also resolved.
+    assert H._is_bypass_expert({"engine": "daily", "experts": ["FactorRanker"]}) is True
+    # The ML engine is never a bypass; an unknown class is non-bypass (defensive).
+    assert H._is_bypass_expert({"engine": "ml", "experts": ["FactorRanker"]}) is False
+    assert H._is_bypass_expert({"engine": "daily", "experts": ["NoSuchExpert"]}) is False
+
+
+def test_build_daily_trial_config_bypass_drops_rm_tp_sl():
+    """For a FactorRanker (bypass) backtest_cfg, _build_daily_trial_config forwards ONLY the
+    expert's own model:* overrides — NO rm:* mapped names, NO initial_tp/sl, even if decoded
+    accidentally carried them."""
+    backtest_cfg = {
+        "backtest_id": 9,
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-08",
+        "enabled_instruments": ["AAPL", "MSFT"],
+        "experts": [{"class": "FactorRanker", "settings": {"top_n": 20}}],
+        "initial_capital": 100000.0,
+        "account_settings": {"starting_cash": 100000.0},
+        "warmup_days": 30,
+        "seed": 42,
+    }
+    decoded = {
+        # These rm/tp/sl values must NOT be forwarded for a bypass expert.
+        "tp": 8.0,
+        "sl": 3.0,
+        "rm": {"risk_per_trade_pct": 2.5, "atr_stop_mult": 3.0},
+        "expert_overrides": {"top_n": 10, "winsorize_pct": 0.05},
+        "buy_tree": None, "sell_tree": None, "exit_rules": [],
+    }
+    cfg = H._build_daily_trial_config(backtest_cfg, decoded)
+    settings = cfg["experts"][0]["settings"]
+    # The expert's own params ARE forwarded (override wins over the base spec).
+    assert settings["top_n"] == 10
+    assert settings["winsorize_pct"] == 0.05
+    # NONE of the rm/tp/sl names leak into a bypass expert's settings.
+    for forbidden in (
+        "risk_per_trade_pct", "atr_multiplier", "min_stop_loss_pct",
+        "max_virtual_equity_per_instrument_percent", "initial_tp_percent",
+        "initial_sl_percent",
+    ):
+        assert forbidden not in settings
+    # The run-level backtest_cfg must NOT be mutated.
+    assert backtest_cfg["experts"][0]["settings"] == {"top_n": 20}

@@ -111,10 +111,16 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         expert_cfg = ga.get("expert_params")  # may be None (expert frozen)
         rm_cfg = ga.get("rm_params")  # may be None (RM not optimized)
 
+        # BYPASS expert (piece 1c): if the backtest's expert declares ``bypasses_classic_rm``
+        # (e.g. FactorRanker) the search space must EXCLUDE rm:*/tp/sl/cond:*/exit:* and search
+        # ONLY the expert's own params (model:*). Detected from the backtest_cfg experts here so
+        # the same flag drives both the param space and the per-trial config.
+        bypass_expert = _is_bypass_expert(backtest_cfg)
+
         # --- Build the joint param space (Task 1) ---
         try:
             param_space = collect_param_space(
-                strategy, expert_cfg=expert_cfg, rm_cfg=rm_cfg
+                strategy, expert_cfg=expert_cfg, rm_cfg=rm_cfg, bypass=bypass_expert
             )
         except ValueError as e:
             return _fail(opt_id, db, str(e))
@@ -257,6 +263,42 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
 
 
 # ---------------------------------------------------------------------------
+# Bypass-expert detection (piece 1c)
+# ---------------------------------------------------------------------------
+def _is_bypass_expert(backtest_cfg: Dict[str, Any]) -> bool:
+    """True iff ANY expert named in the daily backtest_cfg declares ``bypasses_classic_rm``.
+
+    Resolves each expert class name through the daily handler's ``_SUPPORTED_EXPERTS`` map and
+    reads the class-level marker (``getattr(cls, 'bypasses_classic_rm', False)``). A bypass
+    expert (e.g. FactorRanker) rebalances to target weights via its own portfolio manager, so
+    the optimizer must drop the rm:*/tp/sl/cond:*/exit:* namespaces and search only model:*.
+
+    Only the ``daily`` engine has the expert-aware bypass concept; the ML engine path is never
+    a bypass. An unresolvable / unknown class is treated as NON-bypass (the validating handler
+    rejects unknown experts at run time — this stays defensive and never raises here).
+    """
+    if backtest_cfg.get("engine", "daily") != "daily":
+        return False
+    import importlib
+
+    from app.services.backtest.daily_backtest_handler import _SUPPORTED_EXPERTS
+
+    for spec in backtest_cfg.get("experts", []) or []:
+        class_name = spec.get("class") if isinstance(spec, dict) else spec
+        module_path = _SUPPORTED_EXPERTS.get(class_name)
+        if not module_path:
+            continue
+        try:
+            module = importlib.import_module(module_path)
+            expert_cls = getattr(module, class_name)
+        except Exception:  # noqa: BLE001 — never let detection raise; default to non-bypass
+            continue
+        if bool(getattr(expert_cls, "bypasses_classic_rm", False)):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # The Phase-2 seam (the GA fitness target)
 # ---------------------------------------------------------------------------
 def _build_hoisted_state(backtest_cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -340,19 +382,26 @@ def _build_daily_trial_config(
       * the decoded expert_overrides (model:* numeric decision settings), and
       * the decoded RM params (mapped to the real ba2 RM setting names) so the classic RM
         sizes against the trial's risk config.
+
+    BYPASS expert (piece 1c): for an expert that declares ``bypasses_classic_rm`` the param
+    space already excludes rm:*/tp/sl, so ``decoded`` carries none; but we ALSO refuse to inject
+    any rm/tp/sl override defensively (the bypass rebalance path ignores them), forwarding ONLY
+    the expert's own model:* overrides.
     """
-    rm = decoded.get("rm") or {}
+    bypass = _is_bypass_expert(backtest_cfg)
     overrides = dict(decoded.get("expert_overrides") or {})
-    for joint_name, value in rm.items():
-        real = _RM_SETTING_NAME.get(joint_name)
-        if real is not None and value is not None:
-            overrides[real] = value
-    # Optional TP/SL forwarded as expert settings so the ruleset/RM can read them if it
-    # consults the expert (the daily ruleset's initial TP/SL seam).
-    if decoded.get("tp") is not None:
-        overrides.setdefault("initial_tp_percent", decoded["tp"])
-    if decoded.get("sl") is not None:
-        overrides.setdefault("initial_sl_percent", decoded["sl"])
+    if not bypass:
+        rm = decoded.get("rm") or {}
+        for joint_name, value in rm.items():
+            real = _RM_SETTING_NAME.get(joint_name)
+            if real is not None and value is not None:
+                overrides[real] = value
+        # Optional TP/SL forwarded as expert settings so the ruleset/RM can read them if it
+        # consults the expert (the daily ruleset's initial TP/SL seam).
+        if decoded.get("tp") is not None:
+            overrides.setdefault("initial_tp_percent", decoded["tp"])
+        if decoded.get("sl") is not None:
+            overrides.setdefault("initial_sl_percent", decoded["sl"])
 
     # Merge the per-trial overrides into each expert spec's settings (do NOT mutate the
     # run-level backtest_cfg — build fresh spec dicts).

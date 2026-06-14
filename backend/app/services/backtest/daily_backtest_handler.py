@@ -50,6 +50,11 @@ REQUIRED_KEYS = [
 _SUPPORTED_EXPERTS = {
     "FMPEarningsDrift": "ba2_experts.FMPEarningsDrift",
     "FMPInsiderClusterBuy": "ba2_experts.FMPInsiderClusterBuy",
+    # BYPASS expert (piece 1): FactorRanker declares ``bypasses_classic_rm`` — it does NOT use
+    # the enter/exit ruleset or the classic RM, and rebalances to target weights via its own
+    # FactorPortfolioManager. ``_build_experts`` detects the marker and skips ruleset seeding /
+    # RM-gate enabling for it; the engine routes its targets straight to the portfolio manager.
+    "FactorRanker": "ba2_experts.FactorRanker",
 }
 
 
@@ -293,28 +298,62 @@ def _build_experts(
         module = importlib.import_module(module_path)
         expert_cls = getattr(module, class_name)
 
-        ruleset_id = seed_enter_long_ruleset(name=f"backtest-enter-{class_name}-{idx}")
-        expert_id = seed_expert_instance(
-            account_id=account_id,
-            expert_class_name=class_name,
-            enter_market_ruleset_id=ruleset_id,
-            instance_id=idx,
-        )
+        # BYPASS expert (piece 1b): an expert that declares ``bypasses_classic_rm`` does NOT
+        # use the enter/exit ruleset or the classic RM. For it we seed NO enter ruleset and
+        # enable NO RM gates — it rebalances to target weights via its own
+        # FactorPortfolioManager (the engine routes its analyze_as_of targets there directly).
+        bypass = bool(getattr(expert_cls, "bypasses_classic_rm", False))
+
+        if bypass:
+            ruleset_id: Optional[int] = None
+            expert_id = seed_expert_instance(
+                account_id=account_id,
+                expert_class_name=class_name,
+                # The ExpertInstance FK is non-nullable; seed a ruleset row to satisfy it even
+                # though the engine never evaluates it for a bypass expert.
+                enter_market_ruleset_id=seed_enter_long_ruleset(
+                    name=f"backtest-bypass-{class_name}-{idx}"
+                ),
+                instance_id=idx,
+            )
+        else:
+            ruleset_id = seed_enter_long_ruleset(name=f"backtest-enter-{class_name}-{idx}")
+            expert_id = seed_expert_instance(
+                account_id=account_id,
+                expert_class_name=class_name,
+                enter_market_ruleset_id=ruleset_id,
+                instance_id=idx,
+            )
 
         # The expert's declared decision settings: its own defaults + payload overrides.
         decision_settings = _expert_decision_settings(expert_cls, overrides)
 
         expert = expert_cls(expert_id)
-        # Enable the RM gates (interface defaults are restrictive) + persist the decision
-        # settings so any self.settings read in the inherited path is consistent with the
-        # dict the engine passes to _process.
-        gate_settings: Dict[str, Any] = {
-            "allow_automated_trade_opening": (True, "bool"),
-            "enable_buy": (True, "bool"),
-        }
-        for k, v in decision_settings.items():
-            gate_settings[k] = (v, _setting_type(v))
-        expert.save_settings(gate_settings)
+        if bypass:
+            # No RM gates: a bypass expert never goes through TradeRiskManagement. It DOES need
+            # its own universe (FactorRanker resolves it from the ``enabled_instruments``
+            # setting), so seed that from the run's universe; persist the decision settings so
+            # any self.settings read on the rebalance path matches the engine's _process dict.
+            bypass_settings: Dict[str, Any] = {
+                "enabled_instruments": (
+                    {sym: {} for sym in config["enabled_instruments"]},
+                    "json",
+                ),
+            }
+            for k, v in decision_settings.items():
+                bypass_settings[k] = (v, _setting_type(v))
+            expert.save_settings(bypass_settings)
+        else:
+            # Enable the RM gates (interface defaults are restrictive) + persist the decision
+            # settings so any self.settings read in the inherited path is consistent with the
+            # dict the engine passes to _process.
+            gate_settings: Dict[str, Any] = {
+                "allow_automated_trade_opening": (True, "bool"),
+                "enable_buy": (True, "bool"),
+            }
+            for k, v in decision_settings.items():
+                gate_settings[k] = (v, _setting_type(v))
+            expert.save_settings(gate_settings)
 
         resolver.register_expert(expert_id, expert)
         out.append((expert, expert_id, decision_settings, ruleset_id))

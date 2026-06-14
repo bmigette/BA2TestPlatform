@@ -147,24 +147,40 @@ def collect_param_space(
     strategy,
     expert_cfg: Optional[Dict[str, Any]] = None,
     rm_cfg: Optional[Dict[str, Any]] = None,
+    bypass: bool = False,
 ) -> Dict[str, Any]:
     """Return the flat joint param_ranges dict for GeneticOptimizer.
 
     Merges expert (model:*) + RM (rm:*) + tp/sl + condition (cond:*/exit:*) ranges.
     Key order is deterministic (model, rm, tp/sl, conditions) so the gene list is
     stable across runs — required for reproducibility.
+
+    BYPASS experts (piece 1c): when ``bypass`` is True the strategy/expert does NOT use
+    the classic RM or the enter/exit ruleset (e.g. FactorRanker rebalances to target weights
+    via its own portfolio manager). For such an expert the search space is restricted to the
+    expert's OWN params (model:*) ONLY — the rm:*, tp, sl, cond:* and exit:* namespaces are
+    EXCLUDED (they have no effect on the rebalance path, so optimizing them would be noise).
     """
     space: Dict[str, Any] = {}
     space.update(_collect_expert(expert_cfg))
-    space.update(_collect_rm(rm_cfg))
-    space.update(_collect_tp_sl(strategy))
-    space.update(_collect_conditions(strategy))
+    if not bypass:
+        space.update(_collect_rm(rm_cfg))
+        space.update(_collect_tp_sl(strategy))
+        space.update(_collect_conditions(strategy))
     if not space:
         raise ValueError(
-            "No optimizable parameters found: mark at least one of expert/RM/"
-            "TP/SL/condition fields optimize=True."
+            "No optimizable parameters found: "
+            + (
+                "a bypass expert searches only its own params — mark at least one expert "
+                "param optimize=True."
+                if bypass
+                else "mark at least one of expert/RM/TP/SL/condition fields optimize=True."
+            )
         )
-    logger.info(f"Collected joint param space: {len(space)} params: {list(space.keys())}")
+    logger.info(
+        f"Collected {'bypass ' if bypass else ''}joint param space: "
+        f"{len(space)} params: {list(space.keys())}"
+    )
     return space
 
 
