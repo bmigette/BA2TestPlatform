@@ -26,6 +26,13 @@ def seeded_cache(tmp_path, monkeypatch):
     (tmp_path / "datasets").mkdir()
     (tmp_path / "datasets" / "ds1.csv").write_text("x\n1\n")
 
+    # seed models (destructive type) — override its root onto the temp tree so
+    # clean-all's "leaves trained_models intact" guarantee is asserted on real
+    # files, not just an empty backend trained_models/ dir.
+    cache_manager.CACHE_TYPES["models"]["roots"] = [tmp_path / "trained_models"]
+    (tmp_path / "trained_models" / "job123").mkdir(parents=True)
+    (tmp_path / "trained_models" / "job123" / "model.pt").write_text("weights")
+
     return cache_manager
 
 
@@ -99,7 +106,9 @@ def test_clear_by_type_removes_only_that_type(seeded_cache):
     assert usage["datasets"]["files"] >= 1
 
 
-def test_clean_all_skips_destructive(seeded_cache):
+def test_clean_all_skips_destructive(seeded_cache, tmp_path):
+    """clean-all clears non-destructive types but leaves dataset CSVs +
+    trained_models INTACT on disk; both clear only via an explicit type delete."""
     from app.main import app
     client = TestClient(app)
     r = client.delete("/api/cache")
@@ -109,15 +118,25 @@ def test_clean_all_skips_destructive(seeded_cache):
     assert "skipped" in body["models"]
     # ohlcv (non-destructive) was cleaned by clean-all
     assert body["ohlcv"]["files_removed"] >= 1
-    # datasets file survives clean-all
+    # datasets + trained_models files survive clean-all (response AND on disk)
     usage = client.get("/api/cache/usage").json()["types"]
     assert usage["datasets"]["files"] >= 1
+    assert usage["models"]["files"] >= 1
+    assert (tmp_path / "datasets" / "ds1.csv").exists()
+    assert (tmp_path / "trained_models" / "job123" / "model.pt").exists()
     # explicit datasets delete IS allowed and removes it
     r2 = client.delete("/api/cache/datasets")
     assert r2.status_code == 200
     assert r2.json()["files_removed"] >= 1
     usage2 = client.get("/api/cache/usage").json()["types"]
     assert usage2["datasets"]["files"] == 0
+    # ...and trained_models is still untouched (only its own explicit delete clears it)
+    assert (tmp_path / "trained_models" / "job123" / "model.pt").exists()
+    # explicit models delete IS allowed and removes it
+    r3 = client.delete("/api/cache/models")
+    assert r3.status_code == 200
+    assert r3.json()["files_removed"] >= 1
+    assert not (tmp_path / "trained_models" / "job123" / "model.pt").exists()
 
 
 def test_clear_by_date_only_old_files(seeded_cache, tmp_path):
