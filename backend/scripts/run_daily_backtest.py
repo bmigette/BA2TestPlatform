@@ -141,6 +141,18 @@ def _parse_args(argv: list) -> argparse.Namespace:
         default=None,
         help="Optional path to write the full results JSON (metrics + curves + trades).",
     )
+    p.add_argument(
+        "--track",
+        action="store_true",
+        help="Persist this run as a tracked Backtest row (shows up in `ba2-test runs list`, "
+             "deletable via clear-unsaved). Same results table the API/UI uses.",
+    )
+    p.add_argument(
+        "--save",
+        action="store_true",
+        help="Persist AND mark the run saved (is_saved=True) so it survives `runs clear-unsaved`. "
+             "Implies --track.",
+    )
     return p.parse_args(argv)
 
 
@@ -206,7 +218,7 @@ def _run_real(args: argparse.Namespace) -> dict:
 
     results = run_daily_backtest(config, progress_cb=progress)
     sys.stderr.write("\n")
-    return results
+    return results, config
 
 
 def _run_hermetic(args: argparse.Namespace) -> dict:
@@ -270,7 +282,7 @@ def _run_hermetic(args: argparse.Namespace) -> dict:
     }
 
     with hermetic_providers():
-        return run_daily_backtest(config)
+        return run_daily_backtest(config), config
 
 
 def _print_report(results: dict, *, hermetic: bool, expert: str) -> None:
@@ -317,6 +329,47 @@ def _print_report(results: dict, *, hermetic: bool, expert: str) -> None:
         )
 
 
+def _persist_tracked(config: dict, results: dict, *, saved: bool) -> int:
+    """Write the finished run as a tracked ``Backtest`` row (the SAME table the API/UI use).
+
+    Reuses ``daily_backtest_handler._persist_results`` for the metric/curve mapping so a
+    CLI-tracked run is indistinguishable from an API one. The results row id is independent
+    of the per-run trading-DB id (two separate DBs, per the handler contract).
+    """
+    import app.models  # noqa: F401 — registers all ORM models on Base
+    from app.models.backtest import Backtest
+    from app.models.database import SessionLocal, init_db
+    from app.services.backtest.daily_backtest_handler import _persist_results
+
+    init_db()  # ensure the results schema exists (same call the platform makes on startup)
+    acct = config["account_settings"]
+    db = SessionLocal()
+    try:
+        bt = Backtest(
+            name=config["name"],
+            model_id=None,  # daily expert runs are not model-driven
+            engine_type="daily_expert",
+            start_date=config["start_date"],
+            end_date=config["end_date"],
+            initial_capital=float(config["initial_capital"]),
+            commission=float(acct["commission_per_trade"]),
+            slippage=float(acct["slippage_bps"]),
+            status="running",
+            started_at=datetime.now(),
+        )
+        db.add(bt)
+        db.commit()
+        db.refresh(bt)
+        _persist_results(db, bt, results)
+        bt.status = "completed"
+        bt.completed_at = datetime.now()
+        bt.is_saved = bool(saved)
+        db.commit()
+        return bt.id
+    finally:
+        db.close()
+
+
 def main(argv: list) -> int:
     args = _parse_args(argv)
     hermetic = not _has_fmp_key()
@@ -324,14 +377,18 @@ def main(argv: list) -> int:
         sys.stderr.write(
             "[run_daily_backtest] no FMP_API_KEY found -> hermetic fixture smoke.\n"
         )
-        results = _run_hermetic(args)
+        results, config = _run_hermetic(args)
     else:
         sys.stderr.write(
             "[run_daily_backtest] FMP_API_KEY found -> real daily-data run.\n"
         )
-        results = _run_real(args)
+        results, config = _run_real(args)
 
     _print_report(results, hermetic=hermetic, expert=args.expert)
+
+    if args.track or args.save:
+        run_id = _persist_tracked(config, results, saved=args.save)
+        print(f"Tracked run persisted -> Backtest id={run_id} (saved={bool(args.save)})")
 
     if args.out:
         out_path = Path(args.out)

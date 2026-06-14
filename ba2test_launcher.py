@@ -10,6 +10,12 @@ covers the platform's operations without the API:
   ba2-test fetch-screener --settings-json F ..  build the survivorship-free screener history
   ba2-test cache-usage                          show cache disk usage per type
   ba2-test cache-clear [--type T] [--before D]  clear cache (all, or one type, optional date)
+  ba2-test runs list [--saved-only]             list tracked backtest runs (shared results table)
+  ba2-test runs save <id> [--name N]            mark a run saved (survives clear-unsaved)
+  ba2-test runs clear-unsaved                    delete all runs not marked saved
+  ba2-test runs delete <id>                      delete one run
+
+  (persist a CLI run with: ba2-test backtest ... --track  [or --save to keep it])
 
 Run ``ba2-test <cmd> -h`` for per-command help. Works for an editable/source install (the
 repo root is resolved from this module's location).
@@ -118,6 +124,70 @@ def _cmd_cache_clear(args) -> int:
     return 0
 
 
+# --- backtest run tracking (the shared `backtests` results table) ----------------------
+def _runs_db():
+    # Ensure the results schema exists so `runs`/`--track` work even before the API's
+    # first start (init_db = Base.metadata.create_all, same call the platform makes).
+    import app.models  # noqa: F401 — registers all ORM models on Base
+    from app.models.database import SessionLocal, init_db
+    init_db()
+    return SessionLocal()
+
+
+def _cmd_runs(args) -> int:
+    from app.models.backtest import Backtest
+    db = _runs_db()
+    try:
+        if args.runs_cmd == "list":
+            q = db.query(Backtest)
+            if args.saved_only:
+                q = q.filter(Backtest.is_saved == True)  # noqa: E712 (SQLAlchemy needs ==)
+            if args.engine:
+                q = q.filter(Backtest.engine_type == args.engine)
+            rows = q.order_by(Backtest.created_at.desc()).limit(args.limit).all()
+            print(f"{'id':>5}  {'engine':<13} {'status':<10} {'ret%':>8} {'sharpe':>7} "
+                  f"{'saved':<5} name")
+            for r in rows:
+                ret = f"{r.total_return:.2f}" if r.total_return is not None else "-"
+                shp = f"{r.sharpe_ratio:.2f}" if r.sharpe_ratio is not None else "-"
+                print(f"{r.id:>5}  {(r.engine_type or 'ml'):<13} {(r.status or ''):<10} "
+                      f"{ret:>8} {shp:>7} {('yes' if r.is_saved else 'no'):<5} {r.name}")
+            print(f"-- {len(rows)} run(s)")
+            return 0
+
+        if args.runs_cmd == "save":
+            r = db.query(Backtest).filter(Backtest.id == args.id).first()
+            if r is None:
+                sys.exit(f"ba2-test: run {args.id} not found")
+            if args.name:
+                r.name = args.name
+            r.is_saved = True
+            db.commit()
+            print(f"saved run {r.id}: {r.name}")
+            return 0
+
+        if args.runs_cmd == "delete":
+            r = db.query(Backtest).filter(Backtest.id == args.id).first()
+            if r is None:
+                sys.exit(f"ba2-test: run {args.id} not found")
+            db.delete(r)
+            db.commit()
+            print(f"deleted run {args.id}")
+            return 0
+
+        if args.runs_cmd == "clear-unsaved":
+            unsaved = db.query(Backtest).filter(Backtest.is_saved == False).all()  # noqa: E712
+            n = len(unsaved)
+            for r in unsaved:
+                db.delete(r)
+            db.commit()
+            print(f"deleted {n} unsaved run(s)")
+            return 0
+        return 0
+    finally:
+        db.close()
+
+
 def main(argv: "list | None" = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _enter_backend()
@@ -156,6 +226,20 @@ def main(argv: "list | None" = None) -> int:
 
     sub.add_parser("cache-usage", help="Show cache disk usage per type.")
 
+    # runs: manage tracked backtest runs (the shared `backtests` results table).
+    rp = sub.add_parser("runs", help="List / save / delete tracked backtest runs.")
+    rsub = rp.add_subparsers(dest="runs_cmd", required=True)
+    rl = rsub.add_parser("list", help="List tracked runs (newest first).")
+    rl.add_argument("--limit", type=int, default=50)
+    rl.add_argument("--saved-only", action="store_true", help="Only runs marked saved.")
+    rl.add_argument("--engine", default=None, help="Filter by engine_type (ml/daily_expert).")
+    rs = rsub.add_parser("save", help="Mark a run saved (survives clear-unsaved).")
+    rs.add_argument("id", type=int)
+    rs.add_argument("--name", default=None, help="Optionally rename the run.")
+    rd = rsub.add_parser("delete", help="Delete one run by id.")
+    rd.add_argument("id", type=int)
+    rsub.add_parser("clear-unsaved", help="Delete all runs not marked saved.")
+
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":
         return _cmd_backtest(argv[1:])
@@ -167,6 +251,7 @@ def main(argv: "list | None" = None) -> int:
         "fetch-screener": lambda: _cmd_fetch_screener(args),
         "cache-usage": lambda: _cmd_cache_usage(args),
         "cache-clear": lambda: _cmd_cache_clear(args),
+        "runs": lambda: _cmd_runs(args),
     }[args.cmd]()
 
 
