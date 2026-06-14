@@ -146,23 +146,93 @@ def _runs_db():
     return SessionLocal()
 
 
+# Fitness/sort metric -> Backtest column (higher = better for all of these).
+_METRIC_COL = {
+    "sharpe": "sharpe_ratio",
+    "calmar": "calmar_ratio",
+    "return": "total_return",
+    "total_return": "total_return",
+    "profit_factor": "profit_factor",
+    "sortino": "sortino_ratio",
+}
+
+
 def _cmd_runs(args) -> int:
     from app.models.backtest import Backtest
     db = _runs_db()
     try:
+        if args.runs_cmd == "prune":
+            # Keep the best --keep runs per expert (by --metric, completed only); delete the
+            # rest. Saved runs (is_saved) are ALWAYS kept and never counted against the budget.
+            col = _METRIC_COL.get(args.metric)
+            if col is None:
+                sys.exit(f"ba2-test: unknown metric {args.metric!r}; use {sorted(_METRIC_COL)}")
+            q = db.query(Backtest).filter(Backtest.status == "completed")
+            if args.expert:
+                q = q.filter(Backtest.expert_name == args.expert)
+            rows = q.all()
+            by_expert: dict = {}
+            for r in rows:
+                by_expert.setdefault(r.expert_name or "(none)", []).append(r)
+            deleted = 0
+            for expert, group in by_expert.items():
+                keepers = [r for r in group if r.is_saved]
+                cands = [r for r in group if not r.is_saved]
+                cands.sort(key=lambda r: (getattr(r, col) if getattr(r, col) is not None else -1e9),
+                           reverse=True)
+                survivors = cands[: max(0, args.keep)]
+                losers = cands[args.keep:]
+                for r in losers:
+                    db.delete(r)
+                    deleted += 1
+                print(f"{expert}: kept {len(survivors)} top + {len(keepers)} saved, "
+                      f"deleted {len(losers)} (by {args.metric})")
+            db.commit()
+            print(f"-- pruned {deleted} run(s) total")
+            return 0
+
+        if args.runs_cmd == "stats":
+            q = db.query(Backtest).filter(Backtest.status == "completed")
+            if args.expert:
+                q = q.filter(Backtest.expert_name == args.expert)
+            if args.group is not None:
+                q = q.filter(Backtest.optimization_id == args.group)
+            rows = q.all()
+            buckets: dict = {}
+            key = (lambda r: r.optimization_id) if args.group is not None else (lambda r: r.expert_name or "(none)")
+            for r in rows:
+                buckets.setdefault(key(r), []).append(r)
+            for k, group in sorted(buckets.items(), key=lambda kv: str(kv[0])):
+                def _vals(c):
+                    return [getattr(r, c) for r in group if getattr(r, c) is not None]
+                shp = _vals("sharpe_ratio"); ret = _vals("total_return")
+                best = max(shp) if shp else None
+                avg = (sum(shp) / len(shp)) if shp else None
+                label = ("opt#" + str(k)) if args.group is not None else str(k)
+                print(f"{label}: n={len(group)} best_sharpe={best if best is None else round(best,2)} "
+                      f"avg_sharpe={avg if avg is None else round(avg,2)} "
+                      f"best_return={max(ret) if ret else None}")
+            print(f"-- {len(rows)} run(s)")
+            return 0
+
         if args.runs_cmd == "list":
             q = db.query(Backtest)
             if args.saved_only:
                 q = q.filter(Backtest.is_saved == True)  # noqa: E712 (SQLAlchemy needs ==)
             if args.engine:
                 q = q.filter(Backtest.engine_type == args.engine)
+            if getattr(args, "expert", None):
+                q = q.filter(Backtest.expert_name == args.expert)
+            if getattr(args, "group", None) is not None:
+                q = q.filter(Backtest.optimization_id == args.group)
             rows = q.order_by(Backtest.created_at.desc()).limit(args.limit).all()
-            print(f"{'id':>5}  {'engine':<13} {'status':<10} {'ret%':>8} {'sharpe':>7} "
+            print(f"{'id':>5}  {'expert':<16} {'opt':>5} {'status':<10} {'ret%':>8} {'sharpe':>7} "
                   f"{'saved':<5} name")
             for r in rows:
                 ret = f"{r.total_return:.2f}" if r.total_return is not None else "-"
                 shp = f"{r.sharpe_ratio:.2f}" if r.sharpe_ratio is not None else "-"
-                print(f"{r.id:>5}  {(r.engine_type or 'ml'):<13} {(r.status or ''):<10} "
+                opt = str(r.optimization_id) if r.optimization_id is not None else "-"
+                print(f"{r.id:>5}  {(r.expert_name or '-'):<16} {opt:>5} {(r.status or ''):<10} "
                       f"{ret:>8} {shp:>7} {('yes' if r.is_saved else 'no'):<5} {r.name}")
             print(f"-- {len(rows)} run(s)")
             return 0
@@ -245,12 +315,21 @@ def main(argv: "list | None" = None) -> int:
     rl.add_argument("--limit", type=int, default=50)
     rl.add_argument("--saved-only", action="store_true", help="Only runs marked saved.")
     rl.add_argument("--engine", default=None, help="Filter by engine_type (ml/daily_expert).")
+    rl.add_argument("--expert", default=None, help="Filter by expert_name.")
+    rl.add_argument("--group", type=int, default=None, help="Filter by optimization_id.")
     rs = rsub.add_parser("save", help="Mark a run saved (survives clear-unsaved).")
     rs.add_argument("id", type=int)
     rs.add_argument("--name", default=None, help="Optionally rename the run.")
     rd = rsub.add_parser("delete", help="Delete one run by id.")
     rd.add_argument("id", type=int)
     rsub.add_parser("clear-unsaved", help="Delete all runs not marked saved.")
+    rpr = rsub.add_parser("prune", help="Keep best N runs per expert (by metric); delete the rest.")
+    rpr.add_argument("--keep", type=int, default=10, help="How many top runs to keep per expert.")
+    rpr.add_argument("--metric", default="sharpe", help="Ranking metric (sharpe/calmar/return/...).")
+    rpr.add_argument("--expert", default=None, help="Only prune this expert (else all).")
+    rst = rsub.add_parser("stats", help="Per-expert (or per opt-job) summary stats.")
+    rst.add_argument("--expert", default=None, help="Filter to one expert.")
+    rst.add_argument("--group", type=int, default=None, help="Group by optimization_id (this job).")
 
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":
