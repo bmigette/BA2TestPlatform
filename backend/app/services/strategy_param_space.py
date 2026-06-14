@@ -166,3 +166,107 @@ def collect_param_space(
         )
     logger.info(f"Collected joint param space: {len(space)} params: {list(space.keys())}")
     return space
+
+
+def _apply_to_tree(tree: Optional[Dict[str, Any]], by_id: Dict[str, Dict[str, Any]]
+                   ) -> Optional[Dict[str, Any]]:
+    """Deep-copy a condition tree, substituting value/confirmation_bars by node id.
+
+    The input tree (and therefore the source Strategy) is never mutated.
+    """
+    if tree is None:
+        return None
+    new = copy.deepcopy(tree)
+
+    def _recurse(node):
+        if not isinstance(node, dict):
+            return
+        for child in (node.get("conditions") or []):
+            _recurse(child)
+        cid = node.get("id")
+        if cid and cid in by_id:
+            sub = by_id[cid]
+            if "value" in sub:
+                node["value"] = sub["value"]
+            if "confirmation_bars" in sub:
+                node["confirmation_bars"] = sub["confirmation_bars"]
+
+    _recurse(new)
+    return new
+
+
+def _rm_defaults_from_strategy(strategy) -> Dict[str, Any]:
+    """Read the non-optimized RM baseline values from the Strategy columns."""
+    return {
+        "risk_per_trade_pct": getattr(strategy, "rm_risk_per_trade_pct", None),
+        "per_instrument_cap_pct": getattr(strategy, "rm_per_instrument_cap_pct", None),
+        "min_stop_pct": getattr(strategy, "rm_min_stop_pct", None),
+        "atr_stop_mult": getattr(strategy, "rm_atr_stop_mult", None),
+        "max_concurrent_positions": getattr(strategy, "rm_max_concurrent_positions", None),
+    }
+
+
+def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Reconstruct a concrete trial config from a decoded flat params dict.
+
+    The flat dict comes from GeneticOptimizer.decode_individual (namespaced keys:
+    tp | sl | rm:<p> | model:<p> | cond:<id>:value | cond:<id>:confirmation_bars |
+    exit:<id>:action_value). Returns::
+
+      {
+        'tp': float, 'sl': float,                 # falls back to strategy defaults
+        'rm': {risk_per_trade_pct,...},           # classic-RM dict (defaults + overrides)
+        'expert_overrides': {param: value},       # model:* stripped of prefix
+        'buy_tree': dict|None, 'sell_tree': dict|None, 'exit_rules': list,
+      }
+
+    The source Strategy is NEVER mutated (trees are deep-copied).
+    """
+    # Partition flat keys by namespace
+    cond_by_id: Dict[str, Dict[str, Any]] = {}
+    exit_action_by_id: Dict[str, Any] = {}
+    rm: Dict[str, Any] = {}
+    expert_overrides: Dict[str, Any] = {}
+    tp = getattr(strategy, "initial_tp_percent", None)
+    sl = getattr(strategy, "initial_sl_percent", None)
+
+    for key, val in flat_params.items():
+        if key == "tp":
+            tp = val
+        elif key == "sl":
+            sl = val
+        elif key.startswith("rm:"):
+            rm[key[len("rm:"):]] = val
+        elif key.startswith("model:"):
+            expert_overrides[key[len("model:"):]] = val
+        elif key.startswith("cond:"):
+            _, cid, field = key.split(":", 2)
+            cond_by_id.setdefault(cid, {})[field] = val
+        elif key.startswith("exit:"):
+            _, eid, field = key.split(":", 2)  # field == 'action_value'
+            exit_action_by_id[eid] = val
+        else:
+            raise ValueError(f"Unknown decoded param namespace: {key!r}")
+
+    # Fill RM defaults from the Strategy columns for params NOT under optimization
+    rm_full = _rm_defaults_from_strategy(strategy)
+    rm_full.update(rm)
+
+    buy_tree = _apply_to_tree(getattr(strategy, "buy_entry_conditions", None), cond_by_id)
+    sell_tree = _apply_to_tree(getattr(strategy, "sell_entry_conditions", None), cond_by_id)
+
+    exit_rules = copy.deepcopy(getattr(strategy, "exit_conditions", None) or [])
+    for rule in exit_rules:
+        if not isinstance(rule, dict):
+            continue
+        eid = rule.get("id")
+        if eid in exit_action_by_id:
+            rule["action_value"] = exit_action_by_id[eid]
+        if rule.get("conditions"):
+            rule["conditions"] = _apply_to_tree(rule["conditions"], cond_by_id)
+
+    return {
+        "tp": tp, "sl": sl, "rm": rm_full,
+        "expert_overrides": expert_overrides,
+        "buy_tree": buy_tree, "sell_tree": sell_tree, "exit_rules": exit_rules,
+    }
