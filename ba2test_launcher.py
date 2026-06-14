@@ -289,8 +289,22 @@ def _build_strategy_row(name: str):
     """A Strategy whose TP/SL + the 5 classic-RM params (the RM's sizing/stop conditions &
     actions) are marked optimizable with ranges — the numeric RM space the optimizer searches."""
     from app.models.strategy import Strategy
+    # Entry-gate tree: confidence + expected-profit thresholds, each value-optimizable AND
+    # on/off-toggleable. The engine builds the enter ruleset from this (seed_ruleset_from_tree),
+    # so these are the optimizer's "RM/entry conditions" — tuned thresholds + steps turned on/off.
+    buy_entry_conditions = {
+        "id": "root", "type": "AND", "conditions": [
+            {"id": "gate_confidence", "field": "confidence", "op": ">", "value": 50,
+             "optimize": True, "value_min": 40, "value_max": 80, "value_step": 5,
+             "toggle_optimize": True},
+            {"id": "gate_expected_profit", "field": "expected_profit", "op": ">", "value": 3,
+             "optimize": True, "value_min": 0, "value_max": 15, "value_step": 1,
+             "toggle_optimize": True},
+        ],
+    }
     return Strategy(
         name=name,
+        buy_entry_conditions=buy_entry_conditions,
         initial_tp_percent=8.0, initial_tp_optimize=True, initial_tp_min=3.0, initial_tp_max=20.0, initial_tp_step=1.0,
         initial_sl_percent=5.0, initial_sl_optimize=True, initial_sl_min=2.0, initial_sl_max=12.0, initial_sl_step=1.0,
         rm_risk_per_trade_pct=1.0, rm_risk_per_trade_pct_optimize=True, rm_risk_per_trade_pct_min=0.5, rm_risk_per_trade_pct_max=3.0, rm_risk_per_trade_pct_step=0.5,

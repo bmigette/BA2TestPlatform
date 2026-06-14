@@ -462,6 +462,11 @@ def _build_daily_trial_config(
         # Cadence (weekly entry) + intraday fill clock carry through to each trial's engine.
         "run_schedule_override": backtest_cfg.get("run_schedule_override"),
         "execution_interval": backtest_cfg.get("execution_interval", "1d"),
+        # Optimizer-decoded condition trees: the engine builds the enter ruleset FROM buy_tree
+        # (seed_ruleset_from_tree) so cond:<id>:value thresholds + on/off toggles drive entries.
+        "buy_tree": decoded.get("buy_tree"),
+        "sell_tree": decoded.get("sell_tree"),
+        "exit_rules": decoded.get("exit_rules"),
     }
 
 

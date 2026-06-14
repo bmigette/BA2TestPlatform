@@ -71,6 +71,69 @@ def _link(ruleset_id: int, event_action_ids: List[int]) -> None:
         session.commit()
 
 
+# Strategy condition-tree field -> ExpertEventType for value (N_*) gates. These are the
+# fields the optimizer's cond:<id>:value genes tune on a buy/sell entry tree; an unknown
+# field is skipped (it never silently breaks the ruleset).
+_FIELD_EVENT = {
+    "confidence": ExpertEventType.N_CONFIDENCE,
+    "expected_profit": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
+    "expected_profit_percent": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
+    "expected_profit_target_percent": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
+}
+
+
+def _tree_leaves(node):
+    """Yield leaf condition dicts (those with a ``field``) from an AND/OR condition tree."""
+    if not isinstance(node, dict):
+        return
+    kids = node.get("conditions")
+    if kids:
+        for child in kids:
+            yield from _tree_leaves(child)
+    elif node.get("field"):
+        yield node
+
+
+def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree") -> int:
+    """Seed an enter_market ruleset from a Strategy buy-entry condition TREE; return its id.
+
+    The base "BUY when bullish and flat" triggers are kept, AND each leaf value-condition in
+    the tree is added as an extra trigger (event_type from _FIELD_EVENT, with the leaf's
+    operator + value). Triggers in one EventAction are ANDed, so this realises a root-AND tree
+    of entry gates (e.g. confidence > X AND expected_profit > Y) — exactly what the optimizer's
+    cond:<id>:value / on-off-toggle genes tune. Unknown fields are skipped. (OR nesting and exit
+    rules are a follow-up; falls back to the bullish+flat default when the tree adds nothing.)
+    """
+    triggers = {
+        "bullish": {"event_type": ExpertEventType.F_BULLISH.value},
+        "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
+    }
+    for i, leaf in enumerate(_tree_leaves(buy_tree)):
+        et = _FIELD_EVENT.get(str(leaf.get("field")))
+        if et is None or leaf.get("value") is None:
+            continue
+        triggers[f"gate_{i}"] = {
+            "event_type": et.value,
+            "operator": leaf.get("op") or leaf.get("operator") or ">",
+            "value": leaf.get("value"),
+        }
+
+    ruleset = Ruleset(
+        name=name,
+        description="Backtest enter ruleset built from a Strategy condition tree.",
+        type=ExpertEventRuleType.TRADING_RECOMMENDATION_RULE,
+        subtype=AnalysisUseCase.ENTER_MARKET,
+    )
+    ruleset_id = add_instance(ruleset)
+    ea = _make_event_action(
+        name=f"{name}-enter",
+        triggers=triggers,
+        actions={"buy": {"action_type": ExpertActionType.BUY.value}},
+    )
+    _link(ruleset_id, [ea])
+    return ruleset_id
+
+
 def seed_enter_long_ruleset(name: str = "backtest-enter-long") -> int:
     """Seed a "BUY when bullish and flat" enter_market ruleset; return its id.
 

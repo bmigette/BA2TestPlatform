@@ -353,7 +353,15 @@ def _build_experts(
     import importlib
 
     from app.services.backtest.backtest_db import seed_expert_instance
-    from app.services.backtest.default_rulesets import seed_enter_long_ruleset
+    from app.services.backtest.default_rulesets import seed_enter_long_ruleset, seed_ruleset_from_tree
+
+    # When the (optimizer-decoded) buy-entry condition tree is present, build the enter ruleset
+    # FROM it so the optimizer's cond:<id>:value thresholds + on/off toggles actually gate
+    # entries; else fall back to the default "BUY when bullish & flat" ruleset.
+    buy_tree = config.get("buy_tree")
+
+    def _seed_enter(nm: str) -> int:
+        return seed_ruleset_from_tree(buy_tree, name=nm) if buy_tree else seed_enter_long_ruleset(name=nm)
 
     out: List[Tuple[Any, int, Dict[str, Any], int]] = []
     for idx, spec in enumerate(config["experts"], start=1):
@@ -387,7 +395,7 @@ def _build_experts(
                 instance_id=idx,
             )
         else:
-            ruleset_id = seed_enter_long_ruleset(name=f"backtest-enter-{class_name}-{idx}")
+            ruleset_id = _seed_enter(name=f"backtest-enter-{class_name}-{idx}")
             expert_id = seed_expert_instance(
                 account_id=account_id,
                 expert_class_name=class_name,
