@@ -66,6 +66,24 @@ except Exception:  # noqa: BLE001 — dotenv is optional; absence just means env
     pass
 
 
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _run_schedule_override(spec, day: str = "monday"):
+    """Map the ``--run-schedule`` shorthand to the engine's ``run_schedule_override`` dict.
+
+    ``daily`` / ``None`` -> ``None`` (analyse every bar, legacy). ``weekly`` -> analyse for
+    NEW entries only on ``day`` (default Monday): ``{"days": {<day>: True, rest: False}}``.
+    Fills + open-position management still run every bar (the engine gates only entry
+    analysis), so weekly cadence is ~5x fewer expensive expert evaluations.
+    """
+    if not spec or spec == "daily":
+        return None
+    if spec == "weekly":
+        return {"days": {d: (d == day) for d in _WEEKDAYS}}
+    raise SystemExit(f"--run-schedule must be 'daily' or 'weekly' (got {spec!r})")
+
+
 def _has_fmp_key() -> bool:
     """True iff an FMP API key is configured.
 
@@ -134,6 +152,20 @@ def _parse_args(argv: list) -> argparse.Namespace:
              "open/close fill detection). Experts still fetch any interval they need separately.",
     )
     p.add_argument(
+        "--run-schedule",
+        default="daily",
+        choices=["daily", "weekly"],
+        help="Entry cadence: 'daily' analyses for new positions every bar (legacy); 'weekly' "
+             "analyses once a week (on --run-schedule-day). Fills + open-position management "
+             "still run every bar — weekly is ~5x fewer (expensive) expert evaluations/fetches.",
+    )
+    p.add_argument(
+        "--run-schedule-day",
+        default="monday",
+        choices=list(_WEEKDAYS),
+        help="Weekday for weekly cadence (default monday).",
+    )
+    p.add_argument(
         "--name", default=None, help="Optional run name (defaults to expert+date stamp)."
     )
     p.add_argument(
@@ -178,7 +210,7 @@ def _build_real_config(args: argparse.Namespace) -> dict:
         raise SystemExit("--universe must list at least one symbol")
 
     backtest_id = int(datetime.now().timestamp())
-    return {
+    config = {
         "backtest_id": backtest_id,
         "name": args.name or f"cli-{args.expert}-{args.start}_{args.end}",
         "start_date": start,
@@ -197,6 +229,10 @@ def _build_real_config(args: argparse.Namespace) -> dict:
         "seed": int(args.seed),
         "subtype": "daily_expert",
     }
+    override = _run_schedule_override(args.run_schedule, args.run_schedule_day)
+    if override:
+        config["run_schedule_override"] = override
+    return config
 
 
 def _run_real(args: argparse.Namespace) -> dict:
@@ -280,6 +316,9 @@ def _run_hermetic(args: argparse.Namespace) -> dict:
         "seed": int(args.seed),
         "subtype": "daily_expert",
     }
+    override = _run_schedule_override(args.run_schedule, args.run_schedule_day)
+    if override:
+        config["run_schedule_override"] = override
 
     with hermetic_providers():
         return run_daily_backtest(config), config

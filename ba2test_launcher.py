@@ -242,7 +242,15 @@ def _cmd_report(args) -> int:
                 f"<td>{num(max(ret)) if ret else '-'}</td></tr>")
         parts.append("</table>")
 
-    out = args.out or "C:\\Users\\basti\\Documents\\dev\\ba2_backtest_report.html"
+    # Default INSIDE the repo (tracked ``reports/``) so the HTML is committed and syncs across
+    # machines — not an out-of-tree absolute path. Resolve from this module's location (the
+    # repo root), since _enter_backend() has chdir'd into backend/ by now.
+    if args.out:
+        out = args.out
+    else:
+        repo_root = os.path.dirname(os.path.abspath(__file__))
+        out = os.path.join(repo_root, "reports", "ba2_backtest_report.html")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write("\n".join(parts))
     print(f"wrote report -> {out} ({len(rows)} runs, {len(by_expert)} experts)")
@@ -424,7 +432,9 @@ def main(argv: "list | None" = None) -> int:
     rst.add_argument("--group", type=int, default=None, help="Group by optimization_id (this job).")
 
     rep = sub.add_parser("report", help="Write an HTML summary of tracked backtests.")
-    rep.add_argument("--out", default=None, help="Output HTML path (default: dev\\ba2_backtest_report.html).")
+    rep.add_argument("--out", default=None,
+                     help="Output HTML path (default: <repo>/reports/ba2_backtest_report.html, "
+                          "tracked in git so it syncs across machines).")
 
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":

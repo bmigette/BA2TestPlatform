@@ -216,6 +216,9 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         "warmup_days": warmup_days,
         "seed": int(payload["seed"]),
         "subtype": payload.get("subtype"),
+        # Entry cadence (optimizer/CLI seam): {"days": {weekday: bool}, "times": [...]}.
+        # None/absent -> analyse every bar (legacy). The engine's _entry_schedule honours it.
+        "run_schedule_override": payload.get("run_schedule_override"),
     }
 
 
@@ -252,7 +255,9 @@ def run_daily_backtest(
         sharpe_ratio / max_drawdown / profit_factor / ... + equity_curve / drawdown_curve /
         trades.
     """
+    from ba2_common.core.db import activity_logging_disabled
     from ba2_providers import get_provider
+    from ba2_providers.fmp_common import frozen_ttl_cache
 
     from app.services.backtest.backtest_account import BacktestAccount
     from app.services.backtest.backtest_db import (
@@ -269,7 +274,13 @@ def run_daily_backtest(
     resolver = wire_backtest_seams()
     account_id = 1
 
-    with backtest_trading_db(config["backtest_id"]):
+    # Backtest perf, scoped to the whole run (live path unaffected):
+    #   * frozen_ttl_cache()      — FMP fundamentals are fetched once per symbol and reused
+    #                               for every as_of bar (no 15-min TTL re-fetch mid-run).
+    #   * activity_logging_disabled() — silence the per-bar ActivityLog write churn (from
+    #                               TradeActionEvaluator / TradeRiskManagement), which would
+    #                               otherwise serialize thousands of writes through the DB lock.
+    with backtest_trading_db(config["backtest_id"]), frozen_ttl_cache(), activity_logging_disabled():
         seed_account_definition(account_id, config["account_settings"])
 
         # Time-machine price source backed by the FMP OHLCV provider (as_of-aware).
