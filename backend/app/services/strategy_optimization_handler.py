@@ -182,6 +182,10 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                 opt, db, task_id, param_space, fitness_function, all_results
             )
 
+        # Parallel trials: ga['parallelIndividuals'] > 1 evaluates the population across a
+        # ThreadPoolExecutor. Safe now that each trial isolates its per-run DB on its own
+        # thread (ba2_common configure_db_threadlocal) + the OHLCV/FMP caches are lock-guarded.
+        parallel = int(ga.get("parallelIndividuals", 1) or 1)
         optimizer = GeneticOptimizer(
             param_ranges=param_space,
             population_size=int(ga["populationSize"]),
@@ -190,6 +194,7 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
             mutation_prob=float(ga["mutationProb"]),
             early_stopping_generations=int(ga["earlyStoppingGenerations"]),
             elitism_percent=float(ga["elitismPercent"]),
+            parallel_individuals=parallel,
         )
 
         gen_state = {"gen": 0}
@@ -225,14 +230,25 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         if ckpt:
             start_gen, init_pop = optimizer.resume_from_checkpoint(ckpt)
 
-        result = optimizer.optimize(
-            fitness_function=fitness_function,
-            callback=ga_callback,
-            on_generation_start=on_generation_start,
-            checkpoint_callback=checkpoint_cb,
-            start_generation=start_gen,
-            initial_population=init_pop,
-        )
+        # Suppress per-trial verbose logging for the optimization's duration — across many
+        # trials it's pure noise (only a SINGLE standalone backtest should log in detail).
+        import logging as _logging
+        _quiet = ("ba2_common", "ba2_providers", "ba2_experts", "app.services.backtest")
+        _prior = {n: _logging.getLogger(n).level for n in _quiet}
+        for n in _quiet:
+            _logging.getLogger(n).setLevel(_logging.WARNING)
+        try:
+            result = optimizer.optimize(
+                fitness_function=fitness_function,
+                callback=ga_callback,
+                on_generation_start=on_generation_start,
+                checkpoint_callback=checkpoint_cb,
+                start_generation=start_gen,
+                initial_population=init_pop,
+            )
+        finally:
+            for n, lv in _prior.items():
+                _logging.getLogger(n).setLevel(lv)
 
         # Trust guard: if EVERY trial failed (e.g. a bad backtest config), all_results is
         # empty and best_fitness is a meaningless default. The GA swallows per-trial
@@ -427,9 +443,13 @@ def _build_daily_trial_config(
         else:
             experts_out.append({"class": spec, "settings": dict(overrides)})
 
+    # UNIQUE per-trial id: parallel trials each name their OWN per-run sqlite, so they never
+    # collide on the same file (WinError 32 / cross-thread session). The run-level id is a base.
+    import uuid as _uuid
+    trial_id = f"{backtest_cfg['backtest_id']}-{_uuid.uuid4().hex[:8]}"
     return {
-        "backtest_id": backtest_cfg["backtest_id"],
-        "name": backtest_cfg.get("name", f"opt-trial-{backtest_cfg['backtest_id']}"),
+        "backtest_id": trial_id,
+        "name": backtest_cfg.get("name", f"opt-trial-{trial_id}"),
         "start_date": backtest_cfg["start_date"],
         "end_date": backtest_cfg["end_date"],
         "enabled_instruments": list(backtest_cfg["enabled_instruments"]),
@@ -439,6 +459,9 @@ def _build_daily_trial_config(
         "warmup_days": int(backtest_cfg["warmup_days"]),
         "seed": int(backtest_cfg["seed"]),
         "subtype": backtest_cfg.get("subtype"),
+        # Cadence (weekly entry) + intraday fill clock carry through to each trial's engine.
+        "run_schedule_override": backtest_cfg.get("run_schedule_override"),
+        "execution_interval": backtest_cfg.get("execution_interval", "1d"),
     }
 
 

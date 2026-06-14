@@ -257,6 +257,184 @@ def _cmd_report(args) -> int:
     return 0
 
 
+# Per-expert optimizable numeric decision settings (model:*) + the fixed (non-optimized)
+# settings each expert still needs. RM params + TP/SL ranges are set on the Strategy below.
+_EXPERT_OPT = {
+    "FMPRating": {
+        "expert_params": {
+            "profit_ratio": {"optimize": True, "min": 0.5, "max": 1.5, "step": 0.1, "type": "float"},
+            "min_analysts": {"optimize": True, "min": 5, "max": 25, "step": 5, "type": "int"},
+            "price_target_window_days": {"optimize": True, "min": 30, "max": 180, "step": 30, "type": "int"},
+        },
+        "fixed_settings": {"target_price_type": "consensus"},
+    },
+    "FMPEarningsDrift": {
+        "expert_params": {
+            "surprise_min_pct": {"optimize": True, "min": 2.0, "max": 15.0, "step": 1.0, "type": "float"},
+            "max_days_since_report": {"optimize": True, "min": 5, "max": 45, "step": 5, "type": "int"},
+        },
+        "fixed_settings": {},
+    },
+    "FMPInsiderClusterBuy": {
+        "expert_params": {
+            "lookback_days": {"optimize": True, "min": 30, "max": 120, "step": 15, "type": "int"},
+            "min_insiders": {"optimize": True, "min": 2, "max": 6, "step": 1, "type": "int"},
+        },
+        "fixed_settings": {},
+    },
+}
+
+
+def _build_strategy_row(name: str):
+    """A Strategy whose TP/SL + the 5 classic-RM params (the RM's sizing/stop conditions &
+    actions) are marked optimizable with ranges — the numeric RM space the optimizer searches."""
+    from app.models.strategy import Strategy
+    return Strategy(
+        name=name,
+        initial_tp_percent=8.0, initial_tp_optimize=True, initial_tp_min=3.0, initial_tp_max=20.0, initial_tp_step=1.0,
+        initial_sl_percent=5.0, initial_sl_optimize=True, initial_sl_min=2.0, initial_sl_max=12.0, initial_sl_step=1.0,
+        rm_risk_per_trade_pct=1.0, rm_risk_per_trade_pct_optimize=True, rm_risk_per_trade_pct_min=0.5, rm_risk_per_trade_pct_max=3.0, rm_risk_per_trade_pct_step=0.5,
+        rm_per_instrument_cap_pct=15.0, rm_per_instrument_cap_pct_optimize=True, rm_per_instrument_cap_pct_min=5.0, rm_per_instrument_cap_pct_max=30.0, rm_per_instrument_cap_pct_step=5.0,
+        rm_min_stop_pct=5.0, rm_min_stop_pct_optimize=True, rm_min_stop_pct_min=3.0, rm_min_stop_pct_max=10.0, rm_min_stop_pct_step=1.0,
+        rm_atr_stop_mult=2.0, rm_atr_stop_mult_optimize=True, rm_atr_stop_mult_min=1.5, rm_atr_stop_mult_max=4.0, rm_atr_stop_mult_step=0.5,
+        rm_max_concurrent_positions=8, rm_max_concurrent_positions_optimize=True, rm_max_concurrent_positions_min=3, rm_max_concurrent_positions_max=20, rm_max_concurrent_positions_step=2,
+    )
+
+
+def _cmd_optimize(args) -> int:
+    """Create a Strategy + StrategyOptimization and run a joint genetic optimization headless.
+
+    Optimizes the expert's numeric decision settings + the 5 classic-RM params (sizing/stop
+    'conditions & actions') + TP/SL, scored by --fitness, with parallel trials and suppressed
+    per-trial logging. Persists the best trial as a tagged Backtest (optimization_id) and writes
+    the HTML report.
+    """
+    from datetime import datetime as _dt
+    import app.models  # noqa: F401 — register ORM models
+    from app.models.database import SessionLocal, init_db
+    from app.models.backtest import Backtest
+    from app.models.strategy import Strategy
+    from app.models.strategy_optimization import StrategyOptimization
+    from app.services.backtest.daily_backtest_handler import derive_warmup_days
+    from app.services.strategy_optimization_handler import handle_strategy_optimization
+
+    expert = args.expert
+    spec = _EXPERT_OPT.get(expert)
+    if spec is None:
+        sys.exit(f"ba2-test: optimize not configured for expert {expert!r}; have {sorted(_EXPERT_OPT)}")
+    universe = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+    if not universe:
+        sys.exit("ba2-test: --universe must list at least one symbol")
+    run_sched = None
+    if args.run_schedule == "weekly":
+        days = {d: (d == args.run_schedule_day) for d in
+                ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")}
+        run_sched = {"days": days}
+
+    init_db()
+    db = SessionLocal()
+    try:
+        strat = _build_strategy_row(args.name or f"opt-{expert}")
+        db.add(strat); db.commit(); db.refresh(strat)
+
+        backtest_block = {
+            "engine": "daily",
+            "enabled_instruments": universe,
+            "experts": [{"class": expert, "settings": dict(spec["fixed_settings"])}],
+            "start_date": args.start, "end_date": args.end,
+            "initial_capital": float(args.initial_capital),
+            "account_settings": {
+                "starting_cash": float(args.initial_capital),
+                "commission_per_trade": float(args.commission),
+                "slippage_bps": float(args.slippage),
+                "fill_model": args.fill_model,
+            },
+            "warmup_days": derive_warmup_days([expert]),
+            "seed": int(args.seed),
+            "subtype": "daily_expert",
+            "run_schedule_override": run_sched,
+            "execution_interval": args.interval,
+            "backtest_id": int(_dt.now().timestamp()),
+            "name": f"opt-{expert}-trial",
+        }
+        cfg = {
+            "populationSize": int(args.population),
+            "generations": int(args.generations),
+            "crossoverProb": 0.6, "mutationProb": 0.3,
+            "earlyStoppingGenerations": int(args.early_stop),
+            "elitismPercent": 0.1, "seed": int(args.seed),
+            "parallelIndividuals": int(args.parallel),
+            "expert_params": spec["expert_params"],
+            "backtest": backtest_block,
+        }
+        opt = StrategyOptimization(
+            strategy_id=strat.id, name=args.name or f"opt-{expert}",
+            fitness_metric=args.fitness, optimization_type="genetic",
+            optimization_config=cfg, status="pending",
+        )
+        db.add(opt); db.commit(); db.refresh(opt)
+        opt_id = opt.id
+        print(f"optimize: strategy #{strat.id} + StrategyOptimization #{opt_id} "
+              f"({expert} x {len(universe)} syms, pop={args.population} gen={args.generations} "
+              f"parallel={args.parallel} fitness={args.fitness})")
+    finally:
+        db.close()
+
+    res = handle_strategy_optimization("cli-optimize", {"optimization_id": opt_id})
+    if res.get("status") != "completed":
+        print(json.dumps(res, indent=2, default=str))
+        sys.exit(f"ba2-test: optimization {opt_id} did not complete")
+
+    # Re-run the best params as ONE tracked, tagged Backtest so it lands in runs/report.
+    db = SessionLocal()
+    try:
+        opt = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
+        print(f"optimize: done. best_fitness={opt.best_fitness} best_params={json.dumps(opt.best_params, default=str)}")
+    finally:
+        db.close()
+    _persist_best_backtest(opt_id, expert)
+    print(f"optimize: best persisted as a tagged Backtest (optimization_id={opt_id}); "
+          f"run `ba2-test runs list --group {opt_id}` or `ba2-test report`.")
+    return 0
+
+
+def _persist_best_backtest(opt_id: int, expert: str) -> None:
+    """Re-run the optimization's best params once and persist a tagged Backtest row."""
+    import app.models  # noqa: F401
+    from app.models.database import SessionLocal
+    from app.models.backtest import Backtest
+    from app.models.strategy_optimization import StrategyOptimization
+    from app.services.strategy_optimization_handler import _build_daily_trial_config  # noqa: SLF001
+    from app.services.backtest.daily_backtest_handler import run_daily_backtest, _persist_results
+    from app.services.strategy_param_space import decode_params
+
+    db = SessionLocal()
+    try:
+        opt = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
+        strat = db.query(__import__("app.models.strategy", fromlist=["Strategy"]).Strategy).filter_by(id=opt.strategy_id).first()
+        cfg = opt.optimization_config or {}
+        bt_block = dict(cfg["backtest"])
+        decoded = decode_params(strat, opt.best_params or {})
+        trial_cfg = _build_daily_trial_config(bt_block, decoded)
+        trial_cfg["name"] = f"BEST-{opt.name or expert}"
+        results = run_daily_backtest(trial_cfg)
+        bt = Backtest(
+            name=trial_cfg["name"], model_id=None, engine_type="daily_expert",
+            expert_name=expert, optimization_id=opt_id,
+            start_date=__import__("datetime").datetime.fromisoformat(str(bt_block["start_date"])),
+            end_date=__import__("datetime").datetime.fromisoformat(str(bt_block["end_date"])),
+            initial_capital=float(bt_block["initial_capital"]),
+            status="running", started_at=__import__("datetime").datetime.now(),
+        )
+        db.add(bt); db.commit(); db.refresh(bt)
+        _persist_results(db, bt, results)
+        bt.status = "completed"; bt.completed_at = __import__("datetime").datetime.now()
+        bt.is_saved = True  # the best of a job is worth keeping
+        db.commit()
+    finally:
+        db.close()
+
+
 def _cmd_runs(args) -> int:
     from app.models.backtest import Backtest
     db = _runs_db()
@@ -436,6 +614,26 @@ def main(argv: "list | None" = None) -> int:
                      help="Output HTML path (default: <repo>/reports/ba2_backtest_report.html, "
                           "tracked in git so it syncs across machines).")
 
+    op = sub.add_parser("optimize", help="Joint genetic optimization (expert + RM params + TP/SL).")
+    op.add_argument("--expert", required=True, help="Expert class (FMPRating/FMPEarningsDrift/...).")
+    op.add_argument("--universe", required=True, help="Comma-separated symbols.")
+    op.add_argument("--start", required=True, help="ISO start date.")
+    op.add_argument("--end", required=True, help="ISO end date.")
+    op.add_argument("--fitness", default="sharpe_ratio", help="Fitness metric (default sharpe_ratio).")
+    op.add_argument("--generations", type=int, default=6)
+    op.add_argument("--population", type=int, default=10)
+    op.add_argument("--parallel", type=int, default=4, help="Parallel trials (ThreadPoolExecutor).")
+    op.add_argument("--early-stop", type=int, default=4)
+    op.add_argument("--seed", type=int, default=42, help="RNG seed (determinism).")
+    op.add_argument("--initial-capital", type=float, default=100000.0)
+    op.add_argument("--commission", type=float, default=1.0)
+    op.add_argument("--slippage", type=float, default=0.0)
+    op.add_argument("--fill-model", default="next_bar_open")
+    op.add_argument("--interval", default="1d", help="Execution/fill interval (1d; 5min for intraday fills).")
+    op.add_argument("--run-schedule", default="weekly", choices=["daily", "weekly"])
+    op.add_argument("--run-schedule-day", default="monday")
+    op.add_argument("--name", default=None)
+
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":
         return _cmd_backtest(argv[1:])
@@ -449,6 +647,7 @@ def main(argv: "list | None" = None) -> int:
         "cache-clear": lambda: _cmd_cache_clear(args),
         "runs": lambda: _cmd_runs(args),
         "report": lambda: _cmd_report(args),
+        "optimize": lambda: _cmd_optimize(args),
     }[args.cmd]()
 
 
