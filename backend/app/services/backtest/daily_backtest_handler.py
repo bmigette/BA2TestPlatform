@@ -61,6 +61,43 @@ _SUPPORTED_EXPERTS = {
 }
 
 
+# Max indicator/lookback window (in trading BARS) each expert needs warmed up before the
+# first trading bar. The classic-RM ATR (~14) is the floor; FactorRanker's 12-1 month
+# momentum needs a full year. An expert may override via a ``BACKTEST_WARMUP_BARS`` class attr.
+_EXPERT_WARMUP_BARS = {
+    "FactorRanker": 252,          # momentum_12_1 lookback (12 months)
+    "FMPRating": 10,
+    "FMPEarningsDrift": 10,
+    "FMPInsiderClusterBuy": 10,
+}
+_WARMUP_FLOOR_DAYS = 60           # never warm up less than this (ATR + safety)
+_BARS_TO_CALDAYS = 1.45           # trading bars -> calendar days (≈252 bars/year -> ~365 days)
+
+
+def derive_warmup_days(expert_specs: List[Any]) -> int:
+    """Calendar-day warmup window derived from the run's experts' max bar lookback.
+
+    Looks up each expert's lookback (the class's ``BACKTEST_WARMUP_BARS`` if present, else
+    the ``_EXPERT_WARMUP_BARS`` table, else a small default), takes the max, converts BARS ->
+    calendar days, and floors at ``_WARMUP_FLOOR_DAYS``. Used when the payload does not pin
+    ``warmup_days`` so indicators (200-EMA, 252-bar momentum, ...) get enough history.
+    """
+    max_bars = 14  # ATR-14 floor
+    for spec in expert_specs or []:
+        name = spec.get("class") if isinstance(spec, dict) else spec
+        bars = _EXPERT_WARMUP_BARS.get(name, 20)
+        mod_path = _SUPPORTED_EXPERTS.get(name)
+        if mod_path:
+            try:
+                import importlib
+                cls = getattr(importlib.import_module(mod_path), name)
+                bars = int(getattr(cls, "BACKTEST_WARMUP_BARS", bars))
+            except Exception:  # noqa: BLE001 — fall back to the table value
+                pass
+        max_bars = max(max_bars, bars)
+    return max(_WARMUP_FLOOR_DAYS, int(max_bars * _BARS_TO_CALDAYS) + 10)
+
+
 class _Paused(Exception):
     """Raised from the progress callback when the task is paused (surfaces as a failure
     with a clear message — the queue's pause/resume re-queues the task)."""
@@ -160,10 +197,12 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # warmup_days: longest indicator/lookback window the experts need preloaded before
-    # start_date. Optional in the payload; default to a safe 60 (covers insider lookback +
-    # ATR period). This is a fetch-window sizing knob, NOT a trading parameter, so a default
-    # is appropriate here (it never affects a decision, only how much history is preloaded).
-    warmup_days = int(payload.get("warmup_days", 60))
+    # start_date. If the payload sets it explicitly, honour that; otherwise DERIVE it from
+    # the experts' max indicator lookback (in bars -> calendar days) so e.g. a 200-EMA or
+    # FactorRanker's 252-bar momentum actually has its lookback. This is a fetch-window
+    # sizing knob, NOT a trading parameter, so deriving it never affects a decision.
+    warmup_days = (int(payload["warmup_days"]) if payload.get("warmup_days") is not None
+                   else derive_warmup_days(expert_specs))
 
     return {
         "backtest_id": payload["backtest_id"],

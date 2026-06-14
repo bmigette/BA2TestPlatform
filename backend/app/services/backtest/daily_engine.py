@@ -111,6 +111,37 @@ def _as_date(d: Any) -> date:
     raise TypeError(f"Cannot normalise {d!r} ({type(d)}) to a date")
 
 
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _schedule_allows_entry(as_of_dt: datetime, schedule: Optional[Dict[str, Any]],
+                           is_intraday: bool) -> bool:
+    """Whether ``as_of_dt`` is a scheduled ENTRY bar for an expert.
+
+    Honours the common ``execution_schedule_enter_market`` setting
+    ``{"days": {monday..sunday: bool}, "times": ["HH:MM", ...]}``: the expert only
+    analyses for NEW positions on enabled weekdays (and, on an intraday clock, only on
+    bars whose clock time matches one of ``times`` — so a 5m fill clock still runs the
+    expert just once/day). Fills + open-position management run EVERY bar regardless;
+    this gate is the "run at" cadence, decoupled from the fill clock.
+
+    A missing/empty schedule means "every bar" (legacy behaviour). On a daily clock the
+    ``times`` are ignored (the single daily bar represents the whole session).
+    """
+    if not schedule:
+        return True
+    days = schedule.get("days") or {}
+    wd = _WEEKDAYS[as_of_dt.weekday()]
+    if not days.get(wd, True):
+        return False
+    if not is_intraday:
+        return True
+    times = schedule.get("times") or []
+    if not times:
+        return True
+    return as_of_dt.strftime("%H:%M") in set(times)
+
+
 # ---------------------------------------------------------------------------
 # Recommendation -> ExpertRecommendation row
 # ---------------------------------------------------------------------------
@@ -255,6 +286,14 @@ class DailyBacktestEngine:
             #    portfolio manager (which itself prices + submits orders), SKIPPING
             #    TradeActionEvaluator/TradeConditions, TradeRiskManagement and position_sizing.
             for expert, expert_id, settings, ruleset_id in self.experts:
+                # Run-cadence gate: only ANALYSE for new positions on the expert's
+                # scheduled entry bars (execution_schedule_enter_market). Between run
+                # bars the loop still advances — fills + open-position management below
+                # run every bar — but the expert no-ops (no new analysis/orders).
+                if not _schedule_allows_entry(
+                    as_of_dt, self._entry_schedule(expert), self.price.is_intraday
+                ):
+                    continue
                 if getattr(expert, "bypasses_classic_rm", False):
                     self._run_bypass_expert_bar(expert, expert_id, settings, as_of_dt)
                     continue
@@ -274,6 +313,20 @@ class DailyBacktestEngine:
             self.progress_cb((i + 1) / total * 100.0, f"bar {as_of:%Y-%m-%d}")
 
         return self._build_minimal_results()
+
+    # -- run-cadence --------------------------------------------------------
+    def _entry_schedule(self, expert: Any) -> Optional[Dict[str, Any]]:
+        """The expert's ``execution_schedule_enter_market`` (common base setting), or None.
+
+        An optional ``run_schedule_override`` on the run config wins (so the optimizer can
+        drive the cadence as a parameter). None/empty -> every bar (legacy)."""
+        override = self.config.get("run_schedule_override")
+        if override:
+            return override
+        try:
+            return expert.get_setting_with_interface_default("execution_schedule_enter_market")
+        except Exception:  # noqa: BLE001 — a stub/unschedulable expert -> run every bar
+            return None
 
     # -- per-expert, per-bar ------------------------------------------------
     def _run_expert_bar(
