@@ -4,7 +4,7 @@ Proves the handler's control flow + persistence WITHOUT network/real-experts (th
 end-to-end run is Task 6's gate):
   * payload validation fails early on a missing required key (no-defaults rule);
   * ``_build_config`` assembles the account_settings + rejects a bad date / unknown expert;
-  * a successful run (``_run_engine`` monkeypatched to a known results blob) flips the
+  * a successful run (``run_daily_backtest`` monkeypatched to a known results blob) flips the
     ``Backtest`` row to ``completed`` and writes every metric column + the equity/drawdown/
     trades JSON blobs;
   * an engine failure flips the row to ``failed`` with an error_message;
@@ -163,7 +163,7 @@ def test_persist_results_writes_all_columns():
 # ---------------------------------------------------------------------------
 def test_handler_completed_persists_metrics(monkeypatch):
     bt_id = _new_backtest_row("complete-test")
-    monkeypatch.setattr(H, "_run_engine", lambda task_id, tq, config: dict(_RESULTS))
+    monkeypatch.setattr(H, "run_daily_backtest", lambda config, progress_cb=None: dict(_RESULTS))
 
     out = H.handle_daily_backtest("t-ok", _payload(bt_id))
     assert out["status"] == "completed"
@@ -188,10 +188,10 @@ def test_handler_completed_persists_metrics(monkeypatch):
 def test_handler_engine_failure_marks_row_failed(monkeypatch):
     bt_id = _new_backtest_row("fail-test")
 
-    def _boom(task_id, tq, config):
+    def _boom(config, progress_cb=None):
         raise RuntimeError("engine exploded")
 
-    monkeypatch.setattr(H, "_run_engine", _boom)
+    monkeypatch.setattr(H, "run_daily_backtest", _boom)
     out = H.handle_daily_backtest("t-fail", _payload(bt_id))
     assert out["status"] == "failed"
     assert "engine exploded" in out["error"]

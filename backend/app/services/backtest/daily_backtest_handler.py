@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.models.backtest import Backtest
 from app.models.database import SessionLocal
@@ -83,7 +83,12 @@ def handle_daily_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, An
             _fail(db, bt, str(e))
             return {"status": "failed", "error": str(e)}
 
-        results = _run_engine(task_id, tq, config)
+        def progress(pct: float, msg: str) -> None:
+            if tq.is_task_paused(task_id):
+                raise _Paused(msg)
+            tq.update_progress(task_id, pct, msg)
+
+        results = run_daily_backtest(config, progress_cb=progress)
 
         _persist_results(db, bt, results)
         bt.status = "completed"
@@ -170,9 +175,36 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Engine run (the per-run trading DB scope)
 # ---------------------------------------------------------------------------
-def _run_engine(task_id: str, tq: Any, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Open the per-run trading DB, build the account + experts, run the engine, and convert
-    the finished account into the full results metric blob."""
+def run_daily_backtest(
+    config: Dict[str, Any],
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+) -> Dict[str, Any]:
+    """Run ONE daily multi-asset backtest synchronously, in-process, and return the
+    results metric blob (the ``results.build_results`` shape).
+
+    This is the SYNCHRONOUS core extracted from ``handle_daily_backtest`` so it can be
+    called directly (e.g. by the joint genetic optimizer fitness function, which must
+    NOT enqueue a sub-task under ``max_workers=1``). It opens the per-run trading DB,
+    seeds the account + experts, runs ``DailyBacktestEngine``, and converts the finished
+    account into the full metric blob.
+
+    Determinism: the engine seeds ``random``/``numpy`` from ``config["seed"]`` at the start
+    of ``run()`` so a run is byte-reproducible (same cache + same config + same seed =>
+    identical equity curve / metrics).
+
+    Args:
+        config: the engine run config dict (the shape ``_build_config`` produces). Required
+            keys: ``backtest_id``, ``account_settings``, ``enabled_instruments``,
+            ``start_date``, ``end_date``, ``warmup_days``, ``experts``, ``seed``.
+        progress_cb: optional ``callable(pct: float, msg: str)`` invoked once per bar
+            (the handler wires pause/progress through it). Defaults to a no-op so a direct
+            in-process call (the optimizer) needs no task queue.
+
+    Returns:
+        The results dict (``build_results`` output): total_trades / win_rate / total_return /
+        sharpe_ratio / max_drawdown / profit_factor / ... + equity_curve / drawdown_curve /
+        trades.
+    """
     from ba2_providers import get_provider
 
     from app.services.backtest.backtest_account import BacktestAccount
@@ -184,6 +216,8 @@ def _run_engine(task_id: str, tq: Any, config: Dict[str, Any]) -> Dict[str, Any]
     from app.services.backtest.price_source import AsOfPriceSource
     from app.services.backtest.results import build_results
     from app.services.backtest.seam_wiring import make_indicator_provider, wire_backtest_seams
+
+    progress = progress_cb or (lambda pct, msg: None)
 
     resolver = wire_backtest_seams()
     account_id = 1
@@ -205,11 +239,6 @@ def _run_engine(task_id: str, tq: Any, config: Dict[str, Any]) -> Dict[str, Any]
         resolver.register_account(account_id, account)
 
         experts = _build_experts(config, resolver, account_id)
-
-        def progress(pct: float, msg: str) -> None:
-            if tq.is_task_paused(task_id):
-                raise _Paused(msg)
-            tq.update_progress(task_id, pct, msg)
 
         indicator_provider = make_indicator_provider(ohlcv_provider=ohlcv)
 
