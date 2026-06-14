@@ -98,27 +98,31 @@ def backtest_trading_db(run_id: int | str) -> Iterator[str]:
     read/write the backtest DB instead of the live one. We capture ``_db_file`` and
     re-``configure_db`` it on exit so the seam is properly hermetic.
     """
-    prior_db_file = common_db._db_file  # noqa: SLF001 (intentional: save/restore the global)
+    # THREAD-LOCAL DB override (not the global): each run/trial points ba2_common's engine at
+    # its OWN sqlite ONLY on THIS thread, so parallel optimization trials (ThreadPoolExecutor)
+    # never clobber each other's per-run DB. Single-threaded runs work identically (the main
+    # thread just gets its own override, cleared on exit).
+    #
     # Read credential app-settings (e.g. FMP_API_KEY) from the LIVE app DB BEFORE we switch the
     # engine target. A REAL-data run constructs FMPOHLCVProvider INSIDE this context, and the
     # provider resolves its key via get_app_setting("FMP_API_KEY") -> ba2_common.core.db. Once the
     # engine is pointed at the throwaway run sqlite that key would be invisible (the run DB has no
     # AppSetting rows), so the provider would raise "FMP API key not configured". We capture the
-    # key here (from whatever DB is currently active) and re-seed it into the run DB after init so
-    # real-data runs work; hermetic runs (no key configured) simply carry nothing forward.
+    # key here (from whatever DB is currently active — the global/live one, since no override is
+    # set yet on this thread) and re-seed it into the run DB after init.
     carried_settings = _read_carry_settings(_CARRIED_APP_SETTINGS)
     path = backtest_db_path(run_id)
     if path.exists():
         path.unlink()
-    common_db.configure_db(str(path))  # Phase-0 DB seam: point the engine at this file
-    common_db.init_db()                # SQLModel.metadata.create_all(get_engine())
+    common_db.configure_db_threadlocal(str(path))  # per-thread engine -> this run's sqlite
+    common_db.init_db()                             # SQLModel.metadata.create_all(get_engine())
     _seed_carry_settings(carried_settings)
     try:
         yield str(path)
     finally:
-        # Keep the sqlite file (debugging) but restore the previous DB engine target so
-        # the backtest DB never leaks into subsequent (live) code paths or other tests.
-        common_db.configure_db(prior_db_file)
+        # Keep the sqlite file (debugging) but drop THIS thread's override so the backtest DB
+        # never leaks into subsequent (live) code paths or other trials on this thread.
+        common_db.clear_threadlocal_db()
 
 
 def seed_account_definition(
