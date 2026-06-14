@@ -265,7 +265,7 @@ def run_daily_backtest(
         seed_account_definition,
     )
     from app.services.backtest.daily_engine import DailyBacktestEngine
-    from app.services.backtest.price_source import AsOfPriceSource
+    from app.services.backtest.price_source import AsOfClampedOHLCVProvider, AsOfPriceSource
     from app.services.backtest.results import build_results
     from app.services.backtest.seam_wiring import make_indicator_provider, wire_backtest_seams
 
@@ -301,7 +301,12 @@ def run_daily_backtest(
 
         experts = _build_experts(config, resolver, account_id)
 
-        indicator_provider = make_indicator_provider(ohlcv_provider=ohlcv)
+        # Clamp the indicator/ATR OHLCV fetches to the backtest clock: PandasIndicatorCalc
+        # and get_latest_atr fetch with end_date=now(), which would leak future bars into the
+        # ATR/indicators used for sizing + rule conditions. The clamp follows ps.set_clock().
+        indicator_provider = make_indicator_provider(
+            ohlcv_provider=AsOfClampedOHLCVProvider(ohlcv, ps)
+        )
 
         engine = DailyBacktestEngine(
             account=account,

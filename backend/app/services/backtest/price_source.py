@@ -22,7 +22,7 @@ Verified against the installed ba2_providers OHLCV provider:
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -128,6 +128,13 @@ class AsOfPriceSource:
             )
         return self._clock
 
+    def current(self) -> Optional[datetime]:
+        """The current as_of clock, or None if not set yet (None-safe; never raises).
+
+        Used by ``AsOfClampedOHLCVProvider`` to cap indicator/ATR fetches at the bar.
+        """
+        return self._clock
+
     # ---- loading -----------------------------------------------------------
     def preload(
         self,
@@ -206,6 +213,52 @@ class AsOfPriceSource:
         for bars in self._bars.values():
             seen.update(bars.keys())
         return sorted(seen)
+
+
+def _to_utc(d: Any) -> datetime:
+    """Normalise a datetime/date/Timestamp/ISO-string to a tz-aware UTC datetime."""
+    if isinstance(d, datetime):
+        return d if d.tzinfo is not None else d.replace(tzinfo=timezone.utc)
+    if isinstance(d, date):
+        return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    if hasattr(d, "to_pydatetime"):  # pandas.Timestamp
+        dd = d.to_pydatetime()
+        return dd if dd.tzinfo is not None else dd.replace(tzinfo=timezone.utc)
+    if isinstance(d, str):
+        dd = datetime.fromisoformat(d)
+        return dd if dd.tzinfo is not None else dd.replace(tzinfo=timezone.utc)
+    raise TypeError(f"Cannot normalise {d!r} ({type(d)}) to a datetime")
+
+
+class AsOfClampedOHLCVProvider:
+    """Backtest-only OHLCV wrapper that caps every ``get_ohlcv_data(end_date=...)`` at the
+    price source's current as_of clock.
+
+    The indicator calc (``PandasIndicatorCalc``) and ATR sizing (``position_sizing.
+    get_latest_atr``) fetch with ``end_date=datetime.now()`` (wall clock). In a backtest that
+    would pull bars from AFTER the simulated bar, leaking future data into the (causal)
+    indicator/ATR used for rule conditions and position sizing. Wrapping the OHLCV provider
+    here clamps any future end_date down to the current bar, so the indicator path is
+    as_of-correct regardless of what end_date the caller requests. The LIVE path uses the
+    unwrapped provider (its clock is wall-time, which is correct), so this is backtest-scoped.
+
+    Everything other than ``get_ohlcv_data`` is delegated to the inner provider.
+    """
+
+    def __init__(self, inner: Any, price_source: AsOfPriceSource):
+        self._inner = inner
+        self._ps = price_source
+
+    def get_ohlcv_data(self, symbol, start_date=None, end_date=None, interval="1d", **kwargs):
+        asof = self._ps.current()
+        if asof is not None and (end_date is None or _to_utc(end_date) > _to_utc(asof)):
+            end_date = asof  # cap the fetch at the current backtest bar
+        return self._inner.get_ohlcv_data(
+            symbol, start_date=start_date, end_date=end_date, interval=interval, **kwargs
+        )
+
+    def __getattr__(self, name):  # delegate every other attribute/method to the inner provider
+        return getattr(self._inner, name)
 
 
 def _df_to_rows(df: Any) -> List[Dict[str, Any]]:
