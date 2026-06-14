@@ -395,7 +395,7 @@ def _build_experts(
                 instance_id=idx,
             )
         else:
-            ruleset_id = _seed_enter(name=f"backtest-enter-{class_name}-{idx}")
+            ruleset_id = _seed_enter(f"backtest-enter-{class_name}-{idx}")
             expert_id = seed_expert_instance(
                 account_id=account_id,
                 expert_class_name=class_name,
