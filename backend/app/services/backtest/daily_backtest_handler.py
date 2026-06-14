@@ -50,6 +50,9 @@ REQUIRED_KEYS = [
 _SUPPORTED_EXPERTS = {
     "FMPEarningsDrift": "ba2_experts.FMPEarningsDrift",
     "FMPInsiderClusterBuy": "ba2_experts.FMPInsiderClusterBuy",
+    # FMP analyst price-target consensus ("FMPConsensus"). Backtestable: analyze_as_of +
+    # no-lookahead as_of reconstruction (grades-historical + v4/price-target history), no LLM.
+    "FMPRating": "ba2_experts.FMPRating",
     # BYPASS expert (piece 1): FactorRanker declares ``bypasses_classic_rm`` — it does NOT use
     # the enter/exit ruleset or the classic RM, and rebalances to target weights via its own
     # FactorPortfolioManager. ``_build_experts`` detects the marker and skips ruleset seeding /
