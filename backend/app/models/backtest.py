@@ -16,9 +16,18 @@ class Backtest(Base):
     name = Column(String(255), nullable=False)
 
     # Model and datasets
-    model_id = Column(Integer, ForeignKey("trained_models.id"), nullable=False)
+    # nullable=True (Decision 3a): daily expert (non-ML) backtests are NOT model-driven, so
+    # they store model_id=None. The legacy ML path always sets a real model_id. The matching
+    # migration that flips this on EXISTING populated DBs is Task 7 (db_migrate revision 018).
+    model_id = Column(Integer, ForeignKey("trained_models.id"), nullable=True)
     prediction_dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
     execution_dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
+
+    # Engine discriminator (Task 7 / migration 018): distinguishes the two backtest
+    # engines that share this one table. 'ml' = legacy model-driven backtesting.py runs
+    # (model_id set); 'daily_expert' = Phase-2 daily expert engine (model_id=None). The
+    # daily route sets this to 'daily_expert'; everything else defaults to 'ml'.
+    engine_type = Column(String(50), default="ml")
 
     # Strategy
     strategy_id = Column(Integer, ForeignKey("strategies.id"), nullable=True)
@@ -119,6 +128,7 @@ class Backtest(Base):
         return {
             "id": self.id,
             "name": self.name,
+            "engineType": self.engine_type or "ml",
             "modelId": self.model_id,
             "predictionDatasetId": self.prediction_dataset_id,
             "executionDatasetId": self.execution_dataset_id,
@@ -161,6 +171,7 @@ class Backtest(Base):
         return {
             "id": self.id,
             "name": self.name,
+            "engineType": self.engine_type or "ml",
             "modelId": self.model_id,
             "predictionDatasetId": self.prediction_dataset_id,
             "executionDatasetId": self.execution_dataset_id,
