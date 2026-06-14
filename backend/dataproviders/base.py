@@ -83,18 +83,47 @@ class MarketDataProviderInterface(ABC):
 
     def _get_cache_file(self, symbol: str, interval: str) -> Path:
         """
-        Return the per-provider cache file path, creating the directory if needed.
+        Return the per-provider cache file path (Parquet), creating the directory if needed.
+
+        Parquet is ~3-5x smaller than CSV for OHLCV and preserves dtypes, so reads are
+        faster and there is no string<->float reparsing. Legacy ``.csv`` caches are read
+        transparently (see ``_existing_cache_file``) and migrated to Parquet on next write.
 
         Args:
             symbol: Ticker symbol (e.g., 'AAPL').
             interval: Data interval string (e.g., '1d', '1h').
 
         Returns:
-            Path to the cache CSV file under cache_folder/<provider_name>/.
+            Path to the cache Parquet file under cache_folder/<provider_name>/.
         """
         provider_dir = self.cache_folder / self.get_provider_name()
         provider_dir.mkdir(parents=True, exist_ok=True)
-        return provider_dir / f"{symbol}_{interval}.csv"
+        return provider_dir / f"{symbol}_{interval}.parquet"
+
+    def _existing_cache_file(self, symbol: str, interval: str) -> Optional[Path]:
+        """The on-disk cache file to READ: Parquet if present, else a legacy CSV, else None."""
+        pq = self._get_cache_file(symbol, interval)
+        if pq.exists():
+            return pq
+        csv = pq.with_suffix(".csv")
+        return csv if csv.exists() else None
+
+    def _read_cache_df(self, path: Path) -> pd.DataFrame:
+        """Read a cache file by suffix (Parquet preferred; legacy CSV still supported)."""
+        return pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
+
+    def _write_cache_df(self, df: pd.DataFrame, symbol: str, interval: str) -> Path:
+        """Write ``df`` to the Parquet cache and remove any legacy CSV sibling. Returns the path."""
+        path = self._get_cache_file(symbol, interval)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(path, index=False)
+        legacy = path.with_suffix(".csv")
+        if legacy.exists():
+            try:
+                legacy.unlink()
+            except OSError:
+                pass
+        return path
 
     @abstractmethod
     def _get_ohlcv_data_impl(
@@ -146,12 +175,12 @@ class MarketDataProviderInterface(ABC):
         """
         # Check cache first if enabled and not forcing a refresh
         if use_cache and not force_refresh:
-            cache_file = self._get_cache_file(symbol, interval)
-            if cache_file.exists():
+            cache_file = self._existing_cache_file(symbol, interval)
+            if cache_file is not None:
                 # Check if cache is fresh
                 cache_age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
                 if cache_age < timedelta(hours=self.cache_max_age_hours):
-                    df = pd.read_csv(cache_file)
+                    df = self._read_cache_df(cache_file)
                     df['Date'] = pd.to_datetime(df['Date'])
 
                     # Handle timezone-aware comparison
@@ -184,8 +213,7 @@ class MarketDataProviderInterface(ABC):
 
         # Cache the data if caching is enabled (also when force_refresh bypassed reading)
         if (use_cache or force_refresh) and not df.empty:
-            cache_file = self._get_cache_file(symbol, interval)
-            df.to_csv(cache_file, index=False)
+            cache_file = self._write_cache_df(df, symbol, interval)
             logger.debug(f"Cached data for {symbol} to {cache_file}")
 
         return df
@@ -231,20 +259,20 @@ class MarketDataProviderInterface(ABC):
                 ts = ts.tz_convert('UTC').tz_localize(None)
             return ts
 
-        cache_file = self._get_cache_file(symbol, interval)
         start_ts = _to_naive_ts(start_date)
         end_ts = _to_naive_ts(end_date)
 
         # ------------------------------------------------------------------ #
-        # Load existing cache                                                  #
+        # Load existing cache (Parquet, or a legacy CSV — migrated on write)   #
         # ------------------------------------------------------------------ #
         existing = pd.DataFrame()
-        if cache_file.exists():
+        read_file = self._existing_cache_file(symbol, interval)
+        if read_file is not None:
             try:
-                existing = pd.read_csv(cache_file)
+                existing = self._read_cache_df(read_file)
                 existing['Date'] = pd.to_datetime(existing['Date']).dt.tz_localize(None)
             except Exception as e:
-                logger.warning(f"Could not read existing cache {cache_file}: {e}")
+                logger.warning(f"Could not read existing cache {read_file}: {e}")
                 existing = pd.DataFrame()
 
         if existing.empty:
@@ -254,8 +282,7 @@ class MarketDataProviderInterface(ABC):
             new_data = self._get_ohlcv_data_impl(symbol, start_date, end_date, interval)
             if not new_data.empty:
                 new_data['Date'] = pd.to_datetime(new_data['Date']).dt.tz_localize(None)
-                cache_file.parent.mkdir(parents=True, exist_ok=True)
-                new_data.to_csv(cache_file, index=False)
+                cache_file = self._write_cache_df(new_data, symbol, interval)
                 logger.info(f"Saved {len(new_data)} rows to {cache_file}")
             _report(100.0, f"{symbol}/{interval}: Done — {len(new_data)} rows")
             return new_data
@@ -357,8 +384,7 @@ class MarketDataProviderInterface(ABC):
         )
 
         if not final.empty:
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            final.to_csv(cache_file, index=False)
+            cache_file = self._write_cache_df(final, symbol, interval)
             logger.info(f"Saved {len(final)} rows to {cache_file}")
 
         _report(100.0, f"{symbol}/{interval}: Done — {len(final)} rows total")
