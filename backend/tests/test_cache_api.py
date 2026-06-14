@@ -79,3 +79,101 @@ def test_drill_down_unknown_type_404(seeded_cache):
     from app.main import app
     client = TestClient(app)
     assert client.get("/api/cache/usage/bogus").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Deletion endpoints (Task 2): clean-all / by-type / by-date, .tmp-aware,
+# destructive guard excluding datasets + trained_models from clean-all.
+# --------------------------------------------------------------------------
+
+
+def test_clear_by_type_removes_only_that_type(seeded_cache):
+    from app.main import app
+    client = TestClient(app)
+    r = client.delete("/api/cache/ohlcv")
+    assert r.status_code == 200
+    assert r.json()["files_removed"] >= 1
+    # ohlcv now empty, datasets untouched
+    usage = client.get("/api/cache/usage").json()["types"]
+    assert usage["ohlcv"]["files"] == 0
+    assert usage["datasets"]["files"] >= 1
+
+
+def test_clean_all_skips_destructive(seeded_cache):
+    from app.main import app
+    client = TestClient(app)
+    r = client.delete("/api/cache")
+    assert r.status_code == 200
+    body = r.json()
+    assert "skipped" in body["datasets"]
+    assert "skipped" in body["models"]
+    # ohlcv (non-destructive) was cleaned by clean-all
+    assert body["ohlcv"]["files_removed"] >= 1
+    # datasets file survives clean-all
+    usage = client.get("/api/cache/usage").json()["types"]
+    assert usage["datasets"]["files"] >= 1
+    # explicit datasets delete IS allowed and removes it
+    r2 = client.delete("/api/cache/datasets")
+    assert r2.status_code == 200
+    assert r2.json()["files_removed"] >= 1
+    usage2 = client.get("/api/cache/usage").json()["types"]
+    assert usage2["datasets"]["files"] == 0
+
+
+def test_clear_by_date_only_old_files(seeded_cache, tmp_path):
+    import os
+    import time
+    from app.main import app
+    # backdate the seeded ohlcv file 100 days; add a fresh one that must survive
+    provider_dir = tmp_path / "cache" / "FMPOHLCVProvider"
+    (provider_dir / "MSFT_1d.csv").write_text("Date,Open\n2020-01-01,2\n")
+    old_file = provider_dir / "AAPL_1d.csv"
+    old = time.time() - 100 * 86400
+    os.utime(old_file, (old, old))
+    client = TestClient(app)
+    cutoff = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 10 * 86400))
+    r = client.delete(f"/api/cache/ohlcv?before={cutoff}")
+    assert r.status_code == 200
+    assert r.json()["files_removed"] == 1
+    # the fresh MSFT file survives
+    assert (provider_dir / "MSFT_1d.csv").exists()
+    assert not old_file.exists()
+
+
+def test_clear_by_date_rejects_bad_format(seeded_cache):
+    from app.main import app
+    client = TestClient(app)
+    assert client.delete("/api/cache/ohlcv?before=13-06-2026").status_code == 400
+
+
+def test_clear_unknown_type_404(seeded_cache):
+    from app.main import app
+    client = TestClient(app)
+    assert client.delete("/api/cache/bogus").status_code == 404
+
+
+def test_clear_skips_tmp_staging_files(seeded_cache, tmp_path):
+    """A concurrent atomic-write .tmp staging file must never be deleted."""
+    from app.main import app
+    provider_dir = tmp_path / "cache" / "FMPOHLCVProvider"
+    tmp_file = provider_dir / "AAPL_1d.csv.tmp"
+    tmp_file.write_text("partial")
+    client = TestClient(app)
+    r = client.delete("/api/cache/ohlcv")
+    assert r.status_code == 200
+    # the real csv is gone, the .tmp staging file survives
+    assert not (provider_dir / "AAPL_1d.csv").exists()
+    assert tmp_file.exists()
+
+
+def test_clear_ohlcv_symbol_filter(seeded_cache, tmp_path):
+    """symbol/interval filter removes only the matching OHLCV file."""
+    from app.main import app
+    provider_dir = tmp_path / "cache" / "FMPOHLCVProvider"
+    (provider_dir / "MSFT_1d.csv").write_text("Date,Open\n2020-01-01,2\n")
+    client = TestClient(app)
+    r = client.delete("/api/cache/ohlcv?symbol=AAPL&interval=1d")
+    assert r.status_code == 200
+    assert r.json()["files_removed"] == 1
+    assert not (provider_dir / "AAPL_1d.csv").exists()
+    assert (provider_dir / "MSFT_1d.csv").exists()

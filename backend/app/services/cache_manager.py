@@ -192,3 +192,170 @@ def drill_down(cache_type: str) -> List[Dict[str, Any]]:
                         "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
                     })
     return items
+
+
+# ---------------------------------------------------------------------------
+# Deletion (clean-all / by-type / by-date) — lock-safe, .tmp-aware.
+#
+# Reuses the type's native clear API when one exists:
+#   - news  -> NewsCacheService.clear_cache(provider, ticker)  (DB rows, news_cache.py:585)
+#   - ohlcv (symbol+interval filter) -> MarketDataProviderInterface.clear_cache
+#       semantics, applied as a targeted file match across provider subfolders
+#       (no provider instantiation -> no API-key requirement).
+# Everything else is a careful file-tree delete that NEVER touches a ``.tmp``
+# atomic-write staging file (writers do temp+rename under a per-file lock at
+# MarketDataProviderInterface.py:55, so a half-written ``.tmp`` must survive).
+#
+# DESTRUCTIVE guard: ``clear_all`` skips datasets (dataset CSVs) + models
+# (trained_models). Those are irreplaceable and clear only via an explicit
+# per-type request (contract ml_datasets.cache_ui_scope.cross_cutting; plan §3.3).
+# ---------------------------------------------------------------------------
+
+
+def _is_tmp(f: Path) -> bool:
+    """True for atomic-write staging files that must never be deleted."""
+    return f.suffix == ".tmp" or f.name.endswith(".tmp")
+
+
+def _safe_unlink(f: Path) -> int:
+    """Delete one file, skipping .tmp atomic-write staging files. Returns bytes freed."""
+    if _is_tmp(f):
+        return 0
+    try:
+        size = f.stat().st_size
+    except OSError:
+        return 0
+    try:
+        f.unlink()
+    except OSError:
+        return 0
+    return size
+
+
+def _delete_tree(
+    root: "str | Path",
+    before: Optional[datetime] = None,
+    name_match: Optional[Any] = None,
+) -> Dict[str, int]:
+    """Delete files under ``root`` (recursive), skipping .tmp staging files.
+
+    ``before``     : only delete files whose mtime is strictly older than this.
+    ``name_match`` : optional predicate(Path)->bool; only matching files deleted.
+    Empty directories left behind by deletions are pruned (best-effort).
+    """
+    root = Path(root)
+    freed = 0
+    removed = 0
+    if not root.exists():
+        return {"bytes_freed": 0, "files_removed": 0}
+    for f in list(root.rglob("*")):
+        if not f.is_file():
+            continue
+        if _is_tmp(f):
+            continue
+        if name_match is not None and not name_match(f):
+            continue
+        if before is not None:
+            try:
+                mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            if mtime >= before:
+                continue
+        b = _safe_unlink(f)
+        if b or not f.exists():
+            freed += b
+            removed += 1
+    # prune now-empty dirs (deepest first); never remove the root itself
+    for d in sorted(
+        (p for p in root.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        try:
+            next(d.iterdir())
+        except StopIteration:
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        except OSError:
+            pass
+    return {"bytes_freed": freed, "files_removed": removed}
+
+
+def clear_type(
+    cache_type: str,
+    before: Optional[datetime] = None,
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+    provider: Optional[str] = None,
+    ticker: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Clear one cache type, optionally filtered.
+
+    Routes through the type's native clear API when one exists (news DB rows),
+    else lock-aware file deletion. Honors .tmp atomic-write staging files (never
+    deleted). Destructive types (datasets/models) ARE cleared when named here
+    explicitly — only ``clear_all`` skips them.
+    """
+    cfg = CACHE_TYPES.get(cache_type)
+    if cfg is None:
+        raise KeyError(cache_type)
+
+    if cache_type == "news":
+        # DB rows via the native service; orphaned content files via file delete.
+        db_rows = 0
+        try:
+            from app.services.news_cache import NewsCacheService
+            db_rows = NewsCacheService().clear_cache(provider=provider, ticker=ticker)
+        except Exception as exc:  # keep endpoint usable even if DB unavailable
+            logger_msg = f"news clear_cache skipped: {exc}"
+            import logging as _logging
+            _logging.getLogger(__name__).warning(logger_msg)
+        file_res = {"bytes_freed": 0, "files_removed": 0}
+        for root in cfg["roots"]:
+            r = _delete_tree(root, before)
+            file_res["bytes_freed"] += r["bytes_freed"]
+            file_res["files_removed"] += r["files_removed"]
+        return {"db_rows_deleted": db_rows, **file_res}
+
+    # ohlcv symbol/interval filter: targeted file match across provider subfolders.
+    name_match: Optional[Any] = None
+    if cache_type == "ohlcv" and (symbol or interval):
+        def name_match(f: Path) -> bool:  # noqa: E306
+            if f.suffix not in (".csv", ".parquet"):
+                return False
+            stem = f.stem  # SYMBOL_interval
+            f_sym, _, f_int = stem.rpartition("_")
+            if symbol and f_sym.upper() != symbol.upper():
+                return False
+            if interval and f_int != interval:
+                return False
+            return True
+
+    result = {"bytes_freed": 0, "files_removed": 0}
+    for root in cfg["roots"]:
+        target = Path(root)
+        if cache_type in ("jobs", "models") and task_id:
+            target = target / task_id
+        r = _delete_tree(target, before=before, name_match=name_match)
+        result["bytes_freed"] += r["bytes_freed"]
+        result["files_removed"] += r["files_removed"]
+    return result
+
+
+def clear_all(before: Optional[datetime] = None) -> Dict[str, Any]:
+    """Clean every NON-destructive cache type.
+
+    Excludes datasets (dataset CSVs) + models (trained_models): the cross_cutting
+    rule means only an explicit per-type request may delete those.
+    """
+    out: Dict[str, Any] = {}
+    for name, cfg in CACHE_TYPES.items():
+        if cfg["destructive"]:
+            out[name] = {"skipped": "destructive — clear explicitly by type"}
+            continue
+        out[name] = clear_type(name, before=before)
+    return out
