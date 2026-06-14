@@ -234,6 +234,18 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
             initial_population=init_pop,
         )
 
+        # Trust guard: if EVERY trial failed (e.g. a bad backtest config), all_results is
+        # empty and best_fitness is a meaningless default. The GA swallows per-trial
+        # exceptions as warnings, so without this guard the optimization would report
+        # "completed" having evaluated NOTHING. Fail loudly instead.
+        if not all_results:
+            return _fail(
+                opt_id, db,
+                "optimization produced 0 successful trials — every backtest failed. Check the "
+                "logs for per-trial 'Fitness evaluation failed' warnings (e.g. a bad backtest "
+                "config) before trusting any result.",
+            )
+
         opt.status = "completed"
         opt.completed_at = datetime.now()
         opt.progress = 100.0

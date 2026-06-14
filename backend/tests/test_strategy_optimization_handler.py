@@ -431,3 +431,13 @@ def test_build_daily_trial_config_bypass_drops_rm_tp_sl():
         assert forbidden not in settings
     # The run-level backtest_cfg must NOT be mutated.
     assert backtest_cfg["experts"][0]["settings"] == {"top_n": 20}
+
+
+def test_all_trials_failing_marks_optimization_failed():
+    """Trust guard: if every trial errors (here: engine='stub' is not a real engine and is
+    NOT monkeypatched), the run must report 'failed', not silently 'completed' with 0 trials."""
+    sid = _seed_strategy()
+    oid = _seed_opt(sid)  # default _ga_config -> engine='stub' -> _run_trial_backtest raises
+    res = H.handle_strategy_optimization("t-allfail", {"optimization_id": oid})
+    assert res["status"] == "failed", f"expected failed, got {res}"
+    assert _load_opt(oid).status == "failed"

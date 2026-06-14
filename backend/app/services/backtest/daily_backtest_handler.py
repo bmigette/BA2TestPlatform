@@ -271,6 +271,15 @@ def run_daily_backtest(
 
     progress = progress_cb or (lambda pct, msg: None)
 
+    # Accept ISO string dates: the joint optimizer's _build_daily_trial_config forwards the
+    # dates straight from the JSON optimization_config (strings), and AsOfPriceSource.preload
+    # does start - timedelta. Coerce once here so every caller (CLI/API/optimizer) is safe.
+    config = {
+        **config,
+        "start_date": _parse_dt(config["start_date"], "start_date"),
+        "end_date": _parse_dt(config["end_date"], "end_date"),
+    }
+
     resolver = wire_backtest_seams()
     account_id = 1
 
