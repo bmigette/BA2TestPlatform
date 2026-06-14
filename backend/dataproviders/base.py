@@ -6,15 +6,28 @@ that all data providers should inherit from.
 """
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Callable, Optional, List, Dict, Any
+import os
 import threading
 import pandas as pd
 from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Per-file write locks so parallel optimization trials that fill the SAME symbol's cache
+# don't corrupt the parquet (a half-written file). Different files lock independently.
+_CACHE_WRITE_LOCKS: "defaultdict[str, threading.Lock]" = defaultdict(threading.Lock)
+_CACHE_LOCKS_GUARD = threading.Lock()
+
+
+def _cache_write_lock(path: Path) -> threading.Lock:
+    """Return the process-wide write lock for a given cache file path."""
+    with _CACHE_LOCKS_GUARD:
+        return _CACHE_WRITE_LOCKS[str(path)]
 
 
 class MarketDataPoint:
@@ -113,16 +126,24 @@ class MarketDataProviderInterface(ABC):
         return pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
 
     def _write_cache_df(self, df: pd.DataFrame, symbol: str, interval: str) -> Path:
-        """Write ``df`` to the Parquet cache and remove any legacy CSV sibling. Returns the path."""
+        """Write ``df`` to the Parquet cache and remove any legacy CSV sibling. Returns the path.
+
+        Thread-safe: holds the per-file write lock and writes to a temp file then atomically
+        replaces, so concurrent optimization trials never corrupt the cache or read a
+        half-written file.
+        """
         path = self._get_cache_file(symbol, interval)
         path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(path, index=False)
-        legacy = path.with_suffix(".csv")
-        if legacy.exists():
-            try:
-                legacy.unlink()
-            except OSError:
-                pass
+        with _cache_write_lock(path):
+            tmp = path.with_suffix(".parquet.tmp")
+            df.to_parquet(tmp, index=False)
+            os.replace(tmp, path)  # atomic on the same filesystem
+            legacy = path.with_suffix(".csv")
+            if legacy.exists():
+                try:
+                    legacy.unlink()
+                except OSError:
+                    pass
         return path
 
     @abstractmethod
