@@ -311,17 +311,45 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
             status_code=400,
             detail="universe.mode must be 'static' or 'screener' for engine='daily_expert'",
         )
-    if mode == "screener":
-        # Screener-cache universe resolution is Task 8; the create path does not yet resolve a
-        # screener universe into instruments. Fail loudly rather than silently run an empty run.
-        raise HTTPException(
-            status_code=400,
-            detail="universe.mode='screener' is not supported yet (screener resolution is Task 8)",
-        )
 
-    symbols = universe.get("symbols") or []
-    if not symbols:
-        raise HTTPException(status_code=400, detail="universe.symbols must be non-empty for static mode")
+    # Screener mode: the daily handler resolves instruments from the OFFLINE screener-history
+    # cache (built via ``ba2-test fetch-screener``) at run time — READ-ONLY, fail-early on a
+    # cache miss. The create path validates that the screener block carries the criteria +
+    # cache location (no-defaults rule) and passes it through; it does NOT resolve here (the
+    # resolution + fail-fast happens in the task so a cache miss surfaces on the run row).
+    screener_universe = None
+    symbols: list = []
+    if mode == "screener":
+        screener_settings = universe.get("screener_settings")
+        if not screener_settings:
+            raise HTTPException(
+                status_code=400,
+                detail="universe.screener_settings is required for universe.mode='screener'",
+            )
+        cache_db = universe.get("cache_db")
+        if not cache_db:
+            raise HTTPException(
+                status_code=400,
+                detail="universe.cache_db is required for universe.mode='screener' "
+                       "(the offline screener-history cache built via ba2-test fetch-screener)",
+            )
+        group = universe.get("group")
+        if not group:
+            raise HTTPException(
+                status_code=400,
+                detail="universe.group is required for universe.mode='screener' "
+                       "(the --group label used when building the cache)",
+            )
+        screener_universe = {
+            "mode": "screener",
+            "screener_settings": screener_settings,
+            "cache_db": cache_db,
+            "group": group,
+        }
+    else:
+        symbols = universe.get("symbols") or []
+        if not symbols:
+            raise HTTPException(status_code=400, detail="universe.symbols must be non-empty for static mode")
 
     # Fail-early on the daily-engine trading knobs (no-defaults rule).
     if not backtest.fill_model:
@@ -357,26 +385,36 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
 
     experts_payload = [{"class": expert_class, "settings": expert_settings}]
 
+    # Universe plumbing: static runs carry the explicit symbol list; screener runs carry the
+    # ``universe`` block (mode/screener_settings/cache_db/group) which the handler resolves
+    # from the offline cache (read-only, fail-fast on a miss).
+    payload = {
+        'backtest_id': db_backtest.id,
+        'name': backtest.name,
+        'experts': experts_payload,
+        'start_date': backtest.start_date,
+        'end_date': backtest.end_date,
+        'initial_capital': backtest.initial_capital,
+        'commission': backtest.commission,
+        'slippage': backtest.slippage,
+        'fill_model': backtest.fill_model,
+        'seed': backtest.seed,
+        'warmup_days': backtest.warmup_days,
+    }
+    if screener_universe is not None:
+        payload['universe'] = screener_universe
+        universe_desc = f"screener cache (group {screener_universe['group']})"
+    else:
+        payload['enabled_instruments'] = list(symbols)
+        universe_desc = f"{len(symbols)} instruments"
+
     from app.services.task_queue import get_task_queue
     task_queue = get_task_queue()
     task_id = task_queue.queue_task(
         task_type='daily_backtest',
         name=f'Daily Backtest: {db_backtest.name}',
-        payload={
-            'backtest_id': db_backtest.id,
-            'name': backtest.name,
-            'enabled_instruments': list(symbols),
-            'experts': experts_payload,
-            'start_date': backtest.start_date,
-            'end_date': backtest.end_date,
-            'initial_capital': backtest.initial_capital,
-            'commission': backtest.commission,
-            'slippage': backtest.slippage,
-            'fill_model': backtest.fill_model,
-            'seed': backtest.seed,
-            'warmup_days': backtest.warmup_days,
-        },
-        description=f'Daily expert backtest ({expert_class}) over {len(symbols)} instruments',
+        payload=payload,
+        description=f'Daily expert backtest ({expert_class}) over {universe_desc}',
     )
 
     logger.info(f"Queued daily backtest task: {task_id}")

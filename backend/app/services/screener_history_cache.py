@@ -142,6 +142,58 @@ class ScreenerHistoryCache:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def cached_scan_dates(
+        self,
+        group_label: str,
+        start_key: str,
+        end_key: str,
+        cfg_hash: Optional[str] = None,
+    ) -> List[str]:
+        """Read-only: the distinct cached scan-date keys for ``group_label`` in
+        ``[start_key, end_key]`` (inclusive ``YYYY-MM-DD`` strings), optionally narrowed to
+        ``cfg_hash``. NEVER screens/fetches — a pure SELECT against the cache table.
+
+        Used by the daily backtest's screener-universe resolver to enumerate which bars are
+        replay-able offline before unioning their survivors (fail-early on an empty range).
+        """
+        sql = (
+            "SELECT DISTINCT scan_date FROM screener_history "
+            "WHERE group_label=? AND scan_date>=? AND scan_date<=?"
+        )
+        params: List[Any] = [group_label, start_key, end_key]
+        if cfg_hash is not None:
+            sql += " AND screen_config_hash=?"
+            params.append(cfg_hash)
+        sql += " ORDER BY scan_date ASC"
+        with self._connect() as con:
+            rows = con.execute(sql, params).fetchall()
+        return [r["scan_date"] for r in rows]
+
+    def survivors_for_key(
+        self,
+        scan_date_key: str,
+        group_label: str,
+        cfg_hash: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Read-only: cached survivor rows (rank-ordered) for a ``YYYY-MM-DD`` key + group,
+        optionally narrowed to ``cfg_hash``. NEVER screens/fetches.
+
+        Like :meth:`replay` but keyed by the already-canonical date string + group label, so
+        the resolver can union survivors across a date range without re-deriving date keys.
+        """
+        sql = (
+            "SELECT * FROM screener_history "
+            "WHERE scan_date=? AND group_label=?"
+        )
+        params: List[Any] = [scan_date_key, group_label]
+        if cfg_hash is not None:
+            sql += " AND screen_config_hash=?"
+            params.append(cfg_hash)
+        sql += " ORDER BY rank ASC"
+        with self._connect() as con:
+            rows = con.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
     def write(
         self,
         scan_date: datetime,

@@ -32,9 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 # Payload keys the handler REQUIRES (validated fail-early, no defaults).
+# ``enabled_instruments`` is NOT in this list: it is either supplied directly (static
+# universe) or RESOLVED from the offline screener cache (screener universe) in
+# ``_build_config``; the post-resolution non-empty check lives there so a screener run is
+# not rejected for lacking a static symbol list.
 REQUIRED_KEYS = [
     "backtest_id",
-    "enabled_instruments",
     "experts",
     "start_date",
     "end_date",
@@ -188,6 +191,8 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
                 f"unsupported expert '{name}'; supported: {sorted(_SUPPORTED_EXPERTS)}"
             )
 
+    enabled_instruments = _resolve_enabled_instruments(payload, start_date, end_date)
+
     initial_capital = float(payload["initial_capital"])
     account_settings = {
         "starting_cash": initial_capital,
@@ -209,7 +214,7 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         "name": payload.get("name", f"daily-backtest-{payload['backtest_id']}"),
         "start_date": start_date,
         "end_date": end_date,
-        "enabled_instruments": list(payload["enabled_instruments"]),
+        "enabled_instruments": enabled_instruments,
         "experts": expert_specs,
         "initial_capital": initial_capital,
         "account_settings": account_settings,
@@ -227,6 +232,60 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Intraday fill clock (e.g. "1h"/"15m"); 1d default. Decoupled from entry cadence.
         "execution_interval": payload.get("execution_interval", "1d"),
     }
+
+
+def _resolve_enabled_instruments(
+    payload: Dict[str, Any], start_date: datetime, end_date: datetime
+) -> List[str]:
+    """Resolve the run's instrument list: static symbols OR an offline screener-cache union.
+
+    Two universe shapes are supported (discriminated by ``payload['universe']['mode']``):
+
+      * static (default, or ``universe.mode == 'static'``): the explicit ``enabled_instruments``
+        list the payload carries — behaviour unchanged.
+      * screener (``universe.mode == 'screener'``): resolve the symbols from the OFFLINE
+        screener-history cache (built via ``ba2-test fetch-screener``) by unioning the cached
+        survivors across the scan dates in ``[start_date, end_date]``. READ-ONLY — never
+        live-screens; a cache miss raises ``ScreenerCacheMiss`` which propagates to fail the
+        run early (build the cache first). The screener block carries ``screener_settings`` +
+        ``cache_db`` + ``group`` (no defaults — fail-early per ``backend/CLAUDE.md``).
+    """
+    universe = payload.get("universe") or {}
+    mode = universe.get("mode")
+
+    if mode == "screener":
+        from app.services.backtest.universe_resolver import resolve_screener_universe
+
+        screener_settings = universe.get("screener_settings")
+        if screener_settings is None:
+            raise ValueError("universe.screener_settings is required for screener mode")
+        cache_db = universe.get("cache_db")
+        if not cache_db:
+            raise ValueError("universe.cache_db is required for screener mode")
+        group = universe.get("group")
+        if not group:
+            raise ValueError("universe.group is required for screener mode")
+
+        # ScreenerCacheMiss (RuntimeError) is intentionally NOT caught here: it bubbles to the
+        # handler's generic failure path so the run fails with the build-the-cache message.
+        instruments = resolve_screener_universe(
+            screener_settings=screener_settings,
+            start=start_date,
+            end=end_date,
+            cache_db=cache_db,
+            group=group,
+        )
+        if not instruments:
+            raise ValueError(
+                "screener universe resolved to zero symbols for the requested range"
+            )
+        return instruments
+
+    # Static universe (default): the explicit instrument list (fail-early if absent/empty).
+    instruments = payload.get("enabled_instruments")
+    if not instruments:
+        raise ValueError("payload.enabled_instruments is required for a static universe")
+    return list(instruments)
 
 
 # ---------------------------------------------------------------------------
