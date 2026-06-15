@@ -18,6 +18,20 @@ export const listExperts = () => jget<{ experts: ExpertInfo[] }>('/experts').the
 export const getExpertSettings = (cls: string) => jget<{ definitions: Record<string, SettingDef> }>(`/experts/${cls}/settings-definitions`).then(r => r.definitions);
 export const importRules = (json: unknown, which: 'enter' | 'exit') => jpost<{ tree: unknown }>('/strategies/import-rules', { json, which }).then(r => r.tree);
 export const exportRulesUrl = (strategyId: number, which: 'enter' | 'exit') => `${API_BASE}/strategies/${strategyId}/export-rules?which=${which}`;
+export interface TaskInfo {
+  id: number;
+  task_id: string;
+  task_type?: string;
+  name?: string;
+  status: string;
+  progress?: number;
+  progress_message?: string;
+}
+export const listTasks = (status = 'running') =>
+  jget<{ tasks: TaskInfo[] } | TaskInfo[]>(`/tasks?status=${status}&limit=100`)
+    .then(r => (Array.isArray(r) ? r : r.tasks ?? []));
+export const cancelTask = (id: string) => jpost<unknown>(`/tasks/${id}/cancel`, {});
+
 export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean } = {}) => {
   const p = new URLSearchParams();
   if (q.expert) p.set('expert', q.expert);

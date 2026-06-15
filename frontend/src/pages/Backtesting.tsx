@@ -47,6 +47,7 @@ import { UniversePicker } from '../components/UniversePicker';
 import type { UniverseValue } from '../components/UniversePicker';
 import { RuleIO } from '../components/RuleIO';
 import { RunHistoryTable } from '../components/RunHistoryTable';
+import { RunningJobsStrip } from '../components/RunningJobsStrip';
 import {
   XAxis,
   YAxis,
@@ -1757,6 +1758,7 @@ const Backtesting: React.FC = () => {
             ) : backtestCardTab === 'history' ? (
               /* History Tab — all runs */
               <div className="max-h-[32rem] overflow-y-auto">
+                <RunningJobsStrip />
                 <RunHistoryTable savedOnly={false} onSelect={viewBacktest} />
               </div>
             ) : (
