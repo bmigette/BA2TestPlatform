@@ -1008,7 +1008,6 @@ const Step1Settings: React.FC<Step1Props> = ({
   state,
   setState,
   datasets,
-  selectedDataset,
   selectedDatasets,
   checkCompatibility,
   handleModelToggle,
@@ -1021,7 +1020,6 @@ const Step1Settings: React.FC<Step1Props> = ({
   modelsLoading,
 }) => {
   const allModelsSelected = state.selectedModels.length === availableModels.length && availableModels.length > 0;
-  const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString();
 
   return (
     <div className="space-y-6">

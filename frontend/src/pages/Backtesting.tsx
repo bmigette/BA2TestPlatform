@@ -207,6 +207,7 @@ interface BacktestResults {
 interface Backtest {
   id: number;
   name: string;
+  description?: string;
   // 'ml' = legacy model-driven backtesting.py run (modelId set);
   // 'daily_expert' = Phase-2 daily multi-asset expert engine (modelId null).
   engineType?: string;
