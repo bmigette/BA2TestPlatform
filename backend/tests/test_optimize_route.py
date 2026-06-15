@@ -73,12 +73,6 @@ def seed_strategy(test_db):
         initial_sl_min=1.0,
         initial_sl_max=6.0,
         initial_sl_step=1.0,
-        # one RM param marked optimize so the folded rm_params has a True entry
-        rm_risk_per_trade_pct=1.0,
-        rm_risk_per_trade_pct_optimize=True,
-        rm_risk_per_trade_pct_min=0.5,
-        rm_risk_per_trade_pct_max=3.0,
-        rm_risk_per_trade_pct_step=0.25,
     )
     test_db.add(s)
     test_db.commit()
@@ -90,6 +84,15 @@ def _payload():
     return {
         "fitness_metric": "sharpe",
         "optimization_type": "genetic",
+        "expert_params": {
+            "risk_per_trade_pct": {
+                "optimize": True,
+                "min": 0.5,
+                "max": 3.0,
+                "step": 0.25,
+                "type": "float",
+            }
+        },
         "optimization_config": {
             "populationSize": 8,
             "generations": 3,
@@ -123,12 +126,11 @@ def test_optimize_route_creates_row_and_enqueues(client, seed_strategy):
     assert body["optimizationType"] == "genetic"
     assert body["status"] == "pending"
 
-    # RM config folded into optimization_config
+    # expert_params folded into optimization_config (RM sizing optimizes as expert settings)
     cfg = body["optimizationConfig"]
-    assert "rm_params" in cfg and cfg["rm_params"], "rm_params not folded in"
-    assert cfg["rm_params"]["risk_per_trade_pct"]["optimize"] is True
-    assert cfg["rm_params"]["risk_per_trade_pct"]["min"] == 0.5
-    assert cfg["rm_params"]["max_concurrent_positions"]["type"] == "int"
+    assert "expert_params" in cfg and cfg["expert_params"], "expert_params not folded in"
+    assert cfg["expert_params"]["risk_per_trade_pct"]["optimize"] is True
+    assert cfg["expert_params"]["risk_per_trade_pct"]["min"] == 0.5
     # The GA params + backtest block survive untouched
     assert cfg["seed"] == 42
     assert cfg["backtest"]["engine"] == "daily"
@@ -151,7 +153,7 @@ def test_optimize_route_persists_strategy_optimization_row(client, seed_strategy
     assert row.strategy_id == seed_strategy.id
     assert row.fitness_metric == "sharpe"
     assert row.status == "pending"
-    assert row.optimization_config["rm_params"]["risk_per_trade_pct"]["optimize"] is True
+    assert row.optimization_config["expert_params"]["risk_per_trade_pct"]["optimize"] is True
 
 
 def test_optimize_route_enqueues_strategy_optimization_task(client, seed_strategy, test_db):

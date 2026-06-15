@@ -12,9 +12,7 @@ def _strategy():
         initial_tp_optimize=True, initial_tp_min=2.0, initial_tp_max=10.0, initial_tp_step=1.0,
         initial_sl_optimize=False, initial_sl_min=None, initial_sl_max=None, initial_sl_step=None,
         buy_entry_conditions=buy, sell_entry_conditions=None, entry_conditions=None,
-        exit_conditions=[],
-        rm_risk_per_trade_pct=1.0, rm_per_instrument_cap_pct=20.0, rm_min_stop_pct=2.0,
-        rm_atr_stop_mult=2.0, rm_max_concurrent_positions=5)
+        exit_conditions=[])
 
 
 def test_collect_decode_through_genetic_optimizer():

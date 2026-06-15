@@ -58,11 +58,6 @@ def _strategy_stub():
         sell_entry_conditions=None,
         entry_conditions=None,
         exit_conditions=[],
-        rm_risk_per_trade_pct=1.0,
-        rm_per_instrument_cap_pct=20.0,
-        rm_min_stop_pct=2.0,
-        rm_atr_stop_mult=2.0,
-        rm_max_concurrent_positions=5,
     )
 
 

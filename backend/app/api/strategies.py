@@ -15,19 +15,6 @@ from app.services.task_queue import get_task_queue
 
 logger = logging.getLogger(__name__)
 
-# Classic-RM param names this route still folds into optimization_config.rm_params from the
-# Strategy columns. The rm:* param-space namespace itself is retired (RM sizing now optimizes
-# via the expert model:* path); this route-level fold is removed in P1-T7 (optimize payload
-# rework). Kept inline here so retiring CLASSIC_RM_PARAMS from strategy_param_space doesn't
-# break this import in the meantime.
-_CLASSIC_RM_PARAMS = (
-    "risk_per_trade_pct",
-    "per_instrument_cap_pct",
-    "min_stop_pct",
-    "atr_stop_mult",
-    "max_concurrent_positions",
-)
-
 router = APIRouter()
 
 
@@ -83,34 +70,6 @@ class StrategyCreate(BaseModel):
     initial_sl_min: Optional[float] = None
     initial_sl_max: Optional[float] = None
     initial_sl_step: Optional[float] = None
-    # Classic-RM params with optimization ranges (Phase 4 joint optimizer).
-    # The float RM groups + the integer max_concurrent_positions group, each
-    # value/optimize/min/max/step, mirroring the TP/SL pattern.
-    rm_risk_per_trade_pct: Optional[float] = None
-    rm_risk_per_trade_pct_optimize: Optional[bool] = None
-    rm_risk_per_trade_pct_min: Optional[float] = None
-    rm_risk_per_trade_pct_max: Optional[float] = None
-    rm_risk_per_trade_pct_step: Optional[float] = None
-    rm_per_instrument_cap_pct: Optional[float] = None
-    rm_per_instrument_cap_pct_optimize: Optional[bool] = None
-    rm_per_instrument_cap_pct_min: Optional[float] = None
-    rm_per_instrument_cap_pct_max: Optional[float] = None
-    rm_per_instrument_cap_pct_step: Optional[float] = None
-    rm_min_stop_pct: Optional[float] = None
-    rm_min_stop_pct_optimize: Optional[bool] = None
-    rm_min_stop_pct_min: Optional[float] = None
-    rm_min_stop_pct_max: Optional[float] = None
-    rm_min_stop_pct_step: Optional[float] = None
-    rm_atr_stop_mult: Optional[float] = None
-    rm_atr_stop_mult_optimize: Optional[bool] = None
-    rm_atr_stop_mult_min: Optional[float] = None
-    rm_atr_stop_mult_max: Optional[float] = None
-    rm_atr_stop_mult_step: Optional[float] = None
-    rm_max_concurrent_positions: Optional[int] = None
-    rm_max_concurrent_positions_optimize: Optional[bool] = None
-    rm_max_concurrent_positions_min: Optional[int] = None
-    rm_max_concurrent_positions_max: Optional[int] = None
-    rm_max_concurrent_positions_step: Optional[int] = None
 
 
 class StrategyUpdate(BaseModel):
@@ -130,32 +89,6 @@ class StrategyUpdate(BaseModel):
     initial_sl_min: Optional[float] = None
     initial_sl_max: Optional[float] = None
     initial_sl_step: Optional[float] = None
-    # Classic-RM params with optimization ranges (Phase 4 joint optimizer).
-    rm_risk_per_trade_pct: Optional[float] = None
-    rm_risk_per_trade_pct_optimize: Optional[bool] = None
-    rm_risk_per_trade_pct_min: Optional[float] = None
-    rm_risk_per_trade_pct_max: Optional[float] = None
-    rm_risk_per_trade_pct_step: Optional[float] = None
-    rm_per_instrument_cap_pct: Optional[float] = None
-    rm_per_instrument_cap_pct_optimize: Optional[bool] = None
-    rm_per_instrument_cap_pct_min: Optional[float] = None
-    rm_per_instrument_cap_pct_max: Optional[float] = None
-    rm_per_instrument_cap_pct_step: Optional[float] = None
-    rm_min_stop_pct: Optional[float] = None
-    rm_min_stop_pct_optimize: Optional[bool] = None
-    rm_min_stop_pct_min: Optional[float] = None
-    rm_min_stop_pct_max: Optional[float] = None
-    rm_min_stop_pct_step: Optional[float] = None
-    rm_atr_stop_mult: Optional[float] = None
-    rm_atr_stop_mult_optimize: Optional[bool] = None
-    rm_atr_stop_mult_min: Optional[float] = None
-    rm_atr_stop_mult_max: Optional[float] = None
-    rm_atr_stop_mult_step: Optional[float] = None
-    rm_max_concurrent_positions: Optional[int] = None
-    rm_max_concurrent_positions_optimize: Optional[bool] = None
-    rm_max_concurrent_positions_min: Optional[int] = None
-    rm_max_concurrent_positions_max: Optional[int] = None
-    rm_max_concurrent_positions_step: Optional[int] = None
 
 
 def extract_required_fields(
@@ -254,12 +187,6 @@ async def create_strategy(
         initial_sl_max=strategy.initial_sl_max,
         initial_sl_step=strategy.initial_sl_step,
     )
-
-    # Apply any provided classic-RM optimize fields, leaving model defaults intact
-    # for params the request omits (so a baseline RM is always present).
-    for key, value in strategy.model_dump(exclude_unset=True).items():
-        if key.startswith("rm_") and value is not None:
-            setattr(db_strategy, key, value)
 
     db.add(db_strategy)
     db.commit()
@@ -384,40 +311,22 @@ class OptimizeRequest(BaseModel):
     expert_params: Optional[dict] = None     # {param:{optimize,min,max,step,type}}
 
 
-def _rm_cfg_from_strategy(s) -> dict:
-    """Build the rm_params dict collect_param_space expects from Strategy columns."""
-    cfg = {}
-    for p in _CLASSIC_RM_PARAMS:
-        is_int = (p == "max_concurrent_positions")
-        cfg[p] = {
-            "optimize": bool(getattr(s, f"rm_{p}_optimize", False)),
-            "min": getattr(s, f"rm_{p}_min", None),
-            "max": getattr(s, f"rm_{p}_max", None),
-            "step": getattr(s, f"rm_{p}_step", None),
-            "type": "int" if is_int else "float",
-        }
-    return cfg
-
-
 @router.post("/{strategy_id}/optimize")
 async def optimize_strategy(
     strategy_id: int,
     req: OptimizeRequest,
     db: Session = Depends(get_db)
 ):
-    """Launch a joint genetic optimization (expert + classic-RM + ruleset params).
+    """Launch a joint genetic optimization (expert + ruleset params).
 
     Writes a StrategyOptimization row and enqueues a 'strategy_optimization' task.
-    The per-strategy RM config (built from the Strategy's rm_* columns) and any
-    expert_params are folded into optimization_config so the handler is self-contained.
+    Any expert_params are folded into optimization_config so the handler is self-contained.
     """
     strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
     if not strategy:
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
-    # Fold the per-strategy RM config into optimization_config so the handler is self-contained
     cfg = dict(req.optimization_config or {})
-    cfg["rm_params"] = _rm_cfg_from_strategy(strategy)
     if req.expert_params is not None:
         cfg["expert_params"] = req.expert_params
 

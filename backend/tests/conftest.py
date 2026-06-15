@@ -62,7 +62,7 @@ def db(gate_engine):
 
 @pytest.fixture
 def seed_strategy(db):
-    """A Strategy row with TP/SL + one RM param under optimization."""
+    """A Strategy row with TP/SL under optimization."""
     from app.models.strategy import Strategy
 
     s = Strategy(
@@ -77,11 +77,6 @@ def seed_strategy(db):
         initial_sl_min=1.0,
         initial_sl_max=6.0,
         initial_sl_step=1.0,
-        rm_risk_per_trade_pct=1.0,
-        rm_risk_per_trade_pct_optimize=True,
-        rm_risk_per_trade_pct_min=0.5,
-        rm_risk_per_trade_pct_max=3.0,
-        rm_risk_per_trade_pct_step=0.25,
     )
     db.add(s)
     db.commit()
