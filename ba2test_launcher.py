@@ -63,12 +63,66 @@ def _enter_backend() -> str:
     return backend
 
 
+def _find_npm() -> "str | None":
+    """Locate npm: PATH first, then the standard Windows nodejs install."""
+    import shutil
+    for cand in ("npm", "npm.cmd"):
+        p = shutil.which(cand)
+        if p:
+            return p
+    for p in (r"C:\Program Files\nodejs\npm.cmd", r"C:\Program Files (x86)\nodejs\npm.cmd"):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _start_frontend(repo_root: str, port: int):
+    """Launch the Vite dev server (npm run dev) as a subprocess. Returns the Popen or None."""
+    import subprocess
+    fe = os.path.join(repo_root, "frontend")
+    if not os.path.isdir(os.path.join(fe, "node_modules")):
+        print(f"ba2-test: frontend deps not installed; run `npm install` in {fe} first.")
+        return None
+    npm = _find_npm()
+    if not npm:
+        print("ba2-test: npm not found (install Node.js); cannot start the frontend.")
+        return None
+    env = dict(os.environ)
+    # Node on PATH for the child (so vite's own node resolves).
+    nodedir = os.path.dirname(npm)
+    env["PATH"] = nodedir + os.pathsep + env.get("PATH", "")
+    proc = subprocess.Popen([npm, "run", "dev", "--", "--port", str(port)], cwd=fe, env=env)
+    print(f"frontend (vite)  -> http://localhost:{port}")
+    return proc
+
+
 def _cmd_serve(args) -> int:
-    try:
-        import uvicorn
-    except ImportError:
-        sys.exit("ba2-test: uvicorn not installed. Install backend/requirements.txt into this venv.")
-    uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    mode = args.mode
+    fe_proc = None
+    if mode in ("both", "front"):
+        fe_proc = _start_frontend(repo_root, args.frontend_port)
+
+    if mode in ("both", "back"):
+        try:
+            import uvicorn
+        except ImportError:
+            if fe_proc:
+                fe_proc.terminate()
+            sys.exit("ba2-test: uvicorn not installed. Install backend/requirements.txt into this venv.")
+        print(f"backend (api)    -> http://localhost:{args.port}  (docs: /docs)")
+        try:
+            uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
+        finally:
+            if fe_proc:
+                fe_proc.terminate()
+    elif mode == "front":
+        if fe_proc is None:
+            return 1
+        try:
+            fe_proc.wait()
+        except KeyboardInterrupt:
+            fe_proc.terminate()
     return 0
 
 
@@ -569,9 +623,12 @@ def main(argv: "list | None" = None) -> int:
     p = argparse.ArgumentParser(prog="ba2-test", description="BA2 Test Platform CLI.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("serve", help="Launch the FastAPI API.")
+    s = sub.add_parser("serve", help="Launch the API and/or the React frontend.")
+    s.add_argument("--mode", default="both", choices=["both", "back", "front"],
+                   help="What to start: both (default), back (API only), front (Vite UI only).")
     s.add_argument("--host", default="0.0.0.0")
-    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--port", type=int, default=8000, help="Backend API port (default 8000).")
+    s.add_argument("--frontend-port", type=int, default=5173, help="Vite dev-server port (default 5173).")
     s.add_argument("--reload", action="store_true")
 
     # backtest: parse_known_args so the rest passes through to run_daily_backtest.
