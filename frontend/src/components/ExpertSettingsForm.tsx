@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { getExpertSettings } from '../lib/btApi';
 import type { SettingDef } from '../lib/btApi';
+import { ScheduleEditor } from './ScheduleEditor';
 
 export interface OptRange { min: number; max: number; step: number; }
 export interface ExpertSettingsValue {
@@ -9,13 +10,10 @@ export interface ExpertSettingsValue {
   expert_params: Record<string, OptRange & { type: string }>; // Opt-on numeric settings
 }
 const isNumeric = (t: string) => t === 'float' || t === 'int';
-// Object-valued builtin config handled by dedicated controls (universe picker, run-interval)
-// or irrelevant to a backtest — kept out of the per-setting list (avoids "[object Object]").
-const HIDDEN_KEYS = new Set([
-  'execution_schedule_enter_market',
-  'execution_schedule_open_positions',
-  'enabled_instruments',
-]);
+// enabled_instruments is the universe — owned by the UniversePicker, so keep it out of this list.
+const HIDDEN_KEYS = new Set(['enabled_instruments']);
+// Schedule objects get a dedicated editor (days + times) instead of a raw text input.
+const SCHEDULE_KEYS = new Set(['execution_schedule_enter_market', 'execution_schedule_open_positions']);
 // Render any value safely — objects/arrays as JSON instead of "[object Object]".
 const displayVal = (v: unknown) =>
   v != null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
@@ -48,6 +46,18 @@ export function ExpertSettingsForm({ expertClass, value, onChange }:
   return (
     <div className="space-y-2">
       {Object.entries(defs).filter(([k]) => !HIDDEN_KEYS.has(k)).map(([k, def]) => {
+        if (SCHEDULE_KEYS.has(k)) {
+          return (
+            <div
+              key={k}
+              title={def.tooltip || def.description || ''}
+              className="p-2 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600"
+            >
+              <div className="text-sm text-gray-700 dark:text-gray-300 mb-2">{k}</div>
+              <ScheduleEditor value={value.settings[k]} onChange={(v) => setVal(k, v)} />
+            </div>
+          );
+        }
         const choices = (def.choices ?? def.valid_values) as unknown[] | undefined;
         const opt = value.expert_params[k];
         return (

@@ -291,8 +291,8 @@ const Backtesting: React.FC = () => {
   const [positionSizingValue, setPositionSizingValue] = useState(1000);
   const [commission, setCommission] = useState(0.1);
   const [slippage, setSlippage] = useState(0.05);
-  // Expert-engine simulation bar size (execution_interval). Daily default — FMP experts use daily data.
-  const [executionInterval, setExecutionInterval] = useState('1d');
+  // Expert-engine simulation bar size (execution_interval).
+  const [executionInterval, setExecutionInterval] = useState('5m');
 
   // Available fields from model
   const [availableFields, setAvailableFields] = useState<AvailableField[]>([]);
@@ -1457,13 +1457,13 @@ const Backtesting: React.FC = () => {
                           onChange={e => setExecutionInterval(e.target.value)}
                           className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                         >
-                          <option value="1d">Daily (1d) — default</option>
-                          <option value="1h">Hourly (1h)</option>
-                          <option value="30m">30 min</option>
+                          <option value="5m">5 min — default</option>
                           <option value="15m">15 min</option>
-                          <option value="5m">5 min</option>
+                          <option value="30m">30 min</option>
+                          <option value="1h">Hourly (1h)</option>
+                          <option value="1d">Daily (1d)</option>
                         </select>
-                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Simulation bar size. FMP-based experts use daily data — intraday is much slower and needs intraday history.</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Simulation bar size. Intraday needs intraday OHLCV history and is slower; pick 1d for daily/fundamental experts.</p>
                       </div>
                       <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/40 border border-gray-200 dark:border-gray-700 rounded p-2">
                         Position sizing is governed by the expert's risk manager (its <code>sizing_mode</code> / <code>risk_per_trade_pct</code> in Expert Settings), not here.
@@ -1549,13 +1549,13 @@ const Backtesting: React.FC = () => {
             </div>
             ) : backtestCardTab === 'history' ? (
               /* History Tab — all runs */
-              <div className="max-h-[32rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]">
+              <div className="max-h-[32rem] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
                 <RunningJobsStrip />
                 <RunHistoryTable savedOnly={false} onSelect={viewBacktest} />
               </div>
             ) : (
               /* Saved Backtests Tab */
-              <div className="space-y-2 max-h-96 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
+              <div className="space-y-2 max-h-96 overflow-y-auto pr-4 [scrollbar-gutter:stable]">
                 <RunHistoryTable savedOnly={true} onSelect={viewBacktest} />
               </div>
             )}
