@@ -448,7 +448,9 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 self._cancel_oco_sibling(o)
                 continue
             if getattr(o, "asset_class", None) == AssetClass.OPTION:
-                # Option PARENT with no contract_symbol -> multi-leg, handled in Task 8.
+                # Option PARENT with no contract_symbol -> multi-leg (spread/straddle):
+                # fill ALL legs all-or-none off their own premium bars on this bar.
+                self._fill_multi_leg_parent(o, as_of)
                 continue
             fill_px = self._evaluate_fill(o, as_of)
             if fill_px is None:
@@ -458,15 +460,20 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         return True
 
     def _is_single_leg_option(self, order) -> bool:
-        """True for an OPTION order that fills against a contract premium bar.
+        """True for an OPTION order that fills *independently* against a premium bar.
 
-        That is a single-leg parent (or a multi-leg CHILD leg) carrying a ``contract_symbol``.
-        A multi-leg PARENT has ``asset_class == OPTION`` but NO ``contract_symbol`` and is
-        excluded here (its legs fill in Task 8).
+        That is a single-leg parent carrying a ``contract_symbol`` and NO ``parent_order_id``.
+        Excluded:
+          * a multi-leg PARENT (``asset_class == OPTION`` but NO ``contract_symbol``); its
+            legs fill all-or-none via ``_fill_multi_leg_parent``.
+          * a multi-leg CHILD leg (carries ``contract_symbol`` AND ``parent_order_id``); a
+            child must fill ONLY through its parent's all-or-none path — never on its own —
+            so it is excluded here to avoid double-filling.
         """
         return (
             getattr(order, "asset_class", None) == AssetClass.OPTION
             and bool(getattr(order, "contract_symbol", None))
+            and getattr(order, "parent_order_id", None) is None
         )
 
     def _option_fill_price(self, order, as_of) -> Optional[float]:
@@ -481,10 +488,13 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         if self._options is None:
             return None
         same_bar = self._cfg["fill_model"] == "same_bar_close"
+        # The trading calendar is the UNDERLYING's, not the contract's: a multi-leg CHILD's
+        # ``symbol`` is its OCC contract (which has no underlying bars), so use the underlying.
+        calendar_symbol = getattr(order, "underlying_symbol", None) or order.symbol
         if same_bar:
             fill_day = as_of.date() if hasattr(as_of, "date") else as_of
         else:
-            fill_day = self._price.next_bar_date(order.symbol, as_of)
+            fill_day = self._price.next_bar_date(calendar_symbol, as_of)
             if fill_day is None:
                 return None
             if hasattr(fill_day, "date"):
@@ -496,6 +506,58 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         if px is None:
             return None
         return self._slip(float(px), order.side == OrderDirection.BUY)
+
+    def _child_legs(self, parent) -> List[TradingOrder]:
+        """The not-yet-filled child leg orders of a multi-leg option parent.
+
+        Children are linked via ``parent_order_id`` (NOT ``depends_on_order`` — that FK is
+        for OCO/TP/SL legs). Only non-terminal, non-FILLED legs are returned so a re-run on a
+        later bar does not re-fill an already-filled leg.
+        """
+        if parent.id is None:
+            return []
+        terminal = OrderStatus.get_terminal_statuses()
+        return [
+            o
+            for o in self.get_orders()
+            if o.parent_order_id == parent.id
+            and o.status not in terminal
+            and o.status != OrderStatus.FILLED
+        ]
+
+    def _fill_multi_leg_parent(self, parent, as_of: datetime) -> None:
+        """ALL-OR-NONE fill of a multi-leg option parent (spread/straddle/...).
+
+        On this bar, price every child leg off its OWN premium bar (each leg carries a
+        ``contract_symbol`` so ``_option_fill_price`` works). If EVERY leg resolves to a
+        price, fill all legs through the SAME per-leg path as single-leg fills
+        (``_apply_option_fill`` -> per-contract lot + cash, scaled x multiplier), then mark
+        the PARENT FILLED with ``open_price`` = net per-share debit = Σ(buy premium) -
+        Σ(sell premium) (positive = debit, negative = credit). The parent moves NO cash (it
+        already moved per leg). If ANY leg lacks a price, NOTHING fills this bar (retry next).
+        """
+        legs = self._child_legs(parent)
+        if not legs:
+            return
+        priced = []
+        for leg in legs:
+            px = self._option_fill_price(leg, as_of)
+            if px is None:
+                return  # all-or-none: one leg can't price -> fill none this bar
+            priced.append((leg, px))
+
+        net = 0.0
+        for leg, px in priced:
+            self._apply_option_fill(leg, px, as_of)  # reuse single-leg per-leg lot+cash math
+            signed = px if leg.side == OrderDirection.BUY else -px
+            net += signed
+
+        parent.filled_qty = parent.quantity
+        parent.open_price = net  # net per-share: +debit / -credit. No cash moved on the parent.
+        parent.status = OrderStatus.FILLED
+        update_instance(parent)
+        if parent.id is not None:
+            self._fill_dates[parent.id] = as_of
 
     def _activate_triggered_dependents(self) -> None:
         """Promote WAITING_TRIGGER legs to ACCEPTED once their parent hits the trigger.
@@ -806,7 +868,15 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             underlying, self._as_of_date())
 
     def get_option_positions(self):
-        """Held option positions, derived from OPENED transactions whose entry is an OPTION."""
+        """Held option positions, derived from OPENED transactions whose entry is an OPTION.
+
+        single-leg : the transaction's entry order IS the contract -> one position from the
+                     transaction's net open qty.
+        multi-leg  : the entry is the parent (no contract_symbol); each FILLED child leg is a
+                     SEPARATE per-contract position (both legs of a spread share one txn, and
+                     their buy/sell qty would net to zero, so they cannot be read off the txn
+                     net — they are read directly off the child legs).
+        """
         from sqlmodel import select, Session
 
         out: List[OptionPosition] = []
@@ -819,6 +889,10 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         for t in txns:
             entry = self._entry_order_for_transaction(t)
             if entry is None or getattr(entry, "asset_class", None) != AssetClass.OPTION:
+                continue
+            # Multi-leg parent (no contract_symbol): one position per filled child leg.
+            if not getattr(entry, "contract_symbol", None):
+                out.extend(self._multi_leg_positions(entry))
                 continue
             qty = t.get_current_open_qty()
             if qty == 0:
@@ -834,6 +908,36 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                     quantity=abs(qty),
                     avg_entry_price=t.open_price or 0.0,
                     multiplier=entry.multiplier or 100,
+                )
+            )
+        return out
+
+    def _multi_leg_positions(self, parent) -> List[OptionPosition]:
+        """One OptionPosition per FILLED child leg of a multi-leg option parent.
+
+        Each leg is its own per-contract lot (buy leg -> long, sell leg -> short) priced at
+        the leg's own fill premium (``open_price`` per share). Legs that have not filled yet
+        (all-or-none means this is all-or-nothing, but a closed/canceled leg is skipped) are
+        omitted.
+        """
+        executed = OrderStatus.get_executed_statuses()
+        out: List[OptionPosition] = []
+        for leg in self.get_orders():
+            if leg.parent_order_id != parent.id:
+                continue
+            if leg.status not in executed or not leg.filled_qty:
+                continue
+            out.append(
+                OptionPosition(
+                    contract_symbol=leg.contract_symbol,
+                    underlying=leg.underlying_symbol,
+                    option_type=leg.option_type,
+                    strike=leg.strike,
+                    expiry=leg.expiry,
+                    side=leg.side,
+                    quantity=abs(float(leg.filled_qty)),
+                    avg_entry_price=leg.open_price or 0.0,
+                    multiplier=leg.multiplier or 100,
                 )
             )
         return out
