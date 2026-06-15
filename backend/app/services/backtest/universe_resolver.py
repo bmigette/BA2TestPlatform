@@ -34,6 +34,18 @@ class ScreenerCacheMiss(RuntimeError):
     """
 
 
+# Process-global memo of resolved screener unions, keyed by (cache_db, group, cfg_hash, start,
+# end). The union is identical for every GA trial on a fixed cache + config + range, and the
+# pool worker stays alive across trials, so this resolves the universe ~once per worker and
+# shares it across the whole population (the OHLCV-memo pattern). Cleared by clear_universe_memo.
+_UNIVERSE_MEMO: Dict[tuple, List[str]] = {}
+
+
+def clear_universe_memo() -> None:
+    """Drop the process-global screener-universe memo (tests / between distinct caches)."""
+    _UNIVERSE_MEMO.clear()
+
+
 def _coerce_date_key(value: Any, field: str) -> str:
     """Canonicalise a range bound (ISO string OR datetime) to a ``YYYY-MM-DD`` cache key."""
     if isinstance(value, datetime):
@@ -93,20 +105,26 @@ def resolve_screener_universe(
     end_key = _coerce_date_key(end, "end")
     cfg_hash = _config_hash(screener_settings)
 
+    # Process-global memo: the screener union is param-INDEPENDENT (same for every GA trial on
+    # a fixed cache + group + config + range), so resolve it ONCE per worker and reuse across the
+    # whole population — exactly like the OHLCV memo. Re-resolving per trial was ~1.5s each
+    # (one sqlite connection + query per scan date) — ~900s across a 600-trial optimization.
+    memo_key = (str(cache_db), group, cfg_hash, start_key, end_key)
+    hit = _UNIVERSE_MEMO.get(memo_key)
+    if hit is not None:
+        return list(hit)
+
+    # ONE indexed query for the DISTINCT survivor union (was cached_scan_dates + a
+    # survivors_for_key per date — a connection-open per scan date).
     cache = ScreenerHistoryCache(cache_db)
-    scan_dates = cache.cached_scan_dates(group, start_key, end_key, cfg_hash)
-    if not scan_dates:
+    symbols = cache.union_symbols(group, start_key, end_key, cfg_hash)
+    if not symbols:
         raise ScreenerCacheMiss(
-            f"No cached screener scan dates in [{start_key}, {end_key}] for group "
+            f"No cached screener survivors in [{start_key}, {end_key}] for group "
             f"'{group}' (config {cfg_hash[:8]}) in {cache_db}. Build the screener-history "
             f"cache first, e.g.: ba2-test fetch-screener --settings-json <file> "
             f"--start {start_key} --end {end_key} --group {group} --cache-db {cache_db}"
         )
 
-    symbols: set[str] = set()
-    for sd in scan_dates:
-        for row in cache.survivors_for_key(sd, group, cfg_hash):
-            sym = row.get("symbol")
-            if sym:
-                symbols.add(sym)
-    return sorted(symbols)
+    _UNIVERSE_MEMO[memo_key] = symbols
+    return list(symbols)

@@ -169,6 +169,31 @@ class ScreenerHistoryCache:
             rows = con.execute(sql, params).fetchall()
         return [r["scan_date"] for r in rows]
 
+    def union_symbols(
+        self,
+        group_label: str,
+        start_key: str,
+        end_key: str,
+        cfg_hash: Optional[str] = None,
+    ) -> List[str]:
+        """The sorted DISTINCT survivor symbols across ``[start_key, end_key]`` for a group.
+
+        ONE indexed query instead of ``cached_scan_dates`` + a ``survivors_for_key`` per date
+        (which opened ~one sqlite connection per scan date — ~1.5s for a 3-year daily range).
+        Used by the backtest's screener-universe resolver.
+        """
+        sql = (
+            "SELECT DISTINCT symbol FROM screener_history "
+            "WHERE group_label=? AND scan_date>=? AND scan_date<=?"
+        )
+        params: List[Any] = [group_label, start_key, end_key]
+        if cfg_hash is not None:
+            sql += " AND screen_config_hash=?"
+            params.append(cfg_hash)
+        with self._connect() as con:
+            rows = con.execute(sql, params).fetchall()
+        return sorted(r["symbol"] for r in rows if r["symbol"])
+
     def survivors_for_key(
         self,
         scan_date_key: str,
