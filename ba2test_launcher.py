@@ -8,6 +8,7 @@ covers the platform's operations without the API:
   ba2-test backtest <run_daily_backtest args>  run a daily expert backtest (full passthrough)
   ba2-test fetch-cache --symbols .. [...]       populate the as-of OHLCV cache
   ba2-test fetch-screener --settings-json F ..  build the survivorship-free screener history
+  ba2-test fetch-options --underlyings .. [...]  build the offline options cache from Alpaca
   ba2-test cache-usage                          show cache disk usage per type
   ba2-test cache-clear [--type T] [--before D]  clear cache (all, or one type, optional date)
   ba2-test runs list [--saved-only]             list tracked backtest runs (shared results table)
@@ -170,6 +171,18 @@ def _cmd_fetch_screener(args) -> int:
         built += 1
         d += timedelta(days=max(1, args.cadence_days))
     print(f"done: {built} scan dates into {args.cache_db}")
+    return 0
+
+
+def _cmd_fetch_options(args) -> int:
+    # Build the offline options cache from Alpaca. alpaca-py imports lazily inside
+    # fetch_options.build_cache, so the editable venv (~/ba2-venvs/test) is required at runtime.
+    from app.services.backtest import fetch_options
+    from datetime import date
+    unders = (open(args.underlyings[1:]).read().split() if args.underlyings.startswith("@")
+              else [s.strip() for s in args.underlyings.split(",") if s.strip()])
+    fetch_options.build_cache(args.cache_db, unders, date.fromisoformat(args.start),
+                              date.fromisoformat(args.end), args.feed)
     return 0
 
 
@@ -727,6 +740,13 @@ def main(argv: "list | None" = None) -> int:
     fs.add_argument("--cache-db", required=True, help="Path to the screener-history SQLite cache.")
     fs.add_argument("--cadence-days", type=int, default=7, help="Days between scan dates (default 7).")
 
+    fo = sub.add_parser("fetch-options", help="Build the offline options cache from Alpaca.")
+    fo.add_argument("--underlyings", required=True, help="Comma-separated symbols, or @file.")
+    fo.add_argument("--start", required=True, help="ISO start date (>= 2024-02-01).")
+    fo.add_argument("--end", required=True, help="ISO end date.")
+    fo.add_argument("--cache-db", required=True, help="Path to the options-history SQLite cache.")
+    fo.add_argument("--feed", default="indicative", help="Option chain feed (default indicative).")
+
     cc = sub.add_parser("cache-clear", help="Clear cache (all, or one type).")
     cc.add_argument("--type", default=None, help="Cache type to clear (omit = all).")
     cc.add_argument("--before", default=None, help="Only clear entries older than this ISO date.")
@@ -792,6 +812,7 @@ def main(argv: "list | None" = None) -> int:
         "serve": lambda: _cmd_serve(args),
         "fetch-cache": lambda: _cmd_fetch_cache(args),
         "fetch-screener": lambda: _cmd_fetch_screener(args),
+        "fetch-options": lambda: _cmd_fetch_options(args),
         "cache-usage": lambda: _cmd_cache_usage(args),
         "cache-clear": lambda: _cmd_cache_clear(args),
         "runs": lambda: _cmd_runs(args),
