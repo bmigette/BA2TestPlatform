@@ -116,6 +116,101 @@ def test_migration_drops_all_rm_columns_and_keeps_data():
         conn.close()
 
 
+def _pk_columns(cursor, table):
+    cursor.execute(f"PRAGMA table_info({table})")
+    # row = (cid, name, type, notnull, dflt_value, pk)
+    return {row[1]: row[5] for row in cursor.fetchall()}
+
+
+def test_migration_preserves_pk_and_autoincrement():
+    """Regression for C1: the rebuilt table must keep id as an autoincrement PK.
+
+    The old CTAS rebuild (`CREATE TABLE ... AS SELECT`) produced a PK-less,
+    AUTOINCREMENT-less table; a fresh insert without an explicit id failed to
+    autoincrement and `id` was not a PRIMARY KEY. This asserts both properties.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        _build_legacy_strategies(conn)
+        cursor = conn.cursor()
+
+        migration = _load_migration()
+        migration.upgrade(cursor, conn)
+
+        # id is the PRIMARY KEY on the rebuilt table.
+        pks = _pk_columns(cursor, "strategies")
+        assert pks.get("id") == 1, pks
+
+        # Existing max id (the migrated legacy row).
+        cursor.execute("SELECT MAX(id) FROM strategies")
+        existing_max = cursor.fetchone()[0]
+        assert existing_max == 1
+
+        # Insert a row WITHOUT specifying id -> must get a working autoincrement.
+        cursor.execute(
+            "INSERT INTO strategies (name, initial_tp_percent) VALUES (?, ?)",
+            ("Brand New", 3.0),
+        )
+        conn.commit()
+        new_id = cursor.lastrowid
+        assert new_id is not None
+        assert new_id > existing_max, (new_id, existing_max)
+
+        # name NOT NULL constraint survived the rebuild.
+        try:
+            cursor.execute(
+                "INSERT INTO strategies (initial_tp_percent) VALUES (?)", (1.0,)
+            )
+            inserted_null_name = True
+        except sqlite3.IntegrityError:
+            inserted_null_name = False
+        finally:
+            conn.rollback()
+        assert not inserted_null_name, "name NOT NULL constraint was lost"
+    finally:
+        conn.close()
+
+
+def test_migration_preserves_pk_via_orm_insert():
+    """Regression for C1 through the real SQLAlchemy Strategy model.
+
+    Build a legacy table, run the migration on the same DBAPI connection, then
+    insert a new Strategy through the ORM the way the app does and confirm it
+    gets an autoincrement id assigned by the DB.
+    """
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.strategy import Strategy
+
+    engine = create_engine("sqlite://")  # in-memory, single shared connection
+
+    # Run the legacy-table build + migration on the engine's connection.
+    raw = engine.raw_connection()
+    try:
+        _build_legacy_strategies(raw)
+        cursor = raw.cursor()
+        migration = _load_migration()
+        migration.upgrade(cursor, raw)
+        raw.commit()
+    finally:
+        raw.close()
+
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+    try:
+        strat = Strategy(name="ORM Strat", initial_tp_percent=4.0)
+        assert strat.id is None
+        session.add(strat)
+        session.commit()
+        session.refresh(strat)
+        assert strat.id is not None
+        assert strat.id > 1  # greater than the migrated legacy row's id (1)
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_migration_is_idempotent_noop_when_no_rm_columns():
     conn = sqlite3.connect(":memory:")
     try:
