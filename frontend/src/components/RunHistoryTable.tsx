@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { listBacktests } from '../lib/btApi';
+import { listBacktests, saveBacktest, exportBacktest, deleteBacktest } from '../lib/btApi';
 
 const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
 
@@ -9,6 +9,8 @@ export function RunHistoryTable({ savedOnly, onSelect }:
   const [expert, setExpert] = useState('');
   const [optId, setOptId] = useState('');
   const [q, setQ] = useState('');
+  // Bumped after a save/delete to re-run the fetch effect below.
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     listBacktests({
@@ -18,7 +20,37 @@ export function RunHistoryTable({ savedOnly, onSelect }:
     })
       .then(setRows)
       .catch(() => setRows([]));
-  }, [savedOnly, expert, optId]);
+  }, [savedOnly, expert, optId, refresh]);
+
+  const handleSave = async (r: any) => {
+    const name = window.prompt('Save backtest as:', r.name || '');
+    if (name == null) return;  // cancelled
+    try {
+      await saveBacktest(r.id, name);
+      setRefresh(n => n + 1);
+    } catch (e) {
+      alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleExport = async (r: any) => {
+    try {
+      const res = await exportBacktest(r.id);
+      alert(`Exported to: ${res.path}`);
+    } catch (e) {
+      alert(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleDelete = async (r: any) => {
+    if (!window.confirm(`Delete backtest #${r.id} (${r.name || 'unnamed'})?`)) return;
+    try {
+      await deleteBacktest(r.id);
+      setRefresh(n => n + 1);
+    } catch (e) {
+      alert(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   // Field names confirmed against backend/app/api/backtests.py list endpoint
   // (camelCase: expertName / optimizationId / totalReturn / sharpeRatio / isSaved).
@@ -56,6 +88,7 @@ export function RunHistoryTable({ savedOnly, onSelect }:
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">sharpe</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">saved</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">name</th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -69,6 +102,34 @@ export function RunHistoryTable({ savedOnly, onSelect }:
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.sharpeRatio ?? r.sharpe_ratio) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.isSaved ?? r.is_saved) ? '★' : ''}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{r.name}</td>
+              <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">
+                <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleSave(r); }}
+                    title={(r.isSaved ?? r.is_saved) ? 'Saved — rename / re-save' : 'Save this run'}
+                    className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    {(r.isSaved ?? r.is_saved) ? '★ Saved' : '★ Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleExport(r); }}
+                    title="Export this run"
+                    className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleDelete(r); }}
+                    title="Delete this run"
+                    className="px-2 py-1 text-xs border border-red-300 dark:border-red-700 rounded text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>

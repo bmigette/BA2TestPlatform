@@ -315,12 +315,6 @@ const Backtesting: React.FC = () => {
   const [saveStrategyDescription, setSaveStrategyDescription] = useState('');
   const [savingStrategy, setSavingStrategy] = useState(false);
 
-  // Save backtest modal
-  const [showSaveBacktestModal, setShowSaveBacktestModal] = useState(false);
-  const [saveBacktestName, setSaveBacktestName] = useState('');
-  const [backtestToSave, setBacktestToSave] = useState<Backtest | null>(null);
-  const [savingBacktest, setSavingBacktest] = useState(false);
-
   // Tab state for New Backtest card
   const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'history' | 'saved'>('new');
 
@@ -744,41 +738,6 @@ const Backtesting: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to save strategy');
     } finally {
       setSavingStrategy(false);
-    }
-  };
-
-  const saveBacktest = async () => {
-    if (!backtestToSave || !saveBacktestName.trim()) {
-      setError('Please enter a backtest name');
-      return;
-    }
-
-    try {
-      setSavingBacktest(true);
-      setError(null);
-
-      const res = await fetch(`${API_BASE}/backtests/${backtestToSave.id}/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: saveBacktestName })
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to save backtest');
-      }
-
-      const saved = await res.json();
-      setBacktests(prev => prev.map(bt => bt.id === saved.id ? saved : bt));
-      if (selectedBacktest?.id === saved.id) {
-        setSelectedBacktest(saved);
-      }
-      setShowSaveBacktestModal(false);
-      setBacktestToSave(null);
-      setSaveBacktestName('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save backtest');
-    } finally {
-      setSavingBacktest(false);
     }
   };
 
@@ -2039,85 +1998,6 @@ const Backtesting: React.FC = () => {
                   className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {savingStrategy ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-4 h-4" />
-                      Save
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Save Backtest Modal */}
-      {showSaveBacktestModal && backtestToSave && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-            onClick={() => setShowSaveBacktestModal(false)}
-          />
-          <div className="flex min-h-full items-center justify-center p-4">
-            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
-              <button
-                onClick={() => setShowSaveBacktestModal(false)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2">
-                <Save className="w-5 h-5 text-green-500" />
-                Save Backtest
-              </h3>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Backtest Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={saveBacktestName}
-                    onChange={e => setSaveBacktestName(e.target.value)}
-                    placeholder="e.g., Best AAPL Strategy"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    autoFocus
-                  />
-                </div>
-
-                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-sm">
-                  <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Backtest Results:</p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-400">
-                    <span>Return: <span className={`font-medium ${(backtestToSave.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {(backtestToSave.totalReturn || 0) >= 0 ? '+' : ''}{backtestToSave.totalReturn?.toFixed(1)}%
-                    </span></span>
-                    <span>Sharpe: {backtestToSave.sharpeRatio?.toFixed(2)}</span>
-                    <span>Trades: {backtestToSave.totalTrades}</span>
-                    <span>Win Rate: {backtestToSave.winRate?.toFixed(1)}%</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => setShowSaveBacktestModal(false)}
-                  className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={saveBacktest}
-                  disabled={savingBacktest || !saveBacktestName.trim()}
-                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {savingBacktest ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
                       Saving...
