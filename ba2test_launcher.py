@@ -734,7 +734,7 @@ def main(argv: "list | None" = None) -> int:
     op.add_argument("--save-top", type=int, default=5,
                     help="Persist the top-N distinct param sets as saved Backtests (default 5).")
     op.add_argument("--seed", type=int, default=42, help="RNG seed (determinism).")
-    op.add_argument("--initial-capital", type=float, default=100000.0)
+    op.add_argument("--initial-capital", type=float, default=10000.0)
     op.add_argument("--commission", type=float, default=1.0)
     op.add_argument("--slippage", type=float, default=0.0)
     op.add_argument("--fill-model", default="next_bar_open")
