@@ -85,18 +85,20 @@ def _seed_carry_settings(settings: Dict[str, str]) -> None:
 
 
 @contextmanager
-def backtest_trading_db(run_id: int | str) -> Iterator[str]:
+def backtest_trading_db(run_id: int | str, in_memory: bool = True) -> Iterator[str]:
     """Configure ba2_common.core.db at a fresh sqlite for this run, create the schema,
-    and yield the file path.
+    and yield the target.
 
-    A FRESH file per run (the previous file for this run id, if any, is deleted) so
-    the run is hermetic and reproducible. The sqlite FILE is intentionally LEFT on disk
-    after the context exits (post-mortem debugging), but the global ba2_common DB engine
-    is RESTORED to whatever it pointed at before entering — otherwise any code that runs
-    after the context (other tests, or live-flavoured provider construction such as
-    FMPOHLCVProvider reading FMP_API_KEY from the app-settings table) would silently
-    read/write the backtest DB instead of the live one. We capture ``_db_file`` and
-    re-``configure_db`` it on exit so the seam is properly hermetic.
+    ``in_memory`` (default True) backs the per-run trading DB with a RAM-only SQLite
+    (``:memory:`` + StaticPool). Those order/transaction/recommendation rows are ephemeral —
+    ``build_results`` extracts the trades/equity/metrics we keep BEFORE the context exits — so
+    holding them in RAM removes the per-write disk fsync that dominates a many-thousand-order
+    backtest (the GA fitness path). Pass ``in_memory=False`` to use a throwaway sqlite FILE
+    instead (kept on disk after exit for post-mortem inspection) — used for the persisted
+    top-N re-runs so their full instance/analysis rows survive the run.
+
+    Either way the override is THREAD-LOCAL (parallel trials never clobber each other's DB)
+    and is cleared on exit so the backtest DB never leaks into subsequent (live) code paths.
     """
     # THREAD-LOCAL DB override (not the global): each run/trial points ba2_common's engine at
     # its OWN sqlite ONLY on THIS thread, so parallel optimization trials (ThreadPoolExecutor)
@@ -111,17 +113,22 @@ def backtest_trading_db(run_id: int | str) -> Iterator[str]:
     # key here (from whatever DB is currently active — the global/live one, since no override is
     # set yet on this thread) and re-seed it into the run DB after init.
     carried_settings = _read_carry_settings(_CARRIED_APP_SETTINGS)
-    path = backtest_db_path(run_id)
-    if path.exists():
-        path.unlink()
-    common_db.configure_db_threadlocal(str(path))  # per-thread engine -> this run's sqlite
+    if in_memory:
+        target = ":memory:"                         # RAM-only, StaticPool (no disk fsync)
+    else:
+        path = backtest_db_path(run_id)
+        if path.exists():
+            path.unlink()
+        target = str(path)
+    common_db.configure_db_threadlocal(target)      # per-thread engine -> this run's DB
     common_db.init_db()                             # SQLModel.metadata.create_all(get_engine())
     _seed_carry_settings(carried_settings)
     try:
-        yield str(path)
+        yield target
     finally:
-        # Keep the sqlite file (debugging) but drop THIS thread's override so the backtest DB
-        # never leaks into subsequent (live) code paths or other trials on this thread.
+        # Drop THIS thread's override so the backtest DB never leaks into subsequent (live) code
+        # paths or other trials on this thread. (A file DB is left on disk for post-mortem; the
+        # in-memory DB is freed when its engine is disposed by clear_threadlocal_db.)
         common_db.clear_threadlocal_db()
 
 

@@ -120,6 +120,9 @@ class BacktestAccount(AccountInterface):
         # produce a byte-identical trade list (the reproducibility gate). Populated in
         # ``_apply_fill`` and read by ``_order_to_trade``.
         self._fill_dates: Dict[int, datetime] = {}
+        # Transaction ids whose close_date/open_date have already been re-stamped to sim time
+        # (so refresh_transactions only touches freshly-closed transactions, not all closed ones).
+        self._stamped_closed_ids: set = set()
 
     # ======================================================================
     # Settings
@@ -282,6 +285,25 @@ class BacktestAccount(AccountInterface):
                 stmt = stmt.where(TradingOrder.status == status)
             return list(session.exec(stmt).all())
 
+    def _orders_filtered(self, statuses=None, transaction_id=None) -> List[TradingOrder]:
+        """Query this account's orders with SQL-side status / transaction filters.
+
+        The per-bar fill engine only cares about the few WORKING (or a single transaction's)
+        orders; querying ALL orders and filtering in Python materialised hundreds of terminal
+        rows every bar (a top profile cost). Pushing the filters into SQL returns just the rows
+        that matter. ``statuses`` is an iterable of OrderStatus; ``transaction_id`` scopes to one
+        transaction's legs.
+        """
+        from sqlmodel import select, Session
+
+        with Session(get_db().bind) as session:
+            stmt = select(TradingOrder).where(TradingOrder.account_id == self.id)
+            if statuses is not None:
+                stmt = stmt.where(TradingOrder.status.in_(list(statuses)))
+            if transaction_id is not None:
+                stmt = stmt.where(TradingOrder.transaction_id == transaction_id)
+            return list(session.exec(stmt).all())
+
     def get_order(self, order_id: str) -> Any:
         """Look up an order by broker_order_id, then by numeric PK as a fallback."""
         from sqlmodel import select, Session
@@ -337,11 +359,12 @@ class BacktestAccount(AccountInterface):
         self._activate_triggered_dependents()
 
         active = OrderStatus.get_active_statuses()
-        # Re-read AFTER activation so newly-activated legs are seen this bar.
+        # Re-read AFTER activation so newly-activated legs are seen this bar. SQL-filtered to
+        # active statuses so terminal orders (the bulk after a while) aren't materialised.
         working = [
             o
-            for o in self.get_orders()
-            if o.status in active and o.status != OrderStatus.WAITING_TRIGGER
+            for o in self._orders_filtered(statuses=active)
+            if o.status != OrderStatus.WAITING_TRIGGER
         ]
         for o in working:
             fill_px = self._evaluate_fill(o, as_of)
@@ -359,7 +382,7 @@ class BacktestAccount(AccountInterface):
         FILLED. When the parent reaches that status the leg goes live (ACCEPTED) so the
         fill engine evaluates it. Legs with no parent / unmet trigger are left waiting.
         """
-        waiting = [o for o in self.get_orders() if o.status == OrderStatus.WAITING_TRIGGER]
+        waiting = self._orders_filtered(statuses=[OrderStatus.WAITING_TRIGGER])
         for leg in waiting:
             if leg.depends_on_order is None:
                 continue
@@ -381,13 +404,17 @@ class BacktestAccount(AccountInterface):
         roll we re-stamp the ``close_date`` of every transaction CLOSED on THIS bar to the
         simulated fill bar of its closing leg (falling back to the current simulated bar).
         """
-        before = {t.id for t in self._closed_transactions()}
         ok = super().refresh_transactions()
         sim_now = self._price.now()
+        stamped = self._stamped_closed_ids
         for txn in self._closed_transactions():
-            if txn.id in before:
-                continue  # already closed on an earlier bar — leave its simulated close_date.
-            txn.close_date = self._closing_fill_date(txn) or sim_now
+            if txn.id in stamped:
+                continue  # already re-stamped on an earlier bar.
+            stamped.add(txn.id)
+            # A transaction closes when its closing order fills on THE CURRENT bar (refresh_orders
+            # ran just before this), so the simulated close_date is the current clock — no per-txn
+            # order lookup needed.
+            txn.close_date = sim_now
             if txn.open_date is None:
                 entry = self._entry_order_for_transaction(txn)
                 if entry is not None and entry.id is not None:
@@ -396,31 +423,19 @@ class BacktestAccount(AccountInterface):
         return ok
 
     def _closed_transactions(self) -> List[Transaction]:
-        """All CLOSED transactions in the per-run trading DB (single-account backtest)."""
+        """CLOSED transactions not yet re-stamped (single-account backtest DB).
+
+        Filters out already-stamped ids in SQL so the scan returns only the few freshly-closed
+        rows each bar instead of every accumulated closed transaction.
+        """
         from sqlmodel import select, Session
         from ba2_common.core.types import TransactionStatus
 
         with Session(get_db().bind) as session:
-            return list(
-                session.exec(
-                    select(Transaction).where(Transaction.status == TransactionStatus.CLOSED)
-                ).all()
-            )
-
-    def _closing_fill_date(self, transaction: Transaction) -> Optional[datetime]:
-        """The simulated fill bar of the transaction's filled closing leg, if any."""
-        executed = OrderStatus.get_executed_statuses()
-        for o in self.get_orders():
-            if (
-                o.transaction_id == transaction.id
-                and o.depends_on_order is not None
-                and o.status in executed
-                and o.id is not None
-            ):
-                dt = self._fill_dates.get(o.id)
-                if dt is not None:
-                    return dt
-        return None
+            stmt = select(Transaction).where(Transaction.status == TransactionStatus.CLOSED)
+            if self._stamped_closed_ids:
+                stmt = stmt.where(Transaction.id.not_in(self._stamped_closed_ids))
+            return list(session.exec(stmt).all())
 
     def get_dividends(
         self,
@@ -964,10 +979,9 @@ class BacktestAccount(AccountInterface):
         if filled_order.transaction_id is None or filled_order.depends_on_order is None:
             return
         terminal = OrderStatus.get_terminal_statuses()
-        for o in self.get_orders():
+        for o in self._orders_filtered(transaction_id=filled_order.transaction_id):
             if (
                 o.id != filled_order.id
-                and o.transaction_id == filled_order.transaction_id
                 and o.depends_on_order is not None
                 and o.status not in terminal
                 and o.status != OrderStatus.FILLED

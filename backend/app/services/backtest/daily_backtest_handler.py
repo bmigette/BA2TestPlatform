@@ -339,10 +339,20 @@ def run_daily_backtest(
         backtest_trading_db,
         seed_account_definition,
     )
+    from datetime import timedelta
+
     from app.services.backtest.daily_engine import DailyBacktestEngine
-    from app.services.backtest.price_source import AsOfClampedOHLCVProvider, AsOfPriceSource
+    from app.services.backtest.price_source import (
+        AsOfClampedOHLCVProvider,
+        AsOfPriceSource,
+        MemoizedOHLCVProvider,
+    )
     from app.services.backtest.results import build_results
-    from app.services.backtest.seam_wiring import make_indicator_provider, wire_backtest_seams
+    from app.services.backtest.seam_wiring import (
+        make_indicator_provider,
+        set_backtest_ohlcv_override,
+        wire_backtest_seams,
+    )
 
     progress = progress_cb or (lambda pct, msg: None)
 
@@ -364,15 +374,29 @@ def run_daily_backtest(
     #   * activity_logging_disabled() — silence the per-bar ActivityLog write churn (from
     #                               TradeActionEvaluator / TradeRiskManagement), which would
     #                               otherwise serialize thousands of writes through the DB lock.
-    with backtest_trading_db(config["backtest_id"]), frozen_ttl_cache(), activity_logging_disabled():
+    # The per-run trading DB is RAM-only by default (fast GA fitness path); a tagged top-N
+    # re-run sets ``persist_trading_db`` so its full instance/analysis rows are kept on disk.
+    _persist_db = bool(config.get("persist_trading_db", False))
+    with backtest_trading_db(config["backtest_id"], in_memory=not _persist_db), \
+            frozen_ttl_cache(), activity_logging_disabled():
         seed_account_definition(account_id, config["account_settings"])
 
         # Time-machine price source backed by the FMP OHLCV provider (as_of-aware).
         # execution_interval governs the FILL clock granularity (default 1d). Intraday
         # values (e.g. "1h", "15m") give finer open/close fill detection; it is decoupled
         # from whatever interval the experts request via the provider seam in _gather.
-        ohlcv = get_provider("ohlcv", "fmp")
-        ps = AsOfPriceSource(ohlcv_provider=ohlcv, interval=config.get("execution_interval", "1d"))
+        interval = config.get("execution_interval", "1d")
+        # Memoize each symbol's full [start - warmup, end] OHLCV series in process memory ONCE
+        # and serve every get_ohlcv_data call as an in-memory slice. The worker process stays
+        # alive across the whole GA population, so this load is paid ~once per worker instead of
+        # re-reading + re-parsing the disk cache on every bar (the dominant cost — ~370s of an
+        # 836s 6-month profile). Used by the fill-engine preload, the expert price/data path
+        # (via the seam override below) AND the clamped indicator/ATR path.
+        raw_ohlcv = get_provider("ohlcv", "fmp")
+        fetch_start = config["start_date"] - timedelta(days=int(config["warmup_days"]))
+        ohlcv = MemoizedOHLCVProvider(raw_ohlcv, fetch_start, config["end_date"], interval=interval)
+
+        ps = AsOfPriceSource(ohlcv_provider=ohlcv, interval=interval)
         ps.preload(
             config["enabled_instruments"],
             config["start_date"],
@@ -385,25 +409,34 @@ def run_daily_backtest(
 
         experts = _build_experts(config, resolver, account_id)
 
-        # Clamp the indicator/ATR OHLCV fetches to the backtest clock: PandasIndicatorCalc
-        # and get_latest_atr fetch with end_date=now(), which would leak future bars into the
-        # ATR/indicators used for sizing + rule conditions. The clamp follows ps.set_clock().
-        indicator_provider = make_indicator_provider(
-            ohlcv_provider=AsOfClampedOHLCVProvider(ohlcv, ps)
-        )
+        # Route the expert's OHLCV fetches (LiveProviderBundle.ohlcv / price_at_date) through the
+        # memoized provider too. The expert self-clamps (it passes end_date=as_of), so the memo's
+        # in-memory slice is as_of-correct without an extra wrapper.
+        set_backtest_ohlcv_override(ohlcv)
+        try:
+            # Clamp the indicator/ATR OHLCV fetches to the backtest clock: PandasIndicatorCalc
+            # and get_latest_atr fetch with end_date=now(), which would leak future bars into the
+            # ATR/indicators used for sizing + rule conditions. The clamp follows ps.set_clock();
+            # the inner memoized provider serves the actual bars from memory.
+            indicator_provider = make_indicator_provider(
+                ohlcv_provider=AsOfClampedOHLCVProvider(ohlcv, ps)
+            )
 
-        engine = DailyBacktestEngine(
-            account=account,
-            experts=experts,
-            price_source=ps,
-            config=config,
-            progress_cb=progress,
-            indicator_provider=indicator_provider,
-        )
-        engine.run()
+            engine = DailyBacktestEngine(
+                account=account,
+                experts=experts,
+                price_source=ps,
+                config=config,
+                progress_cb=progress,
+                indicator_provider=indicator_provider,
+            )
+            engine.run()
 
-        # build_results consumes the SAME account (get_balance_history / get_filled_trades).
-        return build_results(account, config)
+            # build_results consumes the SAME account (get_balance_history / get_filled_trades).
+            return build_results(account, config)
+        finally:
+            # Drop the per-run OHLCV override so it never leaks into a later (non-backtest) call.
+            set_backtest_ohlcv_override(None)
 
 
 def _build_experts(

@@ -530,6 +530,9 @@ def _persist_top_backtests(opt_id: int, expert: str, n: int = 5) -> int:
         for rank, params in enumerate(ranked, start=1):
             trial_cfg = _build_daily_trial_config(bt_block, decode_params(strat, params))
             trial_cfg["name"] = f"TOP{rank}-{opt.name or expert}"
+            # Persist this top-N run's trading DB (orders/transactions/recommendations) to disk
+            # for post-mortem inspection — the GA trials run RAM-only for speed.
+            trial_cfg["persist_trading_db"] = True
             results = run_daily_backtest(trial_cfg)
             bt = Backtest(
                 name=trial_cfg["name"], model_id=None, engine_type="daily_expert",

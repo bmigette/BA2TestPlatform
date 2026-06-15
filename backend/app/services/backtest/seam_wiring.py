@@ -128,17 +128,38 @@ def wire_backtest_seams() -> BacktestInstanceResolver:
     return _resolver
 
 
+# Per-run OHLCV provider override (process-global; set by run_daily_backtest at the start of
+# each trial and cleared at the end). When set, the TradeConditions provider resolver returns
+# THIS provider for any ("ohlcv", *) request — so the expert's price_at_date / data-condition
+# OHLCV fetches go through the run's MemoizedOHLCVProvider (one in-memory load per worker,
+# shared across the whole GA population) instead of re-reading the disk cache every bar. Trials
+# run sequentially within a worker process, so a single global is safe.
+_ohlcv_override: Optional[Any] = None
+
+
+def set_backtest_ohlcv_override(provider: Optional[Any]) -> None:
+    """Install (or clear, with None) the per-run OHLCV provider the resolver hands experts."""
+    global _ohlcv_override
+    _ohlcv_override = provider
+
+
 def _wire_provider_resolver() -> None:
     """Route ``TradeConditions`` data fetches through ba2_providers.get_provider.
 
     Phase 0 severed the ba2_common -> ba2_providers edge; data-driven conditions now
     resolve a provider through this host-injected resolver. The signature matches
-    ba2_providers.get_provider exactly: fn(category, name, **kwargs).
+    ba2_providers.get_provider exactly: fn(category, name, **kwargs). When a per-run OHLCV
+    override is set, ("ohlcv", *) resolves to it (the memoized in-memory provider).
     """
     from ba2_common.core import TradeConditions
     from ba2_providers import get_provider  # ba2_providers is allowed here (host side)
 
-    TradeConditions.set_provider_resolver(get_provider)
+    def _resolve(category: str, name: str, **kwargs: Any) -> Any:
+        if category == "ohlcv" and _ohlcv_override is not None:
+            return _ohlcv_override
+        return get_provider(category, name, **kwargs)
+
+    TradeConditions.set_provider_resolver(_resolve)
 
 
 def make_indicator_provider(ohlcv_provider: Any = None) -> Any:

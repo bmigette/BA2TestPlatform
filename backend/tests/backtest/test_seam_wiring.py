@@ -70,13 +70,28 @@ def test_no_llm_service_fails_loud():
 
 
 def test_trade_conditions_provider_resolver_wired():
-    """TradeConditions.set_provider_resolver receives ba2_providers.get_provider."""
-    from app.services.backtest.seam_wiring import wire_backtest_seams
+    """The provider resolver delegates to ba2_providers.get_provider, and honours a per-run
+    OHLCV override (the memoized in-memory provider) for ("ohlcv", *)."""
+    from app.services.backtest.seam_wiring import wire_backtest_seams, set_backtest_ohlcv_override
     from ba2_common.core import TradeConditions
     from ba2_providers import get_provider
 
     wire_backtest_seams()
-    assert TradeConditions.get_provider_resolver() is get_provider
+    resolver = TradeConditions.get_provider_resolver()
+
+    # No override -> delegates to get_provider (same provider TYPE; get_provider builds fresh
+    # instances per call, so compare by type rather than identity).
+    set_backtest_ohlcv_override(None)
+    assert type(resolver("ohlcv", "fmp")) is type(get_provider("ohlcv", "fmp"))
+
+    # Override set -> ("ohlcv", *) returns it; other categories still delegate.
+    sentinel = object()
+    set_backtest_ohlcv_override(sentinel)
+    try:
+        assert resolver("ohlcv", "fmp") is sentinel
+        assert resolver("fundamentals_details", "fmp") is not sentinel
+    finally:
+        set_backtest_ohlcv_override(None)
 
 
 def test_make_indicator_provider_builds_pandas_calc():
@@ -99,11 +114,18 @@ def test_make_indicator_provider_builds_pandas_calc():
 
 
 def test_backtest_db_isolates():
-    """backtest_trading_db points ba2_common.core.db at a fresh per-run sqlite."""
+    """backtest_trading_db points ba2_common.core.db at a per-run DB — RAM-only by default,
+    a throwaway file when ``in_memory=False``."""
     from app.services.backtest.backtest_db import backtest_trading_db
     from ba2_common.core import db
 
+    # Default: in-memory (the fast GA fitness path) -> the RAM-only "sqlite://" engine.
     with backtest_trading_db("seamtest") as path:
+        assert path == ":memory:"
+        assert str(db.get_engine().url) == "sqlite://"
+
+    # Opt-in file DB (the persisted top-N path) still isolates to a per-run sqlite.
+    with backtest_trading_db("seamtest", in_memory=False) as path:
         assert path.endswith("run_seamtest.sqlite")
         assert str(path) in str(db.get_engine().url)
 

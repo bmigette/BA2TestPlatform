@@ -270,3 +270,84 @@ def _df_to_rows(df: Any) -> List[Dict[str, Any]]:
         return []
     # to_dict("records") yields one dict per row with the column names as keys.
     return df.to_dict("records")
+
+
+# ---------------------------------------------------------------------------
+# In-memory OHLCV memo (shared across every trial a worker process runs)
+# ---------------------------------------------------------------------------
+# Process-global cache of each symbol's FULL bounded OHLCV series. Key:
+# (symbol, interval, bounds_start_iso, bounds_end_iso). Value: (DataFrame, dates_ndarray).
+# A backtest asks for the same symbol's bars on EVERY bar (price_at_date) plus indicator/ATR
+# lookbacks — all sub-ranges of one fixed window. Re-reading the disk cache + re-parsing dates
+# per call dominated runtime (~370s of an 836s 6-month run). Caching the full series here, at
+# MODULE level, means it is paid ~once per worker and reused across the whole GA population
+# (the pool workers stay alive across trials), not once per call.
+_FULL_SERIES_MEMO: Dict[tuple, Any] = {}
+
+
+def clear_ohlcv_memo() -> None:
+    """Drop the process-global OHLCV memo (tests / between distinct universes)."""
+    _FULL_SERIES_MEMO.clear()
+
+
+class MemoizedOHLCVProvider:
+    """Wrap an OHLCV provider so each symbol's full [bounds] series is fetched ONCE per worker
+    process and every ``get_ohlcv_data`` call is served by an in-memory date-range slice.
+
+    ``bounds`` is the widest window the run needs (start - warmup .. end). The first request for
+    a symbol fetches+parses that window once (module memo, shared across trials); every later
+    request — same symbol, any sub-range, any later trial in the population — is an O(log n)
+    ``searchsorted`` slice with no disk read and no date re-parsing. Non-OHLCV attributes are
+    delegated to the inner provider unchanged.
+    """
+
+    def __init__(self, inner: Any, bounds_start: Any, bounds_end: Any, interval: str = "1d"):
+        self._inner = inner
+        self._bs = bounds_start
+        self._be = bounds_end
+        self._interval = interval
+
+    def _full(self, symbol: str, interval: str):
+        import numpy as np
+        import pandas as pd
+
+        key = (symbol, interval, _to_utc(self._bs).isoformat(), _to_utc(self._be).isoformat())
+        hit = _FULL_SERIES_MEMO.get(key)
+        if hit is None:
+            df = self._inner.get_ohlcv_data(
+                symbol, start_date=self._bs, end_date=self._be, interval=interval
+            )
+            if df is None or len(df) == 0:
+                import pandas as _pd
+                df = _pd.DataFrame() if df is None else df
+                dates = np.array([], dtype="datetime64[ns]")
+            else:
+                df = df.reset_index(drop=True)
+                dates = (
+                    pd.to_datetime(df["Date"], utc=True).dt.tz_localize(None).values
+                ).astype("datetime64[ns]")
+                order = np.argsort(dates, kind="stable")
+                df = df.iloc[order].reset_index(drop=True)
+                dates = dates[order]
+            hit = (df, dates)
+            _FULL_SERIES_MEMO[key] = hit
+        return hit
+
+    def get_ohlcv_data(self, symbol, start_date=None, end_date=None, interval="1d", **kwargs):
+        import numpy as np
+
+        df, dates = self._full(symbol, interval)
+        if len(df) == 0:
+            return df
+        lo = 0
+        hi = len(df)
+        if start_date is not None:
+            s = np.datetime64(_to_utc(start_date).replace(tzinfo=None))
+            lo = int(np.searchsorted(dates, s, side="left"))
+        if end_date is not None:
+            e = np.datetime64(_to_utc(end_date).replace(tzinfo=None))
+            hi = int(np.searchsorted(dates, e, side="right"))
+        return df.iloc[lo:hi].reset_index(drop=True)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
