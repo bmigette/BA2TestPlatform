@@ -531,6 +531,83 @@ git commit -m "feat(ui): expert-centric New tab + History tab + source-aware run
 
 ---
 
+## Task 8: Running-jobs live-progress strip
+
+Backtests already poll status, but optimizations have no live view. The backend exposes
+`GET /api/tasks?status=running` (+ pending/queued) with per-task `progress`/`task_type` and
+`POST /api/tasks/{id}/cancel`. Add a strip that lists in-flight backtest/optimization jobs
+with a progress bar + cancel, polling while any are active.
+
+**Files:**
+- Modify: `frontend/src/lib/btApi.ts` (add `listTasks` + `cancelTask`)
+- Create: `frontend/src/components/RunningJobsStrip.tsx`
+- Modify: `frontend/src/pages/Backtesting.tsx` (render the strip atop the History tab)
+
+- [ ] **Step 1: API helpers** — append to `btApi.ts`:
+
+```ts
+export interface TaskInfo { id: string; status: string; task_type?: string; progress?: number; name?: string; }
+export const listTasks = (status = 'running') =>
+  jget<{ tasks: TaskInfo[] }>(`/tasks?status=${status}&limit=100`).then(r => r.tasks ?? (r as any));
+export const cancelTask = (id: string) => jpost<unknown>(`/tasks/${id}/cancel`, {});
+```
+Note: confirm the real `GET /api/tasks` response shape (it may return a bare list or `{tasks:[...]}`, and field names may be camel or snake) and the task_type strings for backtest vs optimization (e.g. `daily_backtest`, `strategy_optimization`) by calling it / reading `app/services/task_queue.py::list_tasks`; adjust the helper + the `BT_TASK_TYPES` filter below accordingly.
+
+- [ ] **Step 2: Component**
+
+```tsx
+// frontend/src/components/RunningJobsStrip.tsx
+import React, { useEffect, useState } from 'react';
+import { listTasks, cancelTask, TaskInfo } from '../lib/btApi';
+
+const BT_TASK_TYPES = new Set(['daily_backtest', 'backtest', 'strategy_optimization']);
+
+export function RunningJobsStrip() {
+  const [jobs, setJobs] = useState<TaskInfo[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const all = await listTasks('running');
+        if (alive) setJobs(all.filter(t => !t.task_type || BT_TASK_TYPES.has(t.task_type)));
+      } catch { if (alive) setJobs([]); }
+    };
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  if (!jobs.length) return null;
+  return (
+    <div style={{ border: '1px solid #cbd5e1', borderRadius: 6, padding: 8, marginBottom: 12 }}>
+      <b>Running jobs ({jobs.length})</b>
+      {jobs.map(j => (
+        <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+          <span style={{ width: 160 }}>{j.task_type ?? 'job'} · {j.name ?? j.id}</span>
+          <progress max={100} value={j.progress ?? 0} style={{ flex: 1 }} />
+          <span>{Math.round(j.progress ?? 0)}%</span>
+          <button type="button" onClick={() => cancelTask(j.id).then(() => setJobs(p => p.filter(x => x.id !== j.id)))}>Cancel</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 3: Render it** at the top of the History tab body in `Backtesting.tsx` (and optionally the New tab): `<RunningJobsStrip />`.
+
+- [ ] **Step 4: Type-check** — `cd frontend && npm run build`. Expected: clean.
+
+- [ ] **Step 5: Manual verify** (backend running): launch an optimization → the strip appears with a live progress bar that advances and a working Cancel; disappears when done.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/lib/btApi.ts frontend/src/components/RunningJobsStrip.tsx frontend/src/pages/Backtesting.tsx
+git commit -m "feat(ui): running-jobs strip with live progress + cancel"
+```
+
+---
+
 ## Final verification
 
 - [ ] `cd frontend && npm run build` clean.
