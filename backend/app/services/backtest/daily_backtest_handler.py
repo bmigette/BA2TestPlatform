@@ -224,6 +224,15 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Entry cadence (optimizer/CLI seam): {"days": {weekday: bool}, "times": [...]}.
         # None/absent -> analyse every bar (legacy). The engine's _entry_schedule honours it.
         "run_schedule_override": payload.get("run_schedule_override"),
+        # Optimizer/API condition trees: when a buy-entry tree is present the engine builds the
+        # enter ruleset FROM it (_build_experts -> seed_ruleset_from_tree) so the condition
+        # thresholds + on/off toggles gate entries; else it falls back to the bullish+flat
+        # default. The optimizer builds its config dict directly (bypassing _build_config), so
+        # these forwards are what carry the trees through the API/CLI create path. sell_tree /
+        # exit_rules are plumbed through for the engine's follow-up consumption.
+        "buy_tree": payload.get("buy_tree"),
+        "sell_tree": payload.get("sell_tree"),
+        "exit_rules": payload.get("exit_rules"),
         # Initial TP/SL bracket percents applied per opened position so trades close (the
         # engine's _apply_initial_brackets reads these). Optional on the standalone path;
         # the optimizer always supplies them via the tp/sl genes.

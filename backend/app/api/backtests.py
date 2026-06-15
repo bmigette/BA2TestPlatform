@@ -41,6 +41,15 @@ class BacktestCreate(BaseModel):
     # daily_expert-engine fields (required only when engine == "daily_expert").
     expert: Optional[dict] = None  # {"class": "FMPRating", "settings": {...}}
     universe: Optional[dict] = None  # {"mode": "static"|"screener", "symbols": [...], "screener_settings": {...}}
+    # Strategy conditions + initial TP/SL bracket (daily_expert path). When supplied, the
+    # buy-entry condition TREE seeds the enter ruleset (seed_ruleset_from_tree) and the TP/SL
+    # percents apply per opened position so trades close. All optional: omitted -> the handler
+    # falls back to its defaults (the bullish+flat enter ruleset / no brackets).
+    buy_entry_conditions: Optional[dict] = None   # AND/OR condition tree -> config "buy_tree"
+    sell_entry_conditions: Optional[dict] = None  # -> config "sell_tree"
+    exit_conditions: Optional[list] = None        # -> config "exit_rules"
+    initial_tp_percent: Optional[float] = None    # -> config "initial_tp_percent"
+    initial_sl_percent: Optional[float] = None    # -> config "initial_sl_percent"
     # Shared trading parameters.
     start_date: str
     end_date: str
@@ -407,6 +416,23 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
     else:
         payload['enabled_instruments'] = list(symbols)
         universe_desc = f"{len(symbols)} instruments"
+
+    # Forward the strategy's conditions + initial TP/SL bracket into the daily-engine payload
+    # using the EXACT keys the handler reads: the buy-entry tree -> ``buy_tree`` (consumed by
+    # _build_experts -> seed_ruleset_from_tree), ``sell_tree`` / ``exit_rules``, and the
+    # ``initial_tp_percent`` / ``initial_sl_percent`` bracket percents (read by _build_config /
+    # daily_engine._apply_initial_brackets). Only include provided (non-None) keys so we never
+    # override the handler's own defaults with None (fail-early/no-silent-defaults rule).
+    if backtest.buy_entry_conditions is not None:
+        payload['buy_tree'] = backtest.buy_entry_conditions
+    if backtest.sell_entry_conditions is not None:
+        payload['sell_tree'] = backtest.sell_entry_conditions
+    if backtest.exit_conditions is not None:
+        payload['exit_rules'] = backtest.exit_conditions
+    if backtest.initial_tp_percent is not None:
+        payload['initial_tp_percent'] = backtest.initial_tp_percent
+    if backtest.initial_sl_percent is not None:
+        payload['initial_sl_percent'] = backtest.initial_sl_percent
 
     from app.services.task_queue import get_task_queue
     task_queue = get_task_queue()

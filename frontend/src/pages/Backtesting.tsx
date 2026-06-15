@@ -369,7 +369,7 @@ const Backtesting: React.FC = () => {
   const [expertSettings, setExpertSettings] = useState<ExpertSettingsValue>({ settings: {}, expert_params: {} });
   const [universe, setUniverse] = useState<UniverseValue>({ mode: 'static', symbols: [] });
   // Required by the daily_expert engine on the backend.
-  const [fillModel, setFillModel] = useState<string>('next_open');
+  const [fillModel, setFillModel] = useState<string>('next_bar_open');
   const [runSeed, setRunSeed] = useState<number>(42);
 
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -1169,8 +1169,8 @@ const Backtesting: React.FC = () => {
                         onChange={e => setFillModel(e.target.value)}
                         className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                       >
-                        <option value="next_open">Next open</option>
-                        <option value="close">Close</option>
+                        <option value="next_bar_open">Next bar open</option>
+                        <option value="same_bar_close">Same bar close</option>
                       </select>
                     </div>
                     <div>
