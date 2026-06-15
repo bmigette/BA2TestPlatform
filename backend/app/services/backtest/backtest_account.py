@@ -371,6 +371,57 @@ class BacktestAccount(AccountInterface):
                 leg.status = OrderStatus.ACCEPTED
                 update_instance(leg)
 
+    def refresh_transactions(self) -> bool:
+        """Roll order state into transactions, then fix CLOSED transactions' ``close_date``.
+
+        The inherited lifecycle closes a transaction via ``close_transaction_with_logging``,
+        which stamps ``close_date = datetime.now(timezone.utc)`` (WALL clock). In a backtest the
+        simulated clock is years off wall time, so a wall-clock close_date would corrupt any
+        as-of date math (e.g. the days-since-last-close cooldown condition). After the inherited
+        roll we re-stamp the ``close_date`` of every transaction CLOSED on THIS bar to the
+        simulated fill bar of its closing leg (falling back to the current simulated bar).
+        """
+        before = {t.id for t in self._closed_transactions()}
+        ok = super().refresh_transactions()
+        sim_now = self._price.now()
+        for txn in self._closed_transactions():
+            if txn.id in before:
+                continue  # already closed on an earlier bar — leave its simulated close_date.
+            txn.close_date = self._closing_fill_date(txn) or sim_now
+            if txn.open_date is None:
+                entry = self._entry_order_for_transaction(txn)
+                if entry is not None and entry.id is not None:
+                    txn.open_date = self._fill_dates.get(entry.id)
+            update_instance(txn)
+        return ok
+
+    def _closed_transactions(self) -> List[Transaction]:
+        """All CLOSED transactions in the per-run trading DB (single-account backtest)."""
+        from sqlmodel import select, Session
+        from ba2_common.core.types import TransactionStatus
+
+        with Session(get_db().bind) as session:
+            return list(
+                session.exec(
+                    select(Transaction).where(Transaction.status == TransactionStatus.CLOSED)
+                ).all()
+            )
+
+    def _closing_fill_date(self, transaction: Transaction) -> Optional[datetime]:
+        """The simulated fill bar of the transaction's filled closing leg, if any."""
+        executed = OrderStatus.get_executed_statuses()
+        for o in self.get_orders():
+            if (
+                o.transaction_id == transaction.id
+                and o.depends_on_order is not None
+                and o.status in executed
+                and o.id is not None
+            ):
+                dt = self._fill_dates.get(o.id)
+                if dt is not None:
+                    return dt
+        return None
+
     def get_dividends(
         self,
         symbol: Optional[str] = None,

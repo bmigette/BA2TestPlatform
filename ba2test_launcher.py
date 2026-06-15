@@ -354,6 +354,19 @@ def _build_strategy_row(name: str):
             {"id": "gate_expected_profit", "field": "expected_profit", "op": ">", "value": 3,
              "optimize": True, "value_min": 0, "value_max": 15, "value_step": 1,
              "toggle_optimize": True},
+            # Cooldown gates: only re-enter a symbol once N days have passed since the last
+            # close (any / profitable / losing). Each is value-optimizable AND on/off-toggleable
+            # so the optimizer can decide whether a cooldown helps and how long it should be.
+            # 0 days never blocks; the optimizer can also turn the gate off entirely.
+            {"id": "gate_days_since_close", "field": "days_since_last_close", "op": ">", "value": 0,
+             "optimize": True, "value_min": 0, "value_max": 30, "value_step": 5,
+             "toggle_optimize": True},
+            {"id": "gate_days_since_profit", "field": "days_since_last_profitable_close", "op": ">",
+             "value": 0, "optimize": True, "value_min": 0, "value_max": 30, "value_step": 5,
+             "toggle_optimize": True},
+            {"id": "gate_days_since_loss", "field": "days_since_last_losing_close", "op": ">",
+             "value": 0, "optimize": True, "value_min": 0, "value_max": 60, "value_step": 10,
+             "toggle_optimize": True},
         ],
     }
     return Strategy(

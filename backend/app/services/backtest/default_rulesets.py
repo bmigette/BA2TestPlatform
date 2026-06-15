@@ -79,6 +79,11 @@ _FIELD_EVENT = {
     "expected_profit": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
     "expected_profit_percent": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
     "expected_profit_target_percent": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
+    # Cooldown gates (avoid re-buying the same symbol right after exiting it). Pair with ">"
+    # so the entry only fires once N days have passed since the last (qualifying) close.
+    "days_since_last_close": ExpertEventType.N_DAYS_SINCE_LAST_CLOSE,
+    "days_since_last_profitable_close": ExpertEventType.N_DAYS_SINCE_LAST_PROFITABLE_CLOSE,
+    "days_since_last_losing_close": ExpertEventType.N_DAYS_SINCE_LAST_LOSING_CLOSE,
 }
 
 
