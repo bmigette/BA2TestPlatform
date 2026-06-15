@@ -40,6 +40,13 @@ import type {
   ExitConditionSet,
   AvailableField
 } from '../components/ConditionBuilder';
+import { ExpertPicker } from '../components/ExpertPicker';
+import { ExpertSettingsForm } from '../components/ExpertSettingsForm';
+import type { ExpertSettingsValue } from '../components/ExpertSettingsForm';
+import { UniversePicker } from '../components/UniversePicker';
+import type { UniverseValue } from '../components/UniversePicker';
+import { RuleIO } from '../components/RuleIO';
+import { RunHistoryTable } from '../components/RunHistoryTable';
 import {
   XAxis,
   YAxis,
@@ -354,7 +361,17 @@ const Backtesting: React.FC = () => {
   const [savingBacktest, setSavingBacktest] = useState(false);
 
   // Tab state for New Backtest card
-  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'saved'>('new');
+  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'history' | 'saved'>('new');
+
+  // Source selector: 'expert' = daily multi-asset expert engine; 'ml' = model-driven.
+  const [source, setSource] = useState<'expert' | 'ml'>('expert');
+  const [expertClass, setExpertClass] = useState<string>('');
+  const [expertSettings, setExpertSettings] = useState<ExpertSettingsValue>({ settings: {}, expert_params: {} });
+  const [universe, setUniverse] = useState<UniverseValue>({ mode: 'static', symbols: [] });
+  // Required by the daily_expert engine on the backend.
+  const [fillModel, setFillModel] = useState<string>('next_open');
+  const [runSeed, setRunSeed] = useState<number>(42);
+
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -477,19 +494,30 @@ const Backtesting: React.FC = () => {
   };
 
   const runBacktest = async () => {
-    if (selectedModels.size === 0) {
-      setError('Please select at least one model');
-      return;
-    }
+    if (source === 'expert') {
+      if (!expertClass) {
+        setError('Please select an expert');
+        return;
+      }
+      if (universe.mode === 'static' && universe.symbols.length === 0) {
+        setError('Please provide at least one symbol in the universe');
+        return;
+      }
+    } else {
+      if (selectedModels.size === 0) {
+        setError('Please select at least one model');
+        return;
+      }
 
-    if (!predictionDatasetId) {
-      setError('Please select a dataset');
-      return;
-    }
+      if (!predictionDatasetId) {
+        setError('Please select a dataset');
+        return;
+      }
 
-    if (!executionDatasetId) {
-      setError('Please select an execution dataset');
-      return;
+      if (!executionDatasetId) {
+        setError('Please select an execution dataset');
+        return;
+      }
     }
 
     // Validate conditions - check for empty fields
@@ -563,34 +591,36 @@ const Backtesting: React.FC = () => {
         initialSlStep: initialSlOptimize ? initialSlStep : null
       };
 
-      // Submit one backtest per selected model
-      const modelIds = [...selectedModels];
       let lastBacktest: Backtest | null = null;
 
-      for (const modelId of modelIds) {
-        const autoName = generateBacktestName();
+      if (source === 'expert') {
+        // Daily multi-asset expert engine. The backend requires fill_model + seed.
         const res = await fetch(`${API_BASE}/backtests`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: autoName,
-            model_id: modelId,
-            prediction_dataset_id: predictionDatasetId,
-            execution_dataset_id: executionDatasetId,
-            strategy_params: strategyParams,
+            engine: 'daily_expert',
+            name: generateBacktestName(),
             start_date: startDate,
             end_date: endDate,
+            expert: { class: expertClass, settings: expertSettings.settings },
+            universe,
             initial_capital: initialCapital,
-            position_sizing_type: positionSizingType,
-            position_sizing_value: positionSizingValue,
             commission,
-            slippage
+            slippage,
+            buy_entry_conditions: buyEntryConditions,
+            sell_entry_conditions: sellEntryConditions,
+            exit_conditions: exitConditions,
+            initial_tp_percent: initialTpPercent,
+            initial_sl_percent: initialSlPercent,
+            fill_model: fillModel,
+            seed: runSeed,
           })
         });
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || `Failed to run backtest for model ${modelId}`);
+          throw new Error(errData.detail || 'Failed to run expert backtest');
         }
 
         const backtest = await res.json();
@@ -599,6 +629,44 @@ const Backtesting: React.FC = () => {
           const details = await detailsRes.json();
           setBacktests(prev => [details, ...prev]);
           lastBacktest = details;
+        }
+      } else {
+        // Submit one backtest per selected model (ML engine).
+        const modelIds = [...selectedModels];
+
+        for (const modelId of modelIds) {
+          const autoName = generateBacktestName();
+          const res = await fetch(`${API_BASE}/backtests`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: autoName,
+              model_id: modelId,
+              prediction_dataset_id: predictionDatasetId,
+              execution_dataset_id: executionDatasetId,
+              strategy_params: strategyParams,
+              start_date: startDate,
+              end_date: endDate,
+              initial_capital: initialCapital,
+              position_sizing_type: positionSizingType,
+              position_sizing_value: positionSizingValue,
+              commission,
+              slippage
+            })
+          });
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || `Failed to run backtest for model ${modelId}`);
+          }
+
+          const backtest = await res.json();
+          const detailsRes = await fetch(`${API_BASE}/backtests/${backtest.id}`);
+          if (detailsRes.ok) {
+            const details = await detailsRes.json();
+            setBacktests(prev => [details, ...prev]);
+            lastBacktest = details;
+          }
         }
       }
 
@@ -879,21 +947,23 @@ const Backtesting: React.FC = () => {
     try {
       setLaunchingOpt(true);
       setOptNotice(null);
-      const body: Record<string, unknown> = {
-        name: `Optimize ${loadedStrategyName} (${optFitnessMetric})`,
-        fitness_metric: optFitnessMetric,
-        optimization_type: optType,
-        optimization_config: {
-          populationSize: optPopulationSize,
-          generations: optGenerations,
-          crossoverProb: optCrossoverProb,
-          mutationProb: optMutationProb,
-          earlyStoppingGenerations: optEarlyStopping,
-          elitismPercent: optElitismPercent,
-          seed: optSeed,
-          backtest: {
-            // ML engine when a model is selected; daily multi-asset expert engine otherwise.
-            engine: selectedModel ? 'ml' : 'daily',
+      // Backend OptimizeRequest folds top-level expert_params into optimization_config.
+      // The backtest block is source-aware: expert sends expert/universe; ml sends model/datasets.
+      const backtestBlock: Record<string, unknown> = source === 'expert'
+        ? {
+            engine: 'daily',
+            expert: { class: expertClass, settings: expertSettings.settings },
+            universe,
+            start_date: startDate,
+            end_date: endDate,
+            initial_capital: initialCapital,
+            position_sizing_type: positionSizingType,
+            position_sizing_value: positionSizingValue,
+            commission,
+            slippage,
+          }
+        : {
+            engine: 'ml',
             model_id: selectedModel || null,
             prediction_dataset_id: predictionDatasetId || null,
             execution_dataset_id: executionDatasetId || null,
@@ -904,7 +974,21 @@ const Backtesting: React.FC = () => {
             position_sizing_value: positionSizingValue,
             commission,
             slippage,
-          },
+          };
+      const body: Record<string, unknown> = {
+        name: `Optimize ${loadedStrategyName} (${optFitnessMetric})`,
+        fitness_metric: optFitnessMetric,
+        optimization_type: optType,
+        expert_params: expertSettings.expert_params,
+        optimization_config: {
+          populationSize: optPopulationSize,
+          generations: optGenerations,
+          crossoverProb: optCrossoverProb,
+          mutationProb: optMutationProb,
+          earlyStoppingGenerations: optEarlyStopping,
+          elitismPercent: optElitismPercent,
+          seed: optSeed,
+          backtest: backtestBlock,
         },
       };
 
@@ -998,6 +1082,17 @@ const Backtesting: React.FC = () => {
                 New Backtest
               </button>
               <button
+                onClick={() => setBacktestCardTab('history')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  backtestCardTab === 'history'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <Clock className="w-4 h-4 inline mr-1" />
+                History
+              </button>
+              <button
                 onClick={() => setBacktestCardTab('saved')}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                   backtestCardTab === 'saved'
@@ -1012,6 +1107,87 @@ const Backtesting: React.FC = () => {
 
             {backtestCardTab === 'new' ? (
             <div className="space-y-4">
+              {/* Source selector: Expert engine vs ML model */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Source
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSource('expert')}
+                    className={`flex-1 px-3 py-2 text-sm rounded-lg border ${
+                      source === 'expert'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300'
+                    }`}
+                  >
+                    Expert
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSource('ml')}
+                    className={`flex-1 px-3 py-2 text-sm rounded-lg border ${
+                      source === 'ml'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300'
+                    }`}
+                  >
+                    ML model
+                  </button>
+                </div>
+              </div>
+
+              {source === 'expert' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      <Brain className="w-4 h-4 inline mr-1" />
+                      Expert
+                    </label>
+                    <ExpertPicker value={expertClass} onChange={(cls) => setExpertClass(cls)} />
+                  </div>
+                  {expertClass && (
+                    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                      <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                        Expert Settings
+                      </h4>
+                      <ExpertSettingsForm expertClass={expertClass} value={expertSettings} onChange={setExpertSettings} />
+                    </div>
+                  )}
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                    <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                      Universe
+                    </h4>
+                    <UniversePicker value={universe} onChange={setUniverse} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Fill model</label>
+                      <select
+                        value={fillModel}
+                        onChange={e => setFillModel(e.target.value)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      >
+                        <option value="next_open">Next open</option>
+                        <option value="close">Close</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Seed</label>
+                      <input
+                        type="number"
+                        value={runSeed}
+                        onChange={e => setRunSeed(parseInt(e.target.value) || 0)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {source === 'ml' && (
+              <>
               {/* Step 1: Symbol Selection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -1154,6 +1330,8 @@ const Backtesting: React.FC = () => {
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Defaults to the selected dataset above</p>
                 </div>
               )}
+              </>
+              )}
 
               {/* Date Range */}
               <div className="grid grid-cols-2 gap-3">
@@ -1226,6 +1404,13 @@ const Backtesting: React.FC = () => {
                     <span className="text-xs text-gray-500">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
                     <ChevronDown className="w-4 h-4 text-gray-400" />
                   </button>
+                  <div className="flex justify-end gap-1 text-xs">
+                    <RuleIO
+                      which="enter"
+                      tree={buyEntryConditions}
+                      onImport={(tree) => { if (isConditionGroup(tree)) setBuyEntryConditions(tree); }}
+                    />
+                  </div>
                   <button
                     onClick={() => setShowConditionModal('sell')}
                     className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg border border-red-200 dark:border-red-800"
@@ -1235,6 +1420,13 @@ const Backtesting: React.FC = () => {
                     <span className="text-xs text-gray-500">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
                     <ChevronDown className="w-4 h-4 text-gray-400" />
                   </button>
+                  <div className="flex justify-end gap-1 text-xs">
+                    <RuleIO
+                      which="enter"
+                      tree={sellEntryConditions}
+                      onImport={(tree) => { if (isConditionGroup(tree)) setSellEntryConditions(tree); }}
+                    />
+                  </div>
                   <button
                     onClick={() => setShowConditionModal('exit')}
                     className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
@@ -1244,6 +1436,23 @@ const Backtesting: React.FC = () => {
                     <span className="text-xs text-gray-500">{exitConditions.length} rule{exitConditions.length !== 1 ? 's' : ''}</span>
                     <ChevronDown className="w-4 h-4 text-gray-400" />
                   </button>
+                  <div className="flex justify-end gap-1 text-xs">
+                    <RuleIO
+                      which="exit"
+                      tree={exitConditions[0]?.conditions ?? createEmptyGroup('AND')}
+                      onImport={(tree) => {
+                        if (!isConditionGroup(tree)) return;
+                        setExitConditions(prev => {
+                          if (prev.length === 0) {
+                            return [{ id: `exit-${Date.now()}`, name: 'Exit Rule 1', conditions: tree, action: 'close' }];
+                          }
+                          const next = [...prev];
+                          next[0] = { ...next[0], conditions: tree };
+                          return next;
+                        });
+                      }}
+                    />
+                  </div>
                 </div>
 
               {/* Initial TP/SL */}
@@ -1527,7 +1736,9 @@ const Backtesting: React.FC = () => {
               {/* Run Button */}
               <button
                 onClick={runBacktest}
-                disabled={running || selectedModels.size === 0 || !predictionDatasetId || !executionDatasetId}
+                disabled={running || (source === 'expert'
+                  ? (!expertClass || (universe.mode === 'static' && universe.symbols.length === 0))
+                  : (selectedModels.size === 0 || !predictionDatasetId || !executionDatasetId))}
                 className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {running ? (
@@ -1543,9 +1754,15 @@ const Backtesting: React.FC = () => {
                 )}
               </button>
             </div>
+            ) : backtestCardTab === 'history' ? (
+              /* History Tab — all runs */
+              <div className="max-h-[32rem] overflow-y-auto">
+                <RunHistoryTable savedOnly={false} onSelect={viewBacktest} />
+              </div>
             ) : (
               /* Saved Backtests Tab */
               <div className="space-y-2 max-h-96 overflow-y-auto">
+                <RunHistoryTable savedOnly={true} onSelect={viewBacktest} />
                 {backtests.filter(bt => bt.isSaved).length === 0 ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
                     No saved backtests yet. Run a backtest and save it to see it here.
