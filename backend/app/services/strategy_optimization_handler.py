@@ -55,6 +55,61 @@ REQUIRED_GA_KEYS = (
 )
 
 
+# Backend dir (this file is backend/app/services/strategy_optimization_handler.py) — the
+# worker processes prepend it to sys.path so ``app...`` imports resolve under spawn.
+import os as _os
+_BACKEND_DIR = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# Provider API keys mirrored into each worker's env (spawn starts a clean environment).
+_WORKER_ENV_KEYS = ("FMP_API_KEY", "ALPHA_VANTAGE_API_KEY", "FINNHUB_API_KEY", "OPENAI_API_KEY")
+
+
+def _worker_init(backend_dir: str, env: Dict[str, str]) -> None:
+    """ProcessPool worker initializer (runs once per worker under spawn).
+
+    Puts ``backend/`` on the path + cwd so ``app...``/relative-path imports resolve, mirrors
+    the provider API keys into the (clean, spawned) env, and quiets per-trial logging.
+    """
+    import os
+    import sys
+    # Disable file logging in workers BEFORE ba2_common is imported: many processes sharing the
+    # one RotatingFileHandler on app.log race on rollover (Windows WinError 32). Read by
+    # ba2_common.config at import time.
+    os.environ["BA2_FILE_LOGGING"] = "0"
+    os.environ["BA2_STDOUT_LOGGING"] = "0"
+    if backend_dir and backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    try:
+        os.chdir(backend_dir)
+    except OSError:
+        pass
+    for k, v in (env or {}).items():
+        if v is not None:
+            os.environ.setdefault(k, v)
+    import logging as _lg
+    _lg.disable(_lg.ERROR)  # workers are silent; the parent process logs the run summary
+    for n in ("ba2_common", "ba2_providers", "ba2_experts", "app.services.backtest"):
+        _lg.getLogger(n).setLevel(_lg.WARNING)
+
+
+def _trial_worker(config: Dict[str, Any], fitness_metric: str) -> Dict[str, Any]:
+    """Run ONE deterministic daily backtest in a worker PROCESS and return a tiny summary.
+
+    Only the CPU-bound backtest runs here (no GIL contention with the GA loop); the result is
+    reduced to ``{ok, fitness, trades, error}`` so the pickled payload back to the parent is
+    small (the full equity/trade blobs are re-derived later for the persisted top-N only).
+    """
+    try:
+        from app.services.backtest.daily_backtest_handler import run_daily_backtest
+        from app.services.strategy_fitness import compute_fitness
+
+        results = run_daily_backtest(config)
+        fit = compute_fitness(fitness_metric, results)
+        return {"ok": True, "fitness": float(fit),
+                "trades": int(results.get("total_trades") or 0), "error": None}
+    except Exception as e:  # noqa: BLE001 — surface as a failed trial, don't kill the pool
+        return {"ok": False, "fitness": 0.0, "trades": 0, "error": repr(e)}
+
+
 def _fail(opt_id: int, db: Any, msg: str) -> Dict[str, Any]:
     """Mark the StrategyOptimization row failed + return the failure dict."""
     logger.error(f"strategy_optimization {opt_id} failed: {msg}")
@@ -235,6 +290,63 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                 task_id, optimizer.get_checkpoint_data(generation, population)
             )
 
+        def _trial_key_for(decoded_flat: Dict[str, Any]) -> str:
+            return trial_key(
+                {
+                    "engine": backtest_cfg.get("engine"),
+                    "model_id": backtest_cfg.get("model_id"),
+                    "pred_dataset_id": backtest_cfg.get("prediction_dataset_id"),
+                    "exec_dataset_id": backtest_cfg.get("execution_dataset_id"),
+                    "start": str(backtest_cfg.get("start_date")),
+                    "end": str(backtest_cfg.get("end_date")),
+                    "seed": backtest_cfg.get("seed"),
+                    "params": decoded_flat,
+                }
+            )
+
+        # TRUE multiprocessing batch evaluator (used when parallel > 1). The CPU-bound
+        # backtests run in worker PROCESSES (no GIL); the GA loop, the trial memo, all_results
+        # and best stay here in the main process. Only plain-dict configs go out and a tiny
+        # {ok,fitness,trades} summary comes back, so nothing un-picklable crosses the boundary.
+        def make_batch_fitness(pool):
+            from concurrent.futures import as_completed
+
+            def batch_fitness(param_dicts: list) -> list:
+                if tq.is_task_paused(task_id):
+                    raise InterruptedError("paused/cancelled")
+                fits: list = [None] * len(param_dicts)
+                jobs = []  # (idx, decoded_flat, key, config)
+                for i, flat in enumerate(param_dicts):
+                    key = _trial_key_for(flat)
+                    cached = memo.get(key)
+                    if cached is not None:
+                        fits[i] = cached
+                        continue
+                    config = _build_daily_trial_config(backtest_cfg, decode_params(strategy, flat))
+                    jobs.append((i, flat, key, config))
+                futures = {
+                    pool.submit(_trial_worker, cfg, opt.fitness_metric): (i, flat, key)
+                    for (i, flat, key, cfg) in jobs
+                }
+                for fut in as_completed(futures):
+                    i, flat, key = futures[fut]
+                    out = fut.result()
+                    fit = float(out["fitness"])
+                    fits[i] = fit
+                    memo.put(key, fit)
+                    if out["ok"]:
+                        all_results.append(
+                            {"params": flat, "fitness": fit, "key": key, "trades": out["trades"]}
+                        )
+                    elif out.get("error"):
+                        logger.warning(f"trial failed in worker: {out['error']}")
+                    if best["fitness"] is None or fit > best["fitness"]:
+                        best["fitness"] = fit
+                        best["params"] = flat
+                return fits
+
+            return batch_fitness
+
         start_gen, init_pop = 0, None
         ckpt = _load_checkpoint(task_id)
         if ckpt:
@@ -247,6 +359,23 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         _prior = {n: _logging.getLogger(n).level for n in _quiet}
         for n in _quiet:
             _logging.getLogger(n).setLevel(_logging.WARNING)
+
+        # Spin up the process pool once for the whole run (spawn -> each worker pays the
+        # import cost once). batch_fitness routes the per-generation batch through it.
+        _pool = None
+        batch_fitness = None
+        if parallel > 1:
+            import multiprocessing as _mp
+            from concurrent.futures import ProcessPoolExecutor
+
+            _env = {k: _os.environ[k] for k in _WORKER_ENV_KEYS if _os.environ.get(k)}
+            _pool = ProcessPoolExecutor(
+                max_workers=parallel,
+                mp_context=_mp.get_context("spawn"),
+                initializer=_worker_init,
+                initargs=(_BACKEND_DIR, _env),
+            )
+            batch_fitness = make_batch_fitness(_pool)
         try:
             result = optimizer.optimize(
                 fitness_function=fitness_function,
@@ -255,10 +384,13 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                 checkpoint_callback=checkpoint_cb,
                 start_generation=start_gen,
                 initial_population=init_pop,
+                batch_fitness=batch_fitness,
             )
         finally:
             for n, lv in _prior.items():
                 _logging.getLogger(n).setLevel(lv)
+            if _pool is not None:
+                _pool.shutdown(wait=True, cancel_futures=True)
 
         # Trust guard: if EVERY trial failed (e.g. a bad backtest config), all_results is
         # empty and best_fitness is a meaningless default. The GA swallows per-trial

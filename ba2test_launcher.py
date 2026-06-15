@@ -339,6 +339,18 @@ _EXPERT_OPT = {
 }
 
 
+# Classic-RM optimization ranges (the 5 sizing/stop params the RM reads off the expert). The
+# param space builds rm:* genes from THIS dict (collect_param_space._collect_rm) — the Strategy
+# rm_* columns only supply the non-optimized baseline. risk_per_trade_pct spans 0.5%..5%.
+_RM_PARAM_SPACE = {
+    "risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 5.0, "step": 0.5, "type": "float"},
+    "per_instrument_cap_pct": {"optimize": True, "min": 5.0, "max": 30.0, "step": 5.0, "type": "float"},
+    "min_stop_pct": {"optimize": True, "min": 3.0, "max": 10.0, "step": 1.0, "type": "float"},
+    "atr_stop_mult": {"optimize": True, "min": 1.5, "max": 4.0, "step": 0.5, "type": "float"},
+    "max_concurrent_positions": {"optimize": True, "min": 3, "max": 20, "step": 2, "type": "int"},
+}
+
+
 def _build_strategy_row(name: str):
     """A Strategy whose TP/SL + the 5 classic-RM params (the RM's sizing/stop conditions &
     actions) are marked optimizable with ranges — the numeric RM space the optimizer searches."""
@@ -374,7 +386,7 @@ def _build_strategy_row(name: str):
         buy_entry_conditions=buy_entry_conditions,
         initial_tp_percent=8.0, initial_tp_optimize=True, initial_tp_min=3.0, initial_tp_max=20.0, initial_tp_step=1.0,
         initial_sl_percent=5.0, initial_sl_optimize=True, initial_sl_min=2.0, initial_sl_max=12.0, initial_sl_step=1.0,
-        rm_risk_per_trade_pct=1.0, rm_risk_per_trade_pct_optimize=True, rm_risk_per_trade_pct_min=0.5, rm_risk_per_trade_pct_max=3.0, rm_risk_per_trade_pct_step=0.5,
+        rm_risk_per_trade_pct=1.0, rm_risk_per_trade_pct_optimize=True, rm_risk_per_trade_pct_min=0.5, rm_risk_per_trade_pct_max=5.0, rm_risk_per_trade_pct_step=0.5,
         rm_per_instrument_cap_pct=15.0, rm_per_instrument_cap_pct_optimize=True, rm_per_instrument_cap_pct_min=5.0, rm_per_instrument_cap_pct_max=30.0, rm_per_instrument_cap_pct_step=5.0,
         rm_min_stop_pct=5.0, rm_min_stop_pct_optimize=True, rm_min_stop_pct_min=3.0, rm_min_stop_pct_max=10.0, rm_min_stop_pct_step=1.0,
         rm_atr_stop_mult=2.0, rm_atr_stop_mult_optimize=True, rm_atr_stop_mult_min=1.5, rm_atr_stop_mult_max=4.0, rm_atr_stop_mult_step=0.5,
@@ -446,6 +458,9 @@ def _cmd_optimize(args) -> int:
             "elitismPercent": 0.1, "seed": int(args.seed),
             "parallelIndividuals": int(args.parallel),
             "expert_params": spec["expert_params"],
+            # RM ranges — without this the param space never builds rm:* genes, so the classic
+            # RM (risk_per_trade/per-instrument cap/stops) would stay fixed at the baseline.
+            "rm_params": _RM_PARAM_SPACE,
             "backtest": backtest_block,
         }
         opt = StrategyOptimization(

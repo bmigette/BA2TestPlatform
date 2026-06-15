@@ -348,7 +348,8 @@ class GeneticOptimizer:
         start_generation: int = 0,
         initial_population: list = None,
         checkpoint_callback: Callable[[int, list], None] = None,
-        on_generation_start: Callable[[int], None] = None
+        on_generation_start: Callable[[int], None] = None,
+        batch_fitness: Callable[[list], list] = None
     ) -> Dict:
         """
         Run genetic algorithm optimization.
@@ -410,8 +411,17 @@ class GeneticOptimizer:
             # due to stochastic neural network training
             invalid_ind = [ind for ind in population if not ind.fitness.valid]
 
-            if self.parallel_individuals > 1:
-                # Parallel evaluation — overlaps CPU data prep with GPU training
+            if batch_fitness is not None:
+                # TRUE multiprocessing path: the caller evaluates the whole batch of
+                # invalid individuals at once (decoded param dicts -> fitnesses), running the
+                # CPU-bound work in worker PROCESSES (no GIL). All shared state (memo /
+                # bookkeeping / DB) stays in the caller's main process. Order is preserved.
+                param_dicts = [self.decode_individual(ind) for ind in invalid_ind]
+                fits = batch_fitness(param_dicts) if param_dicts else []
+                fitnesses = [(float(f),) for f in fits]
+            elif self.parallel_individuals > 1:
+                # Thread pool — only useful for I/O-bound or GPU work (the ML engine), NOT for
+                # CPU-bound daily backtests (GIL-serialised). The daily path uses batch_fitness.
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=self.parallel_individuals) as executor:
                     fitnesses = list(executor.map(self.toolbox.evaluate, invalid_ind))
