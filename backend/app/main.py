@@ -379,7 +379,7 @@ async def global_exception_handler(request, exc):
 
 
 # Import and include routers
-from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools, target_sets, strategies, admin, cache, experts
+from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools, target_sets, strategies, admin, cache, experts, rules
 
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
@@ -394,6 +394,9 @@ app.include_router(websocket.router, prefix="/api", tags=["websocket"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["task-queue"])
 app.include_router(indicator_collections.router, prefix="/api/indicator-collections", tags=["indicator-collections"])
 app.include_router(target_sets.router, prefix="/api/target-sets", tags=["target-sets"])
+# rules router carries its own /api/strategies prefix; register BEFORE the strategies
+# router so its literal import-rules/export-rules segments win over /{strategy_id}.
+app.include_router(rules.router)
 app.include_router(strategies.router, prefix="/api/strategies", tags=["strategies"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(cache.router, prefix="/api/cache", tags=["cache"])
