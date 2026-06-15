@@ -127,6 +127,17 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         opt.parameter_ranges = param_space
         db.commit()
 
+        # Detach the Strategy into a session-free snapshot BEFORE the (possibly parallel) trial
+        # loop. The fitness threads call decode_params(strategy, ...) concurrently, but the
+        # shared SQLAlchemy session + its SQLite connection are NOT thread-safe: a db.commit() in
+        # ga_callback expires this instance, and a concurrent attribute reload over the shared
+        # connection raises "(sqlite3.InterfaceError) bad parameter or other API misuse". refresh()
+        # materialises every mapped column into the instance, expunge() detaches it so the threads
+        # read pure in-memory state with no further DB access. (decode_params only reads scalar
+        # columns — no relationships — so a detached snapshot is sufficient.)
+        db.refresh(strategy)
+        db.expunge(strategy)
+
         # --- DETERMINISM: seed both RNGs (Task 4 / determinism_rule) ---
         seed = int(ga["seed"])
         random.seed(seed)
