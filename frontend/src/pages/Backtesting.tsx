@@ -11,8 +11,6 @@ import {
   Settings,
   ChevronDown,
   ChevronUp,
-  Download,
-  Trash2,
   BarChart3,
   Activity,
   Brain,
@@ -24,7 +22,8 @@ import {
   X,
   Database,
   Layers,
-  Sliders
+  Sliders,
+  Shield
 } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -146,39 +145,6 @@ interface Strategy {
   updatedAt: string | null;
 }
 
-// One classic-RM param's editable optimize range (mirrors the TP/SL control group).
-interface RmParamState {
-  value: number;
-  optimize: boolean;
-  min: number;
-  max: number;
-  step: number;
-}
-
-// The five classic-RM params (design §5), with snake_case API keys + camelCase
-// Strategy.to_dict() keys + UI labels. Drives both rendering and serialization so
-// each param is declared exactly once (no per-param hand-written blocks).
-const RM_PARAMS: Array<{
-  key: string;          // snake_case base used in StrategyCreate/Update request fields
-  camel: string;        // PascalCase suffix used in Strategy.to_dict() (rm<Camel>...)
-  label: string;
-  isInt: boolean;
-}> = [
-  { key: 'risk_per_trade_pct', camel: 'RiskPerTradePct', label: 'Risk / Trade %', isInt: false },
-  { key: 'per_instrument_cap_pct', camel: 'PerInstrumentCapPct', label: 'Per-Instrument Cap %', isInt: false },
-  { key: 'min_stop_pct', camel: 'MinStopPct', label: 'Min Stop %', isInt: false },
-  { key: 'atr_stop_mult', camel: 'AtrStopMult', label: 'ATR Stop Mult', isInt: false },
-  { key: 'max_concurrent_positions', camel: 'MaxConcurrentPositions', label: 'Max Concurrent Positions', isInt: true },
-];
-
-const RM_DEFAULTS: Record<string, RmParamState> = {
-  risk_per_trade_pct: { value: 1.0, optimize: false, min: 0.5, max: 3.0, step: 0.25 },
-  per_instrument_cap_pct: { value: 20.0, optimize: false, min: 5.0, max: 50.0, step: 5.0 },
-  min_stop_pct: { value: 2.0, optimize: false, min: 1.0, max: 5.0, step: 0.5 },
-  atr_stop_mult: { value: 2.0, optimize: false, min: 1.0, max: 4.0, step: 0.5 },
-  max_concurrent_positions: { value: 5, optimize: false, min: 1, max: 10, step: 1 },
-};
-
 // Fitness metrics map 1:1 onto the backend strategy_fitness._FITNESS_KEYS.
 const FITNESS_METRICS: Array<{ value: string; label: string }> = [
   { value: 'sharpe', label: 'Sharpe Ratio' },
@@ -251,7 +217,7 @@ interface Backtest {
   completedAt: string | null;
 }
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = 'http://localhost:8088/api';  // LOCAL TRIAL: backend on 8088 (8000 taken by Docker). Revert to 8000 before committing.
 
 // Generate random backtest name
 const generateBacktestName = (): string => {
@@ -298,12 +264,6 @@ const Backtesting: React.FC = () => {
   const [initialSlMin, setInitialSlMin] = useState(1.0);
   const [initialSlMax, setInitialSlMax] = useState(10.0);
   const [initialSlStep, setInitialSlStep] = useState(0.5);
-
-  // Classic-RM optimize controls (Phase 4 joint optimizer). One RmParamState per
-  // param, keyed by the snake_case base. Seeded from RM_DEFAULTS.
-  const [rmParams, setRmParams] = useState<Record<string, RmParamState>>(
-    () => structuredClone(RM_DEFAULTS)
-  );
 
   // The saved strategy currently loaded into the editor — required to target
   // POST /api/strategies/{id}/optimize. Cleared whenever the editor is edited away
@@ -367,6 +327,9 @@ const Backtesting: React.FC = () => {
   // Source selector: 'expert' = daily multi-asset expert engine; 'ml' = model-driven.
   const [source, setSource] = useState<'expert' | 'ml'>('expert');
   const [expertClass, setExpertClass] = useState<string>('');
+  // True when the selected expert bypasses classic RM (e.g. FactorRanker rebalances
+  // to target weights, so per-position TP/SL is not applied). Set from ExpertPicker.
+  const [expertBypassesRm, setExpertBypassesRm] = useState(false);
   const [expertSettings, setExpertSettings] = useState<ExpertSettingsValue>({ settings: {}, expert_params: {} });
   const [universe, setUniverse] = useState<UniverseValue>({ mode: 'static', symbols: [] });
   // Required by the daily_expert engine on the backend.
@@ -693,38 +656,6 @@ const Backtesting: React.FC = () => {
     }
   };
 
-  const deleteBacktest = (id: number) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: 'Delete Backtest',
-      message: 'Are you sure you want to delete this backtest?',
-      variant: 'danger',
-      onConfirm: async () => {
-        try {
-          await fetch(`${API_BASE}/backtests/${id}`, { method: 'DELETE' });
-          setBacktests(prev => prev.filter(b => b.id !== id));
-          if (selectedBacktest?.id === id) {
-            setSelectedBacktest(null);
-          }
-        } catch (err) {
-          setError('Failed to delete backtest');
-        }
-      },
-    });
-  };
-
-  const exportBacktest = async (id: number) => {
-    try {
-      const res = await fetch(`${API_BASE}/backtests/${id}/export?format=csv`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        alert(`Exported to ${data.path}`);
-      }
-    } catch (err) {
-      setError('Failed to export backtest');
-    }
-  };
-
   const getFilteredTrades = () => {
     if (!selectedBacktest?.results?.trades) return [];
 
@@ -791,9 +722,7 @@ const Backtesting: React.FC = () => {
           initial_sl_optimize: initialSlOptimize,
           initial_sl_min: initialSlOptimize ? initialSlMin : null,
           initial_sl_max: initialSlOptimize ? initialSlMax : null,
-          initial_sl_step: initialSlOptimize ? initialSlStep : null,
-          // Classic-RM optimize fields (Phase 4 joint optimizer)
-          ...rmRequestFields()
+          initial_sl_step: initialSlOptimize ? initialSlStep : null
         })
       });
 
@@ -816,12 +745,6 @@ const Backtesting: React.FC = () => {
     } finally {
       setSavingStrategy(false);
     }
-  };
-
-  const openSaveBacktestModal = (backtest: Backtest) => {
-    setBacktestToSave(backtest);
-    setSaveBacktestName(backtest.name);
-    setShowSaveBacktestModal(true);
   };
 
   const saveBacktest = async () => {
@@ -859,31 +782,6 @@ const Backtesting: React.FC = () => {
     }
   };
 
-  const clearUnsavedBacktests = () => {
-    setConfirmDialog({
-      isOpen: true,
-      title: 'Clear Unsaved Backtests',
-      message: 'Are you sure you want to delete all unsaved backtests? This cannot be undone.',
-      variant: 'warning',
-      onConfirm: async () => {
-        try {
-          const res = await fetch(`${API_BASE}/backtests/unsaved`, { method: 'DELETE' });
-          if (res.ok) {
-            const data = await res.json();
-            // Remove unsaved backtests from state
-            setBacktests(prev => prev.filter(bt => bt.isSaved));
-            if (selectedBacktest && !selectedBacktest.isSaved) {
-              setSelectedBacktest(null);
-            }
-            console.log(`Cleared ${data.count} unsaved backtests`);
-          }
-        } catch (err) {
-          setError('Failed to clear unsaved backtests');
-        }
-      },
-    });
-  };
-
   const loadStrategy = (strategy: Strategy) => {
     // Load buy entry conditions - ensure it's a valid group
     if (strategy.buyEntryConditions && isConditionGroup(strategy.buyEntryConditions)) {
@@ -916,21 +814,6 @@ const Backtesting: React.FC = () => {
     setInitialSlMin(strategy.initialSlMin ?? 1.0);
     setInitialSlMax(strategy.initialSlMax ?? 10.0);
     setInitialSlStep(strategy.initialSlStep ?? 0.5);
-
-    // Load classic-RM optimize controls (fall back to defaults per param/field)
-    const next: Record<string, RmParamState> = structuredClone(RM_DEFAULTS);
-    for (const p of RM_PARAMS) {
-      const d = RM_DEFAULTS[p.key];
-      const s = strategy as unknown as Record<string, number | boolean | null | undefined>;
-      next[p.key] = {
-        value: (s[`rm${p.camel}`] as number) ?? d.value,
-        optimize: (s[`rm${p.camel}Optimize`] as boolean) ?? false,
-        min: (s[`rm${p.camel}Min`] as number) ?? d.min,
-        max: (s[`rm${p.camel}Max`] as number) ?? d.max,
-        step: (s[`rm${p.camel}Step`] as number) ?? d.step,
-      };
-    }
-    setRmParams(next);
 
     // Track which saved strategy is loaded so "Run Joint Optimization" can target it
     setLoadedStrategyId(strategy.id);
@@ -1016,26 +899,6 @@ const Backtesting: React.FC = () => {
     } finally {
       setLaunchingOpt(false);
     }
-  };
-
-  // Update one RM param's optimize field in state.
-  const updateRmParam = (key: string, field: keyof RmParamState, val: number | boolean) => {
-    setRmParams(prev => ({ ...prev, [key]: { ...prev[key], [field]: val } }));
-  };
-
-  // Serialize the RM params to the snake_case request fields the strategy
-  // create/update endpoints accept. Ranges are sent only when optimize=true.
-  const rmRequestFields = (): Record<string, number | boolean | null> => {
-    const out: Record<string, number | boolean | null> = {};
-    for (const p of RM_PARAMS) {
-      const r = rmParams[p.key];
-      out[`rm_${p.key}`] = r.value;
-      out[`rm_${p.key}_optimize`] = r.optimize;
-      out[`rm_${p.key}_min`] = r.optimize ? r.min : null;
-      out[`rm_${p.key}_max`] = r.optimize ? r.max : null;
-      out[`rm_${p.key}_step`] = r.optimize ? r.step : null;
-    }
-    return out;
   };
 
   if (loading) {
@@ -1146,7 +1009,7 @@ const Backtesting: React.FC = () => {
                       <Brain className="w-4 h-4 inline mr-1" />
                       Expert
                     </label>
-                    <ExpertPicker value={expertClass} onChange={(cls) => setExpertClass(cls)} />
+                    <ExpertPicker value={expertClass} onChange={(cls, info) => { setExpertClass(cls); setExpertBypassesRm(info?.bypasses_classic_rm ?? false); }} />
                   </div>
                   {expertClass && (
                     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
@@ -1456,10 +1319,18 @@ const Backtesting: React.FC = () => {
                   </div>
                 </div>
 
-              {/* Initial TP/SL */}
-              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Initial Take Profit / Stop Loss
+              {/* Position protection (TP / SL) — engine-applied protective bracket (risk infra,
+                  not entry logic). Hidden for bypass experts (e.g. FactorRanker) which rebalance
+                  to target weights instead of applying per-position TP/SL. */}
+              {source === 'expert' && expertBypassesRm ? (
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-2 text-sm text-amber-800 dark:text-amber-200">
+                  FactorRanker rebalances to target weights — per-position TP/SL is not applied. Stop-loss protection is via rebalancing (and the expert's optional hard_stop_pct setting).
+                </div>
+              ) : (
+              <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow p-4">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                  <Shield className="w-4 h-4 text-blue-500" />
+                  Position protection (TP / SL)
                   </h4>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -1564,72 +1435,7 @@ const Backtesting: React.FC = () => {
                       </div>
                     </div>
                 </div>
-
-              {/* Classic Risk Management (Phase 4 joint optimizer) */}
-              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-                  <Sliders className="w-4 h-4 text-amber-500" />
-                  Risk Management
-                </h4>
-                <div className="space-y-2">
-                  {RM_PARAMS.map(p => {
-                    const r = rmParams[p.key];
-                    const numStep = p.isInt ? '1' : '0.1';
-                    return (
-                      <div key={p.key}>
-                        <div className="flex items-center gap-2">
-                          <label className="flex-1 text-xs text-gray-500 dark:text-gray-400">{p.label}</label>
-                          <input
-                            type="number"
-                            step={numStep}
-                            value={r.value}
-                            onChange={e => updateRmParam(p.key, 'value', parseFloat(e.target.value))}
-                            className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                          />
-                          <label className="flex items-center gap-1 text-xs">
-                            <input
-                              type="checkbox"
-                              checked={r.optimize}
-                              onChange={e => updateRmParam(p.key, 'optimize', e.target.checked)}
-                              className="rounded"
-                            />
-                            Opt
-                          </label>
-                        </div>
-                        {r.optimize && (
-                          <div className="flex items-center gap-1 mt-1 justify-end">
-                            <input
-                              type="number"
-                              step={numStep}
-                              value={r.min}
-                              onChange={e => updateRmParam(p.key, 'min', parseFloat(e.target.value))}
-                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
-                              placeholder="Min"
-                            />
-                            <span className="text-xs text-gray-500">-</span>
-                            <input
-                              type="number"
-                              step={numStep}
-                              value={r.max}
-                              onChange={e => updateRmParam(p.key, 'max', parseFloat(e.target.value))}
-                              className="w-14 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
-                              placeholder="Max"
-                            />
-                            <input
-                              type="number"
-                              step={numStep}
-                              value={r.step}
-                              onChange={e => updateRmParam(p.key, 'step', parseFloat(e.target.value))}
-                              className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
-                              placeholder="Step"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              )}
 
               {/* Save Strategy + Run Joint Optimization */}
               <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
@@ -1765,150 +1571,8 @@ const Backtesting: React.FC = () => {
               /* Saved Backtests Tab */
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 <RunHistoryTable savedOnly={true} onSelect={viewBacktest} />
-                {backtests.filter(bt => bt.isSaved).length === 0 ? (
-                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
-                    No saved backtests yet. Run a backtest and save it to see it here.
-                  </p>
-                ) : (
-                  backtests.filter(bt => bt.isSaved).map(bt => (
-                    <div
-                      key={bt.id}
-                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                        selectedBacktest?.id === bt.id
-                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                          : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-                      }`}
-                      onClick={() => viewBacktest(bt.id)}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">
-                          <Save className="w-3 h-3 inline mr-1 text-green-500" />
-                          {bt.name}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={e => { e.stopPropagation(); exportBacktest(bt.id); }}
-                            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
-                            title="Export"
-                          >
-                            <Download className="w-3.5 h-3.5 text-gray-500" />
-                          </button>
-                          <button
-                            onClick={e => { e.stopPropagation(); deleteBacktest(bt.id); }}
-                            className="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-red-500" />
-                          </button>
-                        </div>
-                      </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                        {(bt as any).modelName || `Model #${bt.modelId}`}{bt.createdAt ? ' · ' + new Date(bt.createdAt).toLocaleDateString() : ''}
-                      </p>
-                      {bt.status === 'completed' && (
-                        <div className="flex items-center gap-3 text-xs">
-                          <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
-                          </span>
-                          <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
-                          <span className="text-gray-500">{bt.totalTrades} trades{bt.winningTrades != null ? ` (${bt.winningTrades}W/${bt.losingTrades}L)` : ''}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
               </div>
             )}
-          </div>
-
-          {/* Previous Backtests */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold flex items-center gap-2 text-gray-900 dark:text-gray-100">
-                <Clock className="w-4 h-4 text-gray-500" />
-                Previous Backtests
-              </h3>
-              {backtests.some(bt => !bt.isSaved) && (
-                <button
-                  onClick={clearUnsavedBacktests}
-                  className="text-xs text-red-500 hover:text-red-600 flex items-center gap-1"
-                  title="Clear all unsaved backtests"
-                >
-                  <Trash2 className="w-3 h-3" />
-                  Clear Unsaved
-                </button>
-              )}
-            </div>
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {backtests.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No backtests yet</p>
-              ) : (
-                backtests.map(bt => (
-                  <div
-                    key={bt.id}
-                    className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                      selectedBacktest?.id === bt.id
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                        : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-                    }`}
-                    onClick={() => viewBacktest(bt.id)}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">
-                        {bt.isSaved && <Save className="w-3 h-3 inline mr-1 text-green-500" />}
-                        {bt.name}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        {!bt.isSaved && bt.status === 'completed' && (
-                          <button
-                            onClick={e => { e.stopPropagation(); openSaveBacktestModal(bt); }}
-                            className="p-1 hover:bg-green-100 dark:hover:bg-green-900/20 rounded"
-                            title="Save backtest"
-                          >
-                            <Save className="w-3.5 h-3.5 text-green-500" />
-                          </button>
-                        )}
-                        <button
-                          onClick={e => { e.stopPropagation(); exportBacktest(bt.id); }}
-                          className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
-                          title="Export"
-                        >
-                          <Download className="w-3.5 h-3.5 text-gray-500" />
-                        </button>
-                        <button
-                          onClick={e => { e.stopPropagation(); deleteBacktest(bt.id); }}
-                          className="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-red-500" />
-                        </button>
-                      </div>
-                    </div>
-                    <p className={`text-xs mb-2 ${bt.status === 'failed' ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>
-                      {bt.status === 'pending' ? 'Pending...' :
-                       bt.status === 'running' ? 'Running...' :
-                       bt.status === 'failed' ? 'Failed' :
-                       bt.engineType === 'daily_expert' ? 'Daily expert (multi-asset)' :
-                       `Model #${bt.modelId}${bt.createdAt ? ' · ' + new Date(bt.createdAt).toLocaleDateString() : ''}`}
-                    </p>
-                    {bt.status === 'failed' && bt.errorMessage && (
-                      <p className="text-xs text-red-400 mb-2 truncate" title={bt.errorMessage}>
-                        {bt.errorMessage}
-                      </p>
-                    )}
-                    {bt.status === 'completed' && (
-                      <div className="flex items-center gap-3 text-xs">
-                        <span className={`font-medium ${(bt.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {(bt.totalReturn || 0) >= 0 ? '+' : ''}{bt.totalReturn?.toFixed(1)}%
-                        </span>
-                        <span className="text-gray-500">Sharpe: {bt.sharpeRatio?.toFixed(2)}</span>
-                        <span className="text-gray-500">{bt.totalTrades} trades{bt.winningTrades != null ? ` (${bt.winningTrades}W/${bt.losingTrades}L)` : ''}</span>
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
           </div>
         </div>
 
