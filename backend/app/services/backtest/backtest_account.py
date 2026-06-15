@@ -981,6 +981,12 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         Builds a single-leg ``OptionLeg`` on the same contract with the opposite side
         (BUY long -> SELL_TO_CLOSE; SELL short -> BUY_TO_CLOSE) and routes it through the
         inherited ``submit_option_order`` so it is staged fillable like any other option order.
+
+        The close RIDES the OPEN position's transaction (we look up the OPENED option
+        transaction for the contract and pass its id), so the sell-to-close leg REDUCES the
+        original position to flat (net open qty -> 0) instead of spawning a separate OPENED
+        transaction holding the opposite-side leg. This also lets round-trip P&L pair the
+        open and close (they share one ``transaction_id``).
         """
         from ba2_common.core.option_types import OptionLeg
 
@@ -999,12 +1005,15 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             expiry=position.expiry,
             underlying=position.underlying,
         )
+        txn = self._option_transaction_for_contract(position.contract_symbol)
+        txn_id = getattr(txn, "id", None) if txn is not None else None
         return self.submit_option_order(
             legs=[leg],
             quantity=int(position.quantity),
             order_type=order_type,
             limit_price=limit_price,
             option_strategy="close",
+            transaction_id=txn_id,
         )
 
     def settle_option_expiry(

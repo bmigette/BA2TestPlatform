@@ -406,3 +406,84 @@ def test_option_round_trip_pnl_uses_multiplier(option_round_trip_account):
     rt = [t for t in acct.get_round_trip_trades() if t["exit_reason"] != "open_at_end"]
     # (1.50-1.00)*1*100 = 50 gross, minus commissions (0 here, so pnl == 50).
     assert any(abs(t["pnl"] - 50.0) <= 2.0 for t in rt)
+
+
+# ---------------------------------------------------------------------------
+# Task 10b: close_option_position must RIDE the open position's transaction
+# ---------------------------------------------------------------------------
+# Unlike the Task-10 fixture (which hand-passes transaction_id to
+# submit_option_order), this drives ``close_option_position`` — the public close
+# path — end-to-end. The close must reduce the ORIGINAL transaction to flat (net
+# qty -> 0), NOT spawn a second OPENED transaction holding the opposite leg.
+# Before the fix: get_option_positions() shows TWO positions (long + new short)
+# and the close order carries a DIFFERENT transaction_id, so round-trips can't pair.
+@pytest.fixture
+def option_close_account(tmp_path):
+    """BacktestAccount with 1 OPEN call, ready for ``close_option_position``.
+
+    Buy-to-open fills @1.00 (D2 open premium). The position is left OPEN (qty 1);
+    the test closes it via ``close_option_position`` and advances to fill @1.50.
+    Returns (acct, ps, open_txn_id, open_order_id).
+    """
+    from app.services.backtest.backtest_db import (
+        backtest_trading_db,
+        seed_account_definition,
+    )
+    from app.services.backtest.seam_wiring import wire_backtest_seams
+    from app.services.backtest.backtest_account import BacktestAccount
+    from app.services.backtest.price_source import AsOfPriceSource
+    from app.services.backtest.options_provider import HistoricalOptionsProvider
+    from ba2_common.core.option_types import OptionLeg
+    from ba2_common.core.types import OrderDirection
+
+    cache_db = str(tmp_path / "opt_close_cache.sqlite")
+    _seed_option_cache(cache_db)
+    provider = HistoricalOptionsProvider(cache_db)
+
+    wire_backtest_seams()
+    ctx = backtest_trading_db("opt-close")
+    ctx.__enter__()
+    seed_account_definition(1, CFG)
+    ps = AsOfPriceSource(ohlcv_provider=None)
+    ps.load_bars("AAPL", _OPT_UNDERLYING)
+    ps.set_clock(D1)
+    acct = BacktestAccount(1, ps, CFG, options_provider=provider)
+    wire_backtest_seams().register_account(1, acct)
+
+    try:
+        leg = OptionLeg(
+            contract_symbol=_OPT_OCC, side=OrderDirection.BUY,
+            position_intent="buy_to_open", underlying="AAPL",
+        )
+        parent = acct.submit_option_order(
+            legs=[leg], quantity=1, order_type="market", option_strategy="long_call"
+        )
+        open_order_id = parent.id
+        # Fill the open at the D2 open premium (1.00).
+        acct.refresh_orders()
+        acct.refresh_transactions()
+        open_txn_id = acct.get_order(open_order_id).transaction_id
+        yield acct, ps, open_txn_id, open_order_id
+    finally:
+        ctx.__exit__(None, None, None)
+
+
+def test_close_option_position_rides_open_transaction_and_nets_flat(option_close_account):
+    acct, ps, open_txn_id, open_order_id = option_close_account
+
+    pos = acct.get_option_positions()
+    assert len(pos) == 1  # the open long call
+
+    close_order = acct.close_option_position(pos[0], order_type="market")
+    # The close must ride the OPEN position's transaction (not a brand-new one).
+    assert close_order.transaction_id == open_txn_id
+
+    # Step the clock to D2 so the close fills at the D3 open premium (1.50).
+    ps.set_clock(D2)
+    acct.refresh_orders()
+    acct.refresh_transactions()
+    assert acct.get_order(close_order.id).open_price == pytest.approx(1.5)
+
+    # Netted FLAT: the sell-to-close on the SAME txn reduces net qty to 0, so the
+    # position no longer shows — NOT two positions (original long + a new short).
+    assert acct.get_option_positions() == []
