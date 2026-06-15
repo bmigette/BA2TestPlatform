@@ -324,6 +324,40 @@ body {
   color: rgb(209 213 219); /* gray-300 */
 }
 
+/* ============================================================================
+   FORCE dark BACKGROUNDS/borders/inputs — components use light utility classes
+   (bg-white, bg-gray-50, border-gray-200, ...) without dark: variants, so the
+   panels render white with light text (unreadable). These !important overrides
+   darken the surfaces so the existing light text is legible.
+   ============================================================================ */
+.dark .bg-white { background-color: rgb(30 41 59) !important; }     /* slate-800 panels/cards */
+.dark .bg-gray-50 { background-color: rgb(17 24 39) !important; }   /* page/section bg */
+.dark .bg-gray-100 { background-color: rgb(30 41 59) !important; }
+.dark .bg-gray-200 { background-color: rgb(51 65 85) !important; }
+.dark .hover\:bg-gray-50:hover { background-color: rgb(30 41 59) !important; }
+.dark .hover\:bg-gray-100:hover { background-color: rgb(51 65 85) !important; }
+
+.dark .border-gray-100,
+.dark .border-gray-200,
+.dark .border-gray-300 { border-color: rgb(51 65 85) !important; } /* slate-700 borders */
+
+/* Inputs / selects / textareas: dark field, light text, readable border */
+.dark input:not([type="checkbox"]):not([type="radio"]),
+.dark select,
+.dark textarea {
+  background-color: rgb(15 23 42) !important;   /* slate-900 */
+  color: rgb(226 232 240) !important;
+  border-color: rgb(51 65 85) !important;
+}
+
+/* Light gray body text -> readable on the now-dark surfaces */
+.dark .text-gray-400,
+.dark .text-gray-500,
+.dark .text-gray-600,
+.dark .text-gray-700,
+.dark .text-gray-800,
+.dark .text-black { color: rgb(203 213 225) !important; } /* slate-300 */
+
 /* Fix span elements that inherit dark colors */
 .dark span {
   color: inherit;
