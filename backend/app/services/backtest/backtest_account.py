@@ -57,11 +57,22 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ba2_common.core.interfaces.AccountInterface import AccountInterface
+from ba2_common.core.interfaces.OptionsAccountInterface import OptionsAccountInterface
 from ba2_common.core.models import TradingOrder, Transaction
-from ba2_common.core.types import OrderStatus, OrderType, OrderDirection, OrderOpenType
+from ba2_common.core.types import (
+    OrderStatus,
+    OrderType,
+    OrderDirection,
+    OrderOpenType,
+    OptionRight,
+    TransactionStatus,
+    AssetClass,
+)
+from ba2_common.core.option_types import OptionContract, OptionQuote, OptionPosition
 from ba2_common.core.db import get_db, get_instance, add_instance, update_instance
 
 from .price_source import AsOfPriceSource
+from .options_provider import HistoricalOptionsProvider
 
 
 class _AttrDict(dict):
@@ -92,17 +103,33 @@ class _Position:
     realized_pl: float = 0.0
 
 
-class BacktestAccount(AccountInterface):
-    """Simulated broker for daily multi-asset backtests."""
+class BacktestAccount(AccountInterface, OptionsAccountInterface):
+    """Simulated broker for daily multi-asset backtests.
+
+    Inherits BOTH ``AccountInterface`` (the equity/orchestration contract) and
+    ``OptionsAccountInterface`` (the options-capability mixin). The options READ methods
+    delegate to an OPTIONAL injected ``HistoricalOptionsProvider`` clamped to the simulated
+    as-of clock; when no provider is injected (the equity-only path) they degrade to
+    empty/None so existing equity callers are unaffected.
+    """
 
     # Class-level capability flags (mirror the live account contract).
     supports_trading = True
-    supports_options = False
+    supports_options = True
 
-    def __init__(self, id: int, price_source: AsOfPriceSource, settings: Dict[str, Any]):
+    def __init__(
+        self,
+        id: int,
+        price_source: AsOfPriceSource,
+        settings: Dict[str, Any],
+        options_provider: Optional[HistoricalOptionsProvider] = None,
+    ):
         # ReadOnlyAccountInterface.__init__ registers self.id in the _GLOBAL_PRICE_CACHE.
         super().__init__(id)
         self._price = price_source
+        # OPTIONAL as-of-clamped options reader. None on the equity-only path (existing
+        # equity callers pass no provider, so options reads degrade to empty/None).
+        self._options = options_provider
         # Resolved config dict (validated fail-early by the engine before the run):
         #   starting_cash, commission_per_trade, slippage_bps, fill_model.
         self._cfg = settings
@@ -649,6 +676,79 @@ class BacktestAccount(AccountInterface):
         (the engine ALSO pops the per-account cache each bar as belt-and-braces).
         """
         return self._get_instrument_current_price_impl(symbol_or_symbols, price_type=price_type)
+
+    # ======================================================================
+    # OptionsAccountInterface — READ methods (Task 4)
+    #
+    # All option reads delegate to the injected as-of-clamped provider, snapping the
+    # provider's ``as_of`` to the simulated bar's DATE (the engine sets the clock per bar
+    # via ``self._price.set_clock``). When no provider is injected (equity-only path) the
+    # reads degrade to empty/None so equity behaviour is unaffected. The two abstract
+    # ORDER methods (``_submit_option_order_impl`` / ``close_option_position``) are stubs
+    # here — they are implemented in Task 5 — but the class still instantiates (no abstract
+    # method left). ``get_iv_rank`` / ``submit_option_order`` are concrete in the base mixin
+    # and are NOT overridden.
+    # ======================================================================
+    def _as_of_date(self):
+        """The simulated bar's calendar date (the provider's as-of clamp boundary)."""
+        return self._price.now().date()
+
+    def get_option_chain(self, underlying, expiry_min, expiry_max, option_type=None,
+                         strike_min=None, strike_max=None):
+        if self._options is None:
+            return []
+        return self._options.get_chain(
+            underlying, self._as_of_date(), expiry_min=expiry_min, expiry_max=expiry_max,
+            option_type=option_type, strike_min=strike_min, strike_max=strike_max)
+
+    def get_option_quote(self, contract_symbol):
+        return None if self._options is None else self._options.get_quote(
+            contract_symbol, self._as_of_date())
+
+    def get_atm_implied_volatility(self, underlying):
+        return None if self._options is None else self._options.get_atm_iv(
+            underlying, self._as_of_date())
+
+    def get_option_positions(self):
+        """Held option positions, derived from OPENED transactions whose entry is an OPTION."""
+        from sqlmodel import select, Session
+
+        out: List[OptionPosition] = []
+        with Session(get_db().bind) as session:
+            txns = list(
+                session.exec(
+                    select(Transaction).where(Transaction.status == TransactionStatus.OPENED)
+                ).all()
+            )
+        for t in txns:
+            entry = self._entry_order_for_transaction(t)
+            if entry is None or getattr(entry, "asset_class", None) != AssetClass.OPTION:
+                continue
+            qty = t.get_current_open_qty()
+            if qty == 0:
+                continue
+            out.append(
+                OptionPosition(
+                    contract_symbol=entry.contract_symbol,
+                    underlying=entry.underlying_symbol,
+                    option_type=entry.option_type,
+                    strike=entry.strike,
+                    expiry=entry.expiry,
+                    side=(OrderDirection.BUY if qty > 0 else OrderDirection.SELL),
+                    quantity=abs(qty),
+                    avg_entry_price=t.open_price or 0.0,
+                    multiplier=entry.multiplier or 100,
+                )
+            )
+        return out
+
+    def _submit_option_order_impl(self, trading_order, legs, leg_orders=None):
+        # Task 5 implements the bar-based option fill path; stubbed so the class instantiates.
+        raise NotImplementedError("filled in Task 5")
+
+    def close_option_position(self, position, order_type="limit", limit_price=None):
+        # Task 5 implements the closing path; stubbed so the class instantiates.
+        raise NotImplementedError("filled in Task 5")
 
     # ======================================================================
     # Trading abstracts — baseline; expanded into the full engine in Task 3
