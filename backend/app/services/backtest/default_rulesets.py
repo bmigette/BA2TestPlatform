@@ -35,15 +35,17 @@ from ba2_common.core.types import (
     ExpertActionType,
     ExpertEventRuleType,
     ExpertEventType,
+    ReferenceValue,
 )
 
 
-def _make_event_action(name: str, triggers: dict, actions: dict) -> int:
-    """Create one enter_market ``EventAction`` and return its id."""
+def _make_event_action(name: str, triggers: dict, actions: dict,
+                       subtype: "AnalysisUseCase" = AnalysisUseCase.ENTER_MARKET) -> int:
+    """Create one ``EventAction`` (default enter_market subtype) and return its id."""
     ea = EventAction(
         name=name,
         type=ExpertEventRuleType.TRADING_RECOMMENDATION_RULE,
-        subtype=AnalysisUseCase.ENTER_MARKET,
+        subtype=subtype,
         triggers=triggers,
         actions=actions,
         extra_parameters={},
@@ -84,7 +86,126 @@ _FIELD_EVENT = {
     "days_since_last_close": ExpertEventType.N_DAYS_SINCE_LAST_CLOSE,
     "days_since_last_profitable_close": ExpertEventType.N_DAYS_SINCE_LAST_PROFITABLE_CLOSE,
     "days_since_last_losing_close": ExpertEventType.N_DAYS_SINCE_LAST_LOSING_CLOSE,
+    # Exit (open_positions) numeric conditions.
+    "profit_loss_percent": ExpertEventType.N_PROFIT_LOSS_PERCENT,
+    "profit_loss_amount": ExpertEventType.N_PROFIT_LOSS_AMOUNT,
+    "days_opened": ExpertEventType.N_DAYS_OPENED,
+    "percent_to_current_target": ExpertEventType.N_PERCENT_TO_CURRENT_TARGET,
+    "new_target_percent": ExpertEventType.N_NEW_TARGET_PERCENT,
 }
+
+# Flag (boolean) condition fields -> ExpertEventType (no operator/value). Used by exit
+# (open_positions) rules whose triggers include sentiment / term / risk / rating-change /
+# position flags — exactly the live open_positions trigger vocabulary.
+_FLAG_FIELD_EVENT = {
+    "bullish": ExpertEventType.F_BULLISH,
+    "bearish": ExpertEventType.F_BEARISH,
+    "has_position": ExpertEventType.F_HAS_POSITION,
+    "has_no_position": ExpertEventType.F_HAS_NO_POSITION,
+    "has_buy_position": ExpertEventType.F_HAS_BUY_POSITION,
+    "has_sell_position": ExpertEventType.F_HAS_SELL_POSITION,
+    "short_term": ExpertEventType.F_SHORT_TERM,
+    "medium_term": ExpertEventType.F_MEDIUM_TERM,
+    "long_term": ExpertEventType.F_LONG_TERM,
+    "highrisk": ExpertEventType.F_HIGHRISK,
+    "mediumrisk": ExpertEventType.F_MEDIUMRISK,
+    "lowrisk": ExpertEventType.F_LOWRISK,
+    "new_target_higher": ExpertEventType.F_NEW_TARGET_HIGHER,
+    "new_target_lower": ExpertEventType.F_NEW_TARGET_LOWER,
+    "current_rating_positive": ExpertEventType.F_CURRENT_RATING_POSITIVE,
+    "current_rating_negative": ExpertEventType.F_CURRENT_RATING_NEGATIVE,
+}
+
+# Exit action_type string -> (ExpertActionType, needs_reference_value). The adjust actions read
+# reference_value (order_open_price/current_price/expert_target_price) + value (the % offset);
+# close/sell take no params. Mirrors TradeActionEvaluator's action_config parsing.
+_EXIT_ACTION = {
+    "close": (ExpertActionType.CLOSE, False),
+    "sell": (ExpertActionType.SELL, False),
+    "adjust_take_profit": (ExpertActionType.ADJUST_TAKE_PROFIT, True),
+    "adjust_stop_loss": (ExpertActionType.ADJUST_STOP_LOSS, True),
+}
+
+
+def _triggers_from_conditions(tree) -> dict:
+    """Build an EventAction ``triggers`` dict (ANDed) from an exit-rule condition tree.
+
+    Flag leaves (``_FLAG_FIELD_EVENT``) become value-less triggers; numeric leaves
+    (``_FIELD_EVENT``) carry operator + value (the optimizer's cond:<id>:value gene). Unknown
+    fields are skipped so a partial/edited tree never silently breaks the rule.
+    """
+    triggers: dict = {}
+    for i, leaf in enumerate(_tree_leaves(tree)):
+        field = str(leaf.get("field"))
+        flag_et = _FLAG_FIELD_EVENT.get(field)
+        if flag_et is not None:
+            triggers[f"cond_{i}"] = {"event_type": flag_et.value}
+            continue
+        num_et = _FIELD_EVENT.get(field)
+        if num_et is not None and leaf.get("value") is not None:
+            triggers[f"cond_{i}"] = {
+                "event_type": num_et.value,
+                "operator": leaf.get("op") or leaf.get("operator") or ">",
+                "value": leaf.get("value"),
+            }
+    return triggers
+
+
+def _exit_action_json(rule: dict) -> dict | None:
+    """Build an EventAction ``actions`` dict for one exit rule, or None if the action is unknown.
+
+    ``rule['action_type']`` selects the action; adjust actions also carry ``reference_value``
+    and ``action_value`` (the % offset the optimizer tunes via exit:<id>:action_value).
+    """
+    spec = _EXIT_ACTION.get(str(rule.get("action_type")))
+    if spec is None:
+        return None
+    action_type, needs_ref = spec
+    cfg: dict = {"action_type": action_type.value}
+    if needs_ref:
+        cfg["reference_value"] = rule.get("reference_value") or ReferenceValue.ORDER_OPEN_PRICE.value
+        cfg["value"] = rule.get("action_value")
+    return {"act": cfg}
+
+
+def seed_open_positions_ruleset(exit_rules, name: str = "backtest-open-positions") -> int:
+    """Seed an OPEN_POSITIONS ruleset from a Strategy exit-rule LIST; return its id.
+
+    Each entry in ``exit_rules`` (the shape ``decode_params`` emits: ``{id, conditions,
+    action_type, reference_value, action_value, enabled}``; enabled-off rules are already
+    pruned) becomes ONE ordered ``EventAction`` whose triggers are the ANDed condition leaves
+    and whose single action is Close/Sell/Adjust-TP/Adjust-SL. This is evaluated by the SAME
+    packaged ``TradeActionEvaluator`` the live ``process_open_positions_recommendations`` uses
+    (open_positions use case), so the backtest manages open positions identically to live.
+
+    A rule with no usable action is skipped. Returns the ruleset id (with NO event actions if
+    every rule was skipped — the caller can treat that as "no exit management").
+    """
+    ruleset = Ruleset(
+        name=name,
+        description="Backtest open_positions ruleset built from a Strategy exit-rule list.",
+        type=ExpertEventRuleType.TRADING_RECOMMENDATION_RULE,
+        subtype=AnalysisUseCase.OPEN_POSITIONS,
+    )
+    ruleset_id = add_instance(ruleset)
+
+    ea_ids = []
+    for idx, rule in enumerate(exit_rules or []):
+        action = _exit_action_json(rule)
+        if action is None:
+            continue
+        triggers = _triggers_from_conditions(rule.get("conditions"))
+        ea_ids.append(
+            _make_event_action(
+                name=f"{name}-rule-{idx}",
+                triggers=triggers,
+                actions=action,
+                subtype=AnalysisUseCase.OPEN_POSITIONS,
+            )
+        )
+    if ea_ids:
+        _link(ruleset_id, ea_ids)
+    return ruleset_id
 
 
 def _tree_leaves(node):
