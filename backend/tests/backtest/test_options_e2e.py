@@ -26,6 +26,7 @@ Run from the backend dir:
 """
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
 
 import pytest
@@ -292,3 +293,72 @@ def test_engine_e2e_option_fill_mark_and_exercise(engine_run):
     assert results["initial_capital"] == pytest.approx(100_000.0)
     # Deep-ITM call -> the run ENDED above the starting capital.
     assert final_nlv > results["initial_capital"]
+
+
+# --------------------------------------------------------------------------- #
+# Task 12: GATED live-Alpaca smoke test.
+#
+# Unlike the fixture-driven engine e2e above (which never touches Alpaca), this exercises
+# the REAL ``build_cache`` fetch path against the live Alpaca options API for one liquid
+# underlying over a short 2024 window, then asserts the sqlite cache got populated:
+#   - a chain snapshot keyed at ``start.isoformat()`` (matches fetch_options.write_chain_rows),
+#   - at least one per-contract ``option_bar`` row.
+#
+# GATING (must SKIP cleanly so keyless / CI runs never fail):
+#   * No Alpaca creds in the environment -> SKIP. We resolve creds via the same env names
+#     ``fetch_options._alpaca_keys()`` reads (ALPACA_MARKET_API_KEY/_SECRET, falling back to
+#     ALPACA_API_KEY/ALPACA_SECRET_KEY). The codebase loads these from ``.env`` via
+#     ``app.models.database`` -> ``load_dotenv()`` at import; collection order decides whether
+#     that has happened yet, so we call ``load_dotenv()`` ourselves first to make the gate
+#     DETERMINISTIC whether this file is run alone or inside the full suite.
+#   * Creds present but Alpaca rejects them (401 unauthorized) or the account is not entitled
+#     to the options endpoints -> SKIP, not fail. A present-but-invalid ``.env`` key is an
+#     environment problem, not a defect in ``build_cache``; the task requires "all else green".
+#     A genuine population bug (creds valid, request succeeds, but nothing cached) still FAILS
+#     the row assertions below.
+#
+# The ``build_cache`` import is kept INSIDE the test so the lazy ``alpaca`` dependency
+# (imported within build_cache) cannot break collection; running it live requires the editable
+# venv ``~/ba2-venvs/test/bin/python`` which has alpaca-py installed.
+# --------------------------------------------------------------------------- #
+def _alpaca_keys_present() -> bool:
+    """True iff usable Alpaca creds resolve. Loads .env first so the gate is order-independent."""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()  # idempotent; populates os.environ from .env if not already loaded
+    except Exception:
+        pass
+    return bool(
+        (os.environ.get("ALPACA_MARKET_API_KEY") or os.environ.get("ALPACA_API_KEY")) and
+        (os.environ.get("ALPACA_MARKET_API_SECRET") or os.environ.get("ALPACA_SECRET_KEY"))
+    )
+
+
+@pytest.mark.skipif(not _alpaca_keys_present(), reason="no Alpaca API keys in env")
+def test_fetch_options_smoke(tmp_path):
+    """Live end-to-end Alpaca fetch: build_cache populates chain + bars for one underlying."""
+    from app.services.backtest.fetch_options import build_cache
+    from app.services.backtest.options_cache import OptionsHistoryCache
+
+    db = str(tmp_path / "smoke_opt.db")
+    start, end = date(2024, 3, 1), date(2024, 3, 15)
+
+    try:
+        build_cache(db, ["AAPL"], start, end, feed="indicative")
+    except Exception as exc:  # noqa: BLE001 - inspect for auth/entitlement, re-raise real bugs
+        msg = str(exc).lower()
+        if "unauthorized" in msg or "forbidden" in msg or "401" in msg or "403" in msg:
+            pytest.skip(f"Alpaca creds present but not entitled for options endpoints: {exc}")
+        raise
+
+    cache = OptionsHistoryCache(db)
+    # Chain is written keyed at start.isoformat() (fetch_options.write_chain_rows(u, start, ...)).
+    rows = cache.read_chain("AAPL", start.isoformat())
+    assert len(rows) >= 1, "expected at least one chain contract cached"
+
+    # At least one per-contract premium bar should have landed too.
+    import sqlite3
+
+    n_bars = sqlite3.connect(db).execute("SELECT COUNT(*) FROM option_bar").fetchone()[0]
+    assert n_bars >= 1, "expected at least one option_bar row cached"
