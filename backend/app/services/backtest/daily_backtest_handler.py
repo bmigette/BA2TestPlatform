@@ -533,6 +533,14 @@ def _expert_decision_settings(expert_cls: Any, overrides: Dict[str, Any]) -> Dic
             raise ValueError(
                 f"{expert_cls.__name__} setting '{key}' has no default and no payload override"
             )
+    # Pass through any EXPLICIT overrides that aren't among the expert's own decision keys —
+    # e.g. the classic-RM sizing settings (risk_per_trade_pct / atr_multiplier / min_stop_loss_pct
+    # / max_virtual_equity_per_instrument_percent) optimized via model:* but read by the RM off
+    # the expert (get_setting_with_interface_default), not declared on the expert itself. An
+    # override is an intentional caller/optimizer instruction, so it must reach the saved settings.
+    for k, v in overrides.items():
+        if k not in settings:
+            settings[k] = v
     return settings
 
 
