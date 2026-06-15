@@ -5,7 +5,7 @@ from datetime import date
 from typing import List, Optional
 from ba2_common.core.option_types import OptionContract, OptionQuote
 from ba2_common.core.types import OptionRight
-from .options_cache import OptionsHistoryCache, OptionsCacheMiss
+from .options_cache import OptionsHistoryCache
 
 def _to_contract(r: dict) -> OptionContract:
     return OptionContract(

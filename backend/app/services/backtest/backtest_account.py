@@ -64,11 +64,10 @@ from ba2_common.core.types import (
     OrderType,
     OrderDirection,
     OrderOpenType,
-    OptionRight,
     TransactionStatus,
     AssetClass,
 )
-from ba2_common.core.option_types import OptionContract, OptionQuote, OptionPosition
+from ba2_common.core.option_types import OptionPosition
 from ba2_common.core.db import get_db, get_instance, add_instance, update_instance
 
 from .price_source import AsOfPriceSource
