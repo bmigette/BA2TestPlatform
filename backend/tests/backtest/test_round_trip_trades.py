@@ -289,3 +289,120 @@ def test_open_transaction_marks_to_market_open_at_end():
         assert t["exit_price"] == pytest.approx(150.0)  # marked to last close
     finally:
         ctx.__exit__(None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Task 10: OPTION round-trips must scale realised P&L by the contract multiplier
+# ---------------------------------------------------------------------------
+# The premium is quoted PER SHARE but a contract controls 100 shares, so a call
+# bought @1.00 and closed @1.50 (1 contract) realises (1.50-1.00)*1*100 = $50 gross,
+# NOT $0.50. The buy-to-open and sell-to-close ride the SAME transaction so the
+# round-trip pairing groups them (a fresh transaction on the close would NOT pair).
+_OPT_OCC = "AAPL240315C00180000"
+
+# Underlying bars on three consecutive trading days so each submit has a "next bar":
+#   D1 -> buy-to-open fills next_bar_open on D2; D2 -> sell-to-close fills on D3.
+_OPT_UNDERLYING = [
+    {"Date": D1, "Open": 180, "High": 182, "Low": 178, "Close": 181, "Volume": 1000},
+    {"Date": D2, "Open": 181, "High": 184, "Low": 180, "Close": 183, "Volume": 1100},
+    {"Date": D3, "Open": 183, "High": 186, "Low": 182, "Close": 185, "Volume": 1200},
+]
+
+
+def _seed_option_cache(db_path: str) -> None:
+    """Seed the CALL chain + two premium bars: entry open 1.00 (D2), exit open 1.50 (D3)."""
+    from app.services.backtest.options_cache import OptionsHistoryCache
+
+    cache = OptionsHistoryCache(db_path)
+    cache.write_chain_rows(
+        "AAPL",
+        "2024-01-01",
+        [{"occ_symbol": _OPT_OCC, "option_type": "call", "strike": 180.0,
+          "expiry": "2024-03-15", "bid": 0.95, "ask": 1.05, "last": 1.0, "iv": 0.25}],
+    )
+    cache.write_bar_rows(
+        [
+            {"occ_symbol": _OPT_OCC, "date": "2024-01-03", "open": 1.0, "high": 1.2,
+             "low": 0.9, "close": 1.1, "volume": 500, "underlying": "AAPL",
+             "option_type": "call", "strike": 180.0, "expiry": "2024-03-15"},
+            {"occ_symbol": _OPT_OCC, "date": "2024-01-04", "open": 1.5, "high": 1.7,
+             "low": 1.4, "close": 1.6, "volume": 400, "underlying": "AAPL",
+             "option_type": "call", "strike": 180.0, "expiry": "2024-03-15"},
+        ]
+    )
+
+
+@pytest.fixture
+def option_round_trip_account(tmp_path):
+    """BacktestAccount that has BOUGHT then CLOSED 1 call through the real fill engine.
+
+    Buy-to-open fills @1.00 (D2 open premium); sell-to-close (on the SAME transaction)
+    fills @1.50 (D3 open premium). Zero commission/slippage keeps gross == pnl.
+    """
+    from app.services.backtest.backtest_db import (
+        backtest_trading_db,
+        seed_account_definition,
+    )
+    from app.services.backtest.seam_wiring import wire_backtest_seams
+    from app.services.backtest.backtest_account import BacktestAccount
+    from app.services.backtest.price_source import AsOfPriceSource
+    from app.services.backtest.options_provider import HistoricalOptionsProvider
+    from ba2_common.core.option_types import OptionLeg
+    from ba2_common.core.types import OrderDirection
+
+    cache_db = str(tmp_path / "opt_rt_cache.sqlite")
+    _seed_option_cache(cache_db)
+    provider = HistoricalOptionsProvider(cache_db)
+
+    wire_backtest_seams()
+    ctx = backtest_trading_db("opt-round-trip")
+    ctx.__enter__()
+    seed_account_definition(1, CFG)
+    ps = AsOfPriceSource(ohlcv_provider=None)
+    ps.load_bars("AAPL", _OPT_UNDERLYING)
+    ps.set_clock(D1)
+    acct = BacktestAccount(1, ps, CFG, options_provider=provider)
+    wire_backtest_seams().register_account(1, acct)
+
+    try:
+        # 1. Buy-to-open 1 call (market). Submitted on D1 -> auto-creates the txn.
+        leg = OptionLeg(
+            contract_symbol=_OPT_OCC, side=OrderDirection.BUY,
+            position_intent="buy_to_open", underlying="AAPL",
+        )
+        parent = acct.submit_option_order(
+            legs=[leg], quantity=1, order_type="market", option_strategy="long_call"
+        )
+        open_txn = acct.get_order(parent.id).transaction_id
+
+        # 2. Fill the open at the D2 open premium (1.00).
+        acct.refresh_orders()
+        acct.refresh_transactions()
+        assert acct.get_order(parent.id).open_price == pytest.approx(1.0)
+
+        # 3. Sell-to-close 1 call (market) on the SAME transaction so the pairing groups them.
+        close_leg = OptionLeg(
+            contract_symbol=_OPT_OCC, side=OrderDirection.SELL,
+            position_intent="sell_to_close", underlying="AAPL",
+        )
+        close_parent = acct.submit_option_order(
+            legs=[close_leg], quantity=1, order_type="market",
+            option_strategy="close", transaction_id=open_txn,
+        )
+
+        # 4. Step the clock to D2 so the close fills at the D3 open premium (1.50).
+        ps.set_clock(D2)
+        acct.refresh_orders()
+        acct.refresh_transactions()
+        assert acct.get_order(close_parent.id).open_price == pytest.approx(1.5)
+
+        yield acct
+    finally:
+        ctx.__exit__(None, None, None)
+
+
+def test_option_round_trip_pnl_uses_multiplier(option_round_trip_account):
+    acct = option_round_trip_account
+    rt = [t for t in acct.get_round_trip_trades() if t["exit_reason"] != "open_at_end"]
+    # (1.50-1.00)*1*100 = 50 gross, minus commissions (0 here, so pnl == 50).
+    assert any(abs(t["pnl"] - 50.0) <= 2.0 for t in rt)

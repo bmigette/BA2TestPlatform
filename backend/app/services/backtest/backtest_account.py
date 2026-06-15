@@ -763,7 +763,15 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 exit_reason = "open_at_end"
                 comm = commission
 
-            gross = (exit_px - entry_px) * size * direction
+            # Options quote premium PER SHARE but a contract controls ``multiplier`` (100)
+            # shares, so realised option P&L scales by the contract multiplier. Equity entries
+            # are not options -> mult stays 1 and the P&L is unchanged.
+            mult = (
+                (opening.multiplier or 1)
+                if getattr(opening, "asset_class", None) == AssetClass.OPTION
+                else 1
+            )
+            gross = (exit_px - entry_px) * size * direction * mult
             pnl = gross - comm
             pnl_pct = ((exit_px / entry_px - 1.0) * 100.0 * direction) if entry_px else 0.0
             bars_held = self._bars_between(entry_dt, exit_dt)
