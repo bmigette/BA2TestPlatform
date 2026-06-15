@@ -452,82 +452,130 @@ class BacktestAccount(AccountInterface):
         return trades
 
     def get_round_trip_trades(self) -> List[Dict[str, Any]]:
-        """Pair entry fills with their closing fills into round-trip trades with realised P&L.
+        """Pair opening fills with their closing fills into round-trip trades with realised P&L.
 
-        ``get_filled_trades`` returns one row per FILLED order (entries AND protective-leg
-        exits separately), which has no round-trip P&L — so trade-quality metrics (win_rate,
-        profit_factor, expectancy, best/worst trade) are all zero. This method instead groups
-        FILLED orders by their ``transaction_id`` and produces ONE row per transaction:
+        ``get_filled_trades`` returns one row per FILLED order (opens AND closers separately),
+        which has no round-trip P&L — so trade-quality metrics (win_rate, profit_factor,
+        expectancy, best/worst trade) are all zero. This method instead groups FILLED orders by
+        their ``transaction_id`` and produces ONE row per transaction.
 
-          * entry  = the FILLED order with ``depends_on_order IS NULL`` (the market entry);
-          * exit   = the FILLED dependent leg (TP/SL/OCO) closing it, if any;
-          * pnl    = (exit - entry) * qty * dir - commissions; pnl_pct in % of entry notional;
-          * a transaction still OPEN at the end of the run is marked-to-market at the symbol's
-            last available price (``exit_reason='open_at_end'``) so its unrealised P&L is
-            counted — otherwise a run that ends mid-trade would understate performance.
+        Entries vs exits are classified by SIDE, not by ``depends_on_order``: the OPENING order
+        is the EARLIEST-filled order in the transaction (you cannot close before you open) and
+        its side is the ``opening_side``. Then:
 
-        ``exit_reason`` distinguishes ``take_profit`` / ``stop_loss`` by which side of the OCO
-        the fill landed on (closest of limit/stop to the fill price). Rows carry the field
-        names ``results._trade_row`` already maps (entry_time/exit_time/direction/entry_price/
-        exit_price/size/pnl/pnl_pct/bars_held/exit_reason).
+          * ENTRIES = same-side fills (the open + any rebalance ADDs);
+          * EXITS   = opposite-side fills — this covers BOTH plain market sells (FactorRanker
+            rebalance/stop closers, ``depends_on_order IS NULL``) AND dependent TP/SL/OCO legs.
+            Classifying by ``depends_on_order`` instead would mis-read a plain closing sell as
+            an entry and drop the transaction into the ``open_at_end`` branch with garbage.
+          * entry/exit price = quantity-weighted average ``open_price`` over each side; ``size``
+            is the realised (exit) quantity; pnl = (exit_px - entry_px) * size * dir - commissions.
+          * a transaction with NO exit fill is still OPEN at run end -> marked-to-market at the
+            symbol's last available price (``exit_reason='open_at_end'``) so its unrealised P&L
+            is counted (otherwise a run that ends mid-trade would understate performance).
+
+        ``_exit_reason`` (called on the LATEST exit fill) returns ``"exit"`` for a plain market
+        sell (no limit/stop), and ``take_profit``/``stop_loss`` for an OCO/TP/SL leg by the
+        nearest price level. This is an APPROXIMATION for scaled add/reduce (one weighted-avg
+        round-trip row per transaction) and EXACT for the dominant buy-once / sell-once case.
+
+        Rows carry the field names ``results._trade_row`` maps (entry_time/exit_time/direction/
+        entry_price/exit_price/size/pnl/pnl_pct/bars_held/exit_reason).
         """
         executed = OrderStatus.get_executed_statuses()
         commission = float(self._cfg["commission_per_trade"])
 
-        # Group FILLED orders by transaction.
-        by_txn: Dict[int, Dict[str, Any]] = {}
+        def _fill_key(o):
+            """Sort key for fill ordering.
+
+            Order by simulated fill date; when a fill date is missing, fall back to ``o.id``
+            (a monotonic insertion counter). The first tuple element separates rows that HAVE a
+            fill date (0) from those that do not (1) so the two cases never compare a datetime
+            against an id, while keeping ``id`` as the stable tiebreaker within each group.
+            """
+            fd = self._fill_dates.get(o.id) if o.id is not None else None
+            oid = o.id or 0
+            return (0, fd, oid) if fd is not None else (1, oid, oid)
+
+        # Group FILLED orders (with a usable price) by transaction.
+        by_txn: Dict[int, List[Any]] = {}
         for o in self.get_orders():
             if o.transaction_id is None:
                 continue
-            slot = by_txn.setdefault(o.transaction_id, {"entry": None, "exits": []})
             if o.status not in executed or not (o.filled_qty or o.quantity):
                 continue
-            if o.depends_on_order is None:
-                slot["entry"] = o
-            else:
-                slot["exits"].append(o)
+            if not o.open_price:
+                continue
+            by_txn.setdefault(o.transaction_id, []).append(o)
 
         trades: List[Dict[str, Any]] = []
-        for txn_id, slot in by_txn.items():
-            entry = slot["entry"]
-            if entry is None or not entry.open_price:
+        for txn_id, orders in by_txn.items():
+            if not orders:
                 continue
-            qty = abs(float(entry.filled_qty or entry.quantity or 0.0))
-            if qty <= 0:
+            # The opening order is the earliest-filled one; its side opens the position.
+            orders_by_fill = sorted(orders, key=_fill_key)
+            opening = orders_by_fill[0]
+            opening_side = opening.side
+            entries = [o for o in orders if o.side == opening_side]
+            exits = [o for o in orders if o.side != opening_side]
+            if not entries:
                 continue
-            is_long = entry.side == OrderDirection.BUY
-            direction = 1.0 if is_long else -1.0
-            entry_px = float(entry.open_price)
-            entry_dt = self._fill_dates.get(entry.id) if entry.id is not None else None
 
-            exit_fill = next((e for e in slot["exits"] if e.open_price), None)
-            if exit_fill is not None:
-                exit_px = float(exit_fill.open_price)
-                exit_dt = self._fill_dates.get(exit_fill.id) if exit_fill.id is not None else None
-                exit_reason = self._exit_reason(exit_fill, exit_px)
+            def _wavg(group):
+                """(quantity-weighted avg open_price, total qty) over a group of fills."""
+                tot_qty = sum(abs(float(o.filled_qty or o.quantity or 0.0)) for o in group)
+                if tot_qty <= 0:
+                    return None, 0.0
+                wsum = sum(
+                    float(o.open_price) * abs(float(o.filled_qty or o.quantity or 0.0))
+                    for o in group
+                )
+                return wsum / tot_qty, tot_qty
+
+            entry_px, entry_qty = _wavg(entries)
+            if entry_px is None or entry_qty <= 0:
+                continue
+            is_long = opening_side == OrderDirection.BUY
+            direction = 1.0 if is_long else -1.0
+            entry_dt = min(
+                (self._fill_dates.get(o.id) for o in entries if self._fill_dates.get(o.id) is not None),
+                default=None,
+            )
+
+            if exits:
+                exit_px, exit_qty = _wavg(exits)
+                size = exit_qty
+                exits_by_fill = sorted(exits, key=_fill_key)
+                last_exit_fill = exits_by_fill[-1]
+                exit_dt = max(
+                    (self._fill_dates.get(o.id) for o in exits if self._fill_dates.get(o.id) is not None),
+                    default=None,
+                )
+                exit_reason = self._exit_reason(last_exit_fill, exit_px)
                 comm = commission * 2.0
             else:
                 # Still open at run end: mark-to-market at the last available price.
-                exit_px = self._price.close_at(entry.symbol)
+                size = entry_qty
+                exit_px = self._price.close_at(opening.symbol)
                 if exit_px is None:
                     exit_px = entry_px  # no closing price -> flat (counts as a near-zero trade)
                 exit_dt = self._price.now()
                 exit_reason = "open_at_end"
                 comm = commission
 
-            gross = (exit_px - entry_px) * qty * direction
+            gross = (exit_px - entry_px) * size * direction
             pnl = gross - comm
             pnl_pct = ((exit_px / entry_px - 1.0) * 100.0 * direction) if entry_px else 0.0
             bars_held = self._bars_between(entry_dt, exit_dt)
             trades.append(
                 {
-                    "symbol": entry.symbol,
+                    "symbol": opening.symbol,
                     "entry_time": entry_dt,
                     "exit_time": exit_dt,
                     "direction": "buy" if is_long else "sell",
                     "entry_price": entry_px,
                     "exit_price": exit_px,
-                    "size": qty,
+                    "size": size,
                     "pnl": pnl,
                     "pnl_pct": pnl_pct,
                     "bars_held": bars_held,
