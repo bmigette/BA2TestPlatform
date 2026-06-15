@@ -177,3 +177,47 @@ def test_get_atm_implied_volatility_reads_provider(options_account):
 
 def test_get_option_positions_empty_when_no_option_txns(options_account):
     assert options_account.get_option_positions() == []
+
+
+def test_submit_single_call_stages_fillable_option_order(options_account):
+    from ba2_common.core.option_types import OptionLeg
+    from ba2_common.core.types import OrderDirection
+
+    acct = options_account
+    leg = OptionLeg(contract_symbol="AAPL240315C00180000", side=OrderDirection.BUY,
+                    position_intent="buy_to_open", underlying="AAPL")
+    order = acct.submit_option_order(legs=[leg], quantity=1, order_type="limit", limit_price=2.1,
+                                     option_strategy="long_call")
+    assert order is not None
+    assert order.asset_class.value == "option" and order.multiplier == 100
+    assert order.contract_symbol == "AAPL240315C00180000"
+    # staged in a non-terminal, fillable status (matches the equity working status)
+    from ba2_common.core.types import OrderStatus
+    assert order.status not in OrderStatus.get_terminal_statuses()
+    # same working status the equity submit path uses, so the bar-fill engine picks it up
+    assert order.status == OrderStatus.ACCEPTED
+
+
+def test_close_option_position_submits_opposite_side(options_account):
+    from ba2_common.core.option_types import OptionLeg, OptionPosition
+    from ba2_common.core.types import OrderDirection, OrderStatus, OptionRight
+
+    acct = options_account
+    pos = OptionPosition(
+        contract_symbol="AAPL240315C00180000",
+        underlying="AAPL",
+        option_type=OptionRight.CALL,
+        strike=180.0,
+        expiry=date(2024, 3, 15),
+        side=OrderDirection.BUY,
+        quantity=1,
+        avg_entry_price=3.1,
+    )
+    order = acct.close_option_position(pos, order_type="limit", limit_price=3.5)
+    assert order is not None
+    # closing a long -> SELL_TO_CLOSE, staged fillable
+    assert order.side == OrderDirection.SELL
+    assert order.contract_symbol == "AAPL240315C00180000"
+    assert order.option_strategy == "close"
+    assert order.status == OrderStatus.ACCEPTED
+    assert order.status not in OrderStatus.get_terminal_statuses()

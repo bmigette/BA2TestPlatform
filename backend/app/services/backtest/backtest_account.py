@@ -743,12 +743,61 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         return out
 
     def _submit_option_order_impl(self, trading_order, legs, leg_orders=None):
-        # Task 5 implements the bar-based option fill path; stubbed so the class instantiates.
-        raise NotImplementedError("filled in Task 5")
+        """Stage the option order(s) so the per-bar fill engine fills them next bar.
+
+        No broker round-trip: we simply move the order(s) from the base's freshly-persisted
+        PENDING state into the SAME working/fillable status the equity ``_submit_order_impl``
+        uses (``OrderStatus.ACCEPTED`` — see ``get_active_statuses()``), so the per-bar fill
+        engine (Task 6/8) picks them up next bar.
+
+        single-leg: the parent IS the contract (it carries ``contract_symbol``) and fills.
+        multi-leg : the child leg orders carry the contracts that fill; the parent has no
+                    ``contract_symbol`` and only tracks the net — it stays working (non-terminal)
+                    but is not itself directly fillable.
+        """
+        fillable = OrderStatus.ACCEPTED  # matches the equity working status (_submit_order_impl)
+        if leg_orders:
+            for child in leg_orders:
+                child.status = fillable
+                update_instance(child)
+            trading_order.status = fillable
+            update_instance(trading_order)
+        else:
+            trading_order.status = fillable
+            update_instance(trading_order)
+        return trading_order
 
     def close_option_position(self, position, order_type="limit", limit_price=None):
-        # Task 5 implements the closing path; stubbed so the class instantiates.
-        raise NotImplementedError("filled in Task 5")
+        """Submit a closing order for a held option position (opposite intent).
+
+        Builds a single-leg ``OptionLeg`` on the same contract with the opposite side
+        (BUY long -> SELL_TO_CLOSE; SELL short -> BUY_TO_CLOSE) and routes it through the
+        inherited ``submit_option_order`` so it is staged fillable like any other option order.
+        """
+        from ba2_common.core.option_types import OptionLeg
+
+        close_side = (
+            OrderDirection.SELL if position.side == OrderDirection.BUY else OrderDirection.BUY
+        )
+        intent = (
+            "sell_to_close" if position.side == OrderDirection.BUY else "buy_to_close"
+        )
+        leg = OptionLeg(
+            contract_symbol=position.contract_symbol,
+            side=close_side,
+            position_intent=intent,
+            option_type=position.option_type,
+            strike=position.strike,
+            expiry=position.expiry,
+            underlying=position.underlying,
+        )
+        return self.submit_option_order(
+            legs=[leg],
+            quantity=int(position.quantity),
+            order_type=order_type,
+            limit_price=limit_price,
+            option_strategy="close",
+        )
 
     # ======================================================================
     # Trading abstracts — baseline; expanded into the full engine in Task 3
