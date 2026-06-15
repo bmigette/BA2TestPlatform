@@ -6,22 +6,24 @@ def _strategy(**kw):
     base = dict(
         initial_tp_percent=5.0, initial_sl_percent=2.0,
         buy_entry_conditions=None, sell_entry_conditions=None, exit_conditions=[],
-        rm_risk_per_trade_pct=1.0, rm_per_instrument_cap_pct=20.0, rm_min_stop_pct=2.0,
-        rm_atr_stop_mult=2.0, rm_max_concurrent_positions=5,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
 
 
-def test_decode_tp_sl_rm_expert():
+def test_decode_tp_sl_and_expert_incl_rm_sizing():
+    """RM sizing rides on the expert model:* path keyed by the real ba2 names
+    (risk_per_trade_pct), landing in expert_overrides — there is no rm key."""
     s = _strategy()
     out = decode_params(s, {"tp": 8.0, "sl": 3.0,
-                            "rm:risk_per_trade_pct": 2.5,
+                            "model:risk_per_trade_pct": 2.5,
                             "model:surprise_min_pct": 12.0})
     assert out["tp"] == 8.0 and out["sl"] == 3.0
-    assert out["rm"]["risk_per_trade_pct"] == 2.5
-    assert out["rm"]["max_concurrent_positions"] == 5   # baseline preserved
-    assert out["expert_overrides"] == {"surprise_min_pct": 12.0}
+    assert "rm" not in out
+    assert out["expert_overrides"] == {
+        "risk_per_trade_pct": 2.5,
+        "surprise_min_pct": 12.0,
+    }
 
 
 def test_decode_substitutes_condition_by_id_without_mutating_source():
@@ -47,4 +49,5 @@ def test_decode_falls_back_to_strategy_defaults():
     s = _strategy()
     out = decode_params(s, {})  # nothing optimized this trial
     assert out["tp"] == 5.0 and out["sl"] == 2.0
-    assert out["rm"]["risk_per_trade_pct"] == 1.0
+    assert out["expert_overrides"] == {}
+    assert "rm" not in out

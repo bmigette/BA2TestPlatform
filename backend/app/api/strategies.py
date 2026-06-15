@@ -12,9 +12,21 @@ from sqlalchemy.orm import Session
 
 from app.models import get_db, Strategy, TrainedModel, StrategyOptimization
 from app.services.task_queue import get_task_queue
-from app.services.strategy_param_space import CLASSIC_RM_PARAMS
 
 logger = logging.getLogger(__name__)
+
+# Classic-RM param names this route still folds into optimization_config.rm_params from the
+# Strategy columns. The rm:* param-space namespace itself is retired (RM sizing now optimizes
+# via the expert model:* path); this route-level fold is removed in P1-T7 (optimize payload
+# rework). Kept inline here so retiring CLASSIC_RM_PARAMS from strategy_param_space doesn't
+# break this import in the meantime.
+_CLASSIC_RM_PARAMS = (
+    "risk_per_trade_pct",
+    "per_instrument_cap_pct",
+    "min_stop_pct",
+    "atr_stop_mult",
+    "max_concurrent_positions",
+)
 
 router = APIRouter()
 
@@ -375,7 +387,7 @@ class OptimizeRequest(BaseModel):
 def _rm_cfg_from_strategy(s) -> dict:
     """Build the rm_params dict collect_param_space expects from Strategy columns."""
     cfg = {}
-    for p in CLASSIC_RM_PARAMS:
+    for p in _CLASSIC_RM_PARAMS:
         is_int = (p == "max_concurrent_positions")
         cfg[p] = {
             "optimize": bool(getattr(s, f"rm_{p}_optimize", False)),

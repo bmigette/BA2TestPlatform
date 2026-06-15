@@ -1,15 +1,17 @@
-"""Joint optimization parameter space for strategy/expert/RM optimization.
+"""Joint optimization parameter space for strategy/expert optimization.
 
 Collects ONE flat param_ranges dict (the GeneticOptimizer shape
 {name: {'type','min','max','step'}}) from a Strategy row + expert numeric
-settings + classic-RM config, and decodes a flat decoded-params dict back into
-(tp, sl, rm_dict, expert_overrides, buy_tree, sell_tree, exit_rules) by
+settings, and decodes a flat decoded-params dict back into
+(tp, sl, expert_overrides, buy_tree, sell_tree, exit_rules) by
 deep-copying the condition trees and substituting node value/confirmation_bars/
 action_value by id. The Strategy row is never mutated.
 
+RM sizing is optimized through the expert ``model:*`` path keyed by the REAL ba2
+setting names (e.g. ``risk_per_trade_pct``); there is no separate rm namespace.
+
 Namespacing (design §5):
-  model:<p>                       expert numeric decision settings
-  rm:<p>                          classic-RM params
+  model:<p>                       expert numeric decision settings (incl. RM sizing)
   tp | sl                         initial TP/SL percent
   cond:<id>:value                 a buy/sell condition node's threshold
   cond:<id>:confirmation_bars     that node's confirmation bars
@@ -20,15 +22,6 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-
-# Classic-RM params (design §5). Each is namespaced rm:<name>.
-CLASSIC_RM_PARAMS = (
-    "risk_per_trade_pct",
-    "per_instrument_cap_pct",
-    "min_stop_pct",
-    "atr_stop_mult",
-    "max_concurrent_positions",
-)
 
 
 def _range_entry(min_v, max_v, step_v, is_int: bool) -> Dict[str, Any]:
@@ -52,24 +45,6 @@ def _collect_tp_sl(strategy) -> Dict[str, Any]:
     if getattr(strategy, "initial_sl_optimize", False):
         out["sl"] = _range_entry(strategy.initial_sl_min, strategy.initial_sl_max,
                                  strategy.initial_sl_step, is_int=False)
-    return out
-
-
-def _collect_rm(rm_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """rm:<p> ranges from a classic-RM config dict.
-
-    rm_cfg shape (per param): {name: {'optimize': bool, 'min','max','step',
-    'type': 'int'|'float'}}. Only optimize=True params are emitted.
-    """
-    out: Dict[str, Any] = {}
-    if not rm_cfg:
-        return out
-    for name in CLASSIC_RM_PARAMS:
-        spec = rm_cfg.get(name)
-        if spec and spec.get("optimize"):
-            is_int = spec.get("type") == "int"
-            out[f"rm:{name}"] = _range_entry(spec.get("min"), spec.get("max"),
-                                             spec.get("step"), is_int=is_int)
     return out
 
 
@@ -153,25 +128,23 @@ def _collect_conditions(strategy) -> Dict[str, Any]:
 def collect_param_space(
     strategy,
     expert_cfg: Optional[Dict[str, Any]] = None,
-    rm_cfg: Optional[Dict[str, Any]] = None,
     bypass: bool = False,
 ) -> Dict[str, Any]:
     """Return the flat joint param_ranges dict for GeneticOptimizer.
 
-    Merges expert (model:*) + RM (rm:*) + tp/sl + condition (cond:*/exit:*) ranges.
-    Key order is deterministic (model, rm, tp/sl, conditions) so the gene list is
-    stable across runs — required for reproducibility.
+    Merges expert (model:*, including RM sizing settings) + tp/sl + condition
+    (cond:*/exit:*) ranges. Key order is deterministic (model, tp/sl, conditions)
+    so the gene list is stable across runs — required for reproducibility.
 
     BYPASS experts (piece 1c): when ``bypass`` is True the strategy/expert does NOT use
     the classic RM or the enter/exit ruleset (e.g. FactorRanker rebalances to target weights
     via its own portfolio manager). For such an expert the search space is restricted to the
-    expert's OWN params (model:*) ONLY — the rm:*, tp, sl, cond:* and exit:* namespaces are
+    expert's OWN params (model:*) ONLY — the tp, sl, cond:* and exit:* namespaces are
     EXCLUDED (they have no effect on the rebalance path, so optimizing them would be noise).
     """
     space: Dict[str, Any] = {}
     space.update(_collect_expert(expert_cfg))
     if not bypass:
-        space.update(_collect_rm(rm_cfg))
         space.update(_collect_tp_sl(strategy))
         space.update(_collect_conditions(strategy))
     if not space:
@@ -181,7 +154,7 @@ def collect_param_space(
                 "a bypass expert searches only its own params — mark at least one expert "
                 "param optimize=True."
                 if bypass
-                else "mark at least one of expert/RM/TP/SL/condition fields optimize=True."
+                else "mark at least one of expert/TP/SL/condition fields optimize=True."
             )
         )
     logger.info(
@@ -227,28 +200,16 @@ def _apply_to_tree(tree: Optional[Dict[str, Any]], by_id: Dict[str, Dict[str, An
     return new
 
 
-def _rm_defaults_from_strategy(strategy) -> Dict[str, Any]:
-    """Read the non-optimized RM baseline values from the Strategy columns."""
-    return {
-        "risk_per_trade_pct": getattr(strategy, "rm_risk_per_trade_pct", None),
-        "per_instrument_cap_pct": getattr(strategy, "rm_per_instrument_cap_pct", None),
-        "min_stop_pct": getattr(strategy, "rm_min_stop_pct", None),
-        "atr_stop_mult": getattr(strategy, "rm_atr_stop_mult", None),
-        "max_concurrent_positions": getattr(strategy, "rm_max_concurrent_positions", None),
-    }
-
-
 def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     """Reconstruct a concrete trial config from a decoded flat params dict.
 
     The flat dict comes from GeneticOptimizer.decode_individual (namespaced keys:
-    tp | sl | rm:<p> | model:<p> | cond:<id>:value | cond:<id>:confirmation_bars |
+    tp | sl | model:<p> | cond:<id>:value | cond:<id>:confirmation_bars |
     exit:<id>:action_value). Returns::
 
       {
         'tp': float, 'sl': float,                 # falls back to strategy defaults
-        'rm': {risk_per_trade_pct,...},           # classic-RM dict (defaults + overrides)
-        'expert_overrides': {param: value},       # model:* stripped of prefix
+        'expert_overrides': {param: value},       # model:* stripped of prefix (incl. RM sizing)
         'buy_tree': dict|None, 'sell_tree': dict|None, 'exit_rules': list,
       }
 
@@ -258,7 +219,6 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     cond_by_id: Dict[str, Dict[str, Any]] = {}
     exit_action_by_id: Dict[str, Any] = {}
     exit_enabled_by_id: Dict[str, Any] = {}
-    rm: Dict[str, Any] = {}
     expert_overrides: Dict[str, Any] = {}
     tp = getattr(strategy, "initial_tp_percent", None)
     sl = getattr(strategy, "initial_sl_percent", None)
@@ -268,8 +228,6 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
             tp = val
         elif key == "sl":
             sl = val
-        elif key.startswith("rm:"):
-            rm[key[len("rm:"):]] = val
         elif key.startswith("model:"):
             expert_overrides[key[len("model:"):]] = val
         elif key.startswith("cond:"):
@@ -283,10 +241,6 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
                 exit_action_by_id[eid] = val
         else:
             raise ValueError(f"Unknown decoded param namespace: {key!r}")
-
-    # Fill RM defaults from the Strategy columns for params NOT under optimization
-    rm_full = _rm_defaults_from_strategy(strategy)
-    rm_full.update(rm)
 
     buy_tree = _apply_to_tree(getattr(strategy, "buy_entry_conditions", None), cond_by_id)
     sell_tree = _apply_to_tree(getattr(strategy, "sell_entry_conditions", None), cond_by_id)
@@ -307,7 +261,7 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
         exit_rules.append(rule)
 
     return {
-        "tp": tp, "sl": sl, "rm": rm_full,
+        "tp": tp, "sl": sl,
         "expert_overrides": expert_overrides,
         "buy_tree": buy_tree, "sell_tree": sell_tree, "exit_rules": exit_rules,
     }

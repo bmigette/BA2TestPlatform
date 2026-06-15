@@ -1,5 +1,5 @@
 import types
-from app.services.strategy_param_space import collect_param_space, CLASSIC_RM_PARAMS
+from app.services.strategy_param_space import collect_param_space
 
 
 def _strategy(**kw):
@@ -22,13 +22,15 @@ def test_collect_tp_sl_only_when_optimize():
     assert "sl" not in space
 
 
-def test_collect_rm_namespaced():
+def test_rm_sizing_via_expert_model_namespace():
+    """RM sizing is optimized through the expert model:* path keyed by the REAL ba2 setting
+    names (e.g. risk_per_trade_pct); there is no separate rm:* namespace anymore."""
     s = _strategy(initial_tp_optimize=True, initial_tp_min=1, initial_tp_max=2, initial_tp_step=0.5)
-    rm = {"risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 3.0, "step": 0.25, "type": "float"},
-          "max_concurrent_positions": {"optimize": True, "min": 1, "max": 10, "step": 1, "type": "int"}}
-    space = collect_param_space(s, rm_cfg=rm)
-    assert space["rm:risk_per_trade_pct"]["type"] == "float"
-    assert space["rm:max_concurrent_positions"] == {"type": "int", "min": 1, "max": 10, "step": 1}
+    expert = {"risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 3.0, "step": 0.25,
+                                     "type": "float"}}
+    space = collect_param_space(s, expert_cfg=expert)
+    assert space["model:risk_per_trade_pct"]["type"] == "float"
+    assert not any(k.startswith("rm:") for k in space)
 
 
 def test_collect_expert_namespaced():
@@ -69,10 +71,10 @@ def test_empty_space_raises():
         collect_param_space(_strategy())
 
 
-def test_bypass_excludes_rm_tp_sl_cond_exit_keeps_only_model():
-    """BYPASS expert (piece 1c): the param space drops rm:*/tp/sl/cond:*/exit:* and keeps
+def test_bypass_excludes_tp_sl_cond_exit_keeps_only_model():
+    """BYPASS expert (piece 1c): the param space drops tp/sl/cond:*/exit:* and keeps
     ONLY the expert's own model:* params (FactorRanker rebalances via its own portfolio
-    manager, so the classic RM / ruleset namespaces have no effect)."""
+    manager, so the ruleset namespaces have no effect)."""
     buy = {"operator": "AND", "conditions": [
         {"id": "c1", "field": "model:probability", "comparison": ">=", "value": 0.6,
          "optimize": True, "value_min": 0.5, "value_max": 0.9, "value_step": 0.05},
@@ -87,14 +89,12 @@ def test_bypass_excludes_rm_tp_sl_cond_exit_keeps_only_model():
              "action_value_step": 0.5, "conditions": {}},
         ],
     )
-    rm = {"risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 3.0, "step": 0.25,
-                                 "type": "float"}}
     # FactorRanker's own params (factor weights / top_n / winsorize_pct).
     expert = {"top_n": {"optimize": True, "min": 5, "max": 30, "step": 5, "type": "int"},
               "winsorize_pct": {"optimize": True, "min": 0.0, "max": 0.1, "step": 0.01,
                                 "type": "float"}}
 
-    space = collect_param_space(s, expert_cfg=expert, rm_cfg=rm, bypass=True)
+    space = collect_param_space(s, expert_cfg=expert, bypass=True)
 
     # ONLY model:* survives.
     assert set(space) == {"model:top_n", "model:winsorize_pct"}
@@ -107,18 +107,16 @@ def test_bypass_excludes_rm_tp_sl_cond_exit_keeps_only_model():
 
 
 def test_bypass_vs_non_bypass_same_inputs_differ():
-    """The SAME strategy/expert/RM inputs yield a strictly smaller space under bypass=True
-    (rm:*/tp/sl present without bypass, gone with it)."""
+    """The SAME strategy/expert inputs yield a strictly smaller space under bypass=True
+    (tp/sl present without bypass, gone with it)."""
     s = _strategy(initial_tp_optimize=True, initial_tp_min=2.0, initial_tp_max=10.0,
                   initial_tp_step=0.5)
-    rm = {"risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 3.0, "step": 0.25,
-                                 "type": "float"}}
     expert = {"top_n": {"optimize": True, "min": 5, "max": 30, "step": 5, "type": "int"}}
 
-    classic = collect_param_space(s, expert_cfg=expert, rm_cfg=rm, bypass=False)
-    bypass = collect_param_space(s, expert_cfg=expert, rm_cfg=rm, bypass=True)
+    classic = collect_param_space(s, expert_cfg=expert, bypass=False)
+    bypass = collect_param_space(s, expert_cfg=expert, bypass=True)
 
-    assert "tp" in classic and "rm:risk_per_trade_pct" in classic
+    assert "tp" in classic and "model:top_n" in classic
     assert set(bypass) == {"model:top_n"}
     assert set(bypass) < set(classic)
 

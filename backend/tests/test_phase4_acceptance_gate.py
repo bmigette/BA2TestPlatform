@@ -132,11 +132,13 @@ def test_decode_by_id_deep_copy_source_unmutated():
 
 
 def test_joint_space_is_real_with_every_family(seed_strategy):
-    """collect_param_space emits namespaced keys across all three families
-    (tp/sl + rm:* + model:* + cond:*/exit:*) in one flat dict.
+    """collect_param_space emits namespaced keys across every family
+    (tp/sl + model:* + cond:*/exit:*) in one flat dict.
 
-    Uses the conftest seed_strategy (real Strategy row) for tp/sl/rm, plus an
-    expert_cfg + condition tree to exercise model:/cond:/exit: namespaces.
+    Uses the conftest seed_strategy (real Strategy row) for tp/sl, plus an
+    expert_cfg + condition tree to exercise model:/cond:/exit: namespaces. RM
+    sizing rides on the expert model:* path (real ba2 setting names), so it is
+    part of expert_cfg now — there is no separate rm:* namespace.
     """
     s = seed_strategy
     s.buy_entry_conditions = {
@@ -151,17 +153,17 @@ def test_joint_space_is_real_with_every_family(seed_strategy):
          "action_value_optimize": True, "action_value_min": 0.5,
          "action_value_max": 3.0, "action_value_step": 0.5, "conditions": {}},
     ]
-    rm_cfg = {
-        "risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 3.0, "step": 0.25,
-                               "type": "float"},
-    }
     expert_cfg = {
         "surprise_min_pct": {"optimize": True, "min": 1.0, "max": 20.0, "step": 1.0,
                              "type": "float"},
+        # RM sizing optimized via the expert model:* path, keyed by the real ba2 name.
+        "risk_per_trade_pct": {"optimize": True, "min": 0.5, "max": 3.0, "step": 0.25,
+                               "type": "float"},
     }
-    space = collect_param_space(s, expert_cfg=expert_cfg, rm_cfg=rm_cfg)
+    space = collect_param_space(s, expert_cfg=expert_cfg)
     assert "tp" in space and "sl" in space
-    assert "rm:risk_per_trade_pct" in space
+    assert "model:risk_per_trade_pct" in space
+    assert not any(k.startswith("rm:") for k in space)
     assert "model:surprise_min_pct" in space
     assert "cond:c9:value" in space
     assert "exit:e9:action_value" in space

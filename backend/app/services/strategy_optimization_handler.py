@@ -1,5 +1,5 @@
 """Strategy optimization handler — joint genetic search over
-expert + classic-RM + ruleset/condition params, scored by ONE backtest metric.
+expert (incl. RM sizing settings) + ruleset/condition params, scored by ONE backtest metric.
 
 Registered as task type ``strategy_optimization`` (main.py). Mirrors the proven GA
 wiring in ``job_handler.py`` (validate -> seed -> hoist -> fitness_function -> optimize
@@ -109,10 +109,9 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                 "(engine/datasets/date-range/initial_capital/...)",
             )
         expert_cfg = ga.get("expert_params")  # may be None (expert frozen)
-        rm_cfg = ga.get("rm_params")  # may be None (RM not optimized)
 
         # BYPASS expert (piece 1c): if the backtest's expert declares ``bypasses_classic_rm``
-        # (e.g. FactorRanker) the search space must EXCLUDE rm:*/tp/sl/cond:*/exit:* and search
+        # (e.g. FactorRanker) the search space must EXCLUDE tp/sl/cond:*/exit:* and search
         # ONLY the expert's own params (model:*). Detected from the backtest_cfg experts here so
         # the same flag drives both the param space and the per-trial config.
         bypass_expert = _is_bypass_expert(backtest_cfg)
@@ -120,7 +119,7 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         # --- Build the joint param space (Task 1) ---
         try:
             param_space = collect_param_space(
-                strategy, expert_cfg=expert_cfg, rm_cfg=rm_cfg, bypass=bypass_expert
+                strategy, expert_cfg=expert_cfg, bypass=bypass_expert
             )
         except ValueError as e:
             return _fail(opt_id, db, str(e))
@@ -310,7 +309,7 @@ def _is_bypass_expert(backtest_cfg: Dict[str, Any]) -> bool:
     Resolves each expert class name through the daily handler's ``_SUPPORTED_EXPERTS`` map and
     reads the class-level marker (``getattr(cls, 'bypasses_classic_rm', False)``). A bypass
     expert (e.g. FactorRanker) rebalances to target weights via its own portfolio manager, so
-    the optimizer must drop the rm:*/tp/sl/cond:*/exit:* namespaces and search only model:*.
+    the optimizer must drop the tp/sl/cond:*/exit:* namespaces and search only model:*.
 
     Only the ``daily`` engine has the expert-aware bypass concept; the ML engine path is never
     a bypass. An unresolvable / unknown class is treated as NON-bypass (the validating handler
@@ -368,10 +367,10 @@ def _run_trial_backtest(
     The default (and the design's first-class path) is the Phase-2 SYNCHRONOUS daily
     runner (``daily_backtest_handler.run_daily_backtest``) for ba2-expert strategies with
     multi-asset classic RM. The decoded trial params are injected per the Replan seam:
-      * ``decoded['rm']`` + ``decoded['expert_overrides']`` are MERGED into each expert's
-        settings dict (the engine feeds settings to ``_process``; the RM reads its sizing
-        params off the expert via ``get_setting_with_interface_default``), mapping the
-        joint namespaces to the REAL ba2 RM setting names;
+      * ``decoded['expert_overrides']`` (model:* keyed by the REAL ba2 setting names, incl.
+        RM sizing such as ``risk_per_trade_pct``) is MERGED into each expert's settings dict
+        (the engine feeds settings to ``_process``; the RM reads its sizing params off the
+        expert via ``get_setting_with_interface_default``);
       * ``decoded['tp']`` / ``decoded['sl']`` set the initial TP/SL the ruleset applies;
       * ``decoded['buy_tree']`` / ``decoded['sell_tree']`` / ``decoded['exit_rules']`` are
         the substituted condition trees.
@@ -395,36 +394,21 @@ def _run_trial_backtest(
     )
 
 
-# Map the joint RM namespaces (decode_params 'rm' keys) onto the REAL ba2 RM setting names
-# the daily engine's TradeRiskManagement reads off the expert (Replan):
-#   risk_per_trade_pct        -> risk_per_trade_pct        (matches)
-#   atr_stop_mult             -> atr_multiplier
-#   min_stop_pct              -> min_stop_loss_pct
-#   per_instrument_cap_pct    -> max_virtual_equity_per_instrument_percent
-# max_concurrent_positions has NO enforcement hook in the current engine (it caps by
-# equity %, not position count) — it is intentionally NOT forwarded as a setting.
-_RM_SETTING_NAME = {
-    "risk_per_trade_pct": "risk_per_trade_pct",
-    "atr_stop_mult": "atr_multiplier",
-    "min_stop_pct": "min_stop_loss_pct",
-    "per_instrument_cap_pct": "max_virtual_equity_per_instrument_percent",
-}
-
-
 def _build_daily_trial_config(
     backtest_cfg: Dict[str, Any], decoded: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Assemble the ``run_daily_backtest`` config for one trial from the run-level
     backtest_cfg + the decoded trial params.
 
-    The expert settings the engine feeds to ``_process`` are merged with:
-      * the decoded expert_overrides (model:* numeric decision settings), and
-      * the decoded RM params (mapped to the real ba2 RM setting names) so the classic RM
-        sizes against the trial's risk config.
+    The expert settings the engine feeds to ``_process`` are merged with the decoded
+    expert_overrides (model:* numeric decision settings). RM sizing is part of that set:
+    it is optimized through ``model:*`` keyed by the REAL ba2 setting names (e.g.
+    ``risk_per_trade_pct``), so the classic RM sizes against the trial's risk config
+    with no separate mapping needed.
 
     BYPASS expert (piece 1c): for an expert that declares ``bypasses_classic_rm`` the param
-    space already excludes rm:*/tp/sl, so ``decoded`` carries none; but we ALSO refuse to inject
-    any rm/tp/sl override defensively (the bypass rebalance path ignores them), forwarding ONLY
+    space already excludes tp/sl, so ``decoded`` carries none; but we ALSO refuse to inject
+    any tp/sl override defensively (the bypass rebalance path ignores them), forwarding ONLY
     the expert's own model:* overrides.
     """
     bypass = _is_bypass_expert(backtest_cfg)
@@ -436,12 +420,6 @@ def _build_daily_trial_config(
     # position never closes (buy-and-hold) and every trade metric is bogus.
     initial_tp = None if bypass else decoded.get("tp")
     initial_sl = None if bypass else decoded.get("sl")
-    if not bypass:
-        rm = decoded.get("rm") or {}
-        for joint_name, value in rm.items():
-            real = _RM_SETTING_NAME.get(joint_name)
-            if real is not None and value is not None:
-                overrides[real] = value
 
     # Merge the per-trial overrides into each expert spec's settings (do NOT mutate the
     # run-level backtest_cfg — build fresh spec dicts).

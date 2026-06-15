@@ -330,8 +330,10 @@ def test_memo_returns_same_fitness_on_reselection(monkeypatch):
 
 
 def test_build_daily_trial_config_maps_rm_and_overrides():
-    """The daily-trial seam maps the joint RM namespaces to the real ba2 setting names
-    and merges expert overrides + tp/sl into each expert's settings."""
+    """The daily-trial seam merges expert overrides + tp/sl into each expert's settings.
+
+    RM sizing is part of ``expert_overrides`` now (model:* keyed by the REAL ba2 setting
+    names, e.g. ``risk_per_trade_pct``) — there is no separate ``rm`` block or name mapping."""
     backtest_cfg = {
         "backtest_id": 7,
         "start_date": "2024-01-02",
@@ -346,14 +348,14 @@ def test_build_daily_trial_config_maps_rm_and_overrides():
     decoded = {
         "tp": 8.0,
         "sl": 3.0,
-        "rm": {
+        "expert_overrides": {
+            "surprise_min_pct": 12.0,
+            # RM sizing rides on the expert model:* path, keyed by the real ba2 names.
             "risk_per_trade_pct": 2.5,
-            "atr_stop_mult": 3.0,
-            "min_stop_pct": 1.5,
-            "per_instrument_cap_pct": 25.0,
-            "max_concurrent_positions": 5,  # no hook -> not forwarded
+            "atr_multiplier": 3.0,
+            "min_stop_loss_pct": 1.5,
+            "max_virtual_equity_per_instrument_percent": 25.0,
         },
-        "expert_overrides": {"surprise_min_pct": 12.0},
         "buy_tree": None,
         "sell_tree": None,
         "exit_rules": [],
@@ -365,10 +367,10 @@ def test_build_daily_trial_config_maps_rm_and_overrides():
     assert settings["atr_multiplier"] == 3.0
     assert settings["min_stop_loss_pct"] == 1.5
     assert settings["max_virtual_equity_per_instrument_percent"] == 25.0
-    assert settings["initial_tp_percent"] == 8.0
-    assert settings["initial_sl_percent"] == 3.0
-    # max_concurrent_positions has NO RM setting hook and must NOT leak in.
-    assert "max_concurrent_positions" not in settings
+    # tp/sl ride on the top-level run config (NOT expert settings) — the daily engine's
+    # _apply_initial_brackets reads them from there to stage the protective leg(s).
+    assert cfg["initial_tp_percent"] == 8.0
+    assert cfg["initial_sl_percent"] == 3.0
     # The run-level backtest_cfg must NOT be mutated.
     assert backtest_cfg["experts"][0]["settings"] == {"surprise_min_pct": 5.0}
     # Config shape matches what run_daily_backtest reads.
@@ -410,10 +412,9 @@ def test_build_daily_trial_config_bypass_drops_rm_tp_sl():
         "seed": 42,
     }
     decoded = {
-        # These rm/tp/sl values must NOT be forwarded for a bypass expert.
+        # These tp/sl values must NOT be forwarded for a bypass expert.
         "tp": 8.0,
         "sl": 3.0,
-        "rm": {"risk_per_trade_pct": 2.5, "atr_stop_mult": 3.0},
         "expert_overrides": {"top_n": 10, "winsorize_pct": 0.05},
         "buy_tree": None, "sell_tree": None, "exit_rules": [],
     }
