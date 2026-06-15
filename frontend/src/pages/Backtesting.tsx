@@ -217,7 +217,7 @@ interface Backtest {
   completedAt: string | null;
 }
 
-const API_BASE = 'http://localhost:8088/api';  // LOCAL TRIAL: backend on 8088 (8000 taken by Docker). Revert to 8000 before committing.
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';  // override via frontend/.env.local
 
 // Generate random backtest name
 const generateBacktestName = (): string => {
@@ -1283,7 +1283,7 @@ const Backtesting: React.FC = () => {
                   to target weights instead of applying per-position TP/SL. */}
               {source === 'expert' && expertBypassesRm ? (
                 <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-2 text-sm text-amber-800 dark:text-amber-200">
-                  FactorRanker rebalances to target weights — per-position TP/SL is not applied. Stop-loss protection is via rebalancing (and the expert's optional hard_stop_pct setting).
+                  FactorRanker rebalances to target weights, so per-position TP/SL brackets aren't applied. Downside protection is a per-name stop that reuses <code>risk_per_trade_pct</code>: a holding is sold once its loss reaches that % of total equity (set it in the expert's risk settings). The stop fires between rebalances.
                 </div>
               ) : (
               <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow p-4">
