@@ -9,6 +9,7 @@ export interface ConditionNode {
   comparison: string; // gt, lt, eq, gte, lte, neq, between
   value: number | string | [number, number];
   optimizeEnabled: boolean;
+  toggleOptimize?: boolean; // optimizer may enable/disable this condition (cond:<id>:enabled gene)
   valueMin?: number;
   valueMax?: number;
   valueStep?: number;
@@ -417,6 +418,18 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
           >
             <Settings2 className="w-4 h-4" />
           </button>
+          <label
+            className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+            title="Let the optimizer enable/disable this condition"
+          >
+            <input
+              type="checkbox"
+              checked={condition.toggleOptimize ?? false}
+              onChange={(e) => onChange({ ...condition, toggleOptimize: e.target.checked })}
+              className="rounded"
+            />
+            on/off opt
+          </label>
         </div>
       )}
 
