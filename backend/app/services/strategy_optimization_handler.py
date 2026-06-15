@@ -418,18 +418,19 @@ def _build_daily_trial_config(
     """
     bypass = _is_bypass_expert(backtest_cfg)
     overrides = dict(decoded.get("expert_overrides") or {})
+    # Initial TP/SL the engine applies as an OCO bracket on each opened position. These are
+    # NOT expert settings (the experts don't declare them, so they'd be dropped by
+    # _expert_decision_settings) — they ride on the run config and the daily engine's
+    # _apply_initial_brackets reads them to stage the protective leg(s). Without this the
+    # position never closes (buy-and-hold) and every trade metric is bogus.
+    initial_tp = None if bypass else decoded.get("tp")
+    initial_sl = None if bypass else decoded.get("sl")
     if not bypass:
         rm = decoded.get("rm") or {}
         for joint_name, value in rm.items():
             real = _RM_SETTING_NAME.get(joint_name)
             if real is not None and value is not None:
                 overrides[real] = value
-        # Optional TP/SL forwarded as expert settings so the ruleset/RM can read them if it
-        # consults the expert (the daily ruleset's initial TP/SL seam).
-        if decoded.get("tp") is not None:
-            overrides.setdefault("initial_tp_percent", decoded["tp"])
-        if decoded.get("sl") is not None:
-            overrides.setdefault("initial_sl_percent", decoded["sl"])
 
     # Merge the per-trial overrides into each expert spec's settings (do NOT mutate the
     # run-level backtest_cfg — build fresh spec dicts).
@@ -467,6 +468,10 @@ def _build_daily_trial_config(
         "buy_tree": decoded.get("buy_tree"),
         "sell_tree": decoded.get("sell_tree"),
         "exit_rules": decoded.get("exit_rules"),
+        # Initial TP/SL bracket percents (the tp/sl genes) — applied per opened position by
+        # the daily engine so trades actually close.
+        "initial_tp_percent": initial_tp,
+        "initial_sl_percent": initial_sl,
     }
 
 

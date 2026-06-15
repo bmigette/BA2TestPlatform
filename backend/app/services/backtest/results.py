@@ -51,7 +51,14 @@ def build_results(account: Any, config: Dict[str, Any]) -> Dict[str, Any]:
         for s in snaps
     ]
     drawdown_curve = _drawdown_curve(equity_curve)
-    trades = [_trade_row(t) for t in account.get_filled_trades()]
+    # Prefer round-trip trades (entry+exit paired with realised P&L) when the account exposes
+    # them — that's what makes win_rate/profit_factor/expectancy meaningful. Fall back to the
+    # per-fill rows for accounts/stubs that don't implement the pairing.
+    if hasattr(account, "get_round_trip_trades"):
+        raw_trades = account.get_round_trip_trades()
+    else:
+        raw_trades = account.get_filled_trades()
+    trades = [_trade_row(t) for t in raw_trades]
 
     final = equity_curve[-1]["equity"] if equity_curve else initial
 

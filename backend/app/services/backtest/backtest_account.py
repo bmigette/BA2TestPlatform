@@ -400,6 +400,116 @@ class BacktestAccount(AccountInterface):
             trades.append(self._order_to_trade(o, qty))
         return trades
 
+    def get_round_trip_trades(self) -> List[Dict[str, Any]]:
+        """Pair entry fills with their closing fills into round-trip trades with realised P&L.
+
+        ``get_filled_trades`` returns one row per FILLED order (entries AND protective-leg
+        exits separately), which has no round-trip P&L — so trade-quality metrics (win_rate,
+        profit_factor, expectancy, best/worst trade) are all zero. This method instead groups
+        FILLED orders by their ``transaction_id`` and produces ONE row per transaction:
+
+          * entry  = the FILLED order with ``depends_on_order IS NULL`` (the market entry);
+          * exit   = the FILLED dependent leg (TP/SL/OCO) closing it, if any;
+          * pnl    = (exit - entry) * qty * dir - commissions; pnl_pct in % of entry notional;
+          * a transaction still OPEN at the end of the run is marked-to-market at the symbol's
+            last available price (``exit_reason='open_at_end'``) so its unrealised P&L is
+            counted — otherwise a run that ends mid-trade would understate performance.
+
+        ``exit_reason`` distinguishes ``take_profit`` / ``stop_loss`` by which side of the OCO
+        the fill landed on (closest of limit/stop to the fill price). Rows carry the field
+        names ``results._trade_row`` already maps (entry_time/exit_time/direction/entry_price/
+        exit_price/size/pnl/pnl_pct/bars_held/exit_reason).
+        """
+        executed = OrderStatus.get_executed_statuses()
+        commission = float(self._cfg["commission_per_trade"])
+
+        # Group FILLED orders by transaction.
+        by_txn: Dict[int, Dict[str, Any]] = {}
+        for o in self.get_orders():
+            if o.transaction_id is None:
+                continue
+            slot = by_txn.setdefault(o.transaction_id, {"entry": None, "exits": []})
+            if o.status not in executed or not (o.filled_qty or o.quantity):
+                continue
+            if o.depends_on_order is None:
+                slot["entry"] = o
+            else:
+                slot["exits"].append(o)
+
+        trades: List[Dict[str, Any]] = []
+        for txn_id, slot in by_txn.items():
+            entry = slot["entry"]
+            if entry is None or not entry.open_price:
+                continue
+            qty = abs(float(entry.filled_qty or entry.quantity or 0.0))
+            if qty <= 0:
+                continue
+            is_long = entry.side == OrderDirection.BUY
+            direction = 1.0 if is_long else -1.0
+            entry_px = float(entry.open_price)
+            entry_dt = self._fill_dates.get(entry.id) if entry.id is not None else None
+
+            exit_fill = next((e for e in slot["exits"] if e.open_price), None)
+            if exit_fill is not None:
+                exit_px = float(exit_fill.open_price)
+                exit_dt = self._fill_dates.get(exit_fill.id) if exit_fill.id is not None else None
+                exit_reason = self._exit_reason(exit_fill, exit_px)
+                comm = commission * 2.0
+            else:
+                # Still open at run end: mark-to-market at the last available price.
+                exit_px = self._price.close_at(entry.symbol)
+                if exit_px is None:
+                    exit_px = entry_px  # no closing price -> flat (counts as a near-zero trade)
+                exit_dt = self._price.now()
+                exit_reason = "open_at_end"
+                comm = commission
+
+            gross = (exit_px - entry_px) * qty * direction
+            pnl = gross - comm
+            pnl_pct = ((exit_px / entry_px - 1.0) * 100.0 * direction) if entry_px else 0.0
+            bars_held = self._bars_between(entry_dt, exit_dt)
+            trades.append(
+                {
+                    "symbol": entry.symbol,
+                    "entry_time": entry_dt,
+                    "exit_time": exit_dt,
+                    "direction": "buy" if is_long else "sell",
+                    "entry_price": entry_px,
+                    "exit_price": exit_px,
+                    "size": qty,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "bars_held": bars_held,
+                    "exit_reason": exit_reason,
+                }
+            )
+        # Deterministic order: by entry time then symbol.
+        trades.sort(key=lambda t: (str(t["entry_time"]), t["symbol"]))
+        return trades
+
+    def _exit_reason(self, exit_order, fill_px: float) -> str:
+        """Classify an OCO/TP/SL exit fill as take_profit / stop_loss by nearest price level."""
+        tp = exit_order.limit_price
+        sl = exit_order.stop_price
+        if tp is not None and sl is not None:
+            return "take_profit" if abs(fill_px - tp) <= abs(fill_px - sl) else "stop_loss"
+        if tp is not None:
+            return "take_profit"
+        if sl is not None:
+            return "stop_loss"
+        return "exit"
+
+    def _bars_between(self, start: Optional[datetime], end: Optional[datetime]) -> int:
+        """Number of equity-curve bars between two simulated timestamps (>=0)."""
+        if start is None or end is None:
+            return 0
+        n = 0
+        for s in self._equity_snapshots:
+            d = s["date"]
+            if start <= d <= end:
+                n += 1
+        return max(n - 1, 0)
+
     def get_balance_history(
         self,
         start_date: Optional[datetime] = None,

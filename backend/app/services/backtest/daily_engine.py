@@ -47,8 +47,14 @@ import numpy as np
 
 from ba2_common.core.backtest_context import BacktestContext, LiveProviderBundle
 from ba2_common.core.db import add_instance
-from ba2_common.core.models import ExpertRecommendation
-from ba2_common.core.types import OrderRecommendation, RiskLevel, TimeHorizon
+from ba2_common.core.models import ExpertRecommendation, Transaction
+from ba2_common.core.types import (
+    OrderDirection,
+    OrderRecommendation,
+    RiskLevel,
+    TimeHorizon,
+    TransactionStatus,
+)
 from ba2_common.logger import logger
 
 from app.services.backtest.seam_wiring import make_indicator_provider
@@ -307,6 +313,14 @@ class DailyBacktestEngine:
             self.account.refresh_orders()
             self.account.refresh_transactions()
 
+            # 4b. attach the strategy's initial TP/SL OCO bracket to every freshly-OPENED
+            #     transaction that has no protective leg yet. Without this the entry market
+            #     order fills and the position is held forever (buy-and-hold) — no exit order
+            #     ever closes it, so win_rate/profit_factor are 0 and the "return" is just
+            #     mark-to-market. The legs are WAITING_TRIGGER on the (already-FILLED) entry,
+            #     so they activate next bar and fill on a later bar (no intrabar look-ahead).
+            self._apply_initial_brackets()
+
             # 5. record per-bar equity / drawdown point.
             self.account.snapshot_equity(as_of_dt)
 
@@ -484,6 +498,70 @@ class DailyBacktestEngine:
                     self.account.submit_order(order)
                 except Exception as e:  # noqa: BLE001
                     self._log(f"submit_order failed for order {order.id}: {e}")
+
+    # -- initial TP/SL brackets ---------------------------------------------
+    def _apply_initial_brackets(self) -> None:
+        """Attach the run's initial TP/SL OCO bracket to newly-OPENED transactions.
+
+        Reads ``initial_tp_percent`` / ``initial_sl_percent`` off the run config (the
+        optimizer's ``tp``/``sl`` genes, forwarded by ``_build_daily_trial_config``; the CLI
+        / API standalone path may set them directly). For each OPENED transaction that does
+        NOT yet carry a take-profit/stop-loss, the engine derives the absolute TP/SL prices
+        from the FILLED entry price and calls ``account.adjust_tp_sl`` — which stages the
+        protective leg(s) WAITING_TRIGGER on the entry order's FILL. The fill engine then
+        activates + fills them on later bars (first-leg-wins close).
+
+        A no-op when neither percent is configured (legacy buy-and-hold behaviour, but the
+        optimizer / CLI always set at least one so positions close). Per-transaction failures
+        are logged and skipped (one bad bracket must not abort the bar).
+        """
+        tp_pct = self.config.get("initial_tp_percent")
+        sl_pct = self.config.get("initial_sl_percent")
+        if not tp_pct and not sl_pct:
+            return
+
+        for txn in self._open_transactions_without_brackets():
+            entry = self.account._entry_order_for_transaction(txn)
+            # Only bracket a transaction whose entry has actually FILLED (open_price set) —
+            # the TP/SL anchor is the realised entry price, not the pre-fill estimate.
+            if entry is None or not entry.open_price:
+                continue
+            entry_px = float(entry.open_price)
+            is_long = entry.side == OrderDirection.BUY
+            tp_price = sl_price = None
+            if tp_pct:
+                frac = float(tp_pct) / 100.0
+                tp_price = entry_px * (1.0 + frac) if is_long else entry_px * (1.0 - frac)
+            if sl_pct:
+                frac = float(sl_pct) / 100.0
+                sl_price = entry_px * (1.0 - frac) if is_long else entry_px * (1.0 + frac)
+            try:
+                self.account.adjust_tp_sl(
+                    txn, new_tp_price=tp_price, new_sl_price=sl_price, source="initial-bracket"
+                )
+            except Exception as e:  # noqa: BLE001 — one bad bracket must not abort the bar
+                self._log(f"initial bracket failed for txn {txn.id}: {e}")
+
+    def _open_transactions_without_brackets(self) -> List[Any]:
+        """OPENED transactions for this account's experts that have no TP/SL set yet.
+
+        ``adjust_tp_sl`` stamps ``take_profit``/``stop_loss`` on the transaction, so a row
+        with neither set is one the engine has not yet bracketed. Restricted to OPENED (the
+        entry filled) — a WAITING transaction has no entry price to anchor the bracket.
+        """
+        from sqlmodel import select, Session
+        from ba2_common.core.db import get_db
+
+        expert_ids = {eid for (_, eid, _, _) in self.experts}
+        with Session(get_db().bind) as session:
+            rows = session.exec(
+                select(Transaction).where(
+                    Transaction.status == TransactionStatus.OPENED,
+                    Transaction.take_profit.is_(None),
+                    Transaction.stop_loss.is_(None),
+                )
+            ).all()
+        return [t for t in rows if t.expert_id in expert_ids]
 
     # -- helpers ------------------------------------------------------------
     def _provider_bundle(self) -> Any:

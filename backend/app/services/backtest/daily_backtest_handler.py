@@ -219,6 +219,13 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Entry cadence (optimizer/CLI seam): {"days": {weekday: bool}, "times": [...]}.
         # None/absent -> analyse every bar (legacy). The engine's _entry_schedule honours it.
         "run_schedule_override": payload.get("run_schedule_override"),
+        # Initial TP/SL bracket percents applied per opened position so trades close (the
+        # engine's _apply_initial_brackets reads these). Optional on the standalone path;
+        # the optimizer always supplies them via the tp/sl genes.
+        "initial_tp_percent": payload.get("initial_tp_percent"),
+        "initial_sl_percent": payload.get("initial_sl_percent"),
+        # Intraday fill clock (e.g. "1h"/"15m"); 1d default. Decoupled from entry cadence.
+        "execution_interval": payload.get("execution_interval", "1d"),
     }
 
 
