@@ -21,7 +21,7 @@ in the separate per-run ``ba2_common.core.db`` sqlite (``backtest_trading_db``).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.models.backtest import Backtest
@@ -29,6 +29,28 @@ from app.models.database import SessionLocal
 from app.services.task_queue import get_task_queue
 
 logger = logging.getLogger(__name__)
+
+
+# Alpaca's options-history floor: there is no chain/bar data before this date, so an
+# options backtest that starts earlier would silently see empty chains. Reject it with a
+# clear error instead (a missing cache still fails fast via OptionsCacheMiss).
+_OPTIONS_HISTORY_FLOOR = date(2024, 2, 1)
+
+
+def validate_options_window(start, uses_options: bool) -> None:
+    """Reject option backtests before Alpaca's 2024-02-01 options-history floor."""
+    if not uses_options:
+        return
+    if isinstance(start, datetime):
+        d = start.date()
+    elif isinstance(start, date):
+        d = start
+    else:
+        d = date.fromisoformat(str(start)[:10])
+    if d < _OPTIONS_HISTORY_FLOOR:
+        raise ValueError(
+            f"Options backtests require start >= {_OPTIONS_HISTORY_FLOOR.isoformat()} "
+            f"(Alpaca options history floor); got {d.isoformat()}.")
 
 
 # Payload keys the handler REQUIRES (validated fail-early, no defaults).
@@ -240,6 +262,11 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         "initial_sl_percent": payload.get("initial_sl_percent"),
         # Intraday fill clock (e.g. "1h"/"15m"); 1d default. Decoupled from entry cadence.
         "execution_interval": payload.get("execution_interval", "1d"),
+        # Options seam: path to the offline OptionsHistoryCache sqlite (built via
+        # ``ba2-test fetch-options``). Present -> the run uses options: run_daily_backtest
+        # builds a HistoricalOptionsProvider from it, injects it into the BacktestAccount,
+        # and the Feb-2024 window is validated. Absent/None -> equity-only (unchanged).
+        "options_cache_db": payload.get("options_cache_db"),
     }
 
 
@@ -365,6 +392,21 @@ def run_daily_backtest(
         "end_date": _parse_dt(config["end_date"], "end_date"),
     }
 
+    # Options seam: a present ``options_cache_db`` flags an options run. Build the as-of
+    # clamped HistoricalOptionsProvider from it and inject it into the account; a missing
+    # cache fails fast (OptionsCacheMiss is raised by the cache reader, not swallowed).
+    # Validate the Feb-2024 options-history floor BEFORE the run starts (clear error vs.
+    # silently empty chains). Equity-only runs (no cache db) are unaffected.
+    options_cache_db = config.get("options_cache_db")
+    uses_options = bool(options_cache_db)
+    validate_options_window(config["start_date"], uses_options)
+    if uses_options:
+        from .options_provider import HistoricalOptionsProvider
+
+        options_provider = HistoricalOptionsProvider(options_cache_db)
+    else:
+        options_provider = None
+
     resolver = wire_backtest_seams()
     account_id = 1
 
@@ -404,7 +446,9 @@ def run_daily_backtest(
             warmup_days=config["warmup_days"],
         )
 
-        account = BacktestAccount(account_id, ps, config["account_settings"])
+        account = BacktestAccount(
+            account_id, ps, config["account_settings"], options_provider=options_provider
+        )
         resolver.register_account(account_id, account)
 
         experts = _build_experts(config, resolver, account_id)
