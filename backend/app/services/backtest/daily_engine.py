@@ -284,6 +284,17 @@ class DailyBacktestEngine:
             # 2. universe for the bar.
             universe = resolve_universe(as_of_dt, self.config, self.price)
 
+            # 2.5 per-bar STOP pass for bypass experts. The cadence-gated analyse/rebalance pass
+            #     below skips non-entry bars, so a bypass expert (sizes by weight, skips the classic
+            #     RM) gets its only between-rebalance downside protection here: a per-name equity-loss
+            #     stop reusing risk_per_trade_pct. Skipped on rebalance bars (the rebalance owns the book).
+            for expert, expert_id, settings, ruleset_id in self.experts:
+                if not getattr(expert, "bypasses_classic_rm", False):
+                    continue
+                if _schedule_allows_entry(as_of_dt, self._entry_schedule(expert), self.price.is_intraday):
+                    continue
+                self._apply_bypass_stops(expert, expert_id, settings, as_of_dt)
+
             # 3. each expert: analyze_as_of -> persist rec -> ruleset -> RM -> submit.
             #    BYPASS experts (piece 1b): an expert that declares ``bypasses_classic_rm``
             #    (e.g. FactorRanker) does NOT use the enter/exit ruleset OR the classic risk
@@ -473,6 +484,30 @@ class DailyBacktestEngine:
             FactorPortfolioManager(expert_id).rebalance(targets)
         except Exception as e:  # noqa: BLE001 — a rebalance failure must not kill the run
             self._log(f"bypass rebalance failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
+
+    def _apply_bypass_stops(self, expert, expert_id, settings, as_of) -> None:
+        """Per-name EQUITY-loss stop for a BYPASS expert (FactorRanker), reusing
+        risk_per_trade_pct as a max-loss-per-name cap (% of equity). Sells any held name
+        whose unrealized loss has reached that % of equity. Runs only on NON-rebalance bars
+        (the rebalance pass owns the book on its scheduled bars). Lookahead-safe: submits a
+        MARKET sell that fills on a later bar per the fill model (same discipline as
+        _apply_initial_brackets). A per-bar failure is logged and swallowed.
+        """
+        try:
+            stop_pct = expert.get_setting_with_interface_default(
+                "risk_per_trade_pct", log_warning=False
+            )
+        except Exception:  # noqa: BLE001 — a stub/unschedulable expert -> no stop
+            stop_pct = None
+        if not (stop_pct and stop_pct > 0):
+            return
+
+        from ba2_experts.FactorRanker.portfolio import FactorPortfolioManager
+
+        try:
+            FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct))
+        except Exception as e:  # noqa: BLE001 — a stop failure must not kill the run
+            self._log(f"bypass stop failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
 
     def _size_and_submit(self, expert_id: int, indicator_provider: Any) -> None:
         """Classic RM sizes the PENDING orders, then submit each sized order to the sim.
