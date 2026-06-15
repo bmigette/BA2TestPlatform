@@ -291,6 +291,8 @@ const Backtesting: React.FC = () => {
   const [positionSizingValue, setPositionSizingValue] = useState(1000);
   const [commission, setCommission] = useState(0.1);
   const [slippage, setSlippage] = useState(0.05);
+  // Expert-engine simulation bar size (execution_interval). Daily default — FMP experts use daily data.
+  const [executionInterval, setExecutionInterval] = useState('1d');
 
   // Available fields from model
   const [availableFields, setAvailableFields] = useState<AvailableField[]>([]);
@@ -572,6 +574,7 @@ const Backtesting: React.FC = () => {
             initial_tp_percent: initialTpPercent,
             initial_sl_percent: initialSlPercent,
             fill_model: fillModel,
+            execution_interval: executionInterval,
             seed: runSeed,
           })
         });
@@ -800,8 +803,7 @@ const Backtesting: React.FC = () => {
             start_date: startDate,
             end_date: endDate,
             initial_capital: initialCapital,
-            position_sizing_type: positionSizingType,
-            position_sizing_value: positionSizingValue,
+            execution_interval: executionInterval,
             commission,
             slippage,
           }
@@ -1446,31 +1448,56 @@ const Backtesting: React.FC = () => {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Position Sizing</label>
-                    <select
-                      value={positionSizingType}
-                      onChange={e => setPositionSizingType(e.target.value)}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                    >
-                      <option value="fixed">Fixed Amount</option>
-                      <option value="percent">Percent of Capital</option>
-                    </select>
-                  </div>
+                  {source === 'expert' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Run interval (bar size)</label>
+                        <select
+                          value={executionInterval}
+                          onChange={e => setExecutionInterval(e.target.value)}
+                          className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        >
+                          <option value="1d">Daily (1d) — default</option>
+                          <option value="1h">Hourly (1h)</option>
+                          <option value="30m">30 min</option>
+                          <option value="15m">15 min</option>
+                          <option value="5m">5 min</option>
+                        </select>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Simulation bar size. FMP-based experts use daily data — intraday is much slower and needs intraday history.</p>
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/40 border border-gray-200 dark:border-gray-700 rounded p-2">
+                        Position sizing is governed by the expert's risk manager (its <code>sizing_mode</code> / <code>risk_per_trade_pct</code> in Expert Settings), not here.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Position Sizing</label>
+                        <select
+                          value={positionSizingType}
+                          onChange={e => setPositionSizingType(e.target.value)}
+                          className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        >
+                          <option value="fixed">Fixed Amount</option>
+                          <option value="percent">Percent of Capital</option>
+                        </select>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                      {positionSizingType === 'percent' ? 'Position %' : 'Position Size ($)'}
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step={positionSizingType === 'percent' ? '1' : '100'}
-                      value={positionSizingValue}
-                      onChange={e => setPositionSizingValue(parseFloat(e.target.value))}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                    />
-                  </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                          {positionSizingType === 'percent' ? 'Position %' : 'Position Size ($)'}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step={positionSizingType === 'percent' ? '1' : '100'}
+                          value={positionSizingValue}
+                          onChange={e => setPositionSizingValue(parseFloat(e.target.value))}
+                          className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        />
+                      </div>
+                    </>
+                  )}
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -1522,13 +1549,13 @@ const Backtesting: React.FC = () => {
             </div>
             ) : backtestCardTab === 'history' ? (
               /* History Tab — all runs */
-              <div className="max-h-[32rem] overflow-y-auto">
+              <div className="max-h-[32rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]">
                 <RunningJobsStrip />
                 <RunHistoryTable savedOnly={false} onSelect={viewBacktest} />
               </div>
             ) : (
               /* Saved Backtests Tab */
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+              <div className="space-y-2 max-h-96 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
                 <RunHistoryTable savedOnly={true} onSelect={viewBacktest} />
               </div>
             )}

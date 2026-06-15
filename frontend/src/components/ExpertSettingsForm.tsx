@@ -9,6 +9,16 @@ export interface ExpertSettingsValue {
   expert_params: Record<string, OptRange & { type: string }>; // Opt-on numeric settings
 }
 const isNumeric = (t: string) => t === 'float' || t === 'int';
+// Object-valued builtin config handled by dedicated controls (universe picker, run-interval)
+// or irrelevant to a backtest — kept out of the per-setting list (avoids "[object Object]").
+const HIDDEN_KEYS = new Set([
+  'execution_schedule_enter_market',
+  'execution_schedule_open_positions',
+  'enabled_instruments',
+]);
+// Render any value safely — objects/arrays as JSON instead of "[object Object]".
+const displayVal = (v: unknown) =>
+  v != null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
 
 const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
 const rangeInputClass = "w-16 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100";
@@ -22,7 +32,7 @@ export function ExpertSettingsForm({ expertClass, value, onChange }:
       setDefs(d);
       // seed defaults for any setting not yet set
       const settings = { ...value.settings };
-      for (const [k, def] of Object.entries(d)) if (!(k in settings) && def.default !== undefined) settings[k] = def.default;
+      for (const [k, def] of Object.entries(d)) if (!HIDDEN_KEYS.has(k) && !(k in settings) && def.default !== undefined) settings[k] = def.default;
       onChange({ ...value, settings });
     }).catch(() => setDefs({}));
   }, [expertClass]);
@@ -37,7 +47,7 @@ export function ExpertSettingsForm({ expertClass, value, onChange }:
 
   return (
     <div className="space-y-2">
-      {Object.entries(defs).map(([k, def]) => {
+      {Object.entries(defs).filter(([k]) => !HIDDEN_KEYS.has(k)).map(([k, def]) => {
         const choices = (def.choices ?? def.valid_values) as unknown[] | undefined;
         const opt = value.expert_params[k];
         return (
@@ -56,7 +66,7 @@ export function ExpertSettingsForm({ expertClass, value, onChange }:
                 </select>
               ) : (
                 <input className={inputClass} type={isNumeric(def.type) ? 'number' : 'text'}
-                  value={String(value.settings[k] ?? '')}
+                  value={displayVal(value.settings[k])}
                   onChange={(e) => setVal(k, isNumeric(def.type) ? Number(e.target.value) : e.target.value)} />
               )}
             </div>

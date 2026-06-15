@@ -63,6 +63,7 @@ class BacktestCreate(BaseModel):
     fill_model: Optional[str] = None       # "next_bar_open" | "same_bar_close"
     seed: Optional[int] = None
     warmup_days: Optional[int] = None
+    execution_interval: Optional[str] = None  # simulation bar size, e.g. "1d" (default) | "1h" | "5m"
 
 
 class DailyExpertSpec(BaseModel):
@@ -409,6 +410,7 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
         'fill_model': backtest.fill_model,
         'seed': backtest.seed,
         'warmup_days': backtest.warmup_days,
+        'execution_interval': backtest.execution_interval or "1d",
     }
     if screener_universe is not None:
         payload['universe'] = screener_universe

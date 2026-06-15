@@ -96,7 +96,7 @@ export function RunHistoryTable({ savedOnly, onSelect }:
             <tr key={r.id} onClick={() => onSelect(r.id)}
               className="border-b border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors">
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{r.id}</td>
-              <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.expertName ?? r.expert_name) ?? '—'}</td>
+              <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.expertName ?? r.expert_name) ?? (r.modelName ?? r.model_name) ?? r.engineType ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.optimizationId ?? r.optimization_id) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.totalReturn ?? r.total_return) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.sharpeRatio ?? r.sharpe_ratio) ?? '—'}</td>
