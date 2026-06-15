@@ -149,6 +149,25 @@ def _schedule_allows_entry(as_of_dt: datetime, schedule: Optional[Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Option expiry / exercise / assignment
+# ---------------------------------------------------------------------------
+def option_expiry_outcome(opt_type, side, *, strike, spot, qty, multiplier=100):
+    """Resolve one option position at expiry. Pure. Long ITM -> exercise; short ITM -> assigned;
+    OTM -> worthless. ITM: call when spot>strike, put when spot<strike."""
+    from ba2_common.core.types import OptionRight, OrderDirection
+    itm = (spot > strike) if opt_type == OptionRight.CALL else (spot < strike)
+    if not itm:
+        return {"action": "worthless"}
+    long = side == OrderDirection.BUY
+    if opt_type == OptionRight.CALL:
+        share_side = "buy" if long else "sell"
+    else:
+        share_side = "sell" if long else "buy"
+    return {"action": "exercise" if long else "assigned", "side": share_side,
+            "shares": int(qty) * multiplier, "price": float(strike)}
+
+
+# ---------------------------------------------------------------------------
 # Recommendation -> ExpertRecommendation row
 # ---------------------------------------------------------------------------
 def _recommendation_to_expert_recommendation(
@@ -337,6 +356,14 @@ class DailyBacktestEngine:
             # 4. fills on THIS bar's working orders; roll order state into transactions.
             self.account.refresh_orders()
             self.account.refresh_transactions()
+
+            # 4a. resolve any option positions reaching expiry on THIS bar: OTM -> worthless;
+            #     ITM long -> exercise; ITM short -> assigned (converting to a SHARE position in
+            #     the equity ledger settled at the strike). Runs after the transaction roll (so
+            #     freshly-OPENED option positions are visible) and before snapshot_equity (so the
+            #     resulting equity position is marked this bar). Early American assignment is NOT
+            #     modelled — options resolve at expiry only.
+            self._apply_option_expiry(as_of_dt)
 
             # 4b. attach the strategy's initial TP/SL OCO bracket to every freshly-OPENED
             #     transaction that has no protective leg yet. Without this the entry market
@@ -635,6 +662,62 @@ class DailyBacktestEngine:
             FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct))
         except Exception as e:  # noqa: BLE001 — a stop failure must not kill the run
             self._log(f"bypass stop failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
+
+    # -- option expiry / exercise / assignment ------------------------------
+    def _apply_option_expiry(self, as_of: datetime) -> None:
+        """Resolve every held single-leg option position that has reached its expiry.
+
+        For each held option whose ``expiry <= as_of.date()`` the engine reads the underlying's
+        bar CLOSE and resolves the outcome via the pure ``option_expiry_outcome`` helper:
+
+          * worthless -> close the option transaction at premium 0 (realise the entry P&L).
+          * exercise/assignment -> close the option at its intrinsic value AND create the
+            resulting SHARE position in the equity ledger, settled at the STRIKE; the new
+            equity position then marks-to-market on every subsequent bar.
+
+        Early American assignment is NOT modelled — options resolve at expiry only.
+
+        A missing underlying close skips the position (logged). Per-position failures are
+        caught + logged so one bad expiry cannot abort the run (matching the per-bar style).
+        """
+        as_of_date = as_of.date() if isinstance(as_of, datetime) else as_of
+        for pos in self.account.get_option_positions():
+            try:
+                if pos.expiry is None or pos.expiry > as_of_date:
+                    continue
+                spot = self.price.close_at(pos.underlying)
+                if spot is None:
+                    self._log(
+                        f"option expiry: no underlying close for {pos.underlying} "
+                        f"({pos.contract_symbol}) @ {as_of_date} — skipped"
+                    )
+                    continue
+                out = option_expiry_outcome(
+                    pos.option_type,
+                    pos.side,
+                    strike=pos.strike,
+                    spot=spot,
+                    qty=pos.quantity,
+                    multiplier=pos.multiplier,
+                )
+                if out["action"] == "worthless":
+                    self.account.settle_option_expiry(pos, close_premium=0.0)
+                else:
+                    intrinsic = abs(float(spot) - float(pos.strike))  # per-share intrinsic value
+                    share_side = (
+                        OrderDirection.BUY if out["side"] == "buy" else OrderDirection.SELL
+                    )
+                    self.account.settle_option_expiry(
+                        pos,
+                        close_premium=intrinsic,
+                        share_side=share_side,
+                        shares=int(out["shares"]),
+                        share_price=float(out["price"]),
+                    )
+            except Exception as e:  # noqa: BLE001 — one bad expiry must not abort the run
+                self._log(
+                    f"option expiry failed for {pos.contract_symbol} @ {as_of_date}: {e}"
+                )
 
     def _size_and_submit(self, expert_id: int, indicator_provider: Any) -> None:
         """Classic RM sizes the PENDING orders, then submit each sized order to the sim.

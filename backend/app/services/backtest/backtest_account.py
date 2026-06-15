@@ -895,6 +895,79 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             option_strategy="close",
         )
 
+    def settle_option_expiry(
+        self,
+        position: OptionPosition,
+        *,
+        close_premium: float,
+        share_side: Optional[OrderDirection] = None,
+        shares: int = 0,
+        share_price: Optional[float] = None,
+    ) -> bool:
+        """Settle a held single-leg option position at expiry (Task 7).
+
+        Closes the option leg's OPENED transaction at ``close_premium`` (per-share intrinsic
+        value, or 0 for worthless) and zeroes its lot in the option ledger, then — for an
+        exercise/assignment — converts to shares in the EQUITY ledger settled at ``share_price``
+        (the STRIKE). The option premium paid/collected at entry is already in cash, so the
+        conversion only moves cash for the share leg (qty x strike); the resulting equity
+        position marks-to-market at the underlying close on every subsequent bar.
+
+        This is a deterministic AT-EXPIRY settlement (no next-bar fill, no slippage/commission):
+        the option simply resolves on its expiry bar. Returns True if the position was settled.
+        """
+        from ba2_common.core.utils import close_transaction_with_logging
+
+        txn = self._option_transaction_for_contract(position.contract_symbol)
+        if txn is None:
+            return False
+
+        # 1. Close the option transaction at the resolved premium (0 = worthless, else intrinsic).
+        txn.close_price = float(close_premium)
+        if not txn.close_date:
+            txn.close_date = self._price.now()
+        close_transaction_with_logging(
+            txn,
+            account_id=self.id,
+            close_reason="option_expiry",
+            additional_data={"contract_symbol": position.contract_symbol},
+        )
+        update_instance(txn)
+
+        # 2. Remove the option lot from the option ledger (its cash was settled at entry; the
+        #    conversion below moves the share-leg cash). Worthless simply zeroes it out.
+        lot = self._option_positions.get(position.contract_symbol)
+        if lot is not None:
+            lot.qty = 0.0
+            lot.avg_price = 0.0
+
+        # 3. Exercise/assignment -> create the resulting SHARE position settled at the strike.
+        if share_side is not None and shares and share_price is not None:
+            signed = float(shares) if share_side == OrderDirection.BUY else -float(shares)
+            self._cash -= signed * float(share_price)  # buy debits, sell credits — at strike.
+            self._update_position(position.underlying, signed, float(share_price))
+        return True
+
+    def _option_transaction_for_contract(self, contract_symbol: str) -> Optional[Transaction]:
+        """The OPENED option transaction whose entry order carries ``contract_symbol``."""
+        from sqlmodel import select, Session
+
+        with Session(get_db().bind) as session:
+            txns = list(
+                session.exec(
+                    select(Transaction).where(Transaction.status == TransactionStatus.OPENED)
+                ).all()
+            )
+        for t in txns:
+            entry = self._entry_order_for_transaction(t)
+            if (
+                entry is not None
+                and getattr(entry, "asset_class", None) == AssetClass.OPTION
+                and entry.contract_symbol == contract_symbol
+            ):
+                return t
+        return None
+
     # ======================================================================
     # Trading abstracts — baseline; expanded into the full engine in Task 3
     # ======================================================================
