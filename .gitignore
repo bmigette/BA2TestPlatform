@@ -120,3 +120,6 @@ backend/trained_models/
 
 # Accidental duplicate directories
 backend/backend/
+
+# Brainstorming visual-companion artifacts
+.superpowers/
