@@ -103,6 +103,21 @@ class _Position:
     realized_pl: float = 0.0
 
 
+@dataclass
+class _OptionLot:
+    """In-memory option ledger lot. ``qty`` is signed CONTRACTS (long +, short -).
+
+    ``multiplier`` (typically 100) and ``avg_price`` (premium per share) let the per-bar
+    marking value the lot at premium-close x qty x multiplier and let the fall-back use
+    the entry premium when no bar exists for the marking day.
+    """
+
+    contract_symbol: str
+    qty: float = 0.0
+    avg_price: float = 0.0
+    multiplier: float = 100.0
+
+
 class BacktestAccount(AccountInterface, OptionsAccountInterface):
     """Simulated broker for daily multi-asset backtests.
 
@@ -140,6 +155,11 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         self._equity_snapshots: List[Dict[str, Any]] = []
         # Monotonic synthetic broker-order-id counter.
         self._broker_seq = 0
+        # contract_symbol -> signed option lot (qty in CONTRACTS, multiplier 100). Kept
+        # SEPARATE from ``self._positions`` (which is the equity ledger keyed by the plain
+        # underlying symbol and multiplier-unaware) so option marking can value at
+        # premium-close x qty x multiplier without disturbing equity fills/marking.
+        self._option_positions: Dict[str, _OptionLot] = {}
         # order-id -> SIMULATED fill date (the virtual bar an order filled on). The
         # TradingOrder row's ``created_at`` is stamped by the DB with wall-clock
         # ``datetime.now()`` at row creation, which is NON-deterministic across runs; the
@@ -192,6 +212,9 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
 
         Signed value (long positions positive, short positions negative). A symbol
         with no price at the current bar contributes 0 (it cannot be valued today).
+        Equity positions are valued at the equity bar's close; OPTION positions are
+        valued separately at the current premium close x qty x multiplier (with a
+        fall-back to the entry premium when there is no premium bar for the day).
         """
         total = 0.0
         for p in self._positions.values():
@@ -200,6 +223,27 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             px = self._price.close_at(p.symbol)
             if px is not None:
                 total += p.qty * px
+        return total + self._option_positions_mtm()
+
+    def _option_positions_mtm(self) -> float:
+        """Mark-to-market value of open OPTION lots at the current bar's premium close.
+
+        Each lot contributes ``premium_close x signed_qty x multiplier`` (mirroring how an
+        equity position contributes ``close x qty``, scaled by the contract multiplier).
+        When no premium bar exists for the lot's contract on the current bar, the lot is
+        valued at its entry premium (``avg_price``) so a held option is never silently
+        dropped to zero on a day the cache lacks a bar.
+        """
+        if self._options is None:
+            return 0.0
+        total = 0.0
+        for lot in self._option_positions.values():
+            if lot.qty == 0:
+                continue
+            bar = self._options.get_bar(lot.contract_symbol, self._as_of_date())
+            px = bar["close"] if (bar and bar.get("close") is not None) else lot.avg_price
+            if px is not None:
+                total += lot.qty * px * lot.multiplier
         return total
 
     def equity(self) -> float:
@@ -394,12 +438,64 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             if o.status != OrderStatus.WAITING_TRIGGER
         ]
         for o in working:
+            if self._is_single_leg_option(o):
+                # OPTION single-leg (or option child carrying a contract): fill off the
+                # cached premium bar, NOT the equity branch (whose bar is the underlying's).
+                fill_px = self._option_fill_price(o, as_of)
+                if fill_px is None:
+                    continue
+                self._apply_option_fill(o, fill_px, as_of)
+                self._cancel_oco_sibling(o)
+                continue
+            if getattr(o, "asset_class", None) == AssetClass.OPTION:
+                # Option PARENT with no contract_symbol -> multi-leg, handled in Task 8.
+                continue
             fill_px = self._evaluate_fill(o, as_of)
             if fill_px is None:
                 continue
             self._apply_fill(o, fill_px, as_of)
             self._cancel_oco_sibling(o)
         return True
+
+    def _is_single_leg_option(self, order) -> bool:
+        """True for an OPTION order that fills against a contract premium bar.
+
+        That is a single-leg parent (or a multi-leg CHILD leg) carrying a ``contract_symbol``.
+        A multi-leg PARENT has ``asset_class == OPTION`` but NO ``contract_symbol`` and is
+        excluded here (its legs fill in Task 8).
+        """
+        return (
+            getattr(order, "asset_class", None) == AssetClass.OPTION
+            and bool(getattr(order, "contract_symbol", None))
+        )
+
+    def _option_fill_price(self, order, as_of) -> Optional[float]:
+        """Premium per share for an option order on its fill bar, per ``fill_model``.
+
+        The fill BAR is chosen exactly like the equity branch (``_bar_for_fill``): the
+        underlying's trading calendar picks the day — ``same_bar_close`` uses the current
+        bar's date; ``next_bar_open`` (default) uses the next trading day strictly after the
+        current bar. The premium is then read for that day from the as-of options cache.
+        Returns None when no provider, no fill day, no premium bar, or no usable price.
+        """
+        if self._options is None:
+            return None
+        same_bar = self._cfg["fill_model"] == "same_bar_close"
+        if same_bar:
+            fill_day = as_of.date() if hasattr(as_of, "date") else as_of
+        else:
+            fill_day = self._price.next_bar_date(order.symbol, as_of)
+            if fill_day is None:
+                return None
+            if hasattr(fill_day, "date"):
+                fill_day = fill_day.date()
+        bar = self._options.get_bar(order.contract_symbol, fill_day)
+        if not bar:
+            return None
+        px = bar.get("close") if same_bar else bar.get("open")
+        if px is None:
+            return None
+        return self._slip(float(px), order.side == OrderDirection.BUY)
 
     def _activate_triggered_dependents(self) -> None:
         """Promote WAITING_TRIGGER legs to ACCEPTED once their parent hits the trigger.
@@ -1032,6 +1128,57 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         # Record the SIMULATED fill bar (not wall-clock) so the trade history is deterministic.
         if order.id is not None:
             self._fill_dates[order.id] = as_of
+
+    def _apply_option_fill(self, order, fill_px: float, as_of: datetime) -> None:
+        """Apply a single-leg option fill to cash + option ledger and mark the order FILLED.
+
+        Mirrors ``_apply_fill`` (the equity path) but scales the cash impact by the contract
+        MULTIPLIER (100): buying ``q`` contracts at premium ``p`` debits ``q*p*multiplier``;
+        commission is the same flat per-leg charge. ``open_price`` stays the premium PER
+        SHARE (so round-trip P&L math reads premiums directly). The signed lot is recorded
+        in the SEPARATE option ledger so the per-bar marking values it at premium-close x
+        qty x multiplier — the equity ledger (``self._positions``) is untouched.
+        """
+        qty = float(order.quantity) if order.quantity is not None else 0.0
+        signed = qty if order.side == OrderDirection.BUY else -qty
+        multiplier = float(order.multiplier or 100)
+        commission = float(self._cfg["commission_per_trade"])
+        # Buying spends cash (signed>0 -> cash decreases); selling adds cash. Scaled x100.
+        self._cash -= signed * fill_px * multiplier
+        self._cash -= commission
+        self._update_option_position(order.contract_symbol, signed, fill_px, multiplier)
+        order.filled_qty = qty
+        order.open_price = fill_px
+        order.status = OrderStatus.FILLED
+        update_instance(order)
+        if order.id is not None:
+            self._fill_dates[order.id] = as_of
+
+    def _update_option_position(
+        self, contract_symbol: str, signed_qty: float, fill_px: float, multiplier: float
+    ) -> None:
+        """Apply a signed option fill to the option ledger (weighted-avg premium on adds).
+
+        Mirrors ``_update_position``'s averaging logic but on contracts: same-sign exposure
+        updates the weighted-average premium; reducing/closing leaves the avg unchanged;
+        flipping through zero re-bases the avg at the new fill premium.
+        """
+        lot = self._option_positions.get(contract_symbol)
+        if lot is None:
+            lot = _OptionLot(contract_symbol=contract_symbol, multiplier=multiplier)
+            self._option_positions[contract_symbol] = lot
+        lot.multiplier = multiplier
+        old_qty = lot.qty
+        new_qty = old_qty + signed_qty
+        if old_qty == 0 or (old_qty > 0) == (signed_qty > 0):
+            total_cost = lot.avg_price * abs(old_qty) + fill_px * abs(signed_qty)
+            denom = abs(new_qty)
+            lot.avg_price = (total_cost / denom) if denom > 0 else 0.0
+        elif abs(signed_qty) > abs(old_qty):
+            lot.avg_price = fill_px  # flipped through zero -> remainder opens at fill premium
+        lot.qty = new_qty
+        if lot.qty == 0:
+            lot.avg_price = 0.0
 
     # ======================================================================
     # TP/SL/OCO leg helpers
