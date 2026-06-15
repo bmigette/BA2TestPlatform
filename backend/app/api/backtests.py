@@ -19,13 +19,29 @@ router = APIRouter()
 
 
 class BacktestCreate(BaseModel):
-    """Request model for creating a backtest."""
+    """Request model for creating a backtest.
+
+    Two engines share this endpoint, discriminated by ``engine``:
+
+      * ``engine="ml"`` (default) — the legacy model-driven path. Requires ``model_id`` +
+        ``prediction_dataset_id`` + ``execution_dataset_id`` (validated in the route so the
+        existing ML behaviour is byte-for-byte unchanged).
+      * ``engine="daily_expert"`` — the daily multi-asset expert engine. Requires ``expert``
+        ({"class", "settings"}) + ``universe`` ({"mode", "symbols", "screener_settings"}).
+        The ML model/dataset fields are unused (and not required) on this path.
+    """
     name: str
-    model_id: str  # String model ID like "mdl-abc123"
-    prediction_dataset_id: int
-    execution_dataset_id: int
+    engine: str = "ml"  # "ml" (default, legacy) | "daily_expert"
+    # ML-engine fields (required only when engine == "ml"; validated in the route).
+    model_id: Optional[str] = None  # String model ID like "mdl-abc123"
+    prediction_dataset_id: Optional[int] = None
+    execution_dataset_id: Optional[int] = None
     strategy_id: Optional[int] = None
     strategy_params: Optional[dict] = None
+    # daily_expert-engine fields (required only when engine == "daily_expert").
+    expert: Optional[dict] = None  # {"class": "FMPRating", "settings": {...}}
+    universe: Optional[dict] = None  # {"mode": "static"|"screener", "symbols": [...], "screener_settings": {...}}
+    # Shared trading parameters.
     start_date: str
     end_date: str
     initial_capital: float = 10000.0
@@ -34,6 +50,10 @@ class BacktestCreate(BaseModel):
     commission: float = 0.1
     slippage: float = 0.05
     fitness_metric: Optional[str] = None
+    # daily_expert engine knobs (used only on that path; sensible explicit values required).
+    fill_model: Optional[str] = None       # "next_bar_open" | "same_bar_close"
+    seed: Optional[int] = None
+    warmup_days: Optional[int] = None
 
 
 class DailyExpertSpec(BaseModel):
@@ -73,9 +93,18 @@ class BacktestListResponse(BaseModel):
 
 @router.get("")
 async def list_backtests(
+    expert: Optional[str] = None,
+    optimization_id: Optional[int] = None,
+    saved: Optional[bool] = None,
     db: Session = Depends(get_db)
 ):
-    """List all backtests (summary only, no curves/trades)."""
+    """List all backtests (summary only, no curves/trades).
+
+    Optional filters (applied only when provided):
+      * ``expert``         — only runs of that expert (``Backtest.expert_name``).
+      * ``optimization_id``— only runs belonging to that optimization job.
+      * ``saved``          — only saved (``True``) / only unsaved (``False``) runs.
+    """
     from sqlalchemy import text
 
     # Use raw SQL to avoid loading huge blob columns (equity_curve, drawdown_curve, trades
@@ -86,6 +115,22 @@ async def list_backtests(
     has_description = 'description' in columns
 
     desc_col = ", description" if has_description else ""
+
+    # Build the optional WHERE clause from the provided filters (parameterised — never
+    # string-interpolate user input).
+    where_clauses = []
+    params: dict = {}
+    if expert is not None:
+        where_clauses.append("b.expert_name = :expert")
+        params["expert"] = expert
+    if optimization_id is not None:
+        where_clauses.append("b.optimization_id = :optimization_id")
+        params["optimization_id"] = optimization_id
+    if saved is not None:
+        where_clauses.append("b.is_saved = :saved")
+        params["saved"] = 1 if saved else 0
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
     result = db.execute(text(f"""
         SELECT b.id, b.name, b.model_id, b.prediction_dataset_id, b.execution_dataset_id,
                b.strategy_id, b.start_date, b.end_date, b.initial_capital, b.fitness_metric,
@@ -93,12 +138,13 @@ async def list_backtests(
                b.profit_factor, b.total_trades, b.winning_trades, b.losing_trades,
                b.avg_trade_duration, b.final_equity,
                b.best_trade, b.worst_trade, b.error_message, b.is_saved, b.created_at, b.completed_at,
-               m.name as model_name
+               m.name as model_name, b.expert_name, b.optimization_id, b.engine_type
                {desc_col}
         FROM backtests b
         LEFT JOIN trained_models m ON b.model_id = m.id
+        {where_sql}
         ORDER BY b.created_at DESC
-    """))
+    """), params)
 
     backtests = []
     for row in result:
@@ -120,7 +166,10 @@ async def list_backtests(
             "createdAt": str(row[25]) if row[25] else None,
             "completedAt": str(row[26]) if row[26] else None,
             "modelName": row[27],
-            "description": row[28] if has_description else None,
+            "expertName": row[28],
+            "optimizationId": row[29],
+            "engineType": row[30] or "ml",
+            "description": row[31] if has_description else None,
         }
         backtests.append(bt)
 
@@ -132,7 +181,23 @@ async def create_backtest(
     backtest: BacktestCreate,
     db: Session = Depends(get_db)
 ):
-    """Create and run a new backtest."""
+    """Create and run a new backtest.
+
+    Dispatches on ``engine``: ``daily_expert`` builds the daily-engine payload (expert spec +
+    static-universe instruments) and queues a ``daily_backtest`` task; everything else (the
+    default ``ml``) keeps the legacy model-driven path byte-for-byte.
+    """
+    if backtest.engine == "daily_expert":
+        return _create_daily_expert_backtest(backtest, db)
+
+    # ----- legacy ML engine path (unchanged behaviour) -----
+    if not backtest.model_id:
+        raise HTTPException(status_code=400, detail="model_id is required for engine='ml'")
+    if backtest.prediction_dataset_id is None:
+        raise HTTPException(status_code=400, detail="prediction_dataset_id is required for engine='ml'")
+    if backtest.execution_dataset_id is None:
+        raise HTTPException(status_code=400, detail="execution_dataset_id is required for engine='ml'")
+
     # Validate model exists (lookup by model_id string, not integer id)
     model = db.query(TrainedModel).filter(TrainedModel.model_id == backtest.model_id).first()
     if not model:
@@ -212,6 +277,111 @@ async def create_backtest(
     logger.info(f"Queued backtest task: {task_id}")
 
     return db_backtest.to_dict()
+
+
+def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> dict:
+    """Create + queue a daily multi-asset (expert) backtest from the unified create request.
+
+    Builds the daily-engine payload from ``backtest.expert`` + ``backtest.universe`` and the
+    shared trading parameters, persists a ``Backtest`` results row (``engine_type='daily_expert'``,
+    ``model_id=None``, ``expert_name`` set for per-expert filtering), and enqueues the
+    ``daily_backtest`` task whose handler (``handle_daily_backtest``) loads the row by id and runs
+    the engine.
+
+    Fail-early validation (``backend/CLAUDE.md``): the expert class must be supported, and a
+    ``static`` universe must be non-empty.
+    """
+    from app.services.backtest.daily_backtest_handler import _SUPPORTED_EXPERTS
+
+    expert = backtest.expert or {}
+    expert_class = expert.get("class")
+    if not expert_class:
+        raise HTTPException(status_code=400, detail="expert.class is required for engine='daily_expert'")
+    if expert_class not in _SUPPORTED_EXPERTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported expert '{expert_class}'; supported: {sorted(_SUPPORTED_EXPERTS)}",
+        )
+    expert_settings = expert.get("settings") or {}
+
+    universe = backtest.universe or {}
+    mode = universe.get("mode")
+    if mode not in ("static", "screener"):
+        raise HTTPException(
+            status_code=400,
+            detail="universe.mode must be 'static' or 'screener' for engine='daily_expert'",
+        )
+    if mode == "screener":
+        # Screener-cache universe resolution is Task 8; the create path does not yet resolve a
+        # screener universe into instruments. Fail loudly rather than silently run an empty run.
+        raise HTTPException(
+            status_code=400,
+            detail="universe.mode='screener' is not supported yet (screener resolution is Task 8)",
+        )
+
+    symbols = universe.get("symbols") or []
+    if not symbols:
+        raise HTTPException(status_code=400, detail="universe.symbols must be non-empty for static mode")
+
+    # Fail-early on the daily-engine trading knobs (no-defaults rule).
+    if not backtest.fill_model:
+        raise HTTPException(status_code=400, detail="fill_model is required for engine='daily_expert'")
+    if backtest.seed is None:
+        raise HTTPException(status_code=400, detail="seed is required for engine='daily_expert'")
+
+    try:
+        start_date = datetime.fromisoformat(backtest.start_date)
+        end_date = datetime.fromisoformat(backtest.end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+
+    db_backtest = Backtest(
+        name=backtest.name,
+        model_id=None,  # daily expert runs are not model-driven
+        expert_name=expert_class,  # per-expert filtering / best-N retention
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=backtest.initial_capital,
+        commission=backtest.commission,
+        slippage=backtest.slippage,
+        fitness_metric=backtest.fitness_metric,
+        status="pending",
+        engine_type="daily_expert",
+    )
+
+    db.add(db_backtest)
+    db.commit()
+    db.refresh(db_backtest)
+
+    logger.info(f"Created daily expert backtest: {db_backtest.name} (id={db_backtest.id})")
+
+    experts_payload = [{"class": expert_class, "settings": expert_settings}]
+
+    from app.services.task_queue import get_task_queue
+    task_queue = get_task_queue()
+    task_id = task_queue.queue_task(
+        task_type='daily_backtest',
+        name=f'Daily Backtest: {db_backtest.name}',
+        payload={
+            'backtest_id': db_backtest.id,
+            'name': backtest.name,
+            'enabled_instruments': list(symbols),
+            'experts': experts_payload,
+            'start_date': backtest.start_date,
+            'end_date': backtest.end_date,
+            'initial_capital': backtest.initial_capital,
+            'commission': backtest.commission,
+            'slippage': backtest.slippage,
+            'fill_model': backtest.fill_model,
+            'seed': backtest.seed,
+            'warmup_days': backtest.warmup_days,
+        },
+        description=f'Daily expert backtest ({expert_class}) over {len(symbols)} instruments',
+    )
+
+    logger.info(f"Queued daily backtest task: {task_id}")
+
+    return {"taskId": task_id, "backtestId": db_backtest.id, **db_backtest.to_dict()}
 
 
 @router.patch("/{backtest_id}")
