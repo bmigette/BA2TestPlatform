@@ -460,17 +460,22 @@ def _cmd_optimize(args) -> int:
         print(f"optimize: done. best_fitness={opt.best_fitness} best_params={json.dumps(opt.best_params, default=str)}")
     finally:
         db.close()
-    _persist_best_backtest(opt_id, expert)
-    print(f"optimize: best persisted as a tagged Backtest (optimization_id={opt_id}); "
+    nsaved = _persist_top_backtests(opt_id, expert, n=int(args.save_top))
+    print(f"optimize: top {nsaved} persisted as tagged, saved Backtests (optimization_id={opt_id}); "
           f"run `ba2-test runs list --group {opt_id}` or `ba2-test report`.")
     return 0
 
 
-def _persist_best_backtest(opt_id: int, expert: str) -> None:
-    """Re-run the optimization's best params once and persist a tagged Backtest row."""
+def _persist_top_backtests(opt_id: int, expert: str, n: int = 5) -> int:
+    """Re-run the optimization's TOP-N distinct param sets and persist each as a tagged,
+    saved Backtest (best params + their metrics) so the top performers are kept for
+    comparison and to warm-start future optimizations. Returns how many were persisted."""
+    import json as _json
+    from datetime import datetime as _dt
     import app.models  # noqa: F401
     from app.models.database import SessionLocal
     from app.models.backtest import Backtest
+    from app.models.strategy import Strategy
     from app.models.strategy_optimization import StrategyOptimization
     from app.services.strategy_optimization_handler import _build_daily_trial_config  # noqa: SLF001
     from app.services.backtest.daily_backtest_handler import run_daily_backtest, _persist_results
@@ -479,26 +484,44 @@ def _persist_best_backtest(opt_id: int, expert: str) -> None:
     db = SessionLocal()
     try:
         opt = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
-        strat = db.query(__import__("app.models.strategy", fromlist=["Strategy"]).Strategy).filter_by(id=opt.strategy_id).first()
+        strat = db.query(Strategy).filter_by(id=opt.strategy_id).first()
         cfg = opt.optimization_config or {}
         bt_block = dict(cfg["backtest"])
-        decoded = decode_params(strat, opt.best_params or {})
-        trial_cfg = _build_daily_trial_config(bt_block, decoded)
-        trial_cfg["name"] = f"BEST-{opt.name or expert}"
-        results = run_daily_backtest(trial_cfg)
-        bt = Backtest(
-            name=trial_cfg["name"], model_id=None, engine_type="daily_expert",
-            expert_name=expert, optimization_id=opt_id,
-            start_date=__import__("datetime").datetime.fromisoformat(str(bt_block["start_date"])),
-            end_date=__import__("datetime").datetime.fromisoformat(str(bt_block["end_date"])),
-            initial_capital=float(bt_block["initial_capital"]),
-            status="running", started_at=__import__("datetime").datetime.now(),
-        )
-        db.add(bt); db.commit(); db.refresh(bt)
-        _persist_results(db, bt, results)
-        bt.status = "completed"; bt.completed_at = __import__("datetime").datetime.now()
-        bt.is_saved = True  # the best of a job is worth keeping
-        db.commit()
+
+        # Top-N distinct param sets by fitness (fall back to best_params if all_results is thin).
+        seen, ranked = set(), []
+        for r in sorted(opt.all_results or [], key=lambda r: (r.get("fitness") if r.get("fitness") is not None else -1e9), reverse=True):
+            key = _json.dumps(r.get("params"), sort_keys=True, default=str)
+            if key in seen:
+                continue
+            seen.add(key)
+            ranked.append(r["params"])
+            if len(ranked) >= n:
+                break
+        if not ranked and opt.best_params:
+            ranked = [opt.best_params]
+
+        persisted = 0
+        for rank, params in enumerate(ranked, start=1):
+            trial_cfg = _build_daily_trial_config(bt_block, decode_params(strat, params))
+            trial_cfg["name"] = f"TOP{rank}-{opt.name or expert}"
+            results = run_daily_backtest(trial_cfg)
+            bt = Backtest(
+                name=trial_cfg["name"], model_id=None, engine_type="daily_expert",
+                expert_name=expert, optimization_id=opt_id,
+                strategy_params=params,
+                start_date=_dt.fromisoformat(str(bt_block["start_date"])),
+                end_date=_dt.fromisoformat(str(bt_block["end_date"])),
+                initial_capital=float(bt_block["initial_capital"]),
+                status="running", started_at=_dt.now(),
+            )
+            db.add(bt); db.commit(); db.refresh(bt)
+            _persist_results(db, bt, results)
+            bt.status = "completed"; bt.completed_at = _dt.now()
+            bt.is_saved = True  # top performers of a job are kept
+            db.commit()
+            persisted += 1
+        return persisted
     finally:
         db.close()
 
@@ -695,6 +718,8 @@ def main(argv: "list | None" = None) -> int:
     op.add_argument("--population", type=int, default=10)
     op.add_argument("--parallel", type=int, default=4, help="Parallel trials (ThreadPoolExecutor).")
     op.add_argument("--early-stop", type=int, default=4)
+    op.add_argument("--save-top", type=int, default=5,
+                    help="Persist the top-N distinct param sets as saved Backtests (default 5).")
     op.add_argument("--seed", type=int, default=42, help="RNG seed (determinism).")
     op.add_argument("--initial-capital", type=float, default=100000.0)
     op.add_argument("--commission", type=float, default=1.0)
