@@ -910,17 +910,17 @@ class BacktestAccount(AccountInterface):
         return rows[0]
 
     def _existing_legs(self, transaction: Transaction) -> List[TradingOrder]:
-        """All non-terminal dependent (TP/SL/OCO) legs for a transaction."""
+        """All non-terminal dependent (TP/SL/OCO) legs for a transaction.
+
+        SQL-scoped to this transaction's orders — scanning ALL account orders here (once per
+        bracket, with thousands accumulated) was the dominant super-linear cost of a long run.
+        """
         terminal = OrderStatus.get_terminal_statuses()
-        legs: List[TradingOrder] = []
-        for o in self.get_orders():
-            if (
-                o.transaction_id == transaction.id
-                and o.depends_on_order is not None
-                and o.status not in terminal
-            ):
-                legs.append(o)
-        return legs
+        return [
+            o
+            for o in self._orders_filtered(transaction_id=transaction.id)
+            if o.depends_on_order is not None and o.status not in terminal
+        ]
 
     def _replace_leg(
         self,
