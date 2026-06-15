@@ -2,6 +2,8 @@ import { useRef } from 'react';
 import { importRules } from '../lib/btApi';
 import type { ConditionTree } from './ConditionBuilder';
 
+const buttonClass = "px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1";
+
 export function RuleIO({ which, tree, onImport }:
   { which: 'enter' | 'exit'; tree: ConditionTree; onImport: (tree: ConditionTree) => void; }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -25,11 +27,11 @@ export function RuleIO({ which, tree, onImport }:
     a.click();
   };
   return (
-    <span>
-      <button type="button" onClick={() => fileRef.current?.click()}>Import JSON</button>
-      <button type="button" onClick={doExport}>Export JSON</button>
-      <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: 'none' }}
+    <div className="flex gap-2">
+      <button type="button" onClick={() => fileRef.current?.click()} className={buttonClass}>Import JSON</button>
+      <button type="button" onClick={doExport} className={buttonClass}>Export JSON</button>
+      <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
         onChange={(e) => doImport(e.target.files?.[0])} />
-    </span>
+    </div>
   );
 }

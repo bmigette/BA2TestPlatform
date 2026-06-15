@@ -12,6 +12,8 @@ const SCREENER_FIELDS: [string, string][] = [
   ['screener_max_stocks', 'Max stocks'],
 ];
 
+const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+
 export function UniversePicker({ value, onChange }: { value: UniverseValue; onChange: (v: UniverseValue) => void; }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const onFile = (f: File | undefined) => {
@@ -19,31 +21,41 @@ export function UniversePicker({ value, onChange }: { value: UniverseValue; onCh
     f.text().then((t) => onChange({ mode: 'static', symbols: parseSymbols(t) }));
   };
   return (
-    <div>
-      <label><input type="radio" checked={value.mode === 'static'} onChange={() => onChange({ mode: 'static', symbols: value.mode === 'static' ? value.symbols : [] })} /> Static list</label>
-      <label className="ml-3"><input type="radio" checked={value.mode === 'screener'} onChange={() => onChange({ mode: 'screener', screener_settings: value.mode === 'screener' ? value.screener_settings : {} })} /> Screener</label>
+    <div className="space-y-2">
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-1 text-sm text-gray-700 dark:text-gray-300">
+          <input type="radio" checked={value.mode === 'static'} onChange={() => onChange({ mode: 'static', symbols: value.mode === 'static' ? value.symbols : [] })} /> Static list
+        </label>
+        <label className="flex items-center gap-1 text-sm text-gray-700 dark:text-gray-300">
+          <input type="radio" checked={value.mode === 'screener'} onChange={() => onChange({ mode: 'screener', screener_settings: value.mode === 'screener' ? value.screener_settings : {} })} /> Screener
+        </label>
+      </div>
 
       {value.mode === 'static' ? (
-        <div>
-          <textarea style={{ width: '100%', height: 56 }} placeholder="AAPL, MSFT, NVDA …"
+        <div className="space-y-2">
+          <textarea className={`${inputClass} w-full`} rows={3} placeholder="AAPL, MSFT, NVDA …"
             value={value.symbols.join(', ')}
             onChange={(e) => onChange({ mode: 'static', symbols: parseSymbols(e.target.value) })} />
-          <button type="button" onClick={() => fileRef.current?.click()}>⬆ Import from .txt</button>
-          <input ref={fileRef} type="file" accept=".txt,text/plain" style={{ display: 'none' }}
-            onChange={(e) => onFile(e.target.files?.[0])} />
-          <span className="text-xs text-gray-500"> {value.symbols.length} symbols</span>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => fileRef.current?.click()}
+              className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1">
+              ⬆ Import from .txt
+            </button>
+            <input ref={fileRef} type="file" accept=".txt,text/plain" className="hidden"
+              onChange={(e) => onFile(e.target.files?.[0])} />
+            <span className="text-xs text-gray-500 dark:text-gray-400">{value.symbols.length} symbols</span>
+          </div>
         </div>
       ) : (
-        <table className="text-sm">
-          <tbody>
-            {SCREENER_FIELDS.map(([k, label]) => (
-              <tr key={k}><td>{label}</td><td>
-                <input type="number" value={Number(value.screener_settings[k] ?? 0)}
-                  onChange={(e) => onChange({ mode: 'screener', screener_settings: { ...value.screener_settings, [k]: Number(e.target.value) } })} />
-              </td></tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="space-y-2">
+          {SCREENER_FIELDS.map(([k, label]) => (
+            <div key={k} className="flex items-center justify-between gap-3 p-2 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600">
+              <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">{label}</span>
+              <input type="number" className={`${inputClass} w-24`} value={Number(value.screener_settings[k] ?? 0)}
+                onChange={(e) => onChange({ mode: 'screener', screener_settings: { ...value.screener_settings, [k]: Number(e.target.value) } })} />
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

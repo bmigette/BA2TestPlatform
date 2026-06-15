@@ -10,6 +10,9 @@ export interface ExpertSettingsValue {
 }
 const isNumeric = (t: string) => t === 'float' || t === 'int';
 
+const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+const rangeInputClass = "w-16 px-1.5 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100";
+
 export function ExpertSettingsForm({ expertClass, value, onChange }:
   { expertClass: string; value: ExpertSettingsValue; onChange: (v: ExpertSettingsValue) => void; }) {
   const [defs, setDefs] = useState<Record<string, SettingDef>>({});
@@ -33,47 +36,49 @@ export function ExpertSettingsForm({ expertClass, value, onChange }:
   };
 
   return (
-    <table className="w-full text-sm">
-      <tbody>
-        {Object.entries(defs).map(([k, def]) => {
-          const choices = (def.choices ?? def.valid_values) as unknown[] | undefined;
-          const opt = value.expert_params[k];
-          return (
-            <tr key={k} title={def.tooltip || def.description || ''}>
-              <td className="pr-2">{k}</td>
-              <td>
-                {def.type === 'bool' ? (
-                  <input type="checkbox" checked={!!value.settings[k]} onChange={(e) => setVal(k, e.target.checked)} />
-                ) : choices ? (
-                  <select value={String(value.settings[k] ?? '')} onChange={(e) => setVal(k, e.target.value)}>
-                    {choices.map((c) => <option key={String(c)} value={String(c)}>{String(c)}</option>)}
-                  </select>
-                ) : (
-                  <input type={isNumeric(def.type) ? 'number' : 'text'}
-                    value={String(value.settings[k] ?? '')}
-                    onChange={(e) => setVal(k, isNumeric(def.type) ? Number(e.target.value) : e.target.value)} />
-                )}
-              </td>
-              <td>
-                {isNumeric(def.type) && (
-                  <label className="text-xs flex gap-1 items-center">
-                    <input type="checkbox" checked={!!opt}
-                      onChange={(e) => setOpt(k, def.type, e.target.checked)} /> Opt
-                    {opt && (<>
-                      <input type="number" placeholder="min" value={opt.min}
-                        onChange={(e) => setOpt(k, def.type, true, { ...opt, min: Number(e.target.value) })} style={{ width: 60 }} />
-                      <input type="number" placeholder="max" value={opt.max}
-                        onChange={(e) => setOpt(k, def.type, true, { ...opt, max: Number(e.target.value) })} style={{ width: 60 }} />
-                      <input type="number" placeholder="step" value={opt.step}
-                        onChange={(e) => setOpt(k, def.type, true, { ...opt, step: Number(e.target.value) })} style={{ width: 60 }} />
-                    </>)}
-                  </label>
-                )}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <div className="space-y-2">
+      {Object.entries(defs).map(([k, def]) => {
+        const choices = (def.choices ?? def.valid_values) as unknown[] | undefined;
+        const opt = value.expert_params[k];
+        return (
+          <div
+            key={k}
+            title={def.tooltip || def.description || ''}
+            className="flex items-center justify-between gap-3 p-2 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600"
+          >
+            <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">{k}</span>
+            <div>
+              {def.type === 'bool' ? (
+                <input type="checkbox" className="rounded" checked={!!value.settings[k]} onChange={(e) => setVal(k, e.target.checked)} />
+              ) : choices ? (
+                <select className={inputClass} value={String(value.settings[k] ?? '')} onChange={(e) => setVal(k, e.target.value)}>
+                  {choices.map((c) => <option key={String(c)} value={String(c)}>{String(c)}</option>)}
+                </select>
+              ) : (
+                <input className={inputClass} type={isNumeric(def.type) ? 'number' : 'text'}
+                  value={String(value.settings[k] ?? '')}
+                  onChange={(e) => setVal(k, isNumeric(def.type) ? Number(e.target.value) : e.target.value)} />
+              )}
+            </div>
+            <div>
+              {isNumeric(def.type) && (
+                <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
+                  <input type="checkbox" className="rounded" checked={!!opt}
+                    onChange={(e) => setOpt(k, def.type, e.target.checked)} /> Opt
+                  {opt && (<>
+                    <input type="number" placeholder="min" value={opt.min} className={rangeInputClass}
+                      onChange={(e) => setOpt(k, def.type, true, { ...opt, min: Number(e.target.value) })} />
+                    <input type="number" placeholder="max" value={opt.max} className={rangeInputClass}
+                      onChange={(e) => setOpt(k, def.type, true, { ...opt, max: Number(e.target.value) })} />
+                    <input type="number" placeholder="step" value={opt.step} className={rangeInputClass}
+                      onChange={(e) => setOpt(k, def.type, true, { ...opt, step: Number(e.target.value) })} />
+                  </>)}
+                </label>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
