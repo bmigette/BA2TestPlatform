@@ -40,6 +40,7 @@ import type {
   AvailableField
 } from '../components/ConditionBuilder';
 import { ExpertPicker } from '../components/ExpertPicker';
+import { ExitPresetPicker } from '../components/ExitPresetPicker';
 import { ExpertSettingsForm } from '../components/ExpertSettingsForm';
 import type { ExpertSettingsValue } from '../components/ExpertSettingsForm';
 import { UniversePicker } from '../components/UniversePicker';
@@ -2494,9 +2495,22 @@ const Backtesting: React.FC = () => {
 
                 {showConditionModal === 'exit' && (
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                      Define conditions for closing positions. Each rule can trigger a close or adjust TP/SL.
-                    </p>
+                    <div className="flex items-center justify-between mb-4">
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        Define conditions for closing positions. Each rule can trigger a close or adjust TP/SL.
+                      </p>
+                      <ExitPresetPicker
+                        onAdd={(p) =>
+                          setExitConditions((prev) => [
+                            ...prev,
+                            {
+                              ...exitConditionFromStored(p.rule as Record<string, unknown>),
+                              id: `exit-${Date.now()}-${prev.length}`,
+                            },
+                          ])
+                        }
+                      />
+                    </div>
                     <ExitConditionsBuilder
                       value={exitConditions}
                       onChange={setExitConditions}
