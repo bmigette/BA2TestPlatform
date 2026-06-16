@@ -302,6 +302,15 @@ class DailyBacktestEngine:
         # is side-effect-only, so throttling cannot change results (determinism preserved).
         last_pct = -1
 
+        # Once-per-scheduled-DAY dedup for the expensive analyse+manage pass. On an intraday
+        # clock with a weekday schedule but no explicit `times`, _schedule_allows_entry is True
+        # for EVERY bar of an enabled day, which re-ran the expert analysis + open-position
+        # management ~78x/day (profiled: ~90k date-parses, the dominant 5min cost). We run that
+        # block once per (expert, calendar day); the OCO TP/SL fills still run EVERY bar via
+        # refresh_orders below, so trade closes stay 5min-precise. Matches live (RM manages on
+        # the analysis cadence, fills are continuous).
+        analyzed_days: set = set()
+
         for i, as_of in enumerate(days):
             # Tz-AWARE UTC clock — the SAME contract the live path assumes: the experts'
             # _process does ``now = as_of or datetime.now(timezone.utc)`` and then subtracts
@@ -357,6 +366,14 @@ class DailyBacktestEngine:
                     as_of_dt, self._entry_schedule(expert), self.price.is_intraday
                 ):
                     continue
+                # Safety net: if the schedule pins weekdays but no `times`, the gate above is
+                # True for EVERY intraday bar of the day — run the (expensive) analyse+manage
+                # pass at most ONCE per (expert, calendar day) so 5min runs don't re-analyse 78x.
+                # (When `times` IS set, only one bar/day passes the gate, so this never triggers.)
+                _day_key = (expert_id, as_of_dt.date())
+                if self.price.is_intraday and _day_key in analyzed_days:
+                    continue
+                analyzed_days.add(_day_key)
                 book_dirty = True  # an analysis/management pass runs -> orders may be created
                 if getattr(expert, "bypasses_classic_rm", False):
                     self._run_bypass_expert_bar(expert, expert_id, settings, as_of_dt)

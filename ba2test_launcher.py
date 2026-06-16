@@ -650,7 +650,10 @@ def _cmd_optimize(args) -> int:
     if args.run_schedule == "weekly":
         days = {d: (d == args.run_schedule_day) for d in
                 ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")}
-        run_sched = {"days": days}
+        # `times` pins the ANALYSIS to the scheduled time-of-day so on a 5min fill clock the
+        # expert analyses ONCE/day (at market open) instead of every intraday bar. FMP bars are
+        # stamped in market-local 09:30-15:55, so "09:30" is the first regular-session bar.
+        run_sched = {"days": days, "times": ["09:30"]}
 
     init_db()
     db = SessionLocal()
@@ -777,9 +780,11 @@ def _cmd_optimize_batch(args) -> int:
             jobs.extend((e, k) for k in strategies)
     run_sched = None
     if args.run_schedule == "weekly":
+        # `times` pins ANALYSIS to market open so a 5min fill clock analyses once/day, not per bar.
         run_sched = {"days": {d: (d == args.run_schedule_day) for d in
                               ("monday", "tuesday", "wednesday", "thursday", "friday",
-                               "saturday", "sunday")}}
+                               "saturday", "sunday")},
+                     "times": ["09:30"]}
     init_db()
     tq = get_task_queue()
     print(f"optimize-batch: {len(jobs)} job(s) {jobs} x {len(universe)} syms, "
