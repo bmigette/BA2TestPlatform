@@ -469,6 +469,94 @@ def test_oco_tp_side_fills_and_closes_position():
         ctx.__exit__(None, None, None)
 
 
+# ---------------------------------------------------------------------------
+# open_date sim-stamping (days_opened correctness)
+# ---------------------------------------------------------------------------
+def test_open_date_stamped_to_sim_fill_date_not_wall_clock():
+    """An OPENED transaction's ``open_date`` must equal the entry's SIM fill bar.
+
+    The inherited lifecycle stamps ``open_date = datetime.now()`` (WALL clock) on
+    WAITING->OPENED. In a backtest the sim clock is years off wall time, so a
+    wall-clock open_date makes ``days_opened`` ~= 0 forever (the bug). The backtest
+    account must re-stamp ``open_date`` to the entry order's simulated fill date.
+    """
+    from datetime import timezone
+    from ba2_common.core.types import OrderStatus, TransactionStatus
+    from ba2_common.core.models import Transaction
+    from ba2_common.core.db import get_instance
+
+    acct, ctx, ps = _acct([(D1, 100, 101, 99, 100), (D2, 102, 103, 101, 102)])
+    try:
+        ps.set_clock(D1)
+        entry, txn = _open_long_with_legs(acct, ps)
+
+        ps.set_clock(D1)
+        acct.refresh_orders()  # entry MARKET fills at D2 open
+        ps.set_clock(D2)
+        acct.refresh_transactions()  # WAITING -> OPENED
+
+        reloaded = get_instance(Transaction, txn.id)
+        assert reloaded.status == TransactionStatus.OPENED
+        assert reloaded.open_date is not None
+        od = reloaded.open_date
+        if od.tzinfo is not None:
+            od = od.replace(tzinfo=None)
+        # open_date is the entry order's recorded SIM fill bar (the same convention the
+        # engine uses for close_date / round-trip trades) — a 2024 date, NOT wall-clock 2026.
+        sim_fill = acct._fill_dates[entry.id]
+        if sim_fill.tzinfo is not None:
+            sim_fill = sim_fill.replace(tzinfo=None)
+        assert od == sim_fill, f"open_date should equal entry sim fill {sim_fill}, got {od}"
+        assert od.year == 2024, f"open_date must be a SIM date, not wall-clock; got {od}"
+    finally:
+        ctx.__exit__(None, None, None)
+
+
+def test_open_date_sim_stamp_survives_close():
+    """A CLOSED transaction keeps its SIM open_date (entry fill), not wall-clock."""
+    from ba2_common.core.types import OrderStatus, TransactionStatus
+    from ba2_common.core.models import Transaction
+    from ba2_common.core.db import get_instance
+
+    # D2 entry fills @102; D3 high 125 crosses TP @120 -> closes on D3.
+    acct, ctx, ps = _acct(
+        [
+            (D1, 100, 101, 99, 100),
+            (D2, 102, 103, 101, 102),
+            (D3, 104, 125, 103, 120),
+        ]
+    )
+    try:
+        ps.set_clock(D1)
+        entry, txn = _open_long_with_legs(acct, ps)
+        acct.adjust_tp_sl(txn, new_tp_price=120.0, new_sl_price=90.0)
+
+        ps.set_clock(D1)
+        acct.refresh_orders()  # entry fills @102 (D2)
+        ps.set_clock(D2)
+        acct.refresh_transactions()  # OPENED, open_date stamped to D2
+        acct.refresh_orders()  # activate OCO, evaluate vs D3 -> TP @120 fills
+        acct.refresh_transactions()  # CLOSED
+
+        reloaded = get_instance(Transaction, txn.id)
+        assert reloaded.status == TransactionStatus.CLOSED
+        od = reloaded.open_date
+        if od.tzinfo is not None:
+            od = od.replace(tzinfo=None)
+        sim_fill = acct._fill_dates[entry.id]
+        if sim_fill.tzinfo is not None:
+            sim_fill = sim_fill.replace(tzinfo=None)
+        assert od == sim_fill, f"open_date should remain entry sim fill {sim_fill}, got {od}"
+        assert od.year == 2024, f"open_date must be a SIM date, not wall-clock; got {od}"
+        # close_date is the current sim bar (D3) when the OCO TP filled — a 2024 date.
+        cd = reloaded.close_date
+        if cd is not None and cd.tzinfo is not None:
+            cd = cd.replace(tzinfo=None)
+        assert cd is not None and cd.year == 2024
+    finally:
+        ctx.__exit__(None, None, None)
+
+
 def test_oco_sl_side_fills_when_both_straddled():
     """When a single bar straddles BOTH legs, the STOP (loss) side fills (conservative)."""
     from ba2_common.core.types import OrderStatus

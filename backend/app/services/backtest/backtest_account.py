@@ -169,6 +169,10 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         # Transaction ids whose close_date/open_date have already been re-stamped to sim time
         # (so refresh_transactions only touches freshly-closed transactions, not all closed ones).
         self._stamped_closed_ids: set = set()
+        # Transaction ids whose open_date has been re-stamped to its entry's SIM fill date.
+        # The inherited lifecycle stamps open_date with WALL clock on WAITING->OPENED; we
+        # overwrite it once with the simulated fill bar so days-opened math is sim-correct.
+        self._stamped_open_ids: set = set()
 
     # ======================================================================
     # Settings
@@ -579,17 +583,42 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 update_instance(leg)
 
     def refresh_transactions(self) -> bool:
-        """Roll order state into transactions, then fix CLOSED transactions' ``close_date``.
+        """Roll order state into transactions, then fix ``open_date``/``close_date`` to sim time.
 
-        The inherited lifecycle closes a transaction via ``close_transaction_with_logging``,
-        which stamps ``close_date = datetime.now(timezone.utc)`` (WALL clock). In a backtest the
-        simulated clock is years off wall time, so a wall-clock close_date would corrupt any
-        as-of date math (e.g. the days-since-last-close cooldown condition). After the inherited
-        roll we re-stamp the ``close_date`` of every transaction CLOSED on THIS bar to the
-        simulated fill bar of its closing leg (falling back to the current simulated bar).
+        The inherited lifecycle stamps BOTH ``open_date`` (on WAITING->OPENED) and
+        ``close_date`` (on close) with ``datetime.now(timezone.utc)`` (WALL clock). In a
+        backtest the simulated clock is years off wall time, so a wall-clock timestamp
+        corrupts any as-of date math:
+
+          * a wall-clock ``open_date`` collapses ``days_opened`` to ~0 forever, so a
+            ``days_opened > N`` exit rule (and the optimization plan's time-exit) NEVER fires;
+          * a wall-clock ``close_date`` corrupts the days-since-last-close cooldown.
+
+        After the inherited roll we re-stamp:
+          * ``open_date`` of every transaction OPENED (or already closed) on THIS bar to its
+            entry order's simulated fill bar (``_fill_dates[entry.id]``);
+          * ``close_date`` of every transaction CLOSED on THIS bar to the current sim clock
+            (the closing leg fills on the current bar; ``refresh_orders`` ran just before).
         """
         ok = super().refresh_transactions()
         sim_now = self._price.now()
+
+        # ---- open_date: re-stamp to the entry's SIM fill bar (overwrite wall-clock). ----
+        open_stamped = self._stamped_open_ids
+        for txn in self._open_date_unstamped_transactions():
+            if txn.id in open_stamped:
+                continue
+            entry = self._entry_order_for_transaction(txn)
+            fill_date = self._fill_dates.get(entry.id) if (entry is not None and entry.id is not None) else None
+            if fill_date is None:
+                # Entry not filled yet (or no fill date recorded) — leave the inherited value
+                # and retry next bar once the fill lands.
+                continue
+            open_stamped.add(txn.id)
+            txn.open_date = fill_date
+            update_instance(txn)
+
+        # ---- close_date: re-stamp CLOSED transactions to the current sim bar. ----
         stamped = self._stamped_closed_ids
         for txn in self._closed_transactions():
             if txn.id in stamped:
@@ -599,12 +628,26 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             # ran just before this), so the simulated close_date is the current clock — no per-txn
             # order lookup needed.
             txn.close_date = sim_now
-            if txn.open_date is None:
-                entry = self._entry_order_for_transaction(txn)
-                if entry is not None and entry.id is not None:
-                    txn.open_date = self._fill_dates.get(entry.id)
             update_instance(txn)
         return ok
+
+    def _open_date_unstamped_transactions(self) -> List[Transaction]:
+        """OPENED or CLOSED transactions whose open_date has not yet been sim-stamped.
+
+        Includes CLOSED as well as OPENED so a transaction that opens AND closes between two
+        of our passes still gets its open_date corrected (the close pass no longer touches it).
+        Filters already-stamped ids in SQL so the scan stays cheap on long runs.
+        """
+        from sqlmodel import select, Session
+        from ba2_common.core.types import TransactionStatus
+
+        with Session(get_db().bind) as session:
+            stmt = select(Transaction).where(
+                Transaction.status.in_([TransactionStatus.OPENED, TransactionStatus.CLOSED])
+            )
+            if self._stamped_open_ids:
+                stmt = stmt.where(Transaction.id.not_in(self._stamped_open_ids))
+            return list(session.exec(stmt).all())
 
     def _closed_transactions(self) -> List[Transaction]:
         """CLOSED transactions not yet re-stamped (single-account backtest DB).
