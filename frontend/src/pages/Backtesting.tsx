@@ -1446,12 +1446,12 @@ const Backtesting: React.FC = () => {
 
                   <button
                     onClick={() => setShowConditionModal('buy')}
-                    className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-800"
+                    className="flex items-center gap-2 text-sm font-medium text-green-900 dark:text-green-100 w-full p-2 bg-green-100 dark:bg-green-900/40 hover:bg-green-200 dark:hover:bg-green-900/60 rounded-lg border border-green-300 dark:border-green-700"
                   >
-                    <TrendingUp className="w-4 h-4 text-green-600" />
+                    <TrendingUp className="w-4 h-4 text-green-600 dark:text-green-400" />
                     <span className="flex-1 text-left">Buy Entry Conditions</span>
-                    <span className="text-xs text-gray-500">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
-                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                    <span className="text-xs text-green-800 dark:text-green-200">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-green-700 dark:text-green-300" />
                   </button>
                   <div className="flex justify-end gap-1 text-xs">
                     <RuleIO
@@ -1462,12 +1462,12 @@ const Backtesting: React.FC = () => {
                   </div>
                   <button
                     onClick={() => setShowConditionModal('sell')}
-                    className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg border border-red-200 dark:border-red-800"
+                    className="flex items-center gap-2 text-sm font-medium text-red-900 dark:text-red-100 w-full p-2 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 rounded-lg border border-red-300 dark:border-red-700"
                   >
-                    <TrendingDown className="w-4 h-4 text-red-600" />
+                    <TrendingDown className="w-4 h-4 text-red-600 dark:text-red-400" />
                     <span className="flex-1 text-left">Sell Entry Conditions</span>
-                    <span className="text-xs text-gray-500">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
-                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                    <span className="text-xs text-red-800 dark:text-red-200">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-red-700 dark:text-red-300" />
                   </button>
                   <div className="flex justify-end gap-1 text-xs">
                     <RuleIO
@@ -1780,8 +1780,8 @@ const Backtesting: React.FC = () => {
               </button>
             </div>
             ) : backtestCardTab === 'history' ? (
-              /* History Tab — all runs */
-              <div className="max-h-[32rem] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
+              /* History Tab — all runs (fills the viewport height) */
+              <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
                 <RunningJobsStrip />
                 <RunHistoryTable savedOnly={false} onSelect={viewBacktest} />
               </div>
