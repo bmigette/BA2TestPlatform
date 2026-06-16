@@ -157,6 +157,7 @@ def _recommendation_to_expert_recommendation(
     expert_instance_id: int,
     symbol: str,
     as_of: datetime,
+    allow_hold: bool = False,
 ) -> Optional[int]:
     """Persist a Phase-1 ``Recommendation`` value object as an ``ExpertRecommendation`` row
     in the backtest DB and return its id (or ``None`` if not actionable).
@@ -173,7 +174,13 @@ def _recommendation_to_expert_recommendation(
     if getattr(rec, "skip", False):
         return None
     action = rec.signal
-    if action == OrderRecommendation.HOLD or action == OrderRecommendation.ERROR:
+    if action == OrderRecommendation.ERROR:
+        return None
+    # HOLD is normally not staged (the enter loop skips it), but the OPEN_POSITIONS pass
+    # persists it (allow_hold=True) so exit conditions — days_opened / profit_loss_percent /
+    # bearish-vs-not — have a recommendation row to read for a held symbol, exactly like the
+    # live OPEN_POSITIONS analysis creates one.
+    if action == OrderRecommendation.HOLD and not allow_hold:
         return None
 
     # expected_profit_percent / confidence are required (non-nullable) on the row; the
@@ -256,10 +263,12 @@ class DailyBacktestEngine:
         random.seed(self.seed)
         np.random.seed(self.seed & 0xFFFFFFFF)
 
-        # ATR injection seam: build once, reuse across bars/experts.
+        # ATR injection seam: build once, reuse across bars/experts (also stashed on self so
+        # _manage_open_positions can size any Sell orders the exit ruleset produces).
         indicator_provider = self._indicator_provider
         if indicator_provider is None:
             indicator_provider = make_indicator_provider()
+        self._indicator_provider = indicator_provider
 
         days = trading_days(self.config["start_date"], self.config["end_date"], self.price)
         total = max(len(days), 1)
@@ -319,6 +328,11 @@ class DailyBacktestEngine:
                 )
                 if created_any:
                     self._size_and_submit(expert_id, indicator_provider)
+
+                # Manage EXISTING positions through the OPEN_POSITIONS ruleset (real RM/evaluator,
+                # on the analysis cadence — identical to live). Adjust-TP/SL/Close/Sell per the
+                # exit conditions; no-op when the expert has no open_positions ruleset configured.
+                self._manage_open_positions(expert, expert_id, settings, as_of_dt)
 
             # 4. fills on THIS bar's working orders; roll order state into transactions.
             self.account.refresh_orders()
@@ -434,6 +448,119 @@ class DailyBacktestEngine:
                 continue
 
         return created_any
+
+    # -- open-positions management (live-identical, packaged evaluator) ------
+    def _manage_open_positions(
+        self,
+        expert: Any,
+        expert_id: int,
+        settings: Dict[str, Any],
+        as_of: datetime,
+    ) -> None:
+        """Evaluate the expert's OPEN_POSITIONS ruleset for each held position on an analysis bar.
+
+        A faithful, thin mirror of the live
+        ``TradeManager.process_open_positions_recommendations``: for every symbol this expert
+        currently holds, run a fresh OPEN_POSITIONS-subtype analysis, persist the recommendation
+        (even HOLD), then drive the SAME packaged ``TradeActionEvaluator`` (open_positions use
+        case, ``existing_transactions=...``) + ``execute()`` — so Adjust-TP/Adjust-SL/Close/Sell
+        actions are produced by the real RM/action code, not re-implemented here. The engine only
+        provides the loop (it cannot import the live TradeManager). RM sizing runs afterwards for
+        any pending (Sell) orders; Adjust/Close act directly on the account.
+        """
+        from ba2_common.core.TradeActionEvaluator import TradeActionEvaluator
+        from ba2_common.core.db import get_instance as _get_instance
+        from ba2_common.core.models import ExpertInstance
+        from ba2_common.core.types import AnalysisUseCase
+
+        instance = _get_instance(ExpertInstance, expert_id)
+        open_ruleset_id = getattr(instance, "open_positions_ruleset_id", None) if instance else None
+        if not open_ruleset_id:
+            return
+
+        held = self._held_transactions(expert_id)  # {symbol: [Transaction, ...]}
+        if not held:
+            return
+
+        providers = self._provider_bundle()
+        created_any = False
+        for symbol, txns in held.items():
+            try:
+                expert._gather_symbol = symbol
+            except Exception:  # noqa: BLE001
+                pass
+            ctx = BacktestContext(
+                providers=providers, settings=settings, as_of=as_of,
+                account=self.account, subtype=AnalysisUseCase.OPEN_POSITIONS,
+            )
+            try:
+                rec = expert.analyze_as_of(as_of, ctx)
+            except Exception as e:  # noqa: BLE001 — one symbol must not abort the bar
+                self._log(f"open-pos analyze failed for {symbol} @ {as_of:%Y-%m-%d}: {e}")
+                continue
+            rec_id = _recommendation_to_expert_recommendation(
+                rec, expert_instance_id=expert_id, symbol=symbol, as_of=as_of, allow_hold=True
+            )
+            if rec_id is None:
+                continue
+            recommendation = _get_instance(ExpertRecommendation, rec_id)
+            if recommendation is None:
+                continue
+            existing_order = self._oldest_entry_order(txns)
+            try:
+                evaluator = TradeActionEvaluator(
+                    account=self.account, instrument_name=symbol, existing_transactions=txns
+                )
+                summaries = evaluator.evaluate(
+                    instrument_name=symbol, expert_recommendation=recommendation,
+                    ruleset_id=open_ruleset_id, existing_order=existing_order,
+                )
+                if not summaries or any("error" in s for s in summaries):
+                    continue
+                # submit_to_broker=True (matches live process_open_positions_recommendations with
+                # allow_automated_trade_modification): Close/Adjust-TP/SL act DIRECTLY on the
+                # position/legs (no RM sizing); a Sell that stages a PENDING order is sized below.
+                results = evaluator.execute(submit_to_broker=True)
+                if any(r.get("success") and (r.get("data") or {}).get("order_id") for r in results):
+                    created_any = True
+            except Exception as e:  # noqa: BLE001
+                self._log(f"open-pos eval/execute failed for {symbol} @ {as_of:%Y-%m-%d}: {e}")
+                continue
+
+        if created_any:
+            self._size_and_submit(expert_id, self._indicator_provider)
+
+    def _held_transactions(self, expert_id: int) -> Dict[str, List[Any]]:
+        """{symbol: [OPENED Transaction, ...]} for this expert.
+
+        OPENED only (not WAITING): the backtest enters with MARKET orders that fill on the NEXT
+        bar, so a WAITING transaction is just THIS bar's freshly-created, un-filled entry —
+        managing it now would cancel the entry before it ever opens. Live includes WAITING
+        because there a limit entry can genuinely sit working; here only a filled position is a
+        real open position to manage.
+        """
+        from sqlmodel import select, Session
+        from ba2_common.core.db import get_db
+        from ba2_common.core.types import TransactionStatus
+
+        out: Dict[str, List[Any]] = {}
+        with Session(get_db().bind) as session:
+            rows = session.exec(
+                select(Transaction).where(
+                    Transaction.expert_id == expert_id,
+                    Transaction.status == TransactionStatus.OPENED,
+                )
+            ).all()
+        for t in rows:
+            out.setdefault(t.symbol, []).append(t)
+        return out
+
+    def _oldest_entry_order(self, txns: List[Any]) -> Optional[Any]:
+        """The FILLED entry order of the oldest transaction (for DaysOpened-style conditions)."""
+        if not txns:
+            return None
+        oldest = min(txns, key=lambda t: t.open_date or t.created_at or datetime.max.replace(tzinfo=timezone.utc))
+        return self.account._entry_order_for_transaction(oldest)
 
     def _run_bypass_expert_bar(
         self,

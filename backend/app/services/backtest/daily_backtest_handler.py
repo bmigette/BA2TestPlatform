@@ -461,15 +461,26 @@ def _build_experts(
     import importlib
 
     from app.services.backtest.backtest_db import seed_expert_instance
-    from app.services.backtest.default_rulesets import seed_enter_long_ruleset, seed_ruleset_from_tree
+    from app.services.backtest.default_rulesets import (
+        seed_enter_long_ruleset,
+        seed_open_positions_ruleset,
+        seed_ruleset_from_tree,
+    )
 
     # When the (optimizer-decoded) buy-entry condition tree is present, build the enter ruleset
     # FROM it so the optimizer's cond:<id>:value thresholds + on/off toggles actually gate
     # entries; else fall back to the default "BUY when bullish & flat" ruleset.
     buy_tree = config.get("buy_tree")
+    # Optimizer-decoded exit rules (open_positions): list of {conditions, action_type,
+    # reference_value, action_value, enabled} — seeded into the per-expert OPEN_POSITIONS
+    # ruleset so the engine manages held positions via the real RM/evaluator (Adjust TP/SL/Close).
+    exit_rules = config.get("exit_rules")
 
     def _seed_enter(nm: str) -> int:
         return seed_ruleset_from_tree(buy_tree, name=nm) if buy_tree else seed_enter_long_ruleset(name=nm)
+
+    def _seed_exit(nm: str) -> Optional[int]:
+        return seed_open_positions_ruleset(exit_rules, name=nm) if exit_rules else None
 
     out: List[Tuple[Any, int, Dict[str, Any], int]] = []
     for idx, spec in enumerate(config["experts"], start=1):
@@ -504,10 +515,12 @@ def _build_experts(
             )
         else:
             ruleset_id = _seed_enter(f"backtest-enter-{class_name}-{idx}")
+            open_ruleset_id = _seed_exit(f"backtest-open-positions-{class_name}-{idx}")
             expert_id = seed_expert_instance(
                 account_id=account_id,
                 expert_class_name=class_name,
                 enter_market_ruleset_id=ruleset_id,
+                open_positions_ruleset_id=open_ruleset_id,
                 instance_id=idx,
             )
 
@@ -536,6 +549,8 @@ def _build_experts(
             gate_settings: Dict[str, Any] = {
                 "allow_automated_trade_opening": (True, "bool"),
                 "enable_buy": (True, "bool"),
+                # Live gates open-positions management (Adjust TP/SL/Close) on this flag.
+                "allow_automated_trade_modification": (True, "bool"),
             }
             for k, v in decision_settings.items():
                 gate_settings[k] = (v, _setting_type(v))
