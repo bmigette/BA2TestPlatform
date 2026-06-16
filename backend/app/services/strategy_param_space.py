@@ -117,6 +117,20 @@ def _collect_conditions(strategy) -> Dict[str, Any]:
                 exit_rule.get("action_value_min"), exit_rule.get("action_value_max"),
                 exit_rule.get("action_value_step"), is_int=False,
             )
+        # OPTION action selection params (Plan 2 T4): the strike delta and DTE the
+        # optimizer can tune for an exit rule that opens an option position.
+        if eid and exit_rule.get("option_strike_param_optimize"):
+            out[f"exit:{eid}:option_delta"] = _range_entry(
+                exit_rule.get("option_strike_param_min"),
+                exit_rule.get("option_strike_param_max"),
+                exit_rule.get("option_strike_param_step"), is_int=False,
+            )
+        if eid and exit_rule.get("option_dte_optimize"):
+            out[f"exit:{eid}:option_dte"] = _range_entry(
+                exit_rule.get("option_dte_min_range"),
+                exit_rule.get("option_dte_max_range"),
+                exit_rule.get("option_dte_step"), is_int=True,
+            )
         # ON/OFF toggle for the whole exit rule (optimizer can drop it entirely).
         if eid and exit_rule.get("toggle_optimize"):
             out[f"exit:{eid}:enabled"] = _range_entry(0, 1, 1, is_int=True)
@@ -219,6 +233,8 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     cond_by_id: Dict[str, Dict[str, Any]] = {}
     exit_action_by_id: Dict[str, Any] = {}
     exit_enabled_by_id: Dict[str, Any] = {}
+    exit_option_delta_by_id: Dict[str, Any] = {}
+    exit_option_dte_by_id: Dict[str, Any] = {}
     expert_overrides: Dict[str, Any] = {}
     tp = getattr(strategy, "initial_tp_percent", None)
     sl = getattr(strategy, "initial_sl_percent", None)
@@ -234,9 +250,13 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
             _, cid, field = key.split(":", 2)
             cond_by_id.setdefault(cid, {})[field] = val
         elif key.startswith("exit:"):
-            _, eid, field = key.split(":", 2)  # 'action_value' | 'enabled'
+            _, eid, field = key.split(":", 2)  # 'action_value'|'enabled'|'option_delta'|'option_dte'
             if field == "enabled":
                 exit_enabled_by_id[eid] = val
+            elif field == "option_delta":
+                exit_option_delta_by_id[eid] = val
+            elif field == "option_dte":
+                exit_option_dte_by_id[eid] = val
             else:
                 exit_action_by_id[eid] = val
         else:
@@ -256,6 +276,11 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
             continue
         if eid in exit_action_by_id:
             rule["action_value"] = exit_action_by_id[eid]
+        # OPTION action selection params (Plan 2 T4).
+        if eid in exit_option_delta_by_id:
+            rule["option_strike_param"] = exit_option_delta_by_id[eid]
+        if eid in exit_option_dte_by_id:
+            rule["option_dte_min"] = rule["option_dte_max"] = int(exit_option_dte_by_id[eid])
         if rule.get("conditions"):
             rule["conditions"] = _apply_to_tree(rule["conditions"], cond_by_id)
         exit_rules.append(rule)
