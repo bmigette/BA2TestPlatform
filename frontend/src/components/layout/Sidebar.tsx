@@ -30,7 +30,7 @@ const Sidebar: React.FC = () => {
   return (
     <aside className="w-64 bg-gray-900 text-white h-screen fixed left-0 top-0 overflow-y-auto">
       <div className="p-6">
-        <h1 className="text-2xl font-bold mb-8">DL Forecasting</h1>
+        <h1 className="text-2xl font-bold mb-8">BA2 Test Platform</h1>
         <nav className="space-y-2">
           {navItems.map((item) => {
             const Icon = item.icon;
