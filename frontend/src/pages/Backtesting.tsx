@@ -231,6 +231,72 @@ const generateBacktestName = (): string => {
   return `${adj}${noun}_${num}`;
 };
 
+// Serialize an exit-rule editor object to the snake_case shape the backend rule
+// engine consumes (action_from_rule / strategy_param_space / strategy_executor).
+// Used by the expert create path which sends exit_conditions straight through.
+const exitConditionToSnake = (ec: ExitConditionSet): Record<string, unknown> => ({
+  id: ec.id,
+  name: ec.name,
+  conditions: ec.conditions,
+  action: ec.action,
+  action_value: ec.actionValue,
+  action_value_optimize: ec.actionValueOptimize,
+  action_value_min: ec.actionValueMin,
+  action_value_max: ec.actionValueMax,
+  action_value_step: ec.actionValueStep,
+  toggle_optimize: ec.toggleOptimize,
+  reference_value: ec.referenceValue,
+  option_strategy: ec.optionStrategy,
+  option_strike_method: ec.optionStrikeMethod,
+  option_strike_param: ec.optionStrikeParam,
+  option_strike_param_optimize: ec.optionStrikeParamOptimize,
+  option_strike_param_min: ec.optionStrikeParamMin,
+  option_strike_param_max: ec.optionStrikeParamMax,
+  option_strike_param_step: ec.optionStrikeParamStep,
+  option_dte_min: ec.optionDteMin,
+  option_dte_max: ec.optionDteMax,
+  option_dte_optimize: ec.optionDteOptimize,
+  option_dte_min_range: ec.optionDteMinRange,
+  option_dte_max_range: ec.optionDteMaxRange,
+  option_dte_step: ec.optionDteStep,
+  option_sizing: ec.optionSizing,
+});
+
+// Round-trip a stored exit rule (snake_case, as persisted by save/run) back into
+// the camelCase ExitConditionSet the editor + ConditionBuilder expect. Tolerates
+// either casing on read so loading older saved strategies still works.
+const exitConditionFromStored = (raw: Record<string, unknown>): ExitConditionSet => {
+  const pick = (camel: string, snake: string): unknown =>
+    raw[camel] !== undefined ? raw[camel] : raw[snake];
+  return {
+    id: raw.id as string,
+    name: raw.name as string,
+    conditions: raw.conditions as ExitConditionSet['conditions'],
+    action: raw.action as ExitConditionSet['action'],
+    actionValue: pick('actionValue', 'action_value') as number | undefined,
+    actionValueOptimize: pick('actionValueOptimize', 'action_value_optimize') as boolean | undefined,
+    actionValueMin: pick('actionValueMin', 'action_value_min') as number | undefined,
+    actionValueMax: pick('actionValueMax', 'action_value_max') as number | undefined,
+    actionValueStep: pick('actionValueStep', 'action_value_step') as number | undefined,
+    toggleOptimize: pick('toggleOptimize', 'toggle_optimize') as boolean | undefined,
+    referenceValue: pick('referenceValue', 'reference_value') as string | undefined,
+    optionStrategy: pick('optionStrategy', 'option_strategy') as string | undefined,
+    optionStrikeMethod: pick('optionStrikeMethod', 'option_strike_method') as ExitConditionSet['optionStrikeMethod'],
+    optionStrikeParam: pick('optionStrikeParam', 'option_strike_param') as number | undefined,
+    optionStrikeParamOptimize: pick('optionStrikeParamOptimize', 'option_strike_param_optimize') as boolean | undefined,
+    optionStrikeParamMin: pick('optionStrikeParamMin', 'option_strike_param_min') as number | undefined,
+    optionStrikeParamMax: pick('optionStrikeParamMax', 'option_strike_param_max') as number | undefined,
+    optionStrikeParamStep: pick('optionStrikeParamStep', 'option_strike_param_step') as number | undefined,
+    optionDteMin: pick('optionDteMin', 'option_dte_min') as number | undefined,
+    optionDteMax: pick('optionDteMax', 'option_dte_max') as number | undefined,
+    optionDteOptimize: pick('optionDteOptimize', 'option_dte_optimize') as boolean | undefined,
+    optionDteMinRange: pick('optionDteMinRange', 'option_dte_min_range') as number | undefined,
+    optionDteMaxRange: pick('optionDteMaxRange', 'option_dte_max_range') as number | undefined,
+    optionDteStep: pick('optionDteStep', 'option_dte_step') as number | undefined,
+    optionSizing: pick('optionSizing', 'option_sizing') as number | undefined,
+  };
+};
+
 const Backtesting: React.FC = () => {
   const _navigate = useNavigate();
   void _navigate;
@@ -554,7 +620,30 @@ const Backtesting: React.FC = () => {
           actionValueOptimize: ec.actionValueOptimize,
           actionValueMin: ec.actionValueMin,
           actionValueMax: ec.actionValueMax,
-          actionValueStep: ec.actionValueStep
+          actionValueStep: ec.actionValueStep,
+          // snake_case fields the backend consumers read directly
+          // (strategy_executor.action_value, strategy_param_space, action_from_rule).
+          action_value: ec.actionValue,
+          action_value_optimize: ec.actionValueOptimize,
+          action_value_min: ec.actionValueMin,
+          action_value_max: ec.actionValueMax,
+          action_value_step: ec.actionValueStep,
+          toggle_optimize: ec.toggleOptimize,
+          reference_value: ec.referenceValue,
+          option_strategy: ec.optionStrategy,
+          option_strike_method: ec.optionStrikeMethod,
+          option_strike_param: ec.optionStrikeParam,
+          option_strike_param_optimize: ec.optionStrikeParamOptimize,
+          option_strike_param_min: ec.optionStrikeParamMin,
+          option_strike_param_max: ec.optionStrikeParamMax,
+          option_strike_param_step: ec.optionStrikeParamStep,
+          option_dte_min: ec.optionDteMin,
+          option_dte_max: ec.optionDteMax,
+          option_dte_optimize: ec.optionDteOptimize,
+          option_dte_min_range: ec.optionDteMinRange,
+          option_dte_max_range: ec.optionDteMaxRange,
+          option_dte_step: ec.optionDteStep,
+          option_sizing: ec.optionSizing
         })),
         initialTpPercent,
         initialTpOptimize,
@@ -587,7 +676,9 @@ const Backtesting: React.FC = () => {
             slippage,
             buy_entry_conditions: buyEntryConditions,
             sell_entry_conditions: sellEntryConditions,
-            exit_conditions: exitConditions,
+            // snake_case so the daily-engine rule builder (action_from_rule) reads
+            // the action + reference_value + option_* selection params.
+            exit_conditions: exitConditions.map(exitConditionToSnake),
             initial_tp_percent: initialTpPercent,
             initial_sl_percent: initialSlPercent,
             fill_model: fillModel,
@@ -725,7 +816,23 @@ const Backtesting: React.FC = () => {
             action_value_optimize: ec.actionValueOptimize,
             action_value_min: ec.actionValueMin,
             action_value_max: ec.actionValueMax,
-            action_value_step: ec.actionValueStep
+            action_value_step: ec.actionValueStep,
+            toggle_optimize: ec.toggleOptimize,
+            reference_value: ec.referenceValue,
+            option_strategy: ec.optionStrategy,
+            option_strike_method: ec.optionStrikeMethod,
+            option_strike_param: ec.optionStrikeParam,
+            option_strike_param_optimize: ec.optionStrikeParamOptimize,
+            option_strike_param_min: ec.optionStrikeParamMin,
+            option_strike_param_max: ec.optionStrikeParamMax,
+            option_strike_param_step: ec.optionStrikeParamStep,
+            option_dte_min: ec.optionDteMin,
+            option_dte_max: ec.optionDteMax,
+            option_dte_optimize: ec.optionDteOptimize,
+            option_dte_min_range: ec.optionDteMinRange,
+            option_dte_max_range: ec.optionDteMaxRange,
+            option_dte_step: ec.optionDteStep,
+            option_sizing: ec.optionSizing
           })),
           initial_tp_percent: initialTpPercent,
           initial_tp_optimize: initialTpOptimize,
@@ -779,8 +886,14 @@ const Backtesting: React.FC = () => {
       setSellEntryConditions(createEmptyGroup('AND'));
     }
 
-    // Load exit conditions
-    setExitConditions(strategy.exitConditions || []);
+    // Load exit conditions. Stored rules carry snake_case fields (save/run write
+    // snake), so map each back into the camelCase ExitConditionSet the editor edits
+    // — this round-trips toggle_optimize/reference_value + the option_* params.
+    setExitConditions(
+      (strategy.exitConditions || []).map((ec) =>
+        exitConditionFromStored(ec as unknown as Record<string, unknown>)
+      )
+    );
 
     // Load TP/SL settings
     setInitialTpPercent(strategy.initialTpPercent ?? 5.0);
