@@ -48,10 +48,10 @@ import type { UniverseValue } from '../components/UniversePicker';
 import { RuleIO } from '../components/RuleIO';
 import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
-import { RunningJobsStrip } from '../components/RunningJobsStrip';
 import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
-import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset } from '../lib/btApi';
+import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks } from '../lib/btApi';
+import { RunningJobsPanel } from '../components/RunningJobsPanel';
 import type { Vocabulary } from '../lib/btApi';
 import {
   XAxis,
@@ -449,7 +449,21 @@ const Backtesting: React.FC = () => {
   const [savingStrategy, setSavingStrategy] = useState(false);
 
   // Tab state for New Backtest card
-  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'history' | 'saved'>('new');
+  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'history' | 'saved' | 'jobs'>('new');
+  const [runningJobCount, setRunningJobCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const all = await listTasks('running');
+        const bt = all.filter(t => !t.task_type || ['daily_backtest', 'backtest', 'strategy_optimization'].includes(t.task_type));
+        if (alive) setRunningJobCount(bt.length);
+      } catch { /* ignore */ }
+    };
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   // Source selector: 'expert' = daily multi-asset expert engine; 'ml' = model-driven.
   const [source, setSource] = useState<'expert' | 'ml'>('expert');
@@ -1115,6 +1129,20 @@ const Backtesting: React.FC = () => {
                 <Save className="w-4 h-4 inline mr-1" />
                 Saved ({backtests.filter(bt => bt.isSaved).length})
               </button>
+              <button
+                onClick={() => setBacktestCardTab('jobs')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  backtestCardTab === 'jobs'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <Activity className="w-4 h-4 inline mr-1" />
+                Running
+                {runningJobCount > 0 && (
+                  <span className="ml-1.5 px-1.5 py-0.5 text-xs rounded-full bg-blue-500 text-white">{runningJobCount}</span>
+                )}
+              </button>
             </div>
 
             {backtestCardTab === 'new' ? (
@@ -1446,12 +1474,12 @@ const Backtesting: React.FC = () => {
 
                   <button
                     onClick={() => setShowConditionModal('buy')}
-                    className="flex items-center gap-2 text-sm font-medium text-green-900 dark:text-green-100 w-full p-2 bg-green-100 dark:bg-green-900/40 hover:bg-green-200 dark:hover:bg-green-900/60 rounded-lg border border-green-300 dark:border-green-700"
+                    className="flex items-center gap-2 text-sm font-semibold text-white w-full p-2 bg-green-700 hover:bg-green-800 rounded-lg border border-green-800 shadow-sm"
                   >
-                    <TrendingUp className="w-4 h-4 text-green-600 dark:text-green-400" />
+                    <TrendingUp className="w-4 h-4 text-white" />
                     <span className="flex-1 text-left">Buy Entry Conditions</span>
-                    <span className="text-xs text-green-800 dark:text-green-200">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
-                    <ChevronDown className="w-4 h-4 text-green-700 dark:text-green-300" />
+                    <span className="text-xs font-medium text-green-100">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-white" />
                   </button>
                   <div className="flex justify-end gap-1 text-xs">
                     <RuleIO
@@ -1462,12 +1490,12 @@ const Backtesting: React.FC = () => {
                   </div>
                   <button
                     onClick={() => setShowConditionModal('sell')}
-                    className="flex items-center gap-2 text-sm font-medium text-red-900 dark:text-red-100 w-full p-2 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 rounded-lg border border-red-300 dark:border-red-700"
+                    className="flex items-center gap-2 text-sm font-semibold text-white w-full p-2 bg-red-700 hover:bg-red-800 rounded-lg border border-red-800 shadow-sm"
                   >
-                    <TrendingDown className="w-4 h-4 text-red-600 dark:text-red-400" />
+                    <TrendingDown className="w-4 h-4 text-white" />
                     <span className="flex-1 text-left">Sell Entry Conditions</span>
-                    <span className="text-xs text-red-800 dark:text-red-200">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
-                    <ChevronDown className="w-4 h-4 text-red-700 dark:text-red-300" />
+                    <span className="text-xs font-medium text-red-100">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                    <ChevronDown className="w-4 h-4 text-white" />
                   </button>
                   <div className="flex justify-end gap-1 text-xs">
                     <RuleIO
@@ -1782,8 +1810,12 @@ const Backtesting: React.FC = () => {
             ) : backtestCardTab === 'history' ? (
               /* History Tab — all runs (fills the viewport height) */
               <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
-                <RunningJobsStrip />
                 <RunHistoryTable savedOnly={false} onSelect={viewBacktest} />
+              </div>
+            ) : backtestCardTab === 'jobs' ? (
+              /* Running Jobs Tab — live per-generation + total progress */
+              <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
+                <RunningJobsPanel />
               </div>
             ) : (
               /* Saved Backtests Tab */
