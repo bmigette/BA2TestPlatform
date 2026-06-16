@@ -311,7 +311,29 @@ class DailyBacktestEngine:
         # the analysis cadence, fills are continuous).
         analyzed_days: set = set()
 
-        for i, as_of in enumerate(days):
+        # ----- skip-flat-bars -------------------------------------------------------------------
+        # When NOTHING is open and NO order is working, no fill is possible until the next ANALYSIS
+        # bar — so jump straight there instead of stepping every intraday bar doing nothing. This is
+        # the big 5min win (and bigger still for a dynamic screener universe): a strategy that is
+        # flat most of the time collapses ~59k bars to a handful. Trades are UNCHANGED (a fill needs
+        # a working order) and Calmar/total-return/maxDD are identical (equity is constant cash while
+        # flat). Precompute the analysis-bar indices once (bars where some expert may analyse/enter).
+        import bisect as _bisect
+
+        def _to_aware(a: Any) -> datetime:
+            if isinstance(a, datetime):
+                return a if a.tzinfo else a.replace(tzinfo=timezone.utc)
+            return datetime(a.year, a.month, a.day, tzinfo=timezone.utc)
+
+        _scheds = [self._entry_schedule(e) for e, _eid, _s, _r in self.experts]
+        _is_intraday = self.price.is_intraday
+        analysis_idx = [j for j, a in enumerate(days)
+                        if any(_schedule_allows_entry(_to_aware(a), s, _is_intraday) for s in _scheds)]
+
+        i = 0
+        n_days = len(days)
+        while i < n_days:
+            as_of = days[i]
             # Tz-AWARE UTC clock — the SAME contract the live path assumes: the experts'
             # _process does ``now = as_of or datetime.now(timezone.utc)`` and then subtracts
             # tz-aware report/transaction dates, so a NAIVE as_of would raise
@@ -436,7 +458,31 @@ class DailyBacktestEngine:
                 last_pct = pct_i
                 self.progress_cb(pct, f"bar {as_of:%Y-%m-%d}")
 
+            # Advance: step to the NEXT bar while there is something to fill (open position or
+            # working order); otherwise (flat) jump straight to the next analysis bar.
+            if self._has_activity():
+                i += 1
+            else:
+                _k = _bisect.bisect_right(analysis_idx, i)
+                i = analysis_idx[_k] if _k < len(analysis_idx) else n_days
+
         return self._build_minimal_results()
+
+    def _has_activity(self) -> bool:
+        """True if a fill is possible next bar: an OPEN position OR a working/waiting order. When
+        False the run is flat — the loop can jump to the next analysis bar (no fills until then).
+        Cheap: reuses the account's cached order list + positions (no DB round-trip)."""
+        try:
+            if self.account.get_positions():
+                return True
+        except Exception:  # noqa: BLE001 — be conservative: unknown -> step densely
+            return True
+        try:
+            from ba2_common.core.types import OrderStatus
+            active = set(OrderStatus.get_active_statuses())
+            return any(getattr(o, "status", None) in active for o in self.account._all_orders())
+        except Exception:  # noqa: BLE001
+            return True
 
     # -- run-cadence --------------------------------------------------------
     def _entry_schedule(self, expert: Any) -> Optional[Dict[str, Any]]:
