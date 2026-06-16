@@ -173,6 +173,10 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         # The inherited lifecycle stamps open_date with WALL clock on WAITING->OPENED; we
         # overwrite it once with the simulated fill bar so days-opened math is sim-correct.
         self._stamped_open_ids: set = set()
+        # In-memory cache of THIS account's TradingOrder rows (the per-bar fill engine reads
+        # working orders on EVERY bar; on a 5-minute clock the DB round-trip dominated). None
+        # means "reload on next read"; see _all_orders / invalidate_order_cache.
+        self._order_cache: Optional[List[TradingOrder]] = None
 
     # ======================================================================
     # Settings
@@ -359,24 +363,50 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 stmt = stmt.where(TradingOrder.status == status)
             return list(session.exec(stmt).all())
 
+    def invalidate_order_cache(self) -> None:
+        """Drop the in-memory order cache so the next read reloads from the DB.
+
+        The per-bar fill engine reads working orders on EVERY bar; querying them from the DB
+        each time dominated the cost of a fine (5-minute) fill clock (profiled). We cache the
+        account's orders and serve ``_orders_filtered`` from memory. The account's OWN per-bar
+        mutations (fills / cancels / activation) happen IN PLACE on the cached objects, so the
+        cache stays valid without a reload. It only goes stale when NEW orders may have been
+        created — analysis / bypass passes, bracket attach, option settlement — and the engine
+        calls this at exactly those points. Those bars are rare on a fine clock, so the hot
+        no-event bars do ZERO order DB reads.
+        """
+        self._order_cache = None
+
+    def _all_orders(self) -> List[TradingOrder]:
+        """This account's TradingOrder rows, loaded once and cached (see invalidate_order_cache)."""
+        if self._order_cache is None:
+            from sqlmodel import select, Session
+
+            with Session(get_db().bind) as session:
+                self._order_cache = list(
+                    session.exec(
+                        select(TradingOrder).where(TradingOrder.account_id == self.id)
+                    ).all()
+                )
+        return self._order_cache
+
     def _orders_filtered(self, statuses=None, transaction_id=None) -> List[TradingOrder]:
-        """Query this account's orders with SQL-side status / transaction filters.
+        """This account's orders, filtered by status / transaction — served from the in-memory
+        cache (NO per-call SQL).
 
         The per-bar fill engine only cares about the few WORKING (or a single transaction's)
-        orders; querying ALL orders and filtering in Python materialised hundreds of terminal
-        rows every bar (a top profile cost). Pushing the filters into SQL returns just the rows
-        that matter. ``statuses`` is an iterable of OrderStatus; ``transaction_id`` scopes to one
-        transaction's legs.
+        orders. We hold all of the account's orders in memory (``_all_orders``) and filter in
+        Python; the cached objects are the SAME instances the fill engine mutates in place, so
+        a fill/cancel/activation is immediately visible here without a reload. ``statuses`` is
+        an iterable of OrderStatus; ``transaction_id`` scopes to one transaction's legs.
         """
-        from sqlmodel import select, Session
-
-        with Session(get_db().bind) as session:
-            stmt = select(TradingOrder).where(TradingOrder.account_id == self.id)
-            if statuses is not None:
-                stmt = stmt.where(TradingOrder.status.in_(list(statuses)))
-            if transaction_id is not None:
-                stmt = stmt.where(TradingOrder.transaction_id == transaction_id)
-            return list(session.exec(stmt).all())
+        orders = self._all_orders()
+        if statuses is not None:
+            sset = set(statuses)
+            orders = [o for o in orders if o.status in sset]
+        if transaction_id is not None:
+            orders = [o for o in orders if o.transaction_id == transaction_id]
+        return list(orders)
 
     def get_order(self, order_id: str) -> Any:
         """Look up an order by broker_order_id, then by numeric PK as a fallback."""
@@ -408,6 +438,30 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 f"No backtest price for {symbol_or_symbols} at {self._price.now()}"
             )
         return px
+
+    def submit_order(self, trading_order, tp_price=None, sl_price=None, is_closing_order=False):
+        """Submit an order through the inherited path, then drop the in-memory order cache.
+
+        Every order (entry, exit, OCO/adjust leg) is created via this single entry point, so
+        invalidating here keeps the cache correct for ANY caller — the engine AND direct/unit
+        use — without each creation site having to know about the cache. The fill engine reads
+        the fresh order on its next ``_orders_filtered`` call.
+        """
+        result = super().submit_order(
+            trading_order, tp_price=tp_price, sl_price=sl_price, is_closing_order=is_closing_order
+        )
+        self.invalidate_order_cache()
+        return result
+
+    def submit_option_order(self, *args, **kwargs):
+        """Submit option order(s) through the inherited path, then drop the order cache.
+
+        Option entries and closes persist new option TradingOrder rows here; invalidate so the
+        fill engine's next read sees them (mirrors the equity ``submit_order`` override).
+        """
+        result = super().submit_option_order(*args, **kwargs)
+        self.invalidate_order_cache()
+        return result
 
     def refresh_positions(self) -> bool:
         """No-op: the ledger is local and always current. Returns True."""
@@ -586,10 +640,15 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         fill engine evaluates it. Legs with no parent / unmet trigger are left waiting.
         """
         waiting = self._orders_filtered(statuses=[OrderStatus.WAITING_TRIGGER])
+        if not waiting:
+            return
+        # Look the parent up in the SAME in-memory order set (no per-leg DB round-trip); the
+        # parent is one of this account's orders, mutated in place by the fill engine.
+        by_id = {o.id: o for o in self._all_orders() if o.id is not None}
         for leg in waiting:
             if leg.depends_on_order is None:
                 continue
-            parent = get_instance(TradingOrder, leg.depends_on_order)
+            parent = by_id.get(leg.depends_on_order)
             if parent is None:
                 continue
             trigger = leg.depends_order_status_trigger or OrderStatus.FILLED
@@ -1195,6 +1254,7 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             return None
         o.status = OrderStatus.CANCELED
         update_instance(o)
+        self.invalidate_order_cache()  # o may be a fresh DB instance, not the cached one
         return o
 
     def modify_order(self, order_id: str) -> Any:
@@ -1209,6 +1269,7 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         if o is None or o.status in OrderStatus.get_terminal_statuses():
             return None
         update_instance(o)
+        self.invalidate_order_cache()  # o may be a fresh DB instance, not the cached one
         return o
 
     def adjust_tp(self, transaction: Transaction, new_tp_price: float, source: str = "") -> bool:
@@ -1521,6 +1582,7 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             created_at=datetime.now(timezone.utc),
         )
         add_instance(leg_order)
+        self.invalidate_order_cache()  # a new leg was persisted -> fill engine must reload
         return leg_order
 
     def _cancel_oco_sibling(self, filled_order) -> None:

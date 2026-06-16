@@ -322,6 +322,13 @@ class DailyBacktestEngine:
             # 2. universe for the bar.
             universe = resolve_universe(as_of_dt, self.config, self.price)
 
+            # The fill engine reads working orders from BacktestAccount's in-memory order cache
+            # (no per-bar DB query). That cache only goes stale when this bar CREATES new orders —
+            # a bypass stop pass, an expert analysis/management pass, or a post-fill bracket
+            # attach. Track that and reload the cache once, right before refresh_orders reads, so
+            # the common no-event bars do zero order DB reads.
+            book_dirty = False
+
             # 2.5 per-bar STOP pass for bypass experts. The cadence-gated analyse/rebalance pass
             #     below skips non-entry bars, so a bypass expert (sizes by weight, skips the classic
             #     RM) gets its only between-rebalance downside protection here: a per-name equity-loss
@@ -332,6 +339,7 @@ class DailyBacktestEngine:
                 if _schedule_allows_entry(as_of_dt, self._entry_schedule(expert), self.price.is_intraday):
                     continue
                 self._apply_bypass_stops(expert, expert_id, settings, as_of_dt)
+                book_dirty = True  # a bypass stop may have submitted a sell order
 
             # 3. each expert: analyze_as_of -> persist rec -> ruleset -> RM -> submit.
             #    BYPASS experts (piece 1b): an expert that declares ``bypasses_classic_rm``
@@ -349,6 +357,7 @@ class DailyBacktestEngine:
                     as_of_dt, self._entry_schedule(expert), self.price.is_intraday
                 ):
                     continue
+                book_dirty = True  # an analysis/management pass runs -> orders may be created
                 if getattr(expert, "bypasses_classic_rm", False):
                     self._run_bypass_expert_bar(expert, expert_id, settings, as_of_dt)
                     continue
@@ -362,6 +371,11 @@ class DailyBacktestEngine:
                 # on the analysis cadence — identical to live). Adjust-TP/SL/Close/Sell per the
                 # exit conditions; no-op when the expert has no open_positions ruleset configured.
                 self._manage_open_positions(expert, expert_id, settings, as_of_dt)
+
+            # The analysis/bypass passes above create orders via ba2_common's DB-backed RM/submit
+            # path; reload the account's order cache so the fill engine sees them this bar.
+            if book_dirty:
+                self.account.invalidate_order_cache()
 
             # 4. fills on THIS bar's working orders; roll order state into transactions.
             #     A transaction only changes state when one of its orders fills, and the bracket
@@ -392,6 +406,9 @@ class DailyBacktestEngine:
             #     Only reachable when something filled this bar (a fresh OPEN requires a fill).
             if filled:
                 self._apply_initial_brackets()
+                # The bracket attach created new WAITING_TRIGGER OCO legs (and the roll may have
+                # touched orders); reload the cache so the next bar's fill engine sees them.
+                self.account.invalidate_order_cache()
 
             # 5. record per-bar equity / drawdown point.
             self.account.snapshot_equity(as_of_dt)
