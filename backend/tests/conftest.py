@@ -19,7 +19,23 @@ does not change their behavior.
 """
 from __future__ import annotations
 
+import os
+import tempfile
+
 import pytest
+
+# --- Host-DB isolation (must run BEFORE app.models.database is imported) ---------------------
+# app/models/database.py binds its module-level `engine`/`SessionLocal` to DATABASE_URL at
+# IMPORT time. Several tests (test_daily_backtest_handler, the e2e/perf/round-trip backtests)
+# write `Backtest` rows through that module-level SessionLocal. Without isolation those rows
+# land in the REAL host DB and pollute the live Backtesting history. pytest imports this package
+# conftest before any test module, so setting DATABASE_URL here points the host engine at a
+# throwaway sqlite for the whole run. Override with BA2_TEST_KEEP_DB=1 to use the real DB.
+if not os.environ.get("BA2_TEST_KEEP_DB"):
+    _ISOLATED_DB_DIR = tempfile.mkdtemp(prefix="ba2test-hostdb-")
+    _ISOLATED_DB_PATH = os.path.join(_ISOLATED_DB_DIR, "test_host.sqlite")
+    # sqlite URL wants forward slashes even on Windows.
+    os.environ["DATABASE_URL"] = "sqlite:///" + _ISOLATED_DB_PATH.replace("\\", "/")
 
 
 @pytest.fixture(scope="session")
