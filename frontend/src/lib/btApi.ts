@@ -73,3 +73,6 @@ export const getRulesetVocabulary = () => jget<Vocabulary>('/ruleset/vocabulary'
 export const getExitPresets = () => jget<{ presets: ExitPreset[] }>('/ruleset/exit-presets').then(r => r.presets);
 export const importLiveRuleset = (expertId: number) =>
   jget<{ rules: any[] }>(`/experts/${expertId}/open-positions-ruleset`).then(r => r.rules);
+//   GET /experts/{id}/enter-market-ruleset           -> {buy_entry_conditions, sell_entry_conditions} (or 503/404)
+export const importLiveEnterMarket = (expertId: number) =>
+  jget<{ buy_entry_conditions: any; sell_entry_conditions: any }>(`/experts/${expertId}/enter-market-ruleset`);

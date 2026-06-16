@@ -49,7 +49,7 @@ import { RuleIO } from '../components/RuleIO';
 import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import { RunningJobsStrip } from '../components/RunningJobsStrip';
-import { getRulesetVocabulary } from '../lib/btApi';
+import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset } from '../lib/btApi';
 import type { Vocabulary } from '../lib/btApi';
 import {
   XAxis,
@@ -324,6 +324,59 @@ const Backtesting: React.FC = () => {
   const [buyEntryConditions, setBuyEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
   const [sellEntryConditions, setSellEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
   const [exitConditions, setExitConditions] = useState<ExitConditionSet[]>([]);
+  // Import-from-live-expert control (B8): the backtest UI picks an expert CLASS, but live import
+  // needs a live expert INSTANCE id, so we collect it explicitly. Graceful on 503 (live DB not
+  // configured) / 404 / any error — surfaces the JSON-paste fallback hint instead of crashing.
+  const [liveExpertId, setLiveExpertId] = useState<string>('');
+  const [liveImporting, setLiveImporting] = useState(false);
+  const [liveImportNote, setLiveImportNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  const handleImportFromLive = useCallback(async () => {
+    const id = Number(liveExpertId);
+    if (!Number.isFinite(id) || id <= 0) {
+      setLiveImportNote({ kind: 'err', text: 'Enter a valid live expert id first.' });
+      return;
+    }
+    setLiveImporting(true);
+    setLiveImportNote(null);
+    try {
+      const [enter, rules] = await Promise.all([
+        importLiveEnterMarket(id),
+        importLiveRuleset(id),
+      ]);
+      let buyCount = 0;
+      let sellCount = 0;
+      if (enter.buy_entry_conditions && isConditionGroup(enter.buy_entry_conditions)) {
+        setBuyEntryConditions(enter.buy_entry_conditions);
+        buyCount = enter.buy_entry_conditions.conditions.length;
+      }
+      if (enter.sell_entry_conditions && isConditionGroup(enter.sell_entry_conditions)) {
+        setSellEntryConditions(enter.sell_entry_conditions);
+        sellCount = enter.sell_entry_conditions.conditions.length;
+      }
+      const exitRules = Array.isArray(rules) ? rules : [];
+      setExitConditions(
+        exitRules.map((r, i) => ({
+          ...exitConditionFromStored(r as Record<string, unknown>),
+          id: `exit-live-${Date.now()}-${i}`,
+        })),
+      );
+      setLiveImportNote({
+        kind: 'ok',
+        text: `Imported from live expert #${id}: ${buyCount} buy / ${sellCount} sell condition(s), ${exitRules.length} exit rule(s).`,
+      });
+    } catch (e) {
+      const is503 = String(e).includes('503');
+      setLiveImportNote({
+        kind: 'err',
+        text: is503
+          ? 'Live DB not configured (503). Paste the ruleset JSON via the Import JSON buttons below instead.'
+          : 'Live import failed (instance not found / unreachable). Paste the ruleset JSON via the Import JSON buttons below instead.',
+      });
+    } finally {
+      setLiveImporting(false);
+    }
+  }, [liveExpertId]);
   const [initialTpPercent, setInitialTpPercent] = useState(5.0);
   const [initialSlPercent, setInitialSlPercent] = useState(2.0);
   const [initialTpOptimize, setInitialTpOptimize] = useState(false);
@@ -1352,6 +1405,43 @@ const Backtesting: React.FC = () => {
                   <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                     Strategy Conditions
                   </h4>
+
+                  {/* Import from a LIVE expert instance (B8). The backtest UI picks an expert CLASS,
+                      so the live INSTANCE id is collected here. Loads buy/sell entry trees + exit
+                      rules into the editor (then editable + previewed below). Graceful on 503/error:
+                      falls back to the Import JSON buttons on each rule section. */}
+                  <div className="mb-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40 p-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={liveExpertId}
+                        onChange={(e) => setLiveExpertId(e.target.value)}
+                        placeholder="Live expert id"
+                        className="w-32 px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleImportFromLive}
+                        disabled={liveImporting}
+                        className="flex items-center gap-1 px-3 py-1 text-sm rounded border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50"
+                      >
+                        {liveImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                        Import from live
+                      </button>
+                    </div>
+                    {liveImportNote && (
+                      <p
+                        className={`mt-2 text-xs ${liveImportNote.kind === 'ok'
+                          ? 'text-green-600 dark:text-green-400'
+                          : 'text-amber-600 dark:text-amber-400'}`}
+                      >
+                        {liveImportNote.text}
+                      </p>
+                    )}
+                  </div>
+
                   <button
                     onClick={() => setShowConditionModal('buy')}
                     className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-800"
