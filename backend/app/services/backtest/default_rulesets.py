@@ -30,13 +30,29 @@ from sqlmodel import Session
 
 from ba2_common.core.db import add_instance, get_db
 from ba2_common.core.models import EventAction, Ruleset, RulesetEventActionLink
+from ba2_common.core.rule_builders import (
+    FIELD_EVENT,
+    FLAG_FIELD_EVENT,
+    EXIT_ACTION,
+    tree_leaves,
+    triggers_from_condition_tree,
+    action_from_rule,
+)
 from ba2_common.core.types import (
     AnalysisUseCase,
     ExpertActionType,
     ExpertEventRuleType,
     ExpertEventType,
-    ReferenceValue,
 )
+
+# Backward-compat aliases for modules that import the (previously local) maps/helpers by name.
+# These are now the SHARED ba2_common.core.rule_builders definitions — the single source of
+# truth reconciled with the API/UI shape. ``rules_tree_json`` imports ``_FIELD_EVENT`` from here.
+_FIELD_EVENT = FIELD_EVENT
+_FLAG_FIELD_EVENT = FLAG_FIELD_EVENT
+_EXIT_ACTION = EXIT_ACTION
+_tree_leaves = tree_leaves
+_triggers_from_conditions = triggers_from_condition_tree
 
 
 def _make_event_action(name: str, triggers: dict, actions: dict,
@@ -73,101 +89,6 @@ def _link(ruleset_id: int, event_action_ids: List[int]) -> None:
         session.commit()
 
 
-# Strategy condition-tree field -> ExpertEventType for value (N_*) gates. These are the
-# fields the optimizer's cond:<id>:value genes tune on a buy/sell entry tree; an unknown
-# field is skipped (it never silently breaks the ruleset).
-_FIELD_EVENT = {
-    "confidence": ExpertEventType.N_CONFIDENCE,
-    "expected_profit": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
-    "expected_profit_percent": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
-    "expected_profit_target_percent": ExpertEventType.N_EXPECTED_PROFIT_TARGET_PERCENT,
-    # Cooldown gates (avoid re-buying the same symbol right after exiting it). Pair with ">"
-    # so the entry only fires once N days have passed since the last (qualifying) close.
-    "days_since_last_close": ExpertEventType.N_DAYS_SINCE_LAST_CLOSE,
-    "days_since_last_profitable_close": ExpertEventType.N_DAYS_SINCE_LAST_PROFITABLE_CLOSE,
-    "days_since_last_losing_close": ExpertEventType.N_DAYS_SINCE_LAST_LOSING_CLOSE,
-    # Exit (open_positions) numeric conditions.
-    "profit_loss_percent": ExpertEventType.N_PROFIT_LOSS_PERCENT,
-    "profit_loss_amount": ExpertEventType.N_PROFIT_LOSS_AMOUNT,
-    "days_opened": ExpertEventType.N_DAYS_OPENED,
-    "percent_to_current_target": ExpertEventType.N_PERCENT_TO_CURRENT_TARGET,
-    "new_target_percent": ExpertEventType.N_NEW_TARGET_PERCENT,
-}
-
-# Flag (boolean) condition fields -> ExpertEventType (no operator/value). Used by exit
-# (open_positions) rules whose triggers include sentiment / term / risk / rating-change /
-# position flags — exactly the live open_positions trigger vocabulary.
-_FLAG_FIELD_EVENT = {
-    "bullish": ExpertEventType.F_BULLISH,
-    "bearish": ExpertEventType.F_BEARISH,
-    "has_position": ExpertEventType.F_HAS_POSITION,
-    "has_no_position": ExpertEventType.F_HAS_NO_POSITION,
-    "has_buy_position": ExpertEventType.F_HAS_BUY_POSITION,
-    "has_sell_position": ExpertEventType.F_HAS_SELL_POSITION,
-    "short_term": ExpertEventType.F_SHORT_TERM,
-    "medium_term": ExpertEventType.F_MEDIUM_TERM,
-    "long_term": ExpertEventType.F_LONG_TERM,
-    "highrisk": ExpertEventType.F_HIGHRISK,
-    "mediumrisk": ExpertEventType.F_MEDIUMRISK,
-    "lowrisk": ExpertEventType.F_LOWRISK,
-    "new_target_higher": ExpertEventType.F_NEW_TARGET_HIGHER,
-    "new_target_lower": ExpertEventType.F_NEW_TARGET_LOWER,
-    "current_rating_positive": ExpertEventType.F_CURRENT_RATING_POSITIVE,
-    "current_rating_negative": ExpertEventType.F_CURRENT_RATING_NEGATIVE,
-}
-
-# Exit action_type string -> (ExpertActionType, needs_reference_value). The adjust actions read
-# reference_value (order_open_price/current_price/expert_target_price) + value (the % offset);
-# close/sell take no params. Mirrors TradeActionEvaluator's action_config parsing.
-_EXIT_ACTION = {
-    "close": (ExpertActionType.CLOSE, False),
-    "sell": (ExpertActionType.SELL, False),
-    "adjust_take_profit": (ExpertActionType.ADJUST_TAKE_PROFIT, True),
-    "adjust_stop_loss": (ExpertActionType.ADJUST_STOP_LOSS, True),
-}
-
-
-def _triggers_from_conditions(tree) -> dict:
-    """Build an EventAction ``triggers`` dict (ANDed) from an exit-rule condition tree.
-
-    Flag leaves (``_FLAG_FIELD_EVENT``) become value-less triggers; numeric leaves
-    (``_FIELD_EVENT``) carry operator + value (the optimizer's cond:<id>:value gene). Unknown
-    fields are skipped so a partial/edited tree never silently breaks the rule.
-    """
-    triggers: dict = {}
-    for i, leaf in enumerate(_tree_leaves(tree)):
-        field = str(leaf.get("field"))
-        flag_et = _FLAG_FIELD_EVENT.get(field)
-        if flag_et is not None:
-            triggers[f"cond_{i}"] = {"event_type": flag_et.value}
-            continue
-        num_et = _FIELD_EVENT.get(field)
-        if num_et is not None and leaf.get("value") is not None:
-            triggers[f"cond_{i}"] = {
-                "event_type": num_et.value,
-                "operator": leaf.get("op") or leaf.get("operator") or ">",
-                "value": leaf.get("value"),
-            }
-    return triggers
-
-
-def _exit_action_json(rule: dict) -> dict | None:
-    """Build an EventAction ``actions`` dict for one exit rule, or None if the action is unknown.
-
-    ``rule['action_type']`` selects the action; adjust actions also carry ``reference_value``
-    and ``action_value`` (the % offset the optimizer tunes via exit:<id>:action_value).
-    """
-    spec = _EXIT_ACTION.get(str(rule.get("action_type")))
-    if spec is None:
-        return None
-    action_type, needs_ref = spec
-    cfg: dict = {"action_type": action_type.value}
-    if needs_ref:
-        cfg["reference_value"] = rule.get("reference_value") or ReferenceValue.ORDER_OPEN_PRICE.value
-        cfg["value"] = rule.get("action_value")
-    return {"act": cfg}
-
-
 def seed_open_positions_ruleset(exit_rules, name: str = "backtest-open-positions") -> int:
     """Seed an OPEN_POSITIONS ruleset from a Strategy exit-rule LIST; return its id.
 
@@ -191,10 +112,14 @@ def seed_open_positions_ruleset(exit_rules, name: str = "backtest-open-positions
 
     ea_ids = []
     for idx, rule in enumerate(exit_rules or []):
-        action = _exit_action_json(rule)
+        # Build via the SHARED rule-builder core: ``action_from_rule`` accepts both the seeding
+        # shape (``action_type``/``action_value``) AND the API/UI shape (``action``/``value``);
+        # ``triggers_from_condition_tree`` reconciles a leaf's ``comparison`` with ``op``/
+        # ``operator``. This is the fix for API exit rules being silently skipped.
+        action = action_from_rule(rule)
         if action is None:
             continue
-        triggers = _triggers_from_conditions(rule.get("conditions"))
+        triggers = triggers_from_condition_tree(rule.get("conditions"))
         ea_ids.append(
             _make_event_action(
                 name=f"{name}-rule-{idx}",
@@ -208,35 +133,17 @@ def seed_open_positions_ruleset(exit_rules, name: str = "backtest-open-positions
     return ruleset_id
 
 
-def _tree_leaves(node):
-    """Yield leaf condition dicts (those with a ``field``) from an AND/OR condition tree."""
-    if not isinstance(node, dict):
-        return
-    kids = node.get("conditions")
-    if kids:
-        for child in kids:
-            yield from _tree_leaves(child)
-    elif node.get("field"):
-        yield node
-
-
 def _gate_triggers(tree) -> dict:
-    """The optimizer's numeric/flag entry gates from a buy/sell condition tree (ANDed)."""
-    triggers: dict = {}
-    for i, leaf in enumerate(_tree_leaves(tree)):
-        field = str(leaf.get("field"))
-        flag_et = _FLAG_FIELD_EVENT.get(field)
-        if flag_et is not None:
-            triggers[f"gate_{i}"] = {"event_type": flag_et.value}
-            continue
-        num_et = _FIELD_EVENT.get(field)
-        if num_et is not None and leaf.get("value") is not None:
-            triggers[f"gate_{i}"] = {
-                "event_type": num_et.value,
-                "operator": leaf.get("op") or leaf.get("operator") or ">",
-                "value": leaf.get("value"),
-            }
-    return triggers
+    """The optimizer's numeric/flag entry gates from a buy/sell condition tree (ANDed).
+
+    Thin wrapper over the SHARED ``triggers_from_condition_tree``: identical leaf -> trigger
+    logic, but the entry path uses a ``gate_`` key prefix (vs the exit path's ``cond_``). The
+    prefix is cosmetic to ``TradeActionEvaluator`` (it iterates ``triggers.items()`` and uses the
+    key only for logging — all triggers are ANDed regardless of key, provided keys are unique),
+    so we reuse the shared builder and just rename the keys to preserve the entry-rule contract.
+    """
+    shared = triggers_from_condition_tree(tree)
+    return {key.replace("cond_", "gate_", 1): cfg for key, cfg in shared.items()}
 
 
 def _entry_actions(side: str) -> dict:
