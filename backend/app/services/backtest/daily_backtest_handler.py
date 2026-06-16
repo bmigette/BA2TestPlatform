@@ -21,8 +21,12 @@ in the separate per-run ``ba2_common.core.db`` sqlite (``backtest_trading_db``).
 from __future__ import annotations
 
 import logging
+import os
+import pathlib
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from ba2_common.core.types import is_option_action
 
 from app.models.backtest import Backtest
 from app.models.database import SessionLocal
@@ -51,6 +55,49 @@ def validate_options_window(start, uses_options: bool) -> None:
         raise ValueError(
             f"Options backtests require start >= {_OPTIONS_HISTORY_FLOOR.isoformat()} "
             f"(Alpaca options history floor); got {d.isoformat()}.")
+
+
+def strategy_uses_options(cfg: Dict[str, Any]) -> bool:
+    """True iff ANY exit/RM rule names an OPTION action (``is_option_action``).
+
+    A strategy's exit/RM rules can now carry an option action (buy_call, sell_covered_call,
+    open_bull_call_spread, ...) instead of an equity action (close / adjust_stop_loss). When
+    any such rule is present the run is an OPTIONS run: the handler derives an
+    ``options_cache_db`` so the Plan-1 seam builds + injects the HistoricalOptionsProvider and
+    validates the Feb-2024 window. When none is present the run is equity-only (unchanged).
+
+    The option action can live under the canonical evaluator key ``action_type``, the API/UI
+    alias ``action``, or the (forward-compat) ``option_strategy`` key — checked in that
+    precedence. Rules are read from ``exit_rules`` (the canonical handler key) else the
+    API-shaped ``exit_conditions`` alias. Non-dict rules are ignored (no crash)."""
+    for rule in (cfg.get("exit_rules") or cfg.get("exit_conditions") or []):
+        if not isinstance(rule, dict):
+            continue
+        action = rule.get("option_strategy") or rule.get("action_type") or rule.get("action")
+        if action and is_option_action(str(action)):
+            return True
+    return False
+
+
+# Default offline options-cache filename, placed under the same datasets/cache dir family the
+# OHLCV/screener caches use (``datasets/cache``; overridable via ``BACKTEST_OPTIONS_CACHE_DB``
+# for an explicit path, or ``BACKTEST_CACHE_DIR`` for just the directory). The cache itself is
+# built once by ``ba2-test fetch-options`` — a missing/empty cache fails fast at read time with
+# OptionsCacheMiss (the build-the-cache message), never a silent empty chain.
+_DEFAULT_OPTIONS_CACHE_FILENAME = "options_cache.sqlite"
+
+
+def default_options_cache_db() -> str:
+    """Path to the offline options cache used when a strategy needs options but the payload
+    did not pin ``options_cache_db``. ``BACKTEST_OPTIONS_CACHE_DB`` overrides the full path;
+    else ``<BACKTEST_CACHE_DIR or datasets/cache>/options_cache.sqlite``. The directory is
+    created on demand so the path is usable (the cache builder/reader opens the sqlite there)."""
+    explicit = os.environ.get("BACKTEST_OPTIONS_CACHE_DB")
+    if explicit:
+        return explicit
+    cache_dir = pathlib.Path(os.environ.get("BACKTEST_CACHE_DIR") or "datasets/cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return str(cache_dir / _DEFAULT_OPTIONS_CACHE_FILENAME)
 
 
 # Payload keys the handler REQUIRES (validated fail-early, no defaults).
@@ -231,6 +278,19 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     warmup_days = (int(payload["warmup_days"]) if payload.get("warmup_days") is not None
                    else derive_warmup_days(expert_specs))
 
+    # Options seam (Plan-2 Task 6): an exit/RM rule may now name an OPTION action. Detect that
+    # from the payload's rules; when the strategy uses options and no explicit cache path was
+    # supplied, derive the default offline options-cache path. A non-None ``options_cache_db``
+    # is the Plan-1 seam trigger: ``run_daily_backtest`` builds + injects the
+    # HistoricalOptionsProvider from it. Validate the Feb-2024 options-history floor here so an
+    # out-of-window options run fails early with a clear message. Equity-only runs (no option
+    # rule) keep ``options_cache_db`` None and skip validation — behaviour is byte-identical.
+    options_cache_db = payload.get("options_cache_db")
+    uses_options = strategy_uses_options(payload)
+    if uses_options and not options_cache_db:
+        options_cache_db = default_options_cache_db()
+    validate_options_window(start_date, uses_options or bool(options_cache_db))
+
     return {
         "backtest_id": payload["backtest_id"],
         "name": payload.get("name", f"daily-backtest-{payload['backtest_id']}"),
@@ -276,8 +336,10 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Options seam: path to the offline OptionsHistoryCache sqlite (built via
         # ``ba2-test fetch-options``). Present -> the run uses options: run_daily_backtest
         # builds a HistoricalOptionsProvider from it, injects it into the BacktestAccount,
-        # and the Feb-2024 window is validated. Absent/None -> equity-only (unchanged).
-        "options_cache_db": payload.get("options_cache_db"),
+        # and the Feb-2024 window is validated. Set explicitly in the payload OR DERIVED above
+        # when the strategy's exit/RM rules name an option action; absent/None -> equity-only
+        # (unchanged).
+        "options_cache_db": options_cache_db,
     }
 
 
