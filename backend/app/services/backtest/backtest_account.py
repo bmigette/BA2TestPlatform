@@ -440,6 +440,11 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             for o in self._orders_filtered(statuses=active)
             if o.status != OrderStatus.WAITING_TRIGGER
         ]
+        # SL-before-TP: when a single bar's range spans BOTH the take-profit (limit) and the
+        # stop-loss (stop) leg of an OCO pair, the intrabar order is ambiguous — fill the STOP
+        # FIRST so the conservative worst-case (stop-loss) wins and cancels the TP sibling. A
+        # stable sort puts every stop-bearing leg ahead of the pure-limit (TP) legs.
+        working.sort(key=lambda o: 0 if getattr(o, "stop_price", None) else 1)
         for o in working:
             if self._is_single_leg_option(o):
                 # OPTION single-leg (or option child carrying a contract): fill off the
