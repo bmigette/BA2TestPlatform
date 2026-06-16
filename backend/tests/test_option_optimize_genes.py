@@ -6,8 +6,14 @@ should be able to tune:
   - DTE, via option_dte_optimize/_min_range/_max_range/_step
 
 collect_param_space must emit exit:<id>:option_delta and exit:<id>:option_dte;
-decode_params must write them back onto the exit rule (option_strike_param and
-option_dte_min == option_dte_max).
+decode_params must write them back onto the exit rule (option_strike_param, and a
+DTE *window* [option_dte_min, option_dte_max] centered on the tuned value).
+
+Why a WINDOW and not a single day: the option_dte gene tunes the DTE window CENTER.
+Real option chains expire on discrete (weekly) dates, so a single-day target
+(option_dte_min == option_dte_max == 30) almost never matches an actual expiry ->
+0 fills whenever option_dte_optimize=True. Decoding to a window that spans at least
+one weekly expiry is what makes the gene non-degenerate.
 """
 import types
 
@@ -66,7 +72,36 @@ def test_option_selection_params_decode_roundtrip():
     decoded = decode_params(s, {"exit:o1:option_delta": 0.35, "exit:o1:option_dte": 30})
     rule = decoded["exit_rules"][0]
     assert rule["option_strike_param"] == 0.35
-    assert rule["option_dte_min"] == 30
-    assert rule["option_dte_max"] == 30
+    # option_dte decodes to a WINDOW centered on the tuned value (NOT a single impossible
+    # day). The window must contain the center and span >= 14 days so it covers a real
+    # (weekly) expiry instead of an exact day that almost never matches the chain.
+    assert rule["option_dte_min"] <= 30 <= rule["option_dte_max"]
+    assert rule["option_dte_max"] - rule["option_dte_min"] >= 14
     # Source strategy is never mutated.
     assert s.exit_conditions[0]["option_strike_param"] == 0.3
+
+
+def test_option_dte_window_uses_base_window_half_width():
+    """A rule that carries a BASE window [30, 60] (half-width 15) decodes the DTE gene to a
+    window of that half-width centered on the tuned value: gene 40 -> [25, 55]."""
+    rule = dict(_OPTION_EXIT)
+    rule["option_dte_min"] = 30
+    rule["option_dte_max"] = 60
+    s = _strategy(exit_conditions=[rule])
+    decoded = decode_params(s, {"exit:o1:option_dte": 40})
+    out = decoded["exit_rules"][0]
+    assert out["option_dte_min"] == 25
+    assert out["option_dte_max"] == 55
+
+
+def test_option_dte_window_default_half_width_when_no_base_window():
+    """A rule with NO base window falls back to a +/-7 day half-width (at least one weekly
+    expiry falls in-window): gene 30 -> [23, 37]."""
+    rule = dict(_OPTION_EXIT)
+    rule.pop("option_dte_min", None)
+    rule.pop("option_dte_max", None)
+    s = _strategy(exit_conditions=[rule])
+    decoded = decode_params(s, {"exit:o1:option_dte": 30})
+    out = decoded["exit_rules"][0]
+    assert out["option_dte_min"] == 23
+    assert out["option_dte_max"] == 37

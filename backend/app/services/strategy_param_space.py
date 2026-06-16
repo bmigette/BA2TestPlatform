@@ -280,7 +280,22 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
         if eid in exit_option_delta_by_id:
             rule["option_strike_param"] = exit_option_delta_by_id[eid]
         if eid in exit_option_dte_by_id:
-            rule["option_dte_min"] = rule["option_dte_max"] = int(exit_option_dte_by_id[eid])
+            # option_dte gene tunes the DTE WINDOW CENTER; keep a half-width so the
+            # [min, max] span covers real (weekly) expiries instead of a single
+            # impossible day. A single-day window (min == max) almost never matches an
+            # actual discrete expiry, so the option entry selects nothing -> 0 fills.
+            center = int(round(exit_option_dte_by_id[eid]))
+            base_hw = 0
+            try:
+                bmin = rule.get("option_dte_min")
+                bmax = rule.get("option_dte_max")
+                if bmin is not None and bmax is not None and bmax > bmin:
+                    base_hw = int((bmax - bmin) // 2)
+            except Exception:  # noqa: BLE001 - defensive: malformed base window -> default hw
+                base_hw = 0
+            hw = max(base_hw, 7)  # at least +/-7 days so a weekly expiry falls in-window
+            rule["option_dte_min"] = max(0, center - hw)
+            rule["option_dte_max"] = center + hw
         if rule.get("conditions"):
             rule["conditions"] = _apply_to_tree(rule["conditions"], cond_by_id)
         exit_rules.append(rule)

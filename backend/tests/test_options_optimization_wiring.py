@@ -134,8 +134,11 @@ def _strategy(exit_conditions):
 
 def test_option_genes_emitted_and_decode_to_trial_rule():
     """collect_param_space emits exit:<id>:option_delta/option_dte AND decode_params writes
-    them back onto the exit rule (option_strike_param, option_dte_min == option_dte_max). This
-    is the gene -> trial-rule flow that _build_daily_trial_config then runs with the provider."""
+    them back onto the exit rule (option_strike_param, and a DTE *window* centered on the
+    tuned value). The option_dte gene tunes the window CENTER; the decoded [min, max] must
+    span >= 14 days so it covers a real (weekly) expiry instead of a single impossible day
+    (min == max almost never matches a discrete expiry -> 0 fills). This is the gene ->
+    trial-rule flow that _build_daily_trial_config then runs with the provider."""
     strategy = _strategy([dict(_OPTION_EXIT)])
 
     space = collect_param_space(strategy)
@@ -147,8 +150,8 @@ def test_option_genes_emitted_and_decode_to_trial_rule():
     )
     rule = decoded["exit_rules"][0]
     assert rule["option_strike_param"] == 0.35
-    assert rule["option_dte_min"] == 30
-    assert rule["option_dte_max"] == 30
+    assert rule["option_dte_min"] <= 30 <= rule["option_dte_max"]
+    assert rule["option_dte_max"] - rule["option_dte_min"] >= 14
 
 
 def test_decoded_option_rule_drives_options_cache_in_trial_config():
@@ -161,4 +164,5 @@ def test_decoded_option_rule_drives_options_cache_in_trial_config():
     cfg = H._build_daily_trial_config(_backtest_cfg(), decoded)
     assert cfg["options_cache_db"] is not None
     assert cfg["exit_rules"][0]["option_strike_param"] == 0.35
-    assert cfg["exit_rules"][0]["option_dte_min"] == 30
+    # DTE decodes to a window centered on 30 (not a single impossible day).
+    assert cfg["exit_rules"][0]["option_dte_min"] <= 30 <= cfg["exit_rules"][0]["option_dte_max"]
