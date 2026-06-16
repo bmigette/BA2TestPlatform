@@ -36,7 +36,7 @@ def test_fmp_news():
     print(f"API Key found: {api_key[:8]}...{api_key[-4:]}")
 
     try:
-        from dataproviders.news.FMPNewsProvider import FMPNewsProvider
+        from ba2_providers.news import FMPNewsProvider
 
         provider = FMPNewsProvider()
         print(f"Provider initialized: {provider.get_provider_name()}")

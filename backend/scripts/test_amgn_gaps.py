@@ -144,9 +144,11 @@ def test_extend_cache():
     logger.info("STEP 3: Running extend_ohlcv_cache() with full logging")
     logger.info(f"{'='*60}")
 
-    from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
+    # get_ohlcv_provider returns the shared FMP provider augmented with the
+    # backend OHLCV disk-cache layer (extend_ohlcv_cache / _get_cache_file).
+    from app.api.datasets import get_ohlcv_provider
 
-    provider = FMPOHLCVProvider()
+    provider = get_ohlcv_provider("fmp")
     end_date = datetime.now()
     start_date = end_date - timedelta(days=15 * 365)
 

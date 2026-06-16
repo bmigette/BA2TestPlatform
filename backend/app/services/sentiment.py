@@ -701,27 +701,27 @@ class SentimentService:
             )
 
         if provider == "fmp":
-            from dataproviders.news import FMPNewsProvider
+            from ba2_providers.news import FMPNewsProvider
             if FMPNewsProvider is None:
                 raise ImportError("FMPNewsProvider not available - check if fmpsdk is installed")
             return FMPNewsProvider()
         elif provider == "alphavantage":
-            from dataproviders.news import AlphaVantageNewsProvider
+            from ba2_providers.news import AlphaVantageNewsProvider
             if AlphaVantageNewsProvider is None:
                 raise ImportError("AlphaVantageNewsProvider not available - check dependencies")
             return AlphaVantageNewsProvider()
         elif provider == "finnhub":
-            from dataproviders.news import FinnhubNewsProvider
+            from ba2_providers.news import FinnhubNewsProvider
             if FinnhubNewsProvider is None:
                 raise ImportError("FinnhubNewsProvider not available - check if finnhub-python is installed")
             return FinnhubNewsProvider()
         elif provider == "alpaca":
-            from dataproviders.news import AlpacaNewsProvider
+            from ba2_providers.news import AlpacaNewsProvider
             if AlpacaNewsProvider is None:
                 raise ImportError("AlpacaNewsProvider not available - check if alpaca-py is installed")
             return AlpacaNewsProvider()
         elif provider == "localfiles":
-            from dataproviders.news import LocalFilesNewsProvider
+            from ba2_providers.news import LocalFilesNewsProvider
             if LocalFilesNewsProvider is None:
                 raise ImportError("LocalFilesNewsProvider not available")
             return LocalFilesNewsProvider()

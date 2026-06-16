@@ -31,7 +31,7 @@ def test_yfinance():
     print("="*60)
 
     try:
-        from dataproviders.fundamentals.details import YFinanceCompanyDetailsProvider
+        from ba2_providers.fundamentals.details import YFinanceCompanyDetailsProvider
         provider = YFinanceCompanyDetailsProvider()
 
         # Test balance sheet
@@ -125,7 +125,7 @@ def test_fmp():
         return
 
     try:
-        from dataproviders.fundamentals.details import FMPCompanyDetailsProvider
+        from ba2_providers.fundamentals.details import FMPCompanyDetailsProvider
         provider = FMPCompanyDetailsProvider()
 
         # Test balance sheet
@@ -221,7 +221,7 @@ def test_alphavantage():
         return
 
     try:
-        from dataproviders.fundamentals.details import AlphaVantageCompanyDetailsProvider
+        from ba2_providers.fundamentals.details import AlphaVantageCompanyDetailsProvider
         provider = AlphaVantageCompanyDetailsProvider()
 
         # Test balance sheet
@@ -320,7 +320,7 @@ def test_fundamentals_service():
     print("="*60)
 
     try:
-        from dataproviders.fundamentals.service import FundamentalsService
+        from ba2_providers.fundamentals.service import FundamentalsService
 
         # Test with priority order: yfinance first, then fmp
         service = FundamentalsService(providers=['yfinance', 'fmp', 'alphavantage'])

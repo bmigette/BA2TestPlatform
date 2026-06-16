@@ -130,7 +130,7 @@ class FundamentalsService:
                 )
 
         try:
-            from dataproviders.fundamentals.service import (
+            from ba2_providers.fundamentals.service import (
                 FundamentalsService as ProviderService,
             )
         except ImportError as e:

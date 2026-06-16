@@ -436,7 +436,7 @@ async def fetch_fundamentals(
     merge: bool = Query(False, description="If true and multiple providers are specified, merge data from all providers (10-day date tolerance). If false, use fallback (first successful provider).")
 ):
     """
-    Fetch fundamental data for a ticker using the dataproviders.
+    Fetch fundamental data for a ticker using the ba2_providers.
 
     Args:
         symbol: Stock ticker symbol
@@ -481,7 +481,7 @@ async def fetch_fundamentals(
 
         # Use FundamentalsService for multi-provider support with priority fallback or merge
         if provider_list and len(provider_list) > 0:
-            from dataproviders.fundamentals.service import FundamentalsService
+            from ba2_providers.fundamentals.service import FundamentalsService
             service = FundamentalsService(providers=provider_list)
 
             # Map data_type to service method
@@ -536,13 +536,13 @@ async def fetch_fundamentals(
 
         # Single provider mode (backwards compatibility)
         if provider == "yfinance":
-            from dataproviders.fundamentals.details import YFinanceCompanyDetailsProvider
+            from ba2_providers.fundamentals.details import YFinanceCompanyDetailsProvider
             details_provider = YFinanceCompanyDetailsProvider()
         elif provider == "fmp":
-            from dataproviders.fundamentals.details import FMPCompanyDetailsProvider
+            from ba2_providers.fundamentals.details import FMPCompanyDetailsProvider
             details_provider = FMPCompanyDetailsProvider()
         elif provider == "alphavantage":
-            from dataproviders.fundamentals.details import AlphaVantageCompanyDetailsProvider
+            from ba2_providers.fundamentals.details import AlphaVantageCompanyDetailsProvider
             details_provider = AlphaVantageCompanyDetailsProvider()
         else:
             raise HTTPException(
@@ -673,7 +673,7 @@ async def _fetch_fundamentals_overview(symbol: str, provider: str, as_of_date: d
             }
             return result
         elif provider == "fmp":
-            from dataproviders.fundamentals.overview import FMPCompanyOverviewProvider
+            from ba2_providers.fundamentals.overview import FMPCompanyOverviewProvider
             overview_provider = FMPCompanyOverviewProvider()
             result = overview_provider.get_fundamentals_overview(
                 symbol=symbol,
@@ -681,7 +681,7 @@ async def _fetch_fundamentals_overview(symbol: str, provider: str, as_of_date: d
                 format_type="dict"
             )
         elif provider == "alphavantage":
-            from dataproviders.fundamentals.overview import AlphaVantageCompanyOverviewProvider
+            from ba2_providers.fundamentals.overview import AlphaVantageCompanyOverviewProvider
             overview_provider = AlphaVantageCompanyOverviewProvider()
             result = overview_provider.get_fundamentals_overview(
                 symbol=symbol,

@@ -30,53 +30,28 @@ from app.services.dataset_handler import (
     INTERVAL_MAP,
     BARS_PER_DAY,
 )
-from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
-from dataproviders.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider
 
 
 def get_ohlcv_provider(provider_name: str = "yfinance"):
-    """Get the appropriate OHLCV provider based on config.
+    """Get the appropriate OHLCV provider from the shared ba2_providers registry.
 
-    OHLCV_SOURCE=ba2_providers routes the fetch through ba2_providers' shared
-    cache (the same cache the experts read point-in-time slices from), returning
-    the SAME List[MarketDataPoint] contract via BA2ProvidersOHLCVAdapter so the
-    dataset builder (_build_dataset_in_background) is untouched. as_of maps to
-    end_date.
+    The shared providers expose ``get_data(...) -> List[MarketDataPoint]``
+    natively (the same public contract the local providers had), so the dataset
+    builder (_build_dataset_in_background) reads ``.timestamp/.open/.high/.low/
+    .close/.volume`` off the returned points unchanged.
 
-    Default is 'legacy' (today's direct YFinance/FMP path) so nothing changes
-    for existing training until the flag is explicitly flipped after the
-    byte-equality gate. If the ba2_providers path cannot be constructed (missing
-    package, provider constructor raising e.g. on a missing API key), this logs
-    and falls back to the legacy provider.
+    The shared providers do not carry the backend's parquet-backed, gap-filling
+    OHLCV disk-cache layer (``extend_ohlcv_cache`` / ``_get_cache_file``) that the
+    OHLCV cache-fetch background task relies on, so the returned provider is
+    augmented with that layer via ``wrap_with_cache`` (see
+    ``app.services.ohlcv_cache_provider``). The public fetch contract is unchanged.
     """
-    source = os.getenv("OHLCV_SOURCE", "legacy").lower()
-    if source == "ba2_providers":
-        try:
-            from dataproviders.ba2providers_adapter import BA2ProvidersOHLCVAdapter
-            # ba2_providers registry keys are lowercase; map yf/yfinance and fall
-            # back to fmp for anything else so as_of caching is available.
-            name = provider_name.lower()
-            if name in ("yfinance", "yf"):
-                ba2_name = "yfinance"
-            elif name == "fmp":
-                ba2_name = "fmp"
-            else:
-                ba2_name = name
-            return BA2ProvidersOHLCVAdapter(ba2_name)
-        except Exception as e:
-            logger.error(
-                f"OHLCV_SOURCE=ba2_providers failed to initialize ({e}); "
-                f"falling back to legacy provider",
-                exc_info=True,
-            )
-
-    provider_map = {
-        "yfinance": YFinanceDataProvider,
-        "yf": YFinanceDataProvider,
-        "fmp": FMPOHLCVProvider,
-    }
-    provider_class = provider_map.get(provider_name.lower(), YFinanceDataProvider)
-    return provider_class()
+    from ba2_providers import get_provider
+    from app.services.ohlcv_cache_provider import wrap_with_cache
+    name = (provider_name or "yfinance").lower()
+    if name == "yf":
+        name = "yfinance"
+    return wrap_with_cache(get_provider("ohlcv", name))
 
 logger = logging.getLogger(__name__)
 

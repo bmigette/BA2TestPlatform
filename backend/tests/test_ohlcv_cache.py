@@ -225,7 +225,7 @@ class TestCacheFilePerProvider:
 
     def test_cache_file_is_per_provider(self):
         """Cache file path must include provider name as subdirectory."""
-        from dataproviders.base import MarketDataProviderInterface
+        from app.services.ohlcv_cache_provider import OHLCVCacheProviderBase as MarketDataProviderInterface
 
         class _Stub(MarketDataProviderInterface):
             def _get_ohlcv_data_impl(self, *a, **kw):
@@ -245,7 +245,7 @@ class TestCacheFilePerProvider:
 
     def test_cache_file_creates_directory(self):
         """_get_cache_file must create the provider subdirectory if it does not exist."""
-        from dataproviders.base import MarketDataProviderInterface
+        from app.services.ohlcv_cache_provider import OHLCVCacheProviderBase as MarketDataProviderInterface
 
         class _Stub(MarketDataProviderInterface):
             def _get_ohlcv_data_impl(self, *a, **kw):
@@ -275,7 +275,7 @@ class TestExtendOHLCVCache:
         })
 
     def _make_provider(self, tmp_dir: str):
-        from dataproviders.base import MarketDataProviderInterface
+        from app.services.ohlcv_cache_provider import OHLCVCacheProviderBase as MarketDataProviderInterface
 
         class _Stub(MarketDataProviderInterface):
             def _get_ohlcv_data_impl(self, symbol, start, end, interval):

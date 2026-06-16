@@ -65,7 +65,7 @@ def test_sentiment_default_legacy_news_provider(monkeypatch):
     """
     monkeypatch.delenv("FEATURES_SOURCE", raising=False)
     from app.services.sentiment import SentimentService
-    from dataproviders.news import AlphaVantageNewsProvider
+    from ba2_providers.news import AlphaVantageNewsProvider
 
     svc = SentimentService(use_cache=False)
     prov = svc._get_news_provider("alphavantage")
@@ -101,7 +101,7 @@ def test_sentiment_ba2_providers_falls_back_to_legacy(monkeypatch):
     monkeypatch.setenv("FEATURES_SOURCE", "ba2_providers")
     from app.services import features_source
     from app.services.sentiment import SentimentService
-    from dataproviders.news import AlphaVantageNewsProvider
+    from ba2_providers.news import AlphaVantageNewsProvider
 
     monkeypatch.setattr(features_source, "get_ba2_provider", lambda c, n: None)
 
@@ -115,7 +115,7 @@ def test_sentiment_localfiles_never_uses_ba2_providers(monkeypatch):
     monkeypatch.setenv("FEATURES_SOURCE", "ba2_providers")
     from app.services import features_source
     from app.services.sentiment import SentimentService
-    from dataproviders.news import LocalFilesNewsProvider
+    from ba2_providers.news import LocalFilesNewsProvider
 
     called = {"n": 0}
 
@@ -139,7 +139,7 @@ def test_fundamentals_default_legacy_provider_service(monkeypatch):
     """Default returns the legacy multi-provider orchestrator (ProviderService)."""
     monkeypatch.delenv("FEATURES_SOURCE", raising=False)
     from app.services.fundamentals import FundamentalsService
-    from dataproviders.fundamentals.service import (
+    from ba2_providers.fundamentals.service import (
         FundamentalsService as ProviderService,
     )
 
@@ -154,7 +154,7 @@ def test_fundamentals_ba2_probes_then_uses_legacy_orchestrator(monkeypatch):
     monkeypatch.setenv("FEATURES_SOURCE", "ba2_providers")
     from app.services import features_source
     from app.services.fundamentals import FundamentalsService
-    from dataproviders.fundamentals.service import (
+    from ba2_providers.fundamentals.service import (
         FundamentalsService as ProviderService,
     )
 
@@ -176,7 +176,7 @@ def test_fundamentals_ba2_unavailable_still_returns_legacy(monkeypatch):
     monkeypatch.setenv("FEATURES_SOURCE", "ba2_providers")
     from app.services import features_source
     from app.services.fundamentals import FundamentalsService
-    from dataproviders.fundamentals.service import (
+    from ba2_providers.fundamentals.service import (
         FundamentalsService as ProviderService,
     )
 

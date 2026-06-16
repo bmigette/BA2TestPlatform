@@ -32,7 +32,7 @@ from app.indicators import TechnicalIndicators
 from app.services.fundamentals import FundamentalsService
 from app.services.macro import MacroService
 from app.services.sentiment import SentimentService
-from dataproviders.ohlcv.YFinanceDataProvider import YFinanceDataProvider
+from ba2_providers.ohlcv.YFinanceDataProvider import YFinanceDataProvider
 
 
 def generate_test_dataset():
