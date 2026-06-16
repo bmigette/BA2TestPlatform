@@ -215,6 +215,10 @@ def _recommendation_to_expert_recommendation(
         symbol=symbol,
         recommended_action=action,
         expected_profit_percent=float(expected_profit),
+        # The expert's recommended TP price (FMPRating's analyst target etc.); None for
+        # experts with no price target -> the bracket falls back to expected_profit_percent.
+        target_price=(None if getattr(rec, "target_price", None) is None
+                      else float(rec.target_price)),
         price_at_date=float(rec.current_price),
         details=rec.details or "",
         confidence=(None if rec.confidence is None else float(rec.confidence)),
@@ -759,11 +763,25 @@ class DailyBacktestEngine:
         A no-op when neither percent is configured (legacy buy-and-hold behaviour, but the
         optimizer / CLI always set at least one so positions close). Per-transaction failures
         are logged and skipped (one bad bracket must not abort the bar).
+
+        TP REFERENCE (``initial_tp_reference`` config, S1 fidelity):
+          * default / anything but ``"expert_target_price"`` -> the LEGACY percent-off-entry
+            TP (``entry_px * (1 +- initial_tp_percent/100)``); byte-identical to before.
+          * ``"expert_target_price"`` -> anchor the TP on the recommendation that opened the
+            position. The reference target is the linked ``ExpertRecommendation.target_price``;
+            if None, ``entry_px * (1 + expected_profit_percent/100)`` (every expert populates
+            expected_profit_percent); if THAT is also unavailable, the configured
+            ``initial_tp_percent`` off entry. ``initial_tp_percent`` is REUSED as the
+            optimizable offset-from-target: ``TP = target * (1 +- offset/100)`` (offset 0 ->
+            TP exactly at the target; +offset above for a long, below for a short).
+        SL keeps the configured ``initial_sl_percent`` percent-off-entry behaviour in BOTH modes.
         """
         tp_pct = self.config.get("initial_tp_percent")
         sl_pct = self.config.get("initial_sl_percent")
         if not tp_pct and not sl_pct:
             return
+        tp_reference = self.config.get("initial_tp_reference")
+        use_expert_target = tp_reference == "expert_target_price"
 
         for txn in self._open_transactions_without_brackets():
             entry = self.account._entry_order_for_transaction(txn)
@@ -774,7 +792,19 @@ class DailyBacktestEngine:
             entry_px = float(entry.open_price)
             is_long = entry.side == OrderDirection.BUY
             tp_price = sl_price = None
-            if tp_pct:
+            if use_expert_target:
+                # Resolve the expert reference target (linked rec.target_price, else derived
+                # from expected_profit_percent, else None -> fall through to the percent path).
+                target = self._expert_reference_target(entry, entry_px, is_long)
+                if target is not None:
+                    # initial_tp_percent is the offset-from-target in this mode (0 -> at target).
+                    off = (float(tp_pct) / 100.0) if tp_pct else 0.0
+                    tp_price = target * (1.0 + off) if is_long else target * (1.0 - off)
+                elif tp_pct:
+                    # No target/profit available -> legacy percent-off-entry fallback.
+                    frac = float(tp_pct) / 100.0
+                    tp_price = entry_px * (1.0 + frac) if is_long else entry_px * (1.0 - frac)
+            elif tp_pct:
                 frac = float(tp_pct) / 100.0
                 tp_price = entry_px * (1.0 + frac) if is_long else entry_px * (1.0 - frac)
             if sl_pct:
@@ -786,6 +816,38 @@ class DailyBacktestEngine:
                 )
             except Exception as e:  # noqa: BLE001 — one bad bracket must not abort the bar
                 self._log(f"initial bracket failed for txn {txn.id}: {e}")
+
+    def _expert_reference_target(
+        self, entry: Any, entry_px: float, is_long: bool
+    ) -> Optional[float]:
+        """The expert TP reference price for an opened transaction's entry order.
+
+        Priority (S1 fidelity, works for EVERY expert):
+          1. the linked ``ExpertRecommendation.target_price`` (FMPRating surfaces it);
+          2. else ``entry_px * (1 +- expected_profit_percent/100)`` derived from the same
+             recommendation (long: above entry; short: below) — every clean expert populates
+             expected_profit_percent;
+          3. else ``None`` -> caller falls back to the configured percent-off-entry TP.
+
+        Returns None on any lookup failure (missing link / row) so the bracket degrades to the
+        percent path rather than skipping the protective leg.
+        """
+        rec_id = getattr(entry, "expert_recommendation_id", None)
+        if not rec_id:
+            return None
+        from ba2_common.core.db import get_instance as _get_instance
+
+        rec = _get_instance(ExpertRecommendation, rec_id)
+        if rec is None:
+            return None
+        target = getattr(rec, "target_price", None)
+        if target is not None:
+            return float(target)
+        epp = getattr(rec, "expected_profit_percent", None)
+        if epp:  # non-zero -> derive a target from the expected move off the entry.
+            frac = float(epp) / 100.0
+            return entry_px * (1.0 + frac) if is_long else entry_px * (1.0 - frac)
+        return None
 
     def _open_transactions_without_brackets(self) -> List[Any]:
         """OPENED transactions for this account's experts that have no TP/SL set yet.
