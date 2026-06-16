@@ -44,6 +44,8 @@ class ExitCondition(BaseModel):
     name: Optional[str] = None
     conditions: ConditionBase
     action: str  # close, adjust_tp, adjust_sl, or option action (e.g. buy_call)
+    toggle_optimize: bool = False                 # -> exit:<id>:enabled gene (optimizer drops the whole rule)
+    reference_value: Optional[str] = None         # order_open_price | current_price | expert_target_price (adjust actions)
     action_value: Optional[float] = None
     action_value_optimize: bool = False
     action_value_min: Optional[float] = None
