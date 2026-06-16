@@ -427,7 +427,11 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
 
         Activation runs first so a leg whose parent filled on THIS same bar (a same-bar
         MARKET entry) can be evaluated against the next bar on the following call — never
-        on the entry bar (no look-ahead within a bar). Returns True.
+        on the entry bar (no look-ahead within a bar).
+
+        Returns whether ANY order filled this bar. The engine uses this to skip the
+        transaction roll + bracket attach on no-fill bars (both are no-ops there), which is
+        the common case on a fine fill clock (5-minute) and a large share of per-bar runtime.
         """
         as_of = self._price.now()
         self._activate_triggered_dependents()
@@ -445,6 +449,8 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         # FIRST so the conservative worst-case (stop-loss) wins and cancels the TP sibling. A
         # stable sort puts every stop-bearing leg ahead of the pure-limit (TP) legs.
         working.sort(key=lambda o: 0 if getattr(o, "stop_price", None) else 1)
+        filled = False  # whether ANY order filled this bar; the engine gates the transaction
+        #                 roll + bracket attach on this (both are no-ops with no fill).
         for o in working:
             if self._is_single_leg_option(o):
                 # OPTION single-leg (or option child carrying a contract): fill off the
@@ -454,18 +460,22 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                     continue
                 self._apply_option_fill(o, fill_px, as_of)
                 self._cancel_oco_sibling(o)
+                filled = True
                 continue
             if getattr(o, "asset_class", None) == AssetClass.OPTION:
                 # Option PARENT with no contract_symbol -> multi-leg (spread/straddle):
                 # fill ALL legs all-or-none off their own premium bars on this bar.
                 self._fill_multi_leg_parent(o, as_of)
+                if o.status == OrderStatus.FILLED:  # all-or-none parent filled this bar
+                    filled = True
                 continue
             fill_px = self._evaluate_fill(o, as_of)
             if fill_px is None:
                 continue
             self._apply_fill(o, fill_px, as_of)
             self._cancel_oco_sibling(o)
-        return True
+            filled = True
+        return filled
 
     def _is_single_leg_option(self, order) -> bool:
         """True for an OPTION order that fills *independently* against a premium bar.
@@ -932,6 +942,13 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                      their buy/sell qty would net to zero, so they cannot be read off the txn
                      net — they are read directly off the child legs).
         """
+        # Equity-only backtest: no options provider was injected, so no option order could ever
+        # have filled (``_option_fill_price`` requires it) and there can be no option positions.
+        # Short-circuit BEFORE opening a Session — ``_apply_option_expiry`` calls this every bar,
+        # and the empty OPENED-transaction query was ~21% of a 5-minute run (profiled).
+        if self._options is None:
+            return []
+
         from sqlmodel import select, Session
 
         out: List[OptionPosition] = []

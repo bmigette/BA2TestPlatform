@@ -295,6 +295,12 @@ class DailyBacktestEngine:
 
         days = trading_days(self.config["start_date"], self.config["end_date"], self.price)
         total = max(len(days), 1)
+        # Progress throttle: the handler's progress_cb does DB work every call (a task-queue
+        # pause-check + a progress write). On a 5-minute fill clock a 1-year/8-symbol run is
+        # ~490k bars, so calling it per bar made progress alone ~36% of runtime (profiled).
+        # Emit only when the integer percent advances (<=100 calls) plus the final bar. Progress
+        # is side-effect-only, so throttling cannot change results (determinism preserved).
+        last_pct = -1
 
         for i, as_of in enumerate(days):
             # Tz-AWARE UTC clock — the SAME contract the live path assumes: the experts'
@@ -358,15 +364,23 @@ class DailyBacktestEngine:
                 self._manage_open_positions(expert, expert_id, settings, as_of_dt)
 
             # 4. fills on THIS bar's working orders; roll order state into transactions.
-            self.account.refresh_orders()
-            self.account.refresh_transactions()
+            #     A transaction only changes state when one of its orders fills, and the bracket
+            #     pass only has work when a transaction freshly OPENED — both are no-ops on a bar
+            #     where nothing filled. On a 5-minute fill clock almost every bar has no fill, and
+            #     the roll (incl. the ba2_common base sync_transaction_orders) + bracket pass were
+            #     ~half of per-bar runtime (profiled), so gate them on the fill signal.
+            filled = self.account.refresh_orders()
+            if filled:
+                self.account.refresh_transactions()
 
             # 4a. resolve any option positions reaching expiry on THIS bar: OTM -> worthless;
             #     ITM long -> exercise; ITM short -> assigned (converting to a SHARE position in
             #     the equity ledger settled at the strike). Runs after the transaction roll (so
             #     freshly-OPENED option positions are visible) and before snapshot_equity (so the
-            #     resulting equity position is marked this bar). Early American assignment is NOT
-            #     modelled — options resolve at expiry only.
+            #     resulting equity position is marked this bar). Date-driven (an option can expire
+            #     on a no-fill bar), so it runs every bar — but get_option_positions() short-
+            #     circuits to [] for equity-only runs (no options provider), so this is ~free
+            #     there. Early American assignment is NOT modelled — options resolve at expiry.
             self._apply_option_expiry(as_of_dt)
 
             # 4b. attach the strategy's initial TP/SL OCO bracket to every freshly-OPENED
@@ -375,12 +389,18 @@ class DailyBacktestEngine:
             #     ever closes it, so win_rate/profit_factor are 0 and the "return" is just
             #     mark-to-market. The legs are WAITING_TRIGGER on the (already-FILLED) entry,
             #     so they activate next bar and fill on a later bar (no intrabar look-ahead).
-            self._apply_initial_brackets()
+            #     Only reachable when something filled this bar (a fresh OPEN requires a fill).
+            if filled:
+                self._apply_initial_brackets()
 
             # 5. record per-bar equity / drawdown point.
             self.account.snapshot_equity(as_of_dt)
 
-            self.progress_cb((i + 1) / total * 100.0, f"bar {as_of:%Y-%m-%d}")
+            pct = (i + 1) / total * 100.0
+            pct_i = int(pct)
+            if pct_i != last_pct or (i + 1) == total:
+                last_pct = pct_i
+                self.progress_cb(pct, f"bar {as_of:%Y-%m-%d}")
 
         return self._build_minimal_results()
 
