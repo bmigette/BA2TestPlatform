@@ -62,7 +62,7 @@ def build_results(account: Any, config: Dict[str, Any]) -> Dict[str, Any]:
 
     final = equity_curve[-1]["equity"] if equity_curve else initial
 
-    metrics = _compute_metrics(equity_curve, drawdown_curve, trades, initial, final)
+    metrics = _compute_metrics(equity_curve, drawdown_curve, trades, initial, final, config)
     metrics["equity_curve"] = equity_curve
     metrics["drawdown_curve"] = drawdown_curve
     metrics["trades"] = trades
@@ -142,6 +142,7 @@ def _compute_metrics(
     trades: List[Dict[str, Any]],
     initial: float,
     final: float,
+    config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Compute every reused ``Backtest`` metric column from the curves + trades.
 
