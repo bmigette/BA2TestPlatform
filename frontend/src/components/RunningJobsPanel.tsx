@@ -5,14 +5,22 @@ import type { TaskInfo } from '../lib/btApi';
 
 const BT_TASK_TYPES = new Set(['daily_backtest', 'backtest', 'strategy_optimization']);
 
-/** Parse "Gen 2/3 best=2.8400" (the optimizer's progress_message) into structured bits. */
-function parseProgress(msg?: string): { gen?: number; total?: number; best?: string } {
+/**
+ * Parse the optimizer's progress_message into structured bits.
+ * Format: "Gen 2/3 · ind 7/12 best=2.8400" (ind segment present once a generation is underway).
+ */
+function parseProgress(msg?: string): {
+  gen?: number; total?: number; ind?: number; indTotal?: number; best?: string;
+} {
   if (!msg) return {};
   const g = msg.match(/Gen\s+(\d+)\s*\/\s*(\d+)/i);
+  const ind = msg.match(/ind\s+(\d+)\s*\/\s*(\d+)/i);
   const b = msg.match(/best\s*=\s*([-\d.]+)/i);
   return {
     gen: g ? Number(g[1]) : undefined,
     total: g ? Number(g[2]) : undefined,
+    ind: ind ? Number(ind[1]) : undefined,
+    indTotal: ind ? Number(ind[2]) : undefined,
     best: b ? b[1] : undefined,
   };
 }
@@ -66,8 +74,9 @@ export function RunningJobsPanel() {
         Running jobs ({jobs.length})
       </div>
       {jobs.map(j => {
-        const { gen, total, best } = parseProgress(j.progress_message);
+        const { gen, total, ind, indTotal, best } = parseProgress(j.progress_message);
         const pct = Math.max(0, Math.min(100, Math.round(j.progress ?? 0)));
+        const genPct = ind != null && indTotal ? Math.round((ind / indTotal) * 100) : null;
         return (
           <div key={j.task_id}
             className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
@@ -86,19 +95,32 @@ export function RunningJobsPanel() {
               </button>
             </div>
 
-            {/* Total-generation progress */}
-            <div className="flex items-center gap-3">
-              <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+            {/* Total progress (across all generations) */}
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <span>Total{gen != null && total != null ? ` · generation ${gen} / ${total}` : ''}</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{pct}%</span>
+              </div>
+              <div className="bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
                 <div className="bg-blue-500 h-2.5 rounded-full transition-all" style={{ width: `${pct}%` }} />
               </div>
-              <span className="text-xs font-medium text-gray-700 dark:text-gray-300 w-10 text-right">{pct}%</span>
             </div>
 
-            {/* Per-generation detail */}
+            {/* Current-generation progress (individuals evaluated within this generation) */}
+            {genPct != null && (
+              <div className="mt-2">
+                <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  <span>Generation {gen ?? ''} · individual {ind} / {indTotal}</span>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{genPct}%</span>
+                </div>
+                <div className="bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                  <div className="bg-indigo-400 h-1.5 rounded-full transition-all" style={{ width: `${genPct}%` }} />
+                </div>
+              </div>
+            )}
+
+            {/* Detail line */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mt-2 text-xs text-gray-600 dark:text-gray-400">
-              {gen != null && total != null && (
-                <span>Generation <span className="font-semibold text-gray-800 dark:text-gray-200">{gen} / {total}</span></span>
-              )}
               {best != null && (
                 <span>Best fitness <span className="font-semibold text-emerald-600 dark:text-emerald-400">{best}</span></span>
               )}

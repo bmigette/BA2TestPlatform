@@ -324,6 +324,28 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                         continue
                     config = _build_daily_trial_config(backtest_cfg, decode_params(strategy, flat))
                     jobs.append((i, flat, key, config))
+
+                # Intra-generation progress: report individuals evaluated WITHIN the current
+                # generation (UI's per-generation bar). The overall % blends the generation
+                # index with the in-batch fraction so it advances smoothly between gen boundaries
+                # (ga_callback still snaps it to the exact boundary at gen end). Throttled to
+                # ~20 updates/gen so we don't hammer the task DB.
+                total_in_batch = len(param_dicts)
+                n_gens = int(ga["generations"])
+                gen = gen_state["gen"]
+                step = max(1, total_in_batch // 20)
+
+                def _emit_intra(done: int):
+                    frac = (done / total_in_batch) if total_in_batch else 1.0
+                    pct = ((gen + frac) / n_gens) * 100.0 if n_gens else 0.0
+                    bf = best["fitness"]
+                    msg = (f"Gen {gen + 1}/{n_gens} · ind {done}/{total_in_batch}"
+                           + (f" best={bf:.4f}" if bf is not None else ""))
+                    tq.update_progress(task_id, pct, msg)
+
+                done = total_in_batch - len(jobs)  # cached individuals are already evaluated
+                _emit_intra(done)
+
                 futures = {
                     pool.submit(_trial_worker, cfg, opt.fitness_metric): (i, flat, key)
                     for (i, flat, key, cfg) in jobs
@@ -343,6 +365,9 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                     if best["fitness"] is None or fit > best["fitness"]:
                         best["fitness"] = fit
                         best["params"] = flat
+                    done += 1
+                    if done % step == 0 or done == total_in_batch:
+                        _emit_intra(done)
                 return fits
 
             return batch_fitness
