@@ -1,5 +1,7 @@
 import React from 'react';
 import { Plus, Trash2, ChevronDown, ChevronRight, GitBranch, Settings2 } from 'lucide-react';
+import { getRulesetVocabulary } from '../lib/btApi';
+import type { Vocabulary } from '../lib/btApi';
 
 // Types for condition tree structure
 export interface ConditionNode {
@@ -41,6 +43,19 @@ export interface AvailableField {
 // Helper to check if a tree node is a group
 export function isConditionGroup(node: ConditionTree): node is ConditionGroup {
   return 'operator' in node && 'conditions' in node;
+}
+
+// Pure flag-detection for a leaf: a field is a FLAG (no operator/value) when it
+// is marked boolean. Vocabulary flags set isBoolean=true; legacy boolean entry
+// fields (position:in_position, etc.) also set it. Exported for unit testing.
+export function isFlagField(field: AvailableField | undefined): boolean {
+  return field?.isBoolean ?? false;
+}
+
+// A field originates from the exit vocabulary's flags list (fieldType 'flag').
+// These render with NO operator at all (a bare {field} test). Exported for tests.
+export function isVocabularyFlagField(field: AvailableField | undefined): boolean {
+  return field?.fieldType === 'flag';
 }
 
 // Generate unique IDs
@@ -108,6 +123,45 @@ const booleanOperators = [
   { value: 'is_false', label: 'is false' },
 ];
 
+// Sentinel comparison kept on flag leaves so that downstream validation (which
+// requires a non-empty `comparison`) passes. The backend treats a flag leaf as a
+// bare {field} test; the comparison/value are ignored for flags.
+const FLAG_SENTINEL_COMPARISON = 'is_true';
+
+// Convert the backend exit-ruleset vocabulary into AvailableField entries grouped
+// under "Flags" and "Numerics" optgroups. Flags reuse the existing boolean-field
+// rendering (no operator/value). This is ADDITIVE to the entry default/prediction
+// fields so entry conditions (model_probability/model_class etc.) keep working.
+function vocabularyToFields(vocab: Vocabulary | undefined): AvailableField[] {
+  if (!vocab) return [];
+  const flagFields: AvailableField[] = (vocab.flags || []).map((f) => ({
+    field: f.value,
+    fieldType: 'flag',
+    description: f.label,
+    category: 'Flags',
+    label: f.label,
+    isBoolean: true,
+  }));
+  const numericFields: AvailableField[] = (vocab.numerics || []).map((n) => ({
+    field: n.value,
+    fieldType: 'numeric',
+    description: n.label,
+    category: 'Numerics',
+    label: n.label,
+    isBoolean: false,
+  }));
+  return [...flagFields, ...numericFields];
+}
+
+// Operators sourced from the vocabulary (exit usage). Falls back to the static
+// comparison operators when no vocabulary is provided (entry usage).
+function operatorsFromVocab(vocab: Vocabulary | undefined): { value: string; label: string }[] {
+  if (!vocab || !vocab.operators || vocab.operators.length === 0) return comparisonOperators;
+  const labelFor = (op: string) =>
+    comparisonOperators.find((c) => c.value === op)?.label ?? op;
+  return vocab.operators.map((op) => ({ value: op, label: labelFor(op) }));
+}
+
 interface ConditionBuilderProps {
   value: ConditionTree;
   onChange: (value: ConditionTree) => void;
@@ -116,6 +170,19 @@ interface ConditionBuilderProps {
   level?: number;
   onRemove?: () => void;
   showOptimization?: boolean;
+  /**
+   * Exit-ruleset vocabulary. When provided, leaves are vocabulary-driven: the
+   * field select gains "Flags"/"Numerics" optgroups and operators come from the
+   * vocabulary. Flag leaves render with no operator/value. When omitted the
+   * builder behaves exactly as before (entry-condition usage).
+   */
+  vocabulary?: Vocabulary;
+  /**
+   * When true AND no `vocabulary` prop was threaded, the ROOT instance lazily
+   * fetches the vocabulary once and passes it to children (self-contained exit
+   * usage). Defaults to false so ENTRY builders never auto-load exit flags.
+   */
+  vocabularyFallback?: boolean;
 }
 
 const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
@@ -126,8 +193,37 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   level = 0,
   onRemove,
   showOptimization = true,
+  vocabulary,
+  vocabularyFallback = false,
 }) => {
-  const allFields = [...defaultFields, ...availableFields];
+  // Fallback fetch: only the root instance fetches, only when explicitly opted
+  // in via vocabularyFallback and no vocabulary prop was threaded. The result is
+  // passed down to recursive children. Entry builders leave this off so they
+  // never auto-load exit flags/numerics.
+  const [fetchedVocab, setFetchedVocab] = React.useState<Vocabulary | undefined>(undefined);
+  React.useEffect(() => {
+    if (!isRoot || vocabulary || !vocabularyFallback) return;
+    let cancelled = false;
+    getRulesetVocabulary()
+      .then((v) => { if (!cancelled) setFetchedVocab(v); })
+      .catch(() => { /* offline: silently fall back to static fields */ });
+    return () => { cancelled = true; };
+  }, [isRoot, vocabulary, vocabularyFallback]);
+
+  const effectiveVocab = vocabulary ?? fetchedVocab;
+  const vocabFields = vocabularyToFields(effectiveVocab);
+  // Merge entry defaults + prediction fields (entry usage) with the vocabulary
+  // flags/numerics (exit usage), de-duplicating by field key so a field never
+  // appears twice if it exists in both lists.
+  const seen = new Set<string>();
+  const allFields = [...defaultFields, ...availableFields, ...vocabFields].filter((f) => {
+    if (seen.has(f.field)) return false;
+    seen.add(f.field);
+    return true;
+  });
+  // Operator list: vocabulary operators when an exit vocabulary is in play,
+  // otherwise the static comparison operators (entry usage).
+  const numericOperators = operatorsFromVocab(effectiveVocab);
 
   // Group fields by category
   const groupedFields = allFields.reduce((acc, field) => {
@@ -239,6 +335,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
                 level={level + 1}
                 onRemove={() => removeCondition(index)}
                 showOptimization={showOptimization}
+                vocabulary={effectiveVocab}
               />
             ))}
 
@@ -278,18 +375,36 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   // Handle single condition
   const condition = value as ConditionNode;
   const selectedField = allFields.find((f) => f.field === condition.field);
-  const isBoolean = selectedField?.isBoolean ?? false;
-  const operators = isBoolean ? booleanOperators : comparisonOperators;
+  // A leaf is a FLAG when its selected field is a boolean/flag field. Vocabulary
+  // flags are mapped to isBoolean=true (see vocabularyToFields); legacy boolean
+  // entry fields (position:in_position, etc.) also set isBoolean. A flag leaf
+  // renders with NO operator and NO value input.
+  const isFlag = isFlagField(selectedField);
+  // For a true vocabulary flag we hide the operator entirely; legacy boolean
+  // entry fields keep their is_true/is_false operator select for back-compat.
+  const isVocabFlag = isVocabularyFlagField(selectedField);
+  const operators = isFlag ? booleanOperators : numericOperators;
 
   const updateField = (field: string, fieldType: string) => {
     const newField = allFields.find((f) => f.field === field);
+    const becomingFlag = isFlagField(newField);
+    const becomingVocabFlag = isVocabularyFlagField(newField);
     const newCondition = { ...condition, field, fieldType };
-    // Switch to appropriate default operator when changing field type
-    if (newField?.isBoolean && !['is_true', 'is_false'].includes(condition.comparison)) {
-      newCondition.comparison = 'is_true';
+    if (becomingFlag) {
+      // Becoming a flag: clear numeric-only fields. Keep a sentinel comparison so
+      // validation passes; a vocab flag leaf serializes effectively to {id, field}.
+      if (!['is_true', 'is_false'].includes(condition.comparison)) {
+        newCondition.comparison = becomingVocabFlag ? FLAG_SENTINEL_COMPARISON : 'is_true';
+      }
       newCondition.value = 1;
-    } else if (!newField?.isBoolean && ['is_true', 'is_false'].includes(condition.comparison)) {
-      newCondition.comparison = 'gt';
+      // A flag has no numeric value to optimize: drop value-range optimization.
+      newCondition.optimizeEnabled = false;
+      delete newCondition.valueMin;
+      delete newCondition.valueMax;
+      delete newCondition.valueStep;
+    } else if (['is_true', 'is_false'].includes(condition.comparison)) {
+      // Becoming numeric from a flag: restore a numeric comparison + value.
+      newCondition.comparison = numericOperators[0]?.value ?? 'gt';
       newCondition.value = 0.5;
     }
     onChange(newCondition);
@@ -349,23 +464,27 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
         </select>
       </div>
 
-      {/* Comparison Operator */}
-      <div className="flex-shrink-0">
-        <select
-          value={condition.comparison}
-          onChange={(e) => updateComparison(e.target.value)}
-          className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-        >
-          {operators.map((op) => (
-            <option key={op.value} value={op.value}>
-              {op.label}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* Comparison Operator - hidden for vocabulary flag leaves (a flag is a
+          bare {field} test with no operator). Legacy boolean entry fields keep
+          their is_true/is_false select. */}
+      {!isVocabFlag && (
+        <div className="flex-shrink-0">
+          <select
+            value={condition.comparison}
+            onChange={(e) => updateComparison(e.target.value)}
+            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+          >
+            {operators.map((op) => (
+              <option key={op.value} value={op.value}>
+                {op.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
-      {/* Value Input - hide for boolean operators */}
-      {!isBoolean && condition.comparison === 'between' ? (
+      {/* Value Input - hidden for flag leaves (no numeric value) */}
+      {!isFlag && condition.comparison === 'between' ? (
         <div className="flex items-center gap-1">
           <input
             type="number"
@@ -393,7 +512,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             className="w-20 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
           />
         </div>
-      ) : !isBoolean ? (
+      ) : !isFlag ? (
         <input
           type="number"
           step="0.01"
@@ -403,21 +522,26 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
         />
       ) : null}
 
-      {/* Optimization Toggle */}
+      {/* Optimization Toggle. The value-range optimize button (Settings2) only
+          makes sense for numeric leaves; a flag has no numeric value to sweep.
+          The per-node on/off toggle (cond:<id>:enabled) is kept for BOTH flags
+          and numerics so the optimizer can drop either kind of condition. */}
       {showOptimization && (
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={toggleOptimize}
-            className={`p-1.5 rounded ${
-              condition.optimizeEnabled
-                ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
-            }`}
-            title={condition.optimizeEnabled ? 'Optimization enabled' : 'Enable optimization'}
-          >
-            <Settings2 className="w-4 h-4" />
-          </button>
+          {!isFlag && (
+            <button
+              type="button"
+              onClick={toggleOptimize}
+              className={`p-1.5 rounded ${
+                condition.optimizeEnabled
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                  : 'bg-gray-100 text-gray-500 dark:bg-gray-600 dark:text-gray-400'
+              }`}
+              title={condition.optimizeEnabled ? 'Optimization enabled' : 'Enable optimization'}
+            >
+              <Settings2 className="w-4 h-4" />
+            </button>
+          )}
           <label
             className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
             title="Let the optimizer enable/disable this condition"
@@ -445,8 +569,8 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
         </button>
       )}
 
-      {/* Optimization Range (if enabled) */}
-      {showOptimization && condition.optimizeEnabled && (
+      {/* Optimization Range (if enabled) - never for flags (no numeric value) */}
+      {showOptimization && !isFlag && condition.optimizeEnabled && (
         <div className="w-full flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
           <span className="text-xs text-gray-500 dark:text-gray-400">Optimize:</span>
           <div className="flex items-center gap-1">
@@ -556,6 +680,8 @@ interface ExitConditionsBuilderProps {
   onChange: (value: ExitConditionSet[]) => void;
   availableFields?: AvailableField[];
   showOptimization?: boolean;
+  /** Exit-ruleset vocabulary threaded to each rule's ConditionBuilder. */
+  vocabulary?: Vocabulary;
 }
 
 export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
@@ -563,6 +689,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
   onChange,
   availableFields = [],
   showOptimization = true,
+  vocabulary,
 }) => {
   const addExitCondition = () => {
     const newExit: ExitConditionSet = {
@@ -621,6 +748,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
               }
               availableFields={availableFields}
               showOptimization={showOptimization}
+              vocabulary={vocabulary}
             />
           </div>
 

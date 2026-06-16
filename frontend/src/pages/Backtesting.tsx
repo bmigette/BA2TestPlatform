@@ -47,6 +47,8 @@ import type { UniverseValue } from '../components/UniversePicker';
 import { RuleIO } from '../components/RuleIO';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import { RunningJobsStrip } from '../components/RunningJobsStrip';
+import { getRulesetVocabulary } from '../lib/btApi';
+import type { Vocabulary } from '../lib/btApi';
 import {
   XAxis,
   YAxis,
@@ -297,6 +299,12 @@ const Backtesting: React.FC = () => {
   // Available fields from model
   const [availableFields, setAvailableFields] = useState<AvailableField[]>([]);
 
+  // Exit-ruleset vocabulary (flags / numerics / operators / actions). Fetched
+  // once on mount and threaded into the exit-condition builder so its leaves are
+  // vocabulary-driven. Entry-condition builders intentionally do NOT receive it,
+  // keeping entry fields scoped to the model's prediction fields.
+  const [rulesetVocabulary, setRulesetVocabulary] = useState<Vocabulary | undefined>(undefined);
+
   // UI state
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showConditionModal, setShowConditionModal] = useState<'buy' | 'sell' | 'exit' | null>(null);
@@ -402,6 +410,15 @@ const Backtesting: React.FC = () => {
       fetchPredictionFields(selectedModel);
     }
   }, [selectedModel, fetchPredictionFields]);
+
+  // Fetch the exit-ruleset vocabulary once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getRulesetVocabulary()
+      .then((v) => { if (!cancelled) setRulesetVocabulary(v); })
+      .catch((err) => console.error('Failed to fetch ruleset vocabulary:', err));
+    return () => { cancelled = true; };
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -2363,6 +2380,7 @@ const Backtesting: React.FC = () => {
                       onChange={setExitConditions}
                       availableFields={availableFields}
                       showOptimization={true}
+                      vocabulary={rulesetVocabulary}
                     />
                   </div>
                 )}
