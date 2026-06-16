@@ -39,6 +39,27 @@ export const listTasks = (status = 'running') =>
     .then(r => (Array.isArray(r) ? r : r.tasks ?? []));
 export const cancelTask = (id: string) => jpost<unknown>(`/tasks/${id}/cancel`, {});
 
+export interface OptIndividual {
+  rank: number;
+  fitness?: number;
+  nTrades?: number;
+  params?: Record<string, unknown>;
+}
+export interface RunningOpt {
+  id: number;
+  name?: string;
+  status: string;
+  progress?: number;
+  fitnessMetric?: string;
+  bestFitness?: number;
+  bestParams?: Record<string, unknown>;
+  nEvaluated?: number;
+  topIndividuals?: OptIndividual[];
+}
+export const listRunningOptimizations = () =>
+  jget<{ optimizations: RunningOpt[] }>(`/strategies/optimizations/running`)
+    .then(r => r.optimizations ?? []);
+
 export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean } = {}) => {
   const p = new URLSearchParams();
   if (q.expert) p.set('expert', q.expert);

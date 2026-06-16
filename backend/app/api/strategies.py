@@ -368,3 +368,56 @@ async def optimize_strategy(
     )
     logger.info(f"Enqueued strategy_optimization {row.id} (task {task_id})")
     return {"optimizationId": row.id, "taskId": task_id, **row.to_dict()}
+
+
+def _top_individuals(row, n: int = 8) -> list:
+    """Top-N distinct (by fitness) evaluated individuals from a (running) optimization's
+    all_results, best first. Each entry carries its fitness + trade count (all_results stores a
+    trade COUNT per trial, not the full trade list — full backtests are the persisted top-N)."""
+    results = row.all_results or []
+    seen, uniq = set(), []
+    for e in sorted(results,
+                    key=lambda x: (x.get("fitness") if x.get("fitness") is not None else -1e18),
+                    reverse=True):
+        f = e.get("fitness")
+        if f is None or f in seen:
+            continue
+        seen.add(f)
+        uniq.append(e)
+        if len(uniq) >= n:
+            break
+    return [
+        {"rank": i + 1, "fitness": e.get("fitness"), "nTrades": e.get("trades"),
+         "params": e.get("params")}
+        for i, e in enumerate(uniq)
+    ]
+
+
+# NOTE: register the two-segment /optimizations/* routes; they never collide with the
+# one-segment GET /{strategy_id} (different path-segment count). /running before /{opt_id}.
+@router.get("/optimizations/running")
+def list_running_optimizations(db: Session = Depends(get_db)):
+    """Running optimizations enriched with best fitness + top individuals (UI Running tab)."""
+    rows = (db.query(StrategyOptimization)
+            .filter(StrategyOptimization.status == "running")
+            .order_by(StrategyOptimization.id.desc()).all())
+    return {"optimizations": [
+        {
+            "id": r.id, "name": r.name, "status": r.status, "progress": r.progress,
+            "fitnessMetric": r.fitness_metric, "bestFitness": r.best_fitness,
+            "bestParams": r.best_params, "nEvaluated": len(r.all_results or []),
+            "topIndividuals": _top_individuals(r, n=8),
+        }
+        for r in rows
+    ]}
+
+
+@router.get("/optimizations/{opt_id}")
+def get_optimization(opt_id: int, db: Session = Depends(get_db)):
+    """Full optimization detail (config, best params, top individuals) by id."""
+    r = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail=f"Optimization {opt_id} not found")
+    d = r.to_dict()
+    d["topIndividuals"] = _top_individuals(r, n=15)
+    return d

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Activity, XCircle } from 'lucide-react';
-import { listTasks, cancelTask } from '../lib/btApi';
-import type { TaskInfo } from '../lib/btApi';
+import { listTasks, cancelTask, listRunningOptimizations } from '../lib/btApi';
+import type { TaskInfo, RunningOpt } from '../lib/btApi';
 
 const BT_TASK_TYPES = new Set(['daily_backtest', 'backtest', 'strategy_optimization']);
 
@@ -33,16 +33,23 @@ function parseProgress(msg?: string): {
  */
 export function RunningJobsPanel() {
   const [jobs, setJobs] = useState<TaskInfo[]>([]);
+  const [opts, setOpts] = useState<RunningOpt[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
-        const all = await listTasks('running');
-        if (alive) setJobs(all.filter(t => !t.task_type || BT_TASK_TYPES.has(t.task_type)));
+        const [all, runningOpts] = await Promise.all([
+          listTasks('running'),
+          listRunningOptimizations().catch(() => [] as RunningOpt[]),
+        ]);
+        if (alive) {
+          setJobs(all.filter(t => !t.task_type || BT_TASK_TYPES.has(t.task_type)));
+          setOpts(runningOpts);
+        }
       } catch {
-        if (alive) setJobs([]);
+        if (alive) { setJobs([]); setOpts([]); }
       } finally {
         if (alive) setLoaded(true);
       }
@@ -51,6 +58,9 @@ export function RunningJobsPanel() {
     const id = setInterval(tick, 2000);
     return () => { alive = false; clearInterval(id); };
   }, []);
+
+  // Match a running optimization to its task by name (task name == optimization name).
+  const optByName = new Map(opts.map(o => [o.name, o] as const));
 
   const onCancel = (taskId: string) => {
     cancelTask(taskId)
@@ -128,9 +138,60 @@ export function RunningJobsPanel() {
                 <span className="truncate">{j.progress_message}</span>
               )}
             </div>
+
+            {/* Live optimization detail: best metric + top individuals */}
+            <OptimizationDetail opt={optByName.get(j.name ?? '')} />
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function fmt(v?: number, n = 2): string {
+  return typeof v === 'number' && isFinite(v) ? v.toFixed(n) : '–';
+}
+
+/** Live best-metric + top-individuals table for a running optimization (matched to its job). */
+function OptimizationDetail({ opt }: { opt?: RunningOpt }) {
+  if (!opt) return null;
+  const top = opt.topIndividuals ?? [];
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs mb-2">
+        <span className="text-gray-500 dark:text-gray-400">
+          Best <span className="font-semibold text-emerald-600 dark:text-emerald-400">{fmt(opt.bestFitness)}</span>
+          {opt.fitnessMetric ? ` (${opt.fitnessMetric})` : ''}
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          Evaluated <span className="font-medium text-gray-700 dark:text-gray-300">{opt.nEvaluated ?? 0}</span>
+        </span>
+      </div>
+      {top.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-400 dark:text-gray-500 text-left">
+                <th className="font-medium py-1 pr-3">#</th>
+                <th className="font-medium py-1 pr-3 text-right">{opt.fitnessMetric ?? 'fitness'}</th>
+                <th className="font-medium py-1 pr-3 text-right">trades</th>
+              </tr>
+            </thead>
+            <tbody>
+              {top.map(ind => (
+                <tr key={ind.rank} className="border-t border-gray-50 dark:border-gray-700/50">
+                  <td className="py-1 pr-3 text-gray-500 dark:text-gray-400">{ind.rank}</td>
+                  <td className="py-1 pr-3 text-right font-medium text-gray-800 dark:text-gray-200">{fmt(ind.fitness)}</td>
+                  <td className="py-1 pr-3 text-right text-gray-600 dark:text-gray-400">{ind.nTrades ?? '–'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-1.5">
+            Full backtests for the top {Math.min(5, top.length)} land in History when the job completes.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
