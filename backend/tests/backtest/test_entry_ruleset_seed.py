@@ -79,6 +79,29 @@ def test_enable_short_adds_symmetric_sell_rule(_trading_db):
     assert set(sell.actions["sell"].keys()) == {"action_type"}
 
 
+def test_or_group_entry_tree_emits_one_rule_per_group(_trading_db):
+    """A top-level OR of AND-groups (e.g. an imported live ruleset with several alternative entry
+    conditions) must seed one BUY rule PER group — preserving OR semantics (ANY group enters).
+    Flattening to a single ANDed rule would AND mutually-exclusive gates (long_term AND short_term)
+    and never fire."""
+    tree = {"id": "root", "type": "OR", "conditions": [
+        {"id": "g1", "type": "AND", "conditions": [
+            {"id": "g1a", "field": "confidence", "op": ">=", "value": 80}]},
+        {"id": "g2", "type": "AND", "conditions": [
+            {"id": "g2a", "field": "confidence", "op": ">=", "value": 75},
+            {"id": "g2b", "field": "expected_profit", "op": ">=", "value": 10}]},
+        {"id": "g3", "type": "AND", "conditions": [
+            {"id": "g3a", "field": "confidence", "op": ">=", "value": 85}]},
+    ]}
+    rid = dr.seed_ruleset_from_tree(tree, name="or-tree", enable_short=False)
+    _, eas = _entry_rules(rid)
+    assert len(eas) == 3, "OR of 3 groups must seed 3 BUY rules"
+    assert all(list(ea.actions.keys()) == ["buy"] for ea in eas)
+    # Each rule keeps the base flags; gate counts differ per group (1, 2, 1 numeric gates).
+    for ea in eas:
+        assert {"bullish", "no_position"} <= set((ea.triggers or {}).keys())
+
+
 def test_seed_ruleset_from_tree_has_no_entry_bracket_param():
     """The dead ``entry_bracket`` kwarg was removed: the engine's ``_apply_initial_brackets``
     is the single bracket path, so the entry seeder no longer accepts a forward-compat bracket.

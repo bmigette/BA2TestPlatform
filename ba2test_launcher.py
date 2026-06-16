@@ -353,6 +353,21 @@ _EXPERT_OPT = {
         },
         "fixed_settings": {},
     },
+    # FactorRanker is a BYPASS expert: it ignores enter/exit rulesets and the classic RM, and
+    # rebalances a portfolio by factor score. So its optimization searches ONLY the factor-model
+    # params (one strategy, no S1/S2/S3 variants, no RM block). Marked bypass=True for the grid.
+    "FactorRanker": {
+        "expert_params": {
+            "factor_weight_momentum": {"optimize": True, "min": 0.0, "max": 2.0, "step": 0.25, "type": "float"},
+            "factor_weight_value": {"optimize": True, "min": 0.0, "max": 2.0, "step": 0.25, "type": "float"},
+            "factor_weight_quality": {"optimize": True, "min": 0.0, "max": 2.0, "step": 0.25, "type": "float"},
+            "factor_weight_pead": {"optimize": True, "min": 0.0, "max": 2.0, "step": 0.25, "type": "float"},
+            "top_n": {"optimize": True, "min": 10, "max": 40, "step": 5, "type": "int"},
+            "max_weight_per_name": {"optimize": True, "min": 0.05, "max": 0.20, "step": 0.05, "type": "float"},
+        },
+        "fixed_settings": {"universe_source": "static", "weighting": "equal"},
+        "bypass": True,
+    },
 }
 
 
@@ -434,6 +449,177 @@ def _build_strategy_row(name: str):
         initial_tp_percent=10.0, initial_tp_optimize=True, initial_tp_min=5.0, initial_tp_max=25.0, initial_tp_step=2.0,
         initial_sl_percent=6.0, initial_sl_optimize=True, initial_sl_min=3.0, initial_sl_max=20.0, initial_sl_step=2.0,
     )
+
+
+# S2 is the canonical "bracket + light exits" strategy above; alias it for the strategy grid.
+_build_strategy_S2 = _build_strategy_row
+
+
+def _build_strategy_S3(name: str):
+    """S3 — momentum / trailing. Light entry gate (confidence + expected-profit, optimized) and a
+    STAGED TRAILING STOP exit (3 profit-tiers that ratchet the stop up, all optimized) + a time
+    exit. NO fixed TP (a very wide, non-optimized cap) so winners run under the trail. Every value
+    is optimizable and every rule is on/off-toggleable — no statics."""
+    from app.models.strategy import Strategy
+    buy_entry_conditions = {
+        "id": "root", "type": "AND", "conditions": [
+            {"id": "gate_confidence", "field": "confidence", "op": ">", "value": 55,
+             "optimize": True, "value_min": 40, "value_max": 80, "value_step": 5, "toggle_optimize": True},
+            {"id": "gate_expected_profit", "field": "expected_profit", "op": ">", "value": 5,
+             "optimize": True, "value_min": 0, "value_max": 15, "value_step": 1, "toggle_optimize": True},
+        ],
+    }
+    # Staged trailing stop: as profit crosses each tier, raise the stop to entry +lock%. Tiers and
+    # locks are optimized; rules toggle on/off. The time exit caps dead-money holds.
+    exit_conditions = [
+        {"id": "trail_t1", "action_type": "adjust_stop_loss", "reference_value": "order_open_price",
+         "action_value": 1.0, "action_value_optimize": True,
+         "action_value_min": -2.0, "action_value_max": 6.0, "action_value_step": 1.0, "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [
+             {"id": "t1", "field": "profit_loss_percent", "op": ">", "value": 6,
+              "optimize": True, "value_min": 3, "value_max": 12, "value_step": 1}]}},
+        {"id": "trail_t2", "action_type": "adjust_stop_loss", "reference_value": "order_open_price",
+         "action_value": 5.0, "action_value_optimize": True,
+         "action_value_min": 2.0, "action_value_max": 12.0, "action_value_step": 2.0, "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [
+             {"id": "t2", "field": "profit_loss_percent", "op": ">", "value": 12,
+              "optimize": True, "value_min": 8, "value_max": 20, "value_step": 2}]}},
+        {"id": "trail_t3", "action_type": "adjust_stop_loss", "reference_value": "order_open_price",
+         "action_value": 12.0, "action_value_optimize": True,
+         "action_value_min": 6.0, "action_value_max": 20.0, "action_value_step": 2.0, "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [
+             {"id": "t3", "field": "profit_loss_percent", "op": ">", "value": 20,
+              "optimize": True, "value_min": 14, "value_max": 30, "value_step": 2}]}},
+        {"id": "exit_time", "action_type": "close", "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [
+             {"id": "xt", "field": "days_opened", "op": ">", "value": 90,
+              "optimize": True, "value_min": 30, "value_max": 150, "value_step": 30}]}},
+    ]
+    return Strategy(
+        name=name,
+        buy_entry_conditions=buy_entry_conditions,
+        exit_conditions=exit_conditions,
+        # No fixed TP (wide, NOT optimized) — let winners run under the trail. A protective initial
+        # stop IS optimized; the trailing tiers ratchet it up from there.
+        initial_tp_percent=200.0, initial_tp_optimize=False,
+        initial_sl_percent=8.0, initial_sl_optimize=True, initial_sl_min=4.0, initial_sl_max=20.0, initial_sl_step=2.0,
+    )
+
+
+def _build_strategy_minimal(name: str):
+    """A placeholder Strategy for BYPASS experts (FactorRanker) that ignore enter/exit rulesets and
+    rebalance by factor score. The optimization still needs a Strategy row; this one carries no
+    conditions and no TP/SL genes — all search lives in the expert's factor model:* params."""
+    from app.models.strategy import Strategy
+    return Strategy(name=name, buy_entry_conditions=None, exit_conditions=[])
+
+
+# --- S1: the expert's LIVE ruleset (exported JSON), normalized to the launcher's canonical shape ---
+def _s1_norm_leaf(leaf: dict) -> dict:
+    """Importer leaf {field, comparison, value, optimize, optimize_enabled, value_min/max/step}
+    -> canonical {field, op, value, optimize, value_min/max/step, toggle_optimize}."""
+    out = {"id": leaf.get("id"), "field": leaf.get("field")}
+    if leaf.get("value") is not None:
+        out["op"] = leaf.get("comparison") or leaf.get("op") or ">"
+        out["value"] = leaf.get("value")
+    for k in ("optimize",):
+        if leaf.get(k) is not None:
+            out[k] = leaf[k]
+    for k in ("value_min", "value_max", "value_step"):
+        if leaf.get(k) is not None:
+            out[k] = leaf[k]
+    if leaf.get("optimize_enabled") is not None:
+        out["toggle_optimize"] = leaf["optimize_enabled"]
+    return out
+
+
+def _s1_norm_tree(node: dict) -> dict:
+    """Recursively normalize an importer condition tree (operator->type, comparison->op)."""
+    if node is None:
+        return None
+    if node.get("conditions") is not None:  # group node
+        return {
+            "id": node.get("id", "grp"),
+            "type": (node.get("operator") or node.get("type") or "AND"),
+            "conditions": [_s1_norm_tree(c) for c in node["conditions"]],
+        }
+    return _s1_norm_leaf(node)  # leaf
+
+
+def _s1_norm_exit_rule(rule: dict) -> dict:
+    """Importer exit rule {action, action_value, reference_value, conditions{operator,...}} ->
+    canonical {action_type, action_value(+optimize range for adjust rules), reference_value,
+    conditions{type,...}, toggle_optimize}."""
+    action = rule.get("action") or rule.get("action_type")
+    out: dict = {
+        "id": rule.get("id"),
+        "action_type": action,
+        "toggle_optimize": bool(rule.get("toggle_optimize", True)),
+    }
+    if rule.get("reference_value") is not None:
+        out["reference_value"] = rule["reference_value"]
+    # Adjust actions carry a % offset -> make it optimizable around the live value (no statics).
+    if action in ("adjust_stop_loss", "adjust_take_profit") and rule.get("action_value") is not None:
+        av = float(rule["action_value"])
+        span = max(2.0, abs(av) * 0.6)
+        out.update({
+            "action_value": av, "action_value_optimize": True,
+            "action_value_min": round(av - span, 2), "action_value_max": round(av + span, 2),
+            "action_value_step": 1.0,
+        })
+    conds = rule.get("conditions")
+    if conds is not None:
+        out["conditions"] = {
+            "type": (conds.get("operator") or conds.get("type") or "AND"),
+            "conditions": [_s1_norm_leaf(c) if c.get("conditions") is None else _s1_norm_tree(c)
+                           for c in conds.get("conditions", [])],
+        }
+    return out
+
+
+def _build_strategy_S1(name: str, expert: str):
+    """S1 — the expert's LIVE dev-account ruleset (exported to docs/live_rulesets/{expert}.json),
+    normalized to the canonical Strategy shape with optimize flags on every threshold + adjust-%.
+    Faithful to the live enter (buy/sell trees, OR groups preserved) + open_positions (exit) rules.
+    An optimizable initial TP/SL bracket (TP<=25) is added like live (the live entry sets one via
+    expert_target_price)."""
+    import json as _json
+    from app.models.strategy import Strategy
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(repo_root, "docs", "live_rulesets", f"{expert}.json")
+    if not os.path.isfile(path):
+        sys.exit(f"optimize: S1 needs {path}; run `python backend/scripts/export_live_rulesets.py` first.")
+    with open(path, encoding="utf-8") as f:
+        data = _json.load(f)
+    buy = _s1_norm_tree(data.get("buy_entry_conditions"))
+    exits = [_s1_norm_exit_rule(r) for r in (data.get("exit_conditions") or [])]
+    # NOTE: the launcher's Strategy has no separate sell tree — shorts are mirrored from the buy
+    # gates via the engine's enable_short flag. The live sell_entry_conditions (if any) is dropped;
+    # these experts are long-only in practice, so S1 runs long.
+    return Strategy(
+        name=name,
+        buy_entry_conditions=buy,
+        exit_conditions=exits,
+        initial_tp_percent=12.0, initial_tp_optimize=True, initial_tp_min=5.0, initial_tp_max=25.0, initial_tp_step=2.0,
+        initial_sl_percent=8.0, initial_sl_optimize=True, initial_sl_min=3.0, initial_sl_max=20.0, initial_sl_step=2.0,
+    )
+
+
+_STRATEGY_BUILDERS = {
+    "S1": _build_strategy_S1,   # (name, expert)
+    "S2": _build_strategy_S2,   # (name)
+    "S3": _build_strategy_S3,   # (name)
+}
+
+
+def _build_strategy(kind: str, name: str, expert: str):
+    """Dispatch to the right strategy builder. S1 is expert-specific (loads its live JSON)."""
+    if kind == "S1":
+        return _build_strategy_S1(name, expert)
+    builder = _STRATEGY_BUILDERS.get(kind)
+    if builder is None:
+        sys.exit(f"optimize: unknown strategy {kind!r}; have {sorted(_STRATEGY_BUILDERS)}")
+    return builder(name)
 
 
 def _cmd_optimize(args) -> int:
@@ -574,12 +760,21 @@ def _cmd_optimize_batch(args) -> int:
     from app.services.task_queue import get_task_queue
 
     experts = [e.strip() for e in args.experts.split(",") if e.strip()]
+    strategies = [s.strip() for s in args.strategies.split(",") if s.strip()]
     universe = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
     if not universe:
         sys.exit("optimize-batch: --universe must list at least one symbol")
     for e in experts:
         if e not in _EXPERT_OPT:
             sys.exit(f"optimize-batch: expert {e!r} not configured; have {sorted(_EXPERT_OPT)}")
+    # Build the (expert, strategy) job grid. Bypass experts (FactorRanker) have no enter/exit
+    # rulesets, so they run ONCE (their factor-model params), not per strategy variant.
+    jobs = []  # (expert, strategy_kind)
+    for e in experts:
+        if _EXPERT_OPT[e].get("bypass"):
+            jobs.append((e, "FACTOR"))
+        else:
+            jobs.extend((e, k) for k in strategies)
     run_sched = None
     if args.run_schedule == "weekly":
         run_sched = {"days": {d: (d == args.run_schedule_day) for d in
@@ -587,15 +782,17 @@ def _cmd_optimize_batch(args) -> int:
                                "saturday", "sunday")}}
     init_db()
     tq = get_task_queue()
-    print(f"optimize-batch: {len(experts)} job(s) {experts} x {len(universe)} syms, "
+    print(f"optimize-batch: {len(jobs)} job(s) {jobs} x {len(universe)} syms, "
           f"{args.fitness}, pop={args.population} gen={args.generations} parallel={args.parallel}")
 
-    for n, expert in enumerate(experts, 1):
+    for n, (expert, strat_kind) in enumerate(jobs, 1):
         spec = _EXPERT_OPT[expert]
-        name = args.name_prefix and f"{args.name_prefix}-{expert}" or f"phase1-{expert}-{args.fitness}"
+        bypass = bool(spec.get("bypass"))
+        prefix = args.name_prefix or "phase1"
+        name = f"{prefix}-{expert}-{strat_kind}-{args.fitness}"
         db = SessionLocal()
         try:
-            strat = _build_strategy_row(name)
+            strat = _build_strategy_minimal(name) if bypass else _build_strategy(strat_kind, name, expert)
             db.add(strat); db.commit(); db.refresh(strat)
             backtest_block = {
                 "engine": "daily",
@@ -624,7 +821,10 @@ def _cmd_optimize_batch(args) -> int:
                 "earlyStoppingGenerations": int(args.early_stop),
                 "elitismPercent": 0.1, "seed": int(args.seed),
                 "parallelIndividuals": int(args.parallel),
-                "expert_params": {**spec["expert_params"], **_RM_OPT},
+                # Bypass experts (FactorRanker) carry no classic-RM block (they size their own
+                # portfolio); ruleset experts get the expert params + the RM sizing/stop params.
+                "expert_params": (dict(spec["expert_params"]) if bypass
+                                  else {**spec["expert_params"], **_RM_OPT}),
                 "backtest": backtest_block,
             }
             opt = StrategyOptimization(
@@ -639,9 +839,9 @@ def _cmd_optimize_batch(args) -> int:
         task_id = tq.queue_task(
             task_type="strategy_optimization", name=name,
             payload={"optimization_id": opt_id},
-            description=f"{expert} x {len(universe)} syms, {args.fitness}, pop={args.population}",
+            description=f"{expert} {strat_kind} x {len(universe)} syms, {args.fitness}, pop={args.population}",
         )
-        print(f"[{n}/{len(experts)}] SUBMITTED {expert} opt#{opt_id} (task {task_id}); polling every {args.poll}s...")
+        print(f"[{n}/{len(jobs)}] SUBMITTED {expert}/{strat_kind} opt#{opt_id} (task {task_id}); polling every {args.poll}s...")
 
         last_msg = None
         st = "queued"
@@ -662,14 +862,14 @@ def _cmd_optimize_batch(args) -> int:
                 break
 
         if st != "completed":
-            print(f"[{n}/{len(experts)}] {expert} opt#{opt_id} ended status={st}; moving on.")
+            print(f"[{n}/{len(jobs)}] {expert} opt#{opt_id} ended status={st}; moving on.")
             continue
 
         try:
             nsaved = _persist_top_backtests(opt_id, expert, n=int(args.save_top))
-            print(f"[{n}/{len(experts)}] {expert} opt#{opt_id} COMPLETE; persisted top {nsaved} backtests.")
+            print(f"[{n}/{len(jobs)}] {expert} opt#{opt_id} COMPLETE; persisted top {nsaved} backtests.")
         except Exception as exc:  # noqa: BLE001
-            print(f"[{n}/{len(experts)}] persist top-N failed for opt#{opt_id}: {exc}")
+            print(f"[{n}/{len(jobs)}] persist top-N failed for opt#{opt_id}: {exc}")
         try:
             _cmd_report(SimpleNamespace(out=None))
             print(f"    report regenerated.")
@@ -968,6 +1168,9 @@ def main(argv: "list | None" = None) -> int:
                              "queue, poll to completion, persist top-N + refresh report, then next.")
     ob.add_argument("--experts", default="FMPRating,FMPEarningsDrift,FMPInsiderClusterBuy",
                     help="Comma-separated expert classes (default: the 3 in-scope equity experts).")
+    ob.add_argument("--strategies", default="S1,S2,S3",
+                    help="Comma-separated strategy variants per ruleset expert (S1 live-import / "
+                         "S2 bracket / S3 trailing). Bypass experts (FactorRanker) ignore this.")
     ob.add_argument("--universe", required=True, help="Comma-separated symbols (shared by all jobs).")
     ob.add_argument("--start", required=True, help="ISO start date.")
     ob.add_argument("--end", required=True, help="ISO end date.")

@@ -146,6 +146,23 @@ def _gate_triggers(tree) -> dict:
     return {key.replace("cond_", "gate_", 1): cfg for key, cfg in shared.items()}
 
 
+def _gate_trigger_groups(tree) -> list:
+    """One ANDed gate-trigger set per top-level OR group, preserving OR semantics (ANY group
+    enters). The flattening ``triggers_from_condition_tree`` ANDs all leaves, which is correct
+    WITHIN a group but wrong across an OR of groups (e.g. an imported live ruleset with several
+    alternative entry conditions — long_term-group OR short_term-group). So when the tree is a
+    top-level OR of groups we emit a separate gate set per group (the caller makes one BUY rule
+    each); otherwise a single gate set. A leaf-only or AND tree yields one set unchanged."""
+    if isinstance(tree, dict):
+        op = str(tree.get("type") or tree.get("operator") or "AND").upper()
+        children = tree.get("conditions") or []
+        if op == "OR" and children and all(
+            isinstance(c, dict) and c.get("conditions") is not None for c in children
+        ):
+            return [_gate_triggers(c) for c in children]
+    return [_gate_triggers(tree)]
+
+
 def _entry_actions(side: str) -> dict:
     """The BUY (long) or SELL (short) open action for an entry rule.
 
@@ -172,12 +189,6 @@ def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree",
     action (see ``_entry_actions``) — so the entry seeder carries no bracket plumbing. Unknown
     fields are skipped; falls back to bullish+flat when the tree adds nothing.
     """
-    buy_triggers = {
-        "bullish": {"event_type": ExpertEventType.F_BULLISH.value},
-        "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
-    }
-    buy_triggers.update(_gate_triggers(buy_tree))
-
     ruleset = Ruleset(
         name=name,
         description="Backtest enter ruleset built from a Strategy condition tree.",
@@ -185,26 +196,35 @@ def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree",
         subtype=AnalysisUseCase.ENTER_MARKET,
     )
     ruleset_id = add_instance(ruleset)
-    eas = [
-        _make_event_action(
-            name=f"{name}-enter-long",
+
+    # One BUY rule per top-level OR group (faithful OR: ANY group enters); a single rule for an
+    # AND / leaf tree. has_no_position keeps it to one entry even if several groups match.
+    groups = _gate_trigger_groups(buy_tree)
+    multi = len(groups) > 1
+    eas = []
+    for gi, gate in enumerate(groups):
+        suffix = f"-{gi}" if multi else ""
+        buy_triggers = {
+            "bullish": {"event_type": ExpertEventType.F_BULLISH.value},
+            "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
+            **gate,
+        }
+        eas.append(_make_event_action(
+            name=f"{name}-enter-long{suffix}",
             triggers=buy_triggers,
             actions=_entry_actions("buy"),
-        )
-    ]
-    if enable_short:
-        sell_triggers = {
-            "bearish": {"event_type": ExpertEventType.F_BEARISH.value},
-            "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
-        }
-        sell_triggers.update(_gate_triggers(buy_tree))
-        eas.append(
-            _make_event_action(
-                name=f"{name}-enter-short",
+        ))
+        if enable_short:
+            sell_triggers = {
+                "bearish": {"event_type": ExpertEventType.F_BEARISH.value},
+                "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
+                **gate,
+            }
+            eas.append(_make_event_action(
+                name=f"{name}-enter-short{suffix}",
                 triggers=sell_triggers,
                 actions=_entry_actions("sell"),
-            )
-        )
+            ))
     _link(ruleset_id, eas)
     return ruleset_id
 
