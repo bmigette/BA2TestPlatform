@@ -684,6 +684,117 @@ export interface ExitConditionSet {
   optionDteStep?: number;
 }
 
+// Actions that legitimately fire every bar with no conditions. An empty
+// condition group on any OTHER action is almost always a mistake (the rule
+// fires on every bar), so we warn. `close` is the canonical unconditional
+// action (e.g. a stand-alone time/trailing exit), but we keep this list small
+// and conservative — it's only used to SUPPRESS the always-fires warning.
+const UNCONDITIONAL_ACTIONS = new Set<string>(['close']);
+
+// Collect every leaf (ConditionNode) in a condition tree, descending groups.
+function collectLeaves(node: ConditionTree): ConditionNode[] {
+  if (isConditionGroup(node)) {
+    return node.conditions.flatMap(collectLeaves);
+  }
+  return [node];
+}
+
+// Pure, dependency-free validation of a single exit rule against the current
+// vocabulary. Returns a list of human-readable WARNING strings (never throws,
+// never blocks). Loaded/imported rules may carry fields/actions that are no
+// longer in the vocabulary, hence the unknown-field / unknown-action checks.
+// Exported for unit testing — see ConditionBuilder.validation.test.ts.
+export function validateExitRule(
+  rule: ExitConditionSet,
+  vocab: Vocabulary | undefined,
+): string[] {
+  const warnings: string[] = [];
+
+  const actionValues = new Set((vocab?.actions ?? []).map((a) => a.value));
+  const fieldValues = new Set([
+    ...(vocab?.flags ?? []).map((f) => f.value),
+    ...(vocab?.numerics ?? []).map((n) => n.value),
+  ]);
+
+  // Unknown ACTION (vocabulary known but action absent). Skip when the
+  // vocabulary has no actions at all (offline / not yet loaded) to avoid a
+  // false positive on every rule.
+  if (actionValues.size > 0 && !actionValues.has(rule.action)) {
+    warnings.push(`Unknown action: ${rule.action}`);
+  }
+
+  // Unknown FIELD on any leaf. Only check when the vocabulary actually carries
+  // fields (otherwise every leaf would look unknown while offline).
+  if (fieldValues.size > 0) {
+    const seenUnknown = new Set<string>();
+    for (const leaf of collectLeaves(rule.conditions)) {
+      const f = leaf.field;
+      if (f && !fieldValues.has(f) && !seenUnknown.has(f)) {
+        seenUnknown.add(f);
+        warnings.push(`Unknown field: ${f}`);
+      }
+    }
+  }
+
+  // Always-fires: no condition leaves AND the action is not deliberately
+  // unconditional. A leaf with an empty field counts as "no real condition".
+  const hasRealLeaf = collectLeaves(rule.conditions).some((l) => !!l.field);
+  if (!hasRealLeaf && !UNCONDITIONAL_ACTIONS.has(rule.action)) {
+    warnings.push('No conditions — fires every bar');
+  }
+
+  // Invalid optimize ranges. A range is bad when min >= max or step <= 0.
+  const badRange = (min?: number, max?: number, step?: number): boolean => {
+    const lo = min ?? 0;
+    const hi = max ?? 0;
+    const st = step ?? 0;
+    return lo >= hi || st <= 0;
+  };
+  let rangeWarned = false;
+  const flagBadRange = () => {
+    if (!rangeWarned) {
+      warnings.push('Invalid optimize range (min/max/step)');
+      rangeWarned = true;
+    }
+  };
+
+  // Per-leaf numeric value optimization ranges.
+  for (const leaf of collectLeaves(rule.conditions)) {
+    if (leaf.optimizeEnabled && badRange(leaf.valueMin, leaf.valueMax, leaf.valueStep)) {
+      flagBadRange();
+    }
+  }
+  // Action value sweep (adjust_take_profit / adjust_stop_loss).
+  if (rule.actionValueOptimize && badRange(rule.actionValueMin, rule.actionValueMax, rule.actionValueStep)) {
+    flagBadRange();
+  }
+  // Option strike-param sweep.
+  if (rule.optionStrikeParamOptimize && badRange(rule.optionStrikeParamMin, rule.optionStrikeParamMax, rule.optionStrikeParamStep)) {
+    flagBadRange();
+  }
+  // Option DTE sweep.
+  if (rule.optionDteOptimize && badRange(rule.optionDteMinRange, rule.optionDteMaxRange, rule.optionDteStep)) {
+    flagBadRange();
+  }
+
+  // Adjust-without-value: an adjust_take_profit / adjust_stop_loss rule that
+  // carries neither a fixed actionValue nor an optimize sweep has nothing to
+  // adjust by.
+  const isAdjust = rule.action === 'adjust_take_profit' || rule.action === 'adjust_stop_loss';
+  if (isAdjust && rule.actionValue == null && !rule.actionValueOptimize) {
+    warnings.push('Adjust action has no value');
+  }
+
+  return warnings;
+}
+
+// Warnings that should be surfaced prominently as a red (reject) chip rather
+// than amber. These are the "reject" class from the spec: an unknown
+// field/action means the rule references vocabulary that no longer exists.
+function isRejectWarning(w: string): boolean {
+  return w.startsWith('Unknown field:') || w.startsWith('Unknown action:');
+}
+
 interface ExitConditionsBuilderProps {
   value: ExitConditionSet[];
   onChange: (value: ExitConditionSet[]) => void;
@@ -818,6 +929,30 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Validation warnings (non-blocking). Unknown field/action surface as
+              red "reject" chips; everything else as amber warning chips. The
+              user can still run the backtest — these never hard-block. */}
+          {(() => {
+            const warnings = validateExitRule(exitCond, effectiveVocab);
+            if (warnings.length === 0) return null;
+            return (
+              <div className="flex flex-wrap gap-1 mb-3">
+                {warnings.map((w) => (
+                  <span
+                    key={w}
+                    className={
+                      isRejectWarning(w)
+                        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded px-1.5 py-0.5 text-xs'
+                        : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded px-1.5 py-0.5 text-xs'
+                    }
+                  >
+                    {w}
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
 
           {/* Conditions */}
           <div className="mb-3">
