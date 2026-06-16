@@ -73,7 +73,7 @@ FMPRating, FMPEarningsDrift, FMPInsiderClusterBuy, FactorRanker.
 |---|---|
 | Plan validated (Calmar, 2 phases, no-static rule) | ✅ 2026-06-16 |
 | Prereq 1: live-ruleset importer | ☐ |
-| Prereq 2: entry-rule Adjust actions | ☐ |
+| Prereq 2: entry-rule Adjust actions | 🟡 entry BUY/SELL(short) rules + bracket-at-open done (8738c01); expert_target_price-ref fidelity for S1 pending |
 | Prereq 3: screener caches (large/mid × dip) | ☐ |
 | S2 / S3 strategy definitions (all-optimized) | ☐ |
 | Phase 1 — FMPRating × {S1,S2,S3} × U1 | ☐ |
