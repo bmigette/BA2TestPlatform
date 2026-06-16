@@ -429,7 +429,9 @@ def _build_strategy_row(name: str):
         name=name,
         buy_entry_conditions=buy_entry_conditions,
         exit_conditions=exit_conditions,
-        initial_tp_percent=10.0, initial_tp_optimize=True, initial_tp_min=5.0, initial_tp_max=40.0, initial_tp_step=3.0,
+        # TP capped at 25%: wider TPs (33-40%) only pay off in a bull market and drag the win
+        # rate down to ~30%. Cap forces more frequent profit-taking (plan: TP 5->25 step 2).
+        initial_tp_percent=10.0, initial_tp_optimize=True, initial_tp_min=5.0, initial_tp_max=25.0, initial_tp_step=2.0,
         initial_sl_percent=6.0, initial_sl_optimize=True, initial_sl_min=3.0, initial_sl_max=20.0, initial_sl_step=2.0,
     )
 
