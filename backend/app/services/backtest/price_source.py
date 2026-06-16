@@ -23,17 +23,35 @@ Verified against the installed ba2_providers OHLCV provider:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 
+@lru_cache(maxsize=16)
 def _is_intraday(interval: str) -> bool:
     """True for sub-daily bar intervals (1m/5m/15m/30m/1h/...). Daily and coarser
-    (1d/1wk/1mo) are False — those keep calendar-date bar keys."""
+    (1d/1wk/1mo) are False — those keep calendar-date bar keys. Cached: the interval is
+    constant for a run but this was called ~200k×/backtest (per price lookup)."""
     iv = (interval or "1d").lower()
     return iv.endswith("m") or iv.endswith("h") or iv.endswith("min")
 
 
+@lru_cache(maxsize=4096)
+def _to_datetime_cached(d: Any) -> datetime:
+    return _to_datetime_impl(d)
+
+
 def _to_datetime(d: Any) -> datetime:
+    """Parse a datetime/date/Timestamp/ISO-string to a tz-naive UTC ``datetime``. Hot path
+    (~200k calls/backtest, mostly the SAME clock value re-converted once per symbol per bar) —
+    route hashable inputs through an LRU cache; fall back to the impl for unhashable ones."""
+    try:
+        return _to_datetime_cached(d)
+    except TypeError:
+        return _to_datetime_impl(d)
+
+
+def _to_datetime_impl(d: Any) -> datetime:
     """Parse a datetime/date/Timestamp/ISO-string to a tz-naive UTC ``datetime``."""
     if isinstance(d, datetime):
         dt = d
