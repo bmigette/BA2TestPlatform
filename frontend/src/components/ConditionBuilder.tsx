@@ -649,7 +649,10 @@ export interface ExitConditionSet {
   id: string;
   name: string;
   conditions: ConditionGroup;
-  action: 'close' | 'adjust_tp' | 'adjust_sl'
+  // Action values mirror the backend ExpertActionType enum (ba2_common). The
+  // exit-rule action picker is vocabulary-driven, so this union is the canonical
+  // set the API serializes/round-trips (NOT the legacy adjust_tp/adjust_sl form).
+  action: 'close' | 'sell' | 'buy' | 'adjust_take_profit' | 'adjust_stop_loss'
         | 'buy_call' | 'buy_put' | 'sell_covered_call' | 'sell_cash_secured_put'
         | 'buy_protective_put' | 'open_bull_call_spread' | 'open_bear_put_spread'
         | 'open_bear_call_spread' | 'open_straddle' | 'open_strangle' | 'close_option';
@@ -658,6 +661,9 @@ export interface ExitConditionSet {
   actionValueMin?: number;
   actionValueMax?: number;
   actionValueStep?: number;
+  // reference_value for adjust_take_profit/adjust_stop_loss (needs_reference
+  // actions): order_open_price | current_price | expert_target_price.
+  referenceValue?: string;
   // option-action fields (undefined for equity actions)
   optionStrategy?: string;
   optionStrikeMethod?: 'delta' | 'percent_otm' | 'consensus_target';
@@ -691,6 +697,24 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
   showOptimization = true,
   vocabulary,
 }) => {
+  // Fallback fetch: if the caller did not thread a vocabulary prop, load it once
+  // so the action picker (actions/reference_values) is still vocabulary-driven.
+  // Offline failures silently degrade to an empty actions list.
+  const [fetchedVocab, setFetchedVocab] = React.useState<Vocabulary | undefined>(undefined);
+  React.useEffect(() => {
+    if (vocabulary) return;
+    let cancelled = false;
+    getRulesetVocabulary()
+      .then((v) => { if (!cancelled) setFetchedVocab(v); })
+      .catch(() => { /* offline: no actions list */ });
+    return () => { cancelled = true; };
+  }, [vocabulary]);
+  const effectiveVocab = vocabulary ?? fetchedVocab;
+  const actions = effectiveVocab?.actions ?? [];
+  const positionActions = actions.filter((a) => !a.is_option);
+  const optionActions = actions.filter((a) => a.is_option);
+  const referenceValues = effectiveVocab?.reference_values ?? {};
+
   const addExitCondition = () => {
     const newExit: ExitConditionSet = {
       id: generateId(),
@@ -748,7 +772,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
               }
               availableFields={availableFields}
               showOptimization={showOptimization}
-              vocabulary={vocabulary}
+              vocabulary={effectiveVocab}
             />
           </div>
 
@@ -757,20 +781,60 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
             <label className="text-xs text-gray-500 dark:text-gray-400">Action:</label>
             <select
               value={exitCond.action}
-              onChange={(e) =>
-                updateExitCondition(index, {
-                  action: e.target.value as 'close' | 'adjust_tp' | 'adjust_sl',
-                })
-              }
+              onChange={(e) => {
+                const next = e.target.value;
+                const meta = actions.find((a) => a.value === next);
+                const updates: Partial<ExitConditionSet> = {
+                  action: next as ExitConditionSet['action'],
+                };
+                // Picking an option action sets optionStrategy = action (the
+                // backend reads the concrete option strategy from this field).
+                if (meta?.is_option) {
+                  updates.optionStrategy = next;
+                  // Seed sensible defaults for the option selection params so a
+                  // freshly-chosen option action is immediately serializable.
+                  if (!exitCond.optionStrikeMethod) updates.optionStrikeMethod = 'delta';
+                } else {
+                  // Leaving option-land: drop the strategy marker.
+                  updates.optionStrategy = undefined;
+                }
+                updateExitCondition(index, updates);
+              }}
               className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             >
-              <option value="close">Close Position</option>
-              <option value="adjust_tp">Adjust Take Profit</option>
-              <option value="adjust_sl">Adjust Stop Loss</option>
+              {positionActions.length > 0 && (
+                <optgroup label="Position">
+                  {positionActions.map((a) => (
+                    <option key={a.value} value={a.value}>{a.label}</option>
+                  ))}
+                </optgroup>
+              )}
+              {optionActions.length > 0 && (
+                <optgroup label="Options">
+                  {optionActions.map((a) => (
+                    <option key={a.value} value={a.value}>{a.label}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
 
-            {(exitCond.action === 'adjust_tp' || exitCond.action === 'adjust_sl') && (
+            {/* needs_reference actions (adjust_take_profit / adjust_stop_loss):
+                reference_value select + value% + optimize toggle. */}
+            {actions.find((a) => a.value === exitCond.action)?.needs_reference && (
               <>
+                <select
+                  value={exitCond.referenceValue ?? ''}
+                  onChange={(e) =>
+                    updateExitCondition(index, { referenceValue: e.target.value })
+                  }
+                  className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  title="Reference price the adjustment is measured from"
+                >
+                  <option value="">Reference...</option>
+                  {Object.entries(referenceValues).map(([val, label]) => (
+                    <option key={val} value={val}>{label}</option>
+                  ))}
+                </select>
                 <input
                   type="number"
                   step="0.1"
@@ -798,12 +862,124 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                 )}
               </>
             )}
+
+            {/* Option actions: strike method + strike param + DTE + sizing. */}
+            {actions.find((a) => a.value === exitCond.action)?.is_option && (
+              <>
+                <select
+                  value={exitCond.optionStrikeMethod ?? 'delta'}
+                  onChange={(e) =>
+                    updateExitCondition(index, {
+                      optionStrikeMethod: e.target.value as ExitConditionSet['optionStrikeMethod'],
+                    })
+                  }
+                  className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  title="Strike selection method"
+                >
+                  <option value="delta">Delta</option>
+                  <option value="percent_otm">% OTM</option>
+                  <option value="consensus_target">Consensus Target</option>
+                </select>
+
+                {/* Strike param: Δ for delta, % OTM for percent_otm, hidden for
+                    consensus_target (no scalar param). */}
+                {exitCond.optionStrikeMethod !== 'consensus_target' && (
+                  <>
+                    <span className="text-xs text-gray-500">
+                      {exitCond.optionStrikeMethod === 'percent_otm' ? '% OTM' : 'Δ'}
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={exitCond.optionStrikeParam ?? 0}
+                      onChange={(e) =>
+                        updateExitCondition(index, {
+                          optionStrikeParam: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    />
+                    {showOptimization && (
+                      <label className="flex items-center gap-1 text-xs text-gray-500">
+                        <input
+                          type="checkbox"
+                          checked={exitCond.optionStrikeParamOptimize ?? false}
+                          onChange={(e) =>
+                            updateExitCondition(index, {
+                              optionStrikeParamOptimize: e.target.checked,
+                            })
+                          }
+                          className="rounded"
+                        />
+                        Optimize Δ
+                      </label>
+                    )}
+                  </>
+                )}
+
+                {/* DTE min/max */}
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">DTE:</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={exitCond.optionDteMin ?? 0}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionDteMin: parseInt(e.target.value) || 0 })
+                    }
+                    className="w-14 px-1 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    title="Min days to expiry"
+                  />
+                  <span className="text-xs text-gray-500">-</span>
+                  <input
+                    type="number"
+                    step="1"
+                    value={exitCond.optionDteMax ?? 0}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionDteMax: parseInt(e.target.value) || 0 })
+                    }
+                    className="w-14 px-1 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    title="Max days to expiry"
+                  />
+                </div>
+
+                {showOptimization && (
+                  <label className="flex items-center gap-1 text-xs text-gray-500" title="Optimize the DTE window">
+                    <input
+                      type="checkbox"
+                      checked={exitCond.optionDteOptimize ?? false}
+                      onChange={(e) =>
+                        updateExitCondition(index, { optionDteOptimize: e.target.checked })
+                      }
+                      className="rounded"
+                    />
+                    Optimize DTE
+                  </label>
+                )}
+
+                {/* Sizing % */}
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Size:</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={exitCond.optionSizing ?? 0}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionSizing: parseFloat(e.target.value) })
+                    }
+                    className="w-16 px-1 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    title="Position sizing %"
+                  />
+                  <span className="text-xs text-gray-500">%</span>
+                </div>
+              </>
+            )}
           </div>
 
-          {/* Action Optimization Range */}
+          {/* Action Optimization Range (adjust actions: action_value sweep) */}
           {showOptimization &&
             exitCond.actionValueOptimize &&
-            (exitCond.action === 'adjust_tp' || exitCond.action === 'adjust_sl') && (
+            actions.find((a) => a.value === exitCond.action)?.needs_reference && (
               <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
                 <span className="text-xs text-gray-500 dark:text-gray-400">Range:</span>
                 <div className="flex items-center gap-1">
@@ -838,6 +1014,99 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                     value={exitCond.actionValueStep ?? 0.5}
                     onChange={(e) =>
                       updateExitCondition(index, { actionValueStep: parseFloat(e.target.value) })
+                    }
+                    className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+              </div>
+            )}
+
+          {/* Option strike-param optimization range */}
+          {showOptimization &&
+            exitCond.optionStrikeParamOptimize &&
+            actions.find((a) => a.value === exitCond.action)?.is_option &&
+            exitCond.optionStrikeMethod !== 'consensus_target' && (
+              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  {exitCond.optionStrikeMethod === 'percent_otm' ? '% OTM' : 'Δ'} Range:
+                </span>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Min:</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={exitCond.optionStrikeParamMin ?? 0}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionStrikeParamMin: parseFloat(e.target.value) })
+                    }
+                    className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Max:</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={exitCond.optionStrikeParamMax ?? 1}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionStrikeParamMax: parseFloat(e.target.value) })
+                    }
+                    className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Step:</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={exitCond.optionStrikeParamStep ?? 0.1}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionStrikeParamStep: parseFloat(e.target.value) })
+                    }
+                    className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+              </div>
+            )}
+
+          {/* Option DTE optimization range */}
+          {showOptimization &&
+            exitCond.optionDteOptimize &&
+            actions.find((a) => a.value === exitCond.action)?.is_option && (
+              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                <span className="text-xs text-gray-500 dark:text-gray-400">DTE Range:</span>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Min:</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={exitCond.optionDteMinRange ?? 0}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionDteMinRange: parseInt(e.target.value) || 0 })
+                    }
+                    className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Max:</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={exitCond.optionDteMaxRange ?? 0}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionDteMaxRange: parseInt(e.target.value) || 0 })
+                    }
+                    className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-gray-500">Step:</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={exitCond.optionDteStep ?? 1}
+                    onChange={(e) =>
+                      updateExitCondition(index, { optionDteStep: parseInt(e.target.value) || 1 })
                     }
                     className="w-16 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   />
