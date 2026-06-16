@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, GitBranch, Settings2 } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, GitBranch, Settings2, ArrowUp, ArrowDown } from 'lucide-react';
 import { getRulesetVocabulary } from '../lib/btApi';
 import type { Vocabulary } from '../lib/btApi';
 
@@ -661,6 +661,9 @@ export interface ExitConditionSet {
   actionValueMin?: number;
   actionValueMax?: number;
   actionValueStep?: number;
+  // When true the optimizer may drop the whole rule (exit:<id>:enabled gene).
+  // Maps to the backend ExitCondition.toggle_optimize field (B5 serializes it).
+  toggleOptimize?: boolean;
   // reference_value for adjust_take_profit/adjust_stop_loss (needs_reference
   // actions): order_open_price | current_price | expert_target_price.
   referenceValue?: string;
@@ -735,6 +738,17 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
     onChange(value.filter((_, i) => i !== index));
   };
 
+  // Reorder a rule by swapping it with its neighbour. Rules are evaluated
+  // top->down (first match wins) so order is semantically meaningful. Swapping
+  // whole array entries preserves each rule's full contents + stable id.
+  const moveExitCondition = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= value.length) return;
+    const newValue = [...value];
+    [newValue[index], newValue[target]] = [newValue[target], newValue[index]];
+    onChange(newValue);
+  };
+
   return (
     <div className="space-y-4">
       {value.map((exitCond, index) => (
@@ -742,22 +756,67 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
           key={exitCond.id}
           className="border border-gray-200 dark:border-gray-700 rounded-lg p-3"
         >
-          <div className="flex items-center justify-between mb-3">
-            <input
-              type="text"
-              value={exitCond.name}
-              onChange={(e) => updateExitCondition(index, { name: e.target.value })}
-              className="px-2 py-1 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-              placeholder="Exit rule name"
-            />
-            <button
-              type="button"
-              onClick={() => removeExitCondition(index)}
-              className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-red-500"
-              title="Remove exit rule"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2 min-w-0">
+              {/* Evaluation order indicator (top->down, first match wins). */}
+              <span className="text-xs font-medium text-gray-400 dark:text-gray-500 w-5 text-right flex-shrink-0">
+                {index + 1}.
+              </span>
+              <input
+                type="text"
+                value={exitCond.name}
+                onChange={(e) => updateExitCondition(index, { name: e.target.value })}
+                className="px-2 py-1 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                placeholder="Exit rule name"
+              />
+              {/* Per-rule toggle_optimize: optimizer may drop the whole rule
+                  (exit:<id>:enabled gene). */}
+              {showOptimization && (
+                <label
+                  className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 flex-shrink-0"
+                  title="Let the optimizer enable/disable this entire rule"
+                >
+                  <input
+                    type="checkbox"
+                    checked={exitCond.toggleOptimize ?? false}
+                    onChange={(e) =>
+                      updateExitCondition(index, { toggleOptimize: e.target.checked })
+                    }
+                    className="rounded"
+                  />
+                  Optimize on/off
+                </label>
+              )}
+            </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Reorder: rules evaluate top->down, first match wins. */}
+              <button
+                type="button"
+                onClick={() => moveExitCondition(index, -1)}
+                disabled={index === 0}
+                className="p-1 rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                title="Move rule up (evaluated earlier)"
+              >
+                <ArrowUp className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveExitCondition(index, 1)}
+                disabled={index === value.length - 1}
+                className="p-1 rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                title="Move rule down (evaluated later)"
+              >
+                <ArrowDown className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => removeExitCondition(index)}
+                className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-red-500"
+                title="Remove exit rule"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Conditions */}
