@@ -72,9 +72,10 @@ FMPRating, FMPEarningsDrift, FMPInsiderClusterBuy, FactorRanker.
 | Item | Status |
 |---|---|
 | Plan validated (Calmar, 2 phases, no-static rule) | ✅ 2026-06-16 |
-| Prereq 1: live-ruleset importer | ☐ |
-| Prereq 2: entry-rule Adjust actions | 🟡 entry BUY/SELL(short) rules + bracket-at-open done (8738c01); expert_target_price-ref fidelity for S1 pending |
-| Prereq 3: screener caches (large/mid × dip) | ☐ |
+| Rule engine unified (trade+test share ba2_common.rule_builders; API action/comparison shape fixed) | ✅ 2026-06-16 (RE1/RE2/RE5) |
+| Prereq 1: live-ruleset importer | ✅ enter_market→buy_entry_conditions + open_positions→exit_conditions importers, optimizable (±50% ranges), graceful live-DB read (GET /api/experts/{id}/enter-market-ruleset + /open-positions-ruleset) |
+| Prereq 2: entry-rule Adjust actions | ✅ entry BUY/SELL(short) + bracket-at-open (8738c01) + expert_target_price-referenced TP bracket with expected_profit_percent fallback for all experts (RE3/RE4; tp gene = offset-from-target) |
+| Prereq 3: screener caches (large/mid × dip) | ☐ (operational: run ba2-test fetch-screener for U2–U5) |
 | S2 / S3 strategy definitions (all-optimized) | ☐ |
 | Phase 1 — FMPRating × {S1,S2,S3} × U1 | ☐ |
 | Phase 1 — FMPEarningsDrift × {S1,S2,S3} × U1 | ☐ |
