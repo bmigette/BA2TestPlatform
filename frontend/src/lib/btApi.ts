@@ -57,3 +57,19 @@ export const exportBacktest = (id: number) =>
   jpost<{ path: string }>(`/backtests/${id}/export?format=csv`, {});
 export const deleteBacktest = (id: number) =>
   jdelete<{ message: string }>(`/backtests/${id}`);
+
+// Exit-ruleset UI vocabulary, presets and live-import (confirmed against backend/app/api/ruleset.py):
+//   GET /ruleset/vocabulary                          -> Vocabulary
+//   GET /ruleset/exit-presets                        -> {presets}
+//   GET /experts/{id}/open-positions-ruleset         -> {rules} (or 503/404)
+export interface VocabItem { value: string; label: string; }
+export interface ActionVocab { value: string; label: string; is_option: boolean; needs_reference: boolean; }
+export interface Vocabulary {
+  flags: VocabItem[]; numerics: VocabItem[]; operators: string[];
+  actions: ActionVocab[]; reference_values: Record<string, string>;
+}
+export interface ExitPreset { key: string; label: string; rule: any; }
+export const getRulesetVocabulary = () => jget<Vocabulary>('/ruleset/vocabulary');
+export const getExitPresets = () => jget<{ presets: ExitPreset[] }>('/ruleset/exit-presets').then(r => r.presets);
+export const importLiveRuleset = (expertId: number) =>
+  jget<{ rules: any[] }>(`/experts/${expertId}/open-positions-ruleset`).then(r => r.rules);
