@@ -60,12 +60,35 @@ def _seed_live_db(path):
     )
     conn.execute(
         "INSERT INTO expertinstance (id, account_id, expert, enabled, virtual_equity_pct, "
-        "open_positions_ruleset_id) VALUES (?,?,?,?,?,?)",
-        (7, 1, "FMPEarningsDrift", 1, 100.0, 42),
+        "enter_market_ruleset_id, open_positions_ruleset_id) VALUES (?,?,?,?,?,?,?)",
+        (7, 1, "FMPEarningsDrift", 1, 100.0, 21, 42),
     )
     conn.execute(
         "INSERT INTO ruleset (id, name, description, type, subtype) VALUES (?,?,?,?,?)",
         (42, "live-open-positions", "live", "trading_recommendation_rule", "open_positions"),
+    )
+    conn.execute(
+        "INSERT INTO ruleset (id, name, description, type, subtype) VALUES (?,?,?,?,?)",
+        (21, "live-enter-market", "live", "trading_recommendation_rule", "enter_market"),
+    )
+    # enter_market rule: BUY when bullish (flag) AND confidence > 0.6 (numeric)
+    conn.execute(
+        "INSERT INTO eventaction (id, type, subtype, name, triggers, actions, "
+        "extra_parameters, continue_processing) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            200, "trading_recommendation_rule", "enter_market", "enter-long",
+            json.dumps({
+                "bullish": {"event_type": "bullish"},
+                "c0": {"event_type": "confidence", "operator": ">", "value": 0.6},
+            }),
+            json.dumps({"buy": {"action_type": "buy"}}),
+            "{}", 0,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO ruleset_eventaction_link (ruleset_id, eventaction_id, order_index) "
+        "VALUES (?,?,?)",
+        (21, 200, 0),
     )
     # Rule 1: take profit at +10% -> close
     conn.execute(
@@ -143,4 +166,58 @@ def test_open_positions_ruleset_503_on_unreadable_db(monkeypatch, tmp_path):
     # Points at a path that does not exist -> graceful 503, never a 500.
     monkeypatch.setenv("BA2_LIVE_DB", str(tmp_path / "nope.sqlite"))
     r = client.get("/api/experts/7/open-positions-ruleset")
+    assert r.status_code == 503
+
+
+# --- enter_market importer (inverse of triggers_from_condition_tree) -----------------------
+
+def test_enter_market_ruleset_503_without_live_db(monkeypatch):
+    monkeypatch.delenv("BA2_LIVE_DB", raising=False)
+    r = client.get("/api/experts/123/enter-market-ruleset")
+    assert r.status_code == 503
+
+
+def test_enter_market_ruleset_imports_buy_tree_from_live(monkeypatch, tmp_path):
+    from app.api.strategies import ConditionBase
+
+    db = tmp_path / "live.sqlite"
+    _seed_live_db(db)
+    monkeypatch.setenv("BA2_LIVE_DB", str(db))
+
+    r = client.get("/api/experts/7/enter-market-ruleset")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sell_entry_conditions"] is None  # no SELL rule seeded
+
+    buy = body["buy_entry_conditions"]
+    assert buy is not None
+    # Single BUY rule -> a single AND group (tree validates as a ConditionBase).
+    tree = ConditionBase(**buy)
+    assert tree.operator == "AND"
+    leaves = {leaf.field: leaf for leaf in tree.conditions}
+
+    # numeric leaf: confidence > 0.6, optimizable with a sensible range, comparison preserved
+    num = leaves["confidence"]
+    assert num.comparison == ">"
+    assert num.value == 0.6
+    assert num.optimize_enabled
+    assert num.value_min is not None and num.value_max is not None and num.value_step is not None
+
+    # flag leaf: bullish (no operator/value)
+    flag = leaves["bullish"]
+    assert flag.field_type == "flag"
+    assert flag.comparison is None and flag.value is None
+
+
+def test_enter_market_ruleset_404_for_missing_expert(monkeypatch, tmp_path):
+    db = tmp_path / "live.sqlite"
+    _seed_live_db(db)
+    monkeypatch.setenv("BA2_LIVE_DB", str(db))
+    r = client.get("/api/experts/999/enter-market-ruleset")
+    assert r.status_code == 404
+
+
+def test_enter_market_ruleset_503_on_unreadable_db(monkeypatch, tmp_path):
+    monkeypatch.setenv("BA2_LIVE_DB", str(tmp_path / "nope.sqlite"))
+    r = client.get("/api/experts/7/enter-market-ruleset")
     assert r.status_code == 503
