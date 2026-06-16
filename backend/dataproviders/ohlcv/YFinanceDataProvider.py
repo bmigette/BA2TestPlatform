@@ -87,74 +87,20 @@ class YFinanceDataProvider(MarketDataProviderInterface):
         Raises:
             Exception: If data fetching fails
         """
-        try:
-            logger.info(f"Fetching {symbol} data from Yahoo Finance: "
-                       f"{start_date.date()} to {end_date.date()}, interval={interval}")
-            
-            # Download data from Yahoo Finance
-            data = yf.download(
-                symbol,
-                start=self.normalize_time_to_interval(start_date, interval), #.strftime("%Y-%m-%d"),
-                end=self.normalize_time_to_interval(end_date, interval), #.strftime("%Y-%m-%d"),
-                interval=interval,
-                multi_level_index=False,
-                progress=False,
-                auto_adjust=True  # Adjust for splits and dividends
-            )
-            
-            if data.empty:
-                raise Exception(f"No data returned for {symbol}")
-            
-            logger.debug(f"Raw data from YFinance: {len(data)} records, "
-                        f"first={data.index[0] if len(data) > 0 else 'N/A'}, "
-                        f"last={data.index[-1] if len(data) > 0 else 'N/A'}")
-            
-            # Reset index to make Date/Datetime a column
-            data = data.reset_index()
-            
-            # Handle both 'Date' (daily) and 'Datetime' (intraday) column names
-            if 'Datetime' in data.columns:
-                data = data.rename(columns={'Datetime': 'Date'})
-            
-            # Ensure we have all required columns
-            required_columns = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-            missing_columns = [col for col in required_columns if col not in data.columns]
-            
-            if missing_columns:
-                raise Exception(f"Missing required columns: {missing_columns}")
-            
-            # Select only the required columns (drop any extras)
-            data = data[required_columns]
-            
-            # Normalize timestamps to interval boundaries
-            # This ensures proper alignment (e.g., 13:30 -> 13:00 for 1h interval)
-            #logger.debug(f"Normalizing {len(data)} timestamps to {interval} interval boundaries")
-            #data['Date'] = data['Date'].apply(
-            #    lambda dt: self.normalize_time_to_interval(dt, interval)
-            #}
-            
-            # Group by normalized timestamp and aggregate (in case multiple rows map to same timestamp)
-            # Use OHLC aggregation: first Open, max High, min Low, last Close, sum Volume
-            if len(data) != len(data['Date'].unique()):
-                logger.debug(f"Found duplicate timestamps after normalization, aggregating...")
-                data = data.groupby('Date').agg({
-                    'Open': 'first',
-                    'High': 'max',
-                    'Low': 'min',
-                    'Close': 'last',
-                    'Volume': 'sum'
-                }).reset_index()
-            
-            # Sort by date to ensure chronological order
-            data = data.sort_values('Date').reset_index(drop=True)
-            
-            logger.info(f"Successfully fetched and normalized {len(data)} records for {symbol}")
-            
-            return data
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch data from Yahoo Finance for {symbol}: {e}", exc_info=True)
-            raise Exception(f"Yahoo Finance data fetch failed for {symbol}: {str(e)}")
+        # SINGLE SHARED FETCH PATH: delegate the actual yfinance download to the COMMON
+        # ba2_providers package provider so the test platform and the backtest use identical
+        # fetch logic. This legacy class keeps only its caching/interface role.
+        from ba2_providers.ohlcv.YFinanceDataProvider import YFinanceDataProvider as _CommonYF
+        common = getattr(self, "_common_yf", None) or _CommonYF()
+        self._common_yf = common
+        logger.debug(
+            f"Fetching {symbol} {start_date.date()}->{end_date.date()} interval {interval} "
+            f"via common ba2_providers YFinance provider"
+        )
+        df = common._get_ohlcv_data_impl(symbol, start_date, end_date, interval=interval)
+        if df is None or df.empty:
+            raise Exception(f"No data returned for {symbol}")
+        return df
     
     @log_provider_call
     def get_current_price(self, symbol: str) -> Optional[float]:

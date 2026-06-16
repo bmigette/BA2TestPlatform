@@ -182,40 +182,28 @@ class FMPOHLCVProvider(MarketDataProviderInterface):
             ValueError: If interval not supported
             requests.HTTPError: If API request fails
         """
-        # Map interval to FMP format
-        if interval not in self.TIMEFRAME_MAP:
-            raise ValueError(
-                f"Interval '{interval}' not supported by FMP. "
-                f"Supported intervals: {list(self.TIMEFRAME_MAP.keys())}"
-            )
-        
-        fmp_interval = self.TIMEFRAME_MAP[interval]
-        
+        # SINGLE SHARED FETCH PATH: delegate the actual FMP fetch to the COMMON ba2_providers
+        # package provider so every code path (backtest as-of cache AND fetch-cache) uses
+        # identical fetch logic — including the chunked intraday paging that works around FMP's
+        # ~624-bar/call cap. This test-platform provider keeps only its caching/interface role
+        # (base.py _get_cache_file / extend_ohlcv_cache); it no longer carries a duplicate fetch.
+        from ba2_providers.ohlcv.FMPOHLCVProvider import FMPOHLCVProvider as _CommonFMP
+        common = getattr(self, "_common_fmp", None) or _CommonFMP()
+        self._common_fmp = common
         logger.debug(
-            f"Fetching FMP OHLCV data for {symbol} from {start_date.date()} "
-            f"to {end_date.date()} with interval {interval} (FMP: {fmp_interval})"
+            f"Fetching FMP OHLCV for {symbol} {start_date.date()}->{end_date.date()} "
+            f"interval {interval} via common ba2_providers provider"
         )
-        
         try:
-            # Choose endpoint based on interval
-            if fmp_interval == "daily":
-                # Use historical-price-full for daily data
-                df = self._fetch_daily_data(symbol, start_date, end_date)
-            else:
-                # Use historical-chart for intraday data
-                df = self._fetch_intraday_data(symbol, start_date, end_date, fmp_interval)
-            
-            if df.empty:
-                logger.warning(f"No data returned from FMP for {symbol}")
-                return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            
-            logger.info(f"Retrieved {len(df)} bars from FMP for {symbol}")
-            
-            return df
-            
+            df = common._get_ohlcv_data_impl(symbol, start_date, end_date, interval=interval)
         except Exception as e:
             logger.error(f"Failed to get FMP OHLCV data for {symbol}: {e}", exc_info=True)
             raise
+        if df is None or df.empty:
+            logger.warning(f"No data returned from FMP (common provider) for {symbol}")
+            return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        logger.info(f"Retrieved {len(df)} bars from FMP (common provider) for {symbol}")
+        return df
     
     def _fetch_daily_data(
         self,
