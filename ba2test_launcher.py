@@ -1154,7 +1154,8 @@ def main(argv: "list | None" = None) -> int:
     op.add_argument("--commission", type=float, default=1.0)
     op.add_argument("--slippage", type=float, default=0.0)
     op.add_argument("--fill-model", default="next_bar_open")
-    op.add_argument("--interval", default="1d", help="Execution/fill interval (1d; 5min for intraday fills).")
+    op.add_argument("--interval", default="5min", help="Execution/fill clock interval (default 5min for "
+                    "precise intraday TP/SL; analysis cadence is set by --run-schedule).")
     op.add_argument("--run-schedule", default="weekly", choices=["daily", "weekly"])
     op.add_argument("--run-schedule-day", default="monday")
     op.add_argument("--name", default=None)
@@ -1185,7 +1186,8 @@ def main(argv: "list | None" = None) -> int:
     ob.add_argument("--commission", type=float, default=1.0)
     ob.add_argument("--slippage", type=float, default=0.0)
     ob.add_argument("--fill-model", default="next_bar_open")
-    ob.add_argument("--interval", default="1d")
+    ob.add_argument("--interval", default="5min",
+                    help="Fill-clock interval (default 5min for precise intraday TP/SL).")
     ob.add_argument("--run-schedule", default="weekly", choices=["daily", "weekly"])
     ob.add_argument("--run-schedule-day", default="monday")
     ob.add_argument("--name-prefix", default=None, help="Strategy/opt name prefix (default phase1-).")

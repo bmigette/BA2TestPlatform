@@ -237,7 +237,24 @@ def _compute_metrics(
         # Equity metrics
         "final_equity": round(_safe_float(final, initial), 2),
         "equity_peak": round(_safe_float(equity_peak, initial), 2),
+        # Run config echoed into the result so the fill granularity is visible after the fact
+        # (History / report): the FILL clock interval (e.g. 5min for precise TP/SL) and the
+        # analysis cadence (weekly when run_schedule_override pins a single weekday, else daily).
+        "execution_interval": config.get("execution_interval", "1d"),
+        "analysis_cadence": _analysis_cadence_label(config.get("run_schedule_override")),
     }
+
+
+def _analysis_cadence_label(run_schedule_override: Any) -> str:
+    """'weekly' when the override pins exactly one weekday on, 'daily' when none/empty, else
+    'custom' (a multi-day schedule)."""
+    if not run_schedule_override:
+        return "daily"
+    days = run_schedule_override.get("days") if isinstance(run_schedule_override, dict) else None
+    if not days:
+        return "daily"
+    on = [d for d, v in days.items() if v]
+    return "weekly" if len(on) == 1 else ("daily" if not on else "custom")
 
 
 # ---------------------------------------------------------------------------
