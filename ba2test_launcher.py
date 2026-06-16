@@ -553,6 +553,133 @@ def _cmd_optimize(args) -> int:
     return 0
 
 
+def _cmd_optimize_batch(args) -> int:
+    """Self-advancing optimization batch driver.
+
+    Submits each expert's optimization to the RUNNING serve queue (so it shows live in the UI
+    Running tab with per-generation progress), polls it to completion, then persists its top-N as
+    tagged Backtests AND regenerates the HTML report before advancing to the next expert. Jobs run
+    ONE AT A TIME (each gets the full process pool) to avoid oversubscribing the CPU. The serve
+    process must be running (`ba2-test serve`); this driver only enqueues + polls + persists.
+    """
+    import time as _time
+    from datetime import datetime as _dt
+    from types import SimpleNamespace
+    import app.models  # noqa: F401
+    from app.models.database import SessionLocal, init_db
+    from app.models.strategy import Strategy  # noqa: F401
+    from app.models.strategy_optimization import StrategyOptimization
+    from app.models.task_queue import TaskQueue
+    from app.services.backtest.daily_backtest_handler import derive_warmup_days
+    from app.services.task_queue import get_task_queue
+
+    experts = [e.strip() for e in args.experts.split(",") if e.strip()]
+    universe = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+    if not universe:
+        sys.exit("optimize-batch: --universe must list at least one symbol")
+    for e in experts:
+        if e not in _EXPERT_OPT:
+            sys.exit(f"optimize-batch: expert {e!r} not configured; have {sorted(_EXPERT_OPT)}")
+    run_sched = None
+    if args.run_schedule == "weekly":
+        run_sched = {"days": {d: (d == args.run_schedule_day) for d in
+                              ("monday", "tuesday", "wednesday", "thursday", "friday",
+                               "saturday", "sunday")}}
+    init_db()
+    tq = get_task_queue()
+    print(f"optimize-batch: {len(experts)} job(s) {experts} x {len(universe)} syms, "
+          f"{args.fitness}, pop={args.population} gen={args.generations} parallel={args.parallel}")
+
+    for n, expert in enumerate(experts, 1):
+        spec = _EXPERT_OPT[expert]
+        name = args.name_prefix and f"{args.name_prefix}-{expert}" or f"phase1-{expert}-{args.fitness}"
+        db = SessionLocal()
+        try:
+            strat = _build_strategy_row(name)
+            db.add(strat); db.commit(); db.refresh(strat)
+            backtest_block = {
+                "engine": "daily",
+                "enabled_instruments": universe,
+                "experts": [{"class": expert, "settings": dict(spec["fixed_settings"])}],
+                "start_date": args.start, "end_date": args.end,
+                "initial_capital": float(args.initial_capital),
+                "account_settings": {
+                    "starting_cash": float(args.initial_capital),
+                    "commission_per_trade": float(args.commission),
+                    "slippage_bps": float(args.slippage),
+                    "fill_model": args.fill_model,
+                },
+                "warmup_days": derive_warmup_days([expert]),
+                "seed": int(args.seed),
+                "subtype": "daily_expert",
+                "run_schedule_override": run_sched,
+                "execution_interval": args.interval,
+                "backtest_id": int(_dt.now().timestamp()),
+                "name": f"{name}-trial",
+            }
+            cfg = {
+                "populationSize": int(args.population),
+                "generations": int(args.generations),
+                "crossoverProb": 0.6, "mutationProb": 0.3,
+                "earlyStoppingGenerations": int(args.early_stop),
+                "elitismPercent": 0.1, "seed": int(args.seed),
+                "parallelIndividuals": int(args.parallel),
+                "expert_params": {**spec["expert_params"], **_RM_OPT},
+                "backtest": backtest_block,
+            }
+            opt = StrategyOptimization(
+                strategy_id=strat.id, name=name, fitness_metric=args.fitness,
+                optimization_type="genetic", optimization_config=cfg, status="pending",
+            )
+            db.add(opt); db.commit(); db.refresh(opt)
+            opt_id = opt.id
+        finally:
+            db.close()
+
+        task_id = tq.queue_task(
+            task_type="strategy_optimization", name=name,
+            payload={"optimization_id": opt_id},
+            description=f"{expert} x {len(universe)} syms, {args.fitness}, pop={args.population}",
+        )
+        print(f"[{n}/{len(experts)}] SUBMITTED {expert} opt#{opt_id} (task {task_id}); polling every {args.poll}s...")
+
+        last_msg = None
+        st = "queued"
+        while True:
+            _time.sleep(int(args.poll))
+            db = SessionLocal()
+            try:
+                t = db.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+                st = t.status if t else "missing"
+                pr = round((t.progress or 0), 1) if t else 0.0
+                msg = ((t.progress_message if t else "") or "")
+            finally:
+                db.close()
+            if msg != last_msg:
+                print(f"    [{expert} opt#{opt_id}] {st} {pr}% {msg}")
+                last_msg = msg
+            if st in ("completed", "failed", "cancelled", "missing"):
+                break
+
+        if st != "completed":
+            print(f"[{n}/{len(experts)}] {expert} opt#{opt_id} ended status={st}; moving on.")
+            continue
+
+        try:
+            nsaved = _persist_top_backtests(opt_id, expert, n=int(args.save_top))
+            print(f"[{n}/{len(experts)}] {expert} opt#{opt_id} COMPLETE; persisted top {nsaved} backtests.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{n}/{len(experts)}] persist top-N failed for opt#{opt_id}: {exc}")
+        try:
+            _cmd_report(SimpleNamespace(out=None))
+            print(f"    report regenerated.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"    report regen failed: {exc}")
+
+    print("optimize-batch: all jobs complete.")
+    return 0
+
+
 def _persist_top_backtests(opt_id: int, expert: str, n: int = 5) -> int:
     """Re-run the optimization's TOP-N distinct param sets and persist each as a tagged,
     saved Backtest (best params + their metrics) so the top performers are kept for
@@ -836,6 +963,31 @@ def main(argv: "list | None" = None) -> int:
                          "instead of running in-process. Submit jobs one at a time to avoid "
                          "process-pool oversubscription (the serve queue has 4 workers).")
 
+    ob = sub.add_parser("optimize-batch",
+                        help="Self-advancing batch: submit each expert's optimization to the serve "
+                             "queue, poll to completion, persist top-N + refresh report, then next.")
+    ob.add_argument("--experts", default="FMPRating,FMPEarningsDrift,FMPInsiderClusterBuy",
+                    help="Comma-separated expert classes (default: the 3 in-scope equity experts).")
+    ob.add_argument("--universe", required=True, help="Comma-separated symbols (shared by all jobs).")
+    ob.add_argument("--start", required=True, help="ISO start date.")
+    ob.add_argument("--end", required=True, help="ISO end date.")
+    ob.add_argument("--fitness", default="calmar_ratio", help="Fitness metric (default calmar_ratio).")
+    ob.add_argument("--generations", type=int, default=8)
+    ob.add_argument("--population", type=int, default=40)
+    ob.add_argument("--parallel", type=int, default=6, help="Process-pool workers per job.")
+    ob.add_argument("--early-stop", type=int, default=4)
+    ob.add_argument("--save-top", type=int, default=5)
+    ob.add_argument("--seed", type=int, default=42)
+    ob.add_argument("--initial-capital", type=float, default=10000.0)
+    ob.add_argument("--commission", type=float, default=1.0)
+    ob.add_argument("--slippage", type=float, default=0.0)
+    ob.add_argument("--fill-model", default="next_bar_open")
+    ob.add_argument("--interval", default="1d")
+    ob.add_argument("--run-schedule", default="weekly", choices=["daily", "weekly"])
+    ob.add_argument("--run-schedule-day", default="monday")
+    ob.add_argument("--name-prefix", default=None, help="Strategy/opt name prefix (default phase1-).")
+    ob.add_argument("--poll", type=int, default=15, help="Poll interval seconds (default 15).")
+
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":
         return _cmd_backtest(argv[1:])
@@ -851,6 +1003,7 @@ def main(argv: "list | None" = None) -> int:
         "runs": lambda: _cmd_runs(args),
         "report": lambda: _cmd_report(args),
         "optimize": lambda: _cmd_optimize(args),
+        "optimize-batch": lambda: _cmd_optimize_batch(args),
     }[args.cmd]()
 
 
