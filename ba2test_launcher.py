@@ -517,6 +517,24 @@ def _cmd_optimize(args) -> int:
     finally:
         db.close()
 
+    if getattr(args, "submit", False):
+        # Enqueue on the SERVE process's DB-backed task queue (the running `ba2-test serve`
+        # worker picks it up) so the job shows live in the UI's Running-jobs strip with
+        # per-generation progress. NOTE: the serve handler does NOT yet persist the top-N as
+        # tagged Backtests (that is the CLI in-process path's _persist_top_backtests / task #37),
+        # so UI-launched runs land their result on the StrategyOptimization row; History
+        # persistence of the top-N is a follow-up.
+        from app.services.task_queue import get_task_queue
+        task_id = get_task_queue().queue_task(
+            task_type="strategy_optimization",
+            name=args.name or f"opt-{expert}",
+            payload={"optimization_id": opt_id},
+            description=f"{expert} x {len(universe)} syms, {args.fitness}, pop={args.population} gen={args.generations}",
+        )
+        print(f"optimize: SUBMITTED to serve queue (task {task_id}, optimization_id={opt_id}). "
+              f"Watch it in the UI: Backtesting -> History -> Running jobs.")
+        return 0
+
     res = handle_strategy_optimization("cli-optimize", {"optimization_id": opt_id})
     if res.get("status") != "completed":
         print(json.dumps(res, indent=2, default=str))
@@ -813,6 +831,10 @@ def main(argv: "list | None" = None) -> int:
     op.add_argument("--run-schedule", default="weekly", choices=["daily", "weekly"])
     op.add_argument("--run-schedule-day", default="monday")
     op.add_argument("--name", default=None)
+    op.add_argument("--submit", action="store_true",
+                    help="Enqueue on the running serve queue (live in the UI Running-jobs strip) "
+                         "instead of running in-process. Submit jobs one at a time to avoid "
+                         "process-pool oversubscription (the serve queue has 4 workers).")
 
     # Split out the backtest passthrough before full parsing.
     if argv and argv[0] == "backtest":
