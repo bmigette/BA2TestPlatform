@@ -545,6 +545,27 @@ def _build_daily_trial_config(
     """
     bypass = _is_bypass_expert(backtest_cfg)
     overrides = dict(decoded.get("expert_overrides") or {})
+
+    # OPTIONS seam (parity with the single-run path daily_backtest_handler._build_config):
+    # if the decoded trial's exit rules name an OPTION action, derive the offline options-cache
+    # path so run_daily_backtest builds + injects the HistoricalOptionsProvider for THIS trial
+    # — without it the option rule can't fetch a chain and the option genes have no effect.
+    # An explicit run-level backtest_cfg['options_cache_db'] is forwarded as-is (e.g. a fixture
+    # cache pinned by the caller); otherwise it is derived from the decoded option rules.
+    # Equity-only trials -> options_cache_db stays None -> byte-identical to the prior behaviour.
+    from app.services.backtest.daily_backtest_handler import (
+        strategy_uses_options,
+        default_options_cache_db,
+        validate_options_window,
+    )
+
+    options_cache_db = backtest_cfg.get("options_cache_db")
+    if not options_cache_db and strategy_uses_options(
+        {"exit_rules": decoded.get("exit_rules")}
+    ):
+        options_cache_db = default_options_cache_db()
+    validate_options_window(backtest_cfg["start_date"], bool(options_cache_db))
+
     # Initial TP/SL the engine applies as an OCO bracket on each opened position. These are
     # NOT expert settings (the experts don't declare them, so they'd be dropped by
     # _expert_decision_settings) — they ride on the run config and the daily engine's
@@ -597,6 +618,11 @@ def _build_daily_trial_config(
         # the same reference (None -> engine's default percent path; "expert_target_price" ->
         # RE4 expert-target bracket). The single ``initial_tp_reference`` key + ``_apply_initial_brackets``.
         "initial_tp_reference": backtest_cfg.get("initial_tp_reference"),
+        # OPTIONS seam: a non-None path here flags an options trial — run_daily_backtest builds
+        # the HistoricalOptionsProvider from it and injects it into the BacktestAccount so the
+        # option exit rule (and its option_delta/option_dte genes) can fetch a chain. None for an
+        # equity-only trial (byte-identical to the prior behaviour).
+        "options_cache_db": options_cache_db,
     }
 
 
