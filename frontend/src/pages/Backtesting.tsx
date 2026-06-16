@@ -49,6 +49,8 @@ import { RuleIO } from '../components/RuleIO';
 import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import { RunningJobsStrip } from '../components/RunningJobsStrip';
+import ResolvedRulesetView from '../components/ResolvedRulesetView';
+import type { BestParams } from '../lib/resolveRuleset';
 import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset } from '../lib/btApi';
 import type { Vocabulary } from '../lib/btApi';
 import {
@@ -2105,6 +2107,15 @@ const Backtesting: React.FC = () => {
                         const sellConditions = sp?.sellEntryConditions?.conditions || [];
                         const exitConditions = sp?.exitConditions || [];
                         const stratName = sp?.strategyName;
+                        // Resolved-ruleset read-back (B10): when this run came from a
+                        // finished optimization that surfaced its flat best-params gene
+                        // map (cond:*/exit:* -> value), render the ruleset that ACTUALLY
+                        // ran (dropped rules greyed, tuned values filled). The backtest
+                        // results object does not yet carry best_params on its own — this
+                        // renders only when strategyParams includes a bestParams/
+                        // best_params dict (e.g. surfaced via /jobs/{id}/individuals
+                        // best_individual.params). See lib/resolveRuleset.ts.
+                        const bestParams = (sp?.bestParams ?? sp?.best_params) as BestParams | undefined;
                         return (
                           <>
                             {stratName && (
@@ -2150,7 +2161,7 @@ const Backtesting: React.FC = () => {
                                 </div>
                               </div>
                             )}
-                            {exitConditions.length > 0 && (
+                            {exitConditions.length > 0 && !bestParams && (
                               <div>
                                 <h4 className="text-sm font-semibold text-yellow-600 mb-2">Exit Conditions ({exitConditions.length})</h4>
                                 <div className="space-y-1">
@@ -2160,6 +2171,11 @@ const Backtesting: React.FC = () => {
                                     </div>
                                   ))}
                                 </div>
+                              </div>
+                            )}
+                            {exitConditions.length > 0 && bestParams && (
+                              <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
+                                <ResolvedRulesetView exitRules={exitConditions} bestParams={bestParams} />
                               </div>
                             )}
                           </>
