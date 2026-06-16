@@ -43,12 +43,27 @@ class ExitCondition(BaseModel):
     id: str
     name: Optional[str] = None
     conditions: ConditionBase
-    action: str  # close, adjust_tp, adjust_sl
+    action: str  # close, adjust_tp, adjust_sl, or option action (e.g. buy_call)
     action_value: Optional[float] = None
     action_value_optimize: bool = False
     action_value_min: Optional[float] = None
     action_value_max: Optional[float] = None
     action_value_step: Optional[float] = None
+    # --- option-action fields (None for equity actions) ---
+    option_strategy: Optional[str] = None
+    option_strike_method: Optional[str] = None      # delta | percent_otm | consensus_target
+    option_strike_param: Optional[float] = None
+    option_dte_min: Optional[int] = None
+    option_dte_max: Optional[int] = None
+    option_sizing: Optional[float] = None           # % of equity
+    option_strike_param_optimize: bool = False
+    option_strike_param_min: Optional[float] = None
+    option_strike_param_max: Optional[float] = None
+    option_strike_param_step: Optional[float] = None
+    option_dte_optimize: bool = False
+    option_dte_min_range: Optional[int] = None
+    option_dte_max_range: Optional[int] = None
+    option_dte_step: Optional[int] = None
 
 
 class StrategyCreate(BaseModel):

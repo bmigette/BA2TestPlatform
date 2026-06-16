@@ -525,12 +525,30 @@ export interface ExitConditionSet {
   id: string;
   name: string;
   conditions: ConditionGroup;
-  action: 'close' | 'adjust_tp' | 'adjust_sl';
+  action: 'close' | 'adjust_tp' | 'adjust_sl'
+        | 'buy_call' | 'buy_put' | 'sell_covered_call' | 'sell_cash_secured_put'
+        | 'buy_protective_put' | 'open_bull_call_spread' | 'open_bear_put_spread'
+        | 'open_bear_call_spread' | 'open_straddle' | 'open_strangle' | 'close_option';
   actionValue?: number;
   actionValueOptimize?: boolean;
   actionValueMin?: number;
   actionValueMax?: number;
   actionValueStep?: number;
+  // option-action fields (undefined for equity actions)
+  optionStrategy?: string;
+  optionStrikeMethod?: 'delta' | 'percent_otm' | 'consensus_target';
+  optionStrikeParam?: number;
+  optionDteMin?: number;
+  optionDteMax?: number;
+  optionSizing?: number;
+  optionStrikeParamOptimize?: boolean;
+  optionStrikeParamMin?: number;
+  optionStrikeParamMax?: number;
+  optionStrikeParamStep?: number;
+  optionDteOptimize?: boolean;
+  optionDteMinRange?: number;
+  optionDteMaxRange?: number;
+  optionDteStep?: number;
 }
 
 interface ExitConditionsBuilderProps {
