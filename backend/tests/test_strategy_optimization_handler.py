@@ -374,6 +374,46 @@ def test_build_daily_trial_config_maps_rm_and_overrides():
         assert k in cfg
 
 
+def test_build_daily_trial_config_forwards_tp_reference():
+    """The run-level ``initial_tp_reference`` rides through to each trial's engine config so
+    every optimizer trial uses the same TP-reference mode (e.g. expert_target_price)."""
+    backtest_cfg = {
+        "backtest_id": 11,
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-08",
+        "enabled_instruments": ["AAPL"],
+        "experts": [{"class": "FMPEarningsDrift", "settings": {}}],
+        "initial_capital": 100000.0,
+        "account_settings": {"starting_cash": 100000.0},
+        "warmup_days": 30,
+        "seed": 42,
+        "initial_tp_reference": "expert_target_price",
+    }
+    decoded = {"tp": 8.0, "sl": 3.0, "expert_overrides": {},
+               "buy_tree": None, "sell_tree": None, "exit_rules": []}
+    cfg = H._build_daily_trial_config(backtest_cfg, decoded)
+    assert cfg["initial_tp_reference"] == "expert_target_price"
+
+
+def test_build_daily_trial_config_tp_reference_absent_is_none():
+    """No run-level reference -> the trial config carries None (engine default percent path)."""
+    backtest_cfg = {
+        "backtest_id": 12,
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-08",
+        "enabled_instruments": ["AAPL"],
+        "experts": [{"class": "FMPEarningsDrift", "settings": {}}],
+        "initial_capital": 100000.0,
+        "account_settings": {"starting_cash": 100000.0},
+        "warmup_days": 30,
+        "seed": 42,
+    }
+    decoded = {"tp": 8.0, "sl": 3.0, "expert_overrides": {},
+               "buy_tree": None, "sell_tree": None, "exit_rules": []}
+    cfg = H._build_daily_trial_config(backtest_cfg, decoded)
+    assert cfg.get("initial_tp_reference") is None
+
+
 # ---------------------------------------------------------------------------
 # BYPASS expert (piece 1c): the optimizer drops rm:*/tp/sl/cond:*/exit:*
 # ---------------------------------------------------------------------------

@@ -260,6 +260,17 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # the optimizer always supplies them via the tp/sl genes.
         "initial_tp_percent": payload.get("initial_tp_percent"),
         "initial_sl_percent": payload.get("initial_sl_percent"),
+        # CANONICAL take-profit reference key. ``_apply_initial_brackets`` reads
+        # ``initial_tp_reference``: unset / anything but "expert_target_price" -> the legacy
+        # percent-off-entry TP (default); "expert_target_price" -> anchor the TP on the
+        # recommendation's target_price (RE4). This is the SINGLE TP-reference vocabulary —
+        # the legacy ``initial_tp_ref`` name is accepted here as an ALIAS (the only place the
+        # alias is collapsed) so both spellings reach the one canonical config key + code path.
+        "initial_tp_reference": (
+            payload.get("initial_tp_reference")
+            if payload.get("initial_tp_reference") is not None
+            else payload.get("initial_tp_ref")
+        ),
         # Intraday fill clock (e.g. "1h"/"15m"); 1d default. Decoupled from entry cadence.
         "execution_interval": payload.get("execution_interval", "1d"),
         # Options seam: path to the offline OptionsHistoryCache sqlite (built via
@@ -520,27 +531,17 @@ def _build_experts(
     # reference_value, action_value, enabled} — seeded into the per-expert OPEN_POSITIONS
     # ruleset so the engine manages held positions via the real RM/evaluator (Adjust TP/SL/Close).
     exit_rules = config.get("exit_rules")
-    # The initial TP/SL bracket the ENTRY rule sets via Adjust actions (like live), driven by the
-    # optimizer's tp/sl genes + reference choice. None -> no entry bracket (the engine's
-    # _apply_initial_brackets still applies it as a fallback). enable_short adds the symmetric
-    # SELL/short entry rule + the RM enable_sell gate.
+    # The initial TP/SL bracket is applied at transaction-OPEN by the engine's
+    # ``_apply_initial_brackets`` (driven by ``initial_tp_percent``/``initial_sl_percent`` and the
+    # canonical ``initial_tp_reference`` key) — NOT as an entry Adjust action, because at
+    # enter_market time the BUY/SELL only stages a PENDING order (see ``_entry_actions``). The
+    # enter ruleset therefore needs no bracket plumbing. enable_short adds the symmetric SELL/short
+    # entry rule + the RM enable_sell gate.
     enable_short = bool(config.get("enable_short"))
-    entry_bracket = (
-        {
-            "tp": config.get("initial_tp_percent"),
-            "sl": config.get("initial_sl_percent"),
-            "tp_ref": config.get("initial_tp_ref"),
-            "sl_ref": config.get("initial_sl_ref"),
-        }
-        if config.get("initial_tp_percent") is not None and config.get("initial_sl_percent") is not None
-        else None
-    )
 
     def _seed_enter(nm: str) -> int:
         if buy_tree:
-            return seed_ruleset_from_tree(
-                buy_tree, name=nm, entry_bracket=entry_bracket, enable_short=enable_short
-            )
+            return seed_ruleset_from_tree(buy_tree, name=nm, enable_short=enable_short)
         return (seed_enter_long_short_ruleset(name=nm) if enable_short
                 else seed_enter_long_ruleset(name=nm))
 

@@ -161,16 +161,16 @@ def _entry_actions(side: str) -> dict:
 
 
 def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree",
-                           entry_bracket=None, enable_short: bool = False) -> int:
+                           enable_short: bool = False) -> int:
     """Seed an enter_market ruleset from a Strategy buy-entry condition TREE; return its id.
 
     The base "BUY when bullish and flat" triggers are kept, AND each leaf condition in the tree
     is added as an extra trigger (ANDed) — exactly what the optimizer's cond:<id>:value / on-off
     genes tune. When ``enable_short`` a symmetric SELL rule (bearish + flat + the SAME gates) is
     added so the strategy can short (gated by the RM's enable_sell). The initial TP/SL bracket is
-    applied at transaction-open by the engine, not as an entry Adjust action (see ``_entry_actions``);
-    ``entry_bracket`` is accepted for forward-compat but unused here. Unknown fields are skipped;
-    falls back to bullish+flat when the tree adds nothing.
+    applied at transaction-open by the engine (``_apply_initial_brackets``), NOT as an entry Adjust
+    action (see ``_entry_actions``) — so the entry seeder carries no bracket plumbing. Unknown
+    fields are skipped; falls back to bullish+flat when the tree adds nothing.
     """
     buy_triggers = {
         "bullish": {"event_type": ExpertEventType.F_BULLISH.value},

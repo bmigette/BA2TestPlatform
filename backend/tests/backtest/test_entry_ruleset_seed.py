@@ -77,3 +77,15 @@ def test_enable_short_adds_symmetric_sell_rule(_trading_db):
     assert set((sell.triggers or {}).keys()) >= {"bearish", "no_position", "gate_0"}
     # And it, too, must not carry an Adjust leg.
     assert set(sell.actions["sell"].keys()) == {"action_type"}
+
+
+def test_seed_ruleset_from_tree_has_no_entry_bracket_param():
+    """The dead ``entry_bracket`` kwarg was removed: the engine's ``_apply_initial_brackets``
+    is the single bracket path, so the entry seeder no longer accepts a forward-compat bracket.
+    """
+    import inspect
+
+    params = inspect.signature(dr.seed_ruleset_from_tree).parameters
+    assert "entry_bracket" not in params, (
+        "seed_ruleset_from_tree must not carry the dead entry_bracket parameter"
+    )

@@ -50,6 +50,12 @@ class BacktestCreate(BaseModel):
     exit_conditions: Optional[list] = None        # -> config "exit_rules"
     initial_tp_percent: Optional[float] = None    # -> config "initial_tp_percent"
     initial_sl_percent: Optional[float] = None    # -> config "initial_sl_percent"
+    # CANONICAL take-profit reference key. None / "percent" -> the legacy percent-off-entry TP;
+    # "expert_target_price" -> anchor the TP on the recommendation's target_price (RE4). The
+    # legacy ``initial_tp_ref`` spelling is still accepted (aliased to this canonical key in the
+    # handler's _build_config). -> config "initial_tp_reference".
+    initial_tp_reference: Optional[str] = None
+    initial_tp_ref: Optional[str] = None          # legacy alias -> "initial_tp_reference"
     # Shared trading parameters.
     start_date: str
     end_date: str
@@ -435,6 +441,12 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
         payload['initial_tp_percent'] = backtest.initial_tp_percent
     if backtest.initial_sl_percent is not None:
         payload['initial_sl_percent'] = backtest.initial_sl_percent
+    # TP-reference mode: forward the canonical key, else the legacy alias (the handler's
+    # _build_config collapses the alias to ``initial_tp_reference`` in one place).
+    if backtest.initial_tp_reference is not None:
+        payload['initial_tp_reference'] = backtest.initial_tp_reference
+    elif backtest.initial_tp_ref is not None:
+        payload['initial_tp_ref'] = backtest.initial_tp_ref
 
     from app.services.task_queue import get_task_queue
     task_queue = get_task_queue()

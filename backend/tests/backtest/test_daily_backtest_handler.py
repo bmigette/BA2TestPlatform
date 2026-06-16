@@ -129,6 +129,34 @@ def test_build_config_rejects_bad_date_order():
 
 
 # ---------------------------------------------------------------------------
+# TP-reference: single canonical key (initial_tp_reference) + legacy alias
+# ---------------------------------------------------------------------------
+def test_build_config_forwards_canonical_tp_reference():
+    """The canonical ``initial_tp_reference`` flows through to the engine config."""
+    cfg = H._build_config(_payload(1, initial_tp_reference="expert_target_price"))
+    assert cfg["initial_tp_reference"] == "expert_target_price"
+
+
+def test_build_config_aliases_legacy_initial_tp_ref():
+    """The legacy ``initial_tp_ref`` name is accepted and maps to the canonical key."""
+    cfg = H._build_config(_payload(1, initial_tp_ref="expert_target_price"))
+    assert cfg["initial_tp_reference"] == "expert_target_price"
+
+
+def test_build_config_canonical_wins_over_legacy_alias():
+    """When BOTH names are present the canonical key takes precedence."""
+    cfg = H._build_config(_payload(
+        1, initial_tp_reference="expert_target_price", initial_tp_ref="percent"))
+    assert cfg["initial_tp_reference"] == "expert_target_price"
+
+
+def test_build_config_tp_reference_absent_is_none():
+    """No reference supplied -> None (the engine's default percent-off-entry path)."""
+    cfg = H._build_config(_payload(1))
+    assert cfg.get("initial_tp_reference") is None
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 def test_persist_results_writes_all_columns():

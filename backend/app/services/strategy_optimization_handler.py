@@ -593,6 +593,10 @@ def _build_daily_trial_config(
         # the daily engine so trades actually close.
         "initial_tp_percent": initial_tp,
         "initial_sl_percent": initial_sl,
+        # Canonical TP-reference mode forwarded from the run-level config so every trial uses
+        # the same reference (None -> engine's default percent path; "expert_target_price" ->
+        # RE4 expert-target bracket). The single ``initial_tp_reference`` key + ``_apply_initial_brackets``.
+        "initial_tp_reference": backtest_cfg.get("initial_tp_reference"),
     }
 
 
