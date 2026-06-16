@@ -381,12 +381,37 @@ def _build_strategy_row(name: str):
              "toggle_optimize": True},
         ],
     }
-    # NOTE: RM sizing params are NOT Strategy columns anymore — they are optimized via the
-    # model:* namespace (see _RM_OPT merged into expert_params in _cmd_optimize). Only TP/SL +
-    # the entry-condition tree live on the Strategy row.
+    # Exit (open_positions) ruleset: the dynamic-exit "movements", each a rule the backtest
+    # evaluates via the real TradeActionEvaluator on the analysis cadence (identical to live).
+    # Every rule is on/off-toggleable (toggle_optimize -> exit:<id>:enabled gene); numeric
+    # condition thresholds (cond:<id>:value) and adjust-action %s (exit:<id>:action_value) are
+    # value-optimized with steps. (The immediate initial TP/SL bracket stays via the tp/sl genes;
+    # these rules ADJUST/CLOSE on top of it.)
+    exit_conditions = [
+        # Close the position when the expert turns bearish (sell signal).
+        {"id": "exit_bearish", "action_type": "close", "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [{"id": "xb", "field": "bearish"}]}},
+        # Close when the expert's current rating goes negative (downgrade exit).
+        {"id": "exit_downgrade", "action_type": "close", "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [{"id": "xd", "field": "current_rating_negative"}]}},
+        # Profit-lock: once +X% in profit, move the stop to entry +lock% (break-even / lock-in).
+        {"id": "exit_belock", "action_type": "adjust_stop_loss", "reference_value": "order_open_price",
+         "action_value": 0.0, "action_value_optimize": True,
+         "action_value_min": -2.0, "action_value_max": 8.0, "action_value_step": 2.0,
+         "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [
+             {"id": "xlk", "field": "profit_loss_percent", "op": ">", "value": 5,
+              "optimize": True, "value_min": 3, "value_max": 20, "value_step": 2}]}},
+        # Time exit: close after N days held (caps dead-money holds).
+        {"id": "exit_time", "action_type": "close", "toggle_optimize": True,
+         "conditions": {"type": "AND", "conditions": [
+             {"id": "xt", "field": "days_opened", "op": ">", "value": 60,
+              "optimize": True, "value_min": 20, "value_max": 120, "value_step": 20}]}},
+    ]
     return Strategy(
         name=name,
         buy_entry_conditions=buy_entry_conditions,
+        exit_conditions=exit_conditions,
         initial_tp_percent=10.0, initial_tp_optimize=True, initial_tp_min=5.0, initial_tp_max=40.0, initial_tp_step=3.0,
         initial_sl_percent=6.0, initial_sl_optimize=True, initial_sl_min=3.0, initial_sl_max=20.0, initial_sl_step=2.0,
     )
