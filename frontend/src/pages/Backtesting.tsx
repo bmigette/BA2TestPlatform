@@ -45,6 +45,7 @@ import type { ExpertSettingsValue } from '../components/ExpertSettingsForm';
 import { UniversePicker } from '../components/UniversePicker';
 import type { UniverseValue } from '../components/UniversePicker';
 import { RuleIO } from '../components/RuleIO';
+import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import { RunningJobsStrip } from '../components/RunningJobsStrip';
 import { getRulesetVocabulary } from '../lib/btApi';
@@ -1408,6 +1409,14 @@ const Backtesting: React.FC = () => {
                       }}
                     />
                   </div>
+
+                  {/* Live optimizer gene-count / search-space preview — recomputes from the
+                      same buy/sell/exit state, so it updates as Optimize toggles change. */}
+                  <GeneCountPreview
+                    buyTree={buyEntryConditions}
+                    sellTree={sellEntryConditions}
+                    exitRules={exitConditions}
+                  />
                 </div>
 
               {/* Position protection (TP / SL) — engine-applied protective bracket (risk infra,
