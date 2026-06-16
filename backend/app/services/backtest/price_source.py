@@ -180,7 +180,7 @@ class AsOfPriceSource:
                 end_date=end,
                 interval=self._interval,
             )
-            self.load_bars(sym, _df_to_rows(df))
+            self.load_bars_df(sym, df)  # vectorized build (avoids per-row dict + _norm loop)
 
     def load_bars(self, symbol: str, rows: List[Dict[str, Any]]) -> None:
         """Index a list of OHLCV row dicts for ``symbol`` by calendar date.
@@ -193,6 +193,39 @@ class AsOfPriceSource:
             d = _norm(row.get("Date", row.get("date")), self._interval)
             indexed[d] = _bar_from_row(row)
         self._bars[symbol] = indexed
+
+    def load_bars_df(self, symbol: str, df: Any) -> None:
+        """VECTORIZED index build straight from a pandas OHLCV DataFrame (the hot preload path).
+
+        Avoids the per-row ``to_dict("records")`` + ``_norm`` + ``_bar_from_row`` Python loop over
+        ~every bar — the dominant cold-load cost for large intraday runs (1.8M rows for 30 syms ×
+        3yr × 5min). Date keys + OHLCV columns are converted in bulk via pandas/numpy; only the
+        final per-key bar dict is built in a comprehension (the dict-of-dicts store is unchanged,
+        so all lookups/semantics are identical to ``load_bars``)."""
+        if df is None or len(df) == 0:
+            self._bars[symbol] = {}
+            return
+        import numpy as np
+        import pandas as pd
+        dcol = "Date" if "Date" in df.columns else "date"
+        dates = pd.to_datetime(df[dcol])
+        if _is_intraday(self._interval):
+            # tz-naive UTC datetime keys (identical to _norm's intraday path).
+            if getattr(dates.dt, "tz", None) is not None:
+                dates = dates.dt.tz_convert("UTC").dt.tz_localize(None)
+            keys = list(dates.dt.to_pydatetime())
+        else:
+            keys = list(dates.dt.date)
+        o = df["Open"].to_numpy(dtype=float)
+        h = df["High"].to_numpy(dtype=float)
+        low = df["Low"].to_numpy(dtype=float)
+        c = df["Close"].to_numpy(dtype=float)
+        v = (df["Volume"].to_numpy(dtype=float) if "Volume" in df.columns
+             else np.zeros(len(df), dtype=float))
+        self._bars[symbol] = {
+            keys[i]: {"open": o[i], "high": h[i], "low": low[i], "close": c[i], "volume": v[i]}
+            for i in range(len(keys))
+        }
 
     # ---- queries -----------------------------------------------------------
     def has_symbol(self, symbol: str) -> bool:
