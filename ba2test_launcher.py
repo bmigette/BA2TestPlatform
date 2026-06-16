@@ -231,7 +231,11 @@ def _cmd_report(args) -> int:
     from app.models.backtest import Backtest
     db = _runs_db()
     try:
-        rows = (db.query(Backtest).filter(Backtest.status == "completed")
+        # Only the expert (daily_expert) optimization runs — the report's subject. Excludes the
+        # legacy 'ml' engine fixtures (pytest e2e/repro/perf rows that land in the same DB with
+        # degenerate 1-trade metrics and no expert_name), which otherwise drown out real results.
+        rows = (db.query(Backtest)
+                .filter(Backtest.status == "completed", Backtest.engine_type == "daily_expert")
                 .order_by(Backtest.sharpe_ratio.desc()).all())
     finally:
         db.close()
@@ -551,10 +555,15 @@ def _persist_top_backtests(opt_id: int, expert: str, n: int = 5) -> int:
         cfg = opt.optimization_config or {}
         bt_block = dict(cfg["backtest"])
 
-        # Top-N distinct param sets by fitness (fall back to best_params if all_results is thin).
+        # Top-N param sets by DISTINCT fitness (fall back to best_params if all_results is thin).
+        # Dedup on fitness, not raw params: a converged GA yields many param sets that differ only
+        # in INERT genes (e.g. exit:<id>:action_value while exit:<id>:enabled=0) yet score the same
+        # and produce identical backtests — keying on params would persist N behaviourally-identical
+        # rows. Distinct fitness gives genuinely different performers across the search landscape.
         seen, ranked = set(), []
         for r in sorted(opt.all_results or [], key=lambda r: (r.get("fitness") if r.get("fitness") is not None else -1e9), reverse=True):
-            key = _json.dumps(r.get("params"), sort_keys=True, default=str)
+            fit = r.get("fitness")
+            key = round(fit, 6) if isinstance(fit, (int, float)) else _json.dumps(r.get("params"), sort_keys=True, default=str)
             if key in seen:
                 continue
             seen.add(key)
