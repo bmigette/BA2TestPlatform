@@ -220,29 +220,56 @@ def _tree_leaves(node):
         yield node
 
 
-def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree") -> int:
+def _gate_triggers(tree) -> dict:
+    """The optimizer's numeric/flag entry gates from a buy/sell condition tree (ANDed)."""
+    triggers: dict = {}
+    for i, leaf in enumerate(_tree_leaves(tree)):
+        field = str(leaf.get("field"))
+        flag_et = _FLAG_FIELD_EVENT.get(field)
+        if flag_et is not None:
+            triggers[f"gate_{i}"] = {"event_type": flag_et.value}
+            continue
+        num_et = _FIELD_EVENT.get(field)
+        if num_et is not None and leaf.get("value") is not None:
+            triggers[f"gate_{i}"] = {
+                "event_type": num_et.value,
+                "operator": leaf.get("op") or leaf.get("operator") or ">",
+                "value": leaf.get("value"),
+            }
+    return triggers
+
+
+def _entry_actions(side: str) -> dict:
+    """The BUY (long) or SELL (short) open action for an entry rule.
+
+    NOTE: the entry TP/SL bracket is NOT emitted here as Adjust actions. At enter_market time the
+    BUY/SELL only stages a PENDING order (the RM sizes + submits it later), so there is no
+    transaction yet for an Adjust action to attach an OCO leg to — emitting Adjust here sets the
+    transaction's tp/sl field with no working leg AND suppresses the fallback, so nothing closes.
+    The engine applies the (reference-aware, optimizable) initial bracket at transaction-OPEN
+    instead (``_apply_initial_brackets``), which is the same net effect as the live entry Adjust.
+    """
+    open_act = ExpertActionType.BUY.value if side == "buy" else ExpertActionType.SELL.value
+    return {side: {"action_type": open_act}}
+
+
+def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree",
+                           entry_bracket=None, enable_short: bool = False) -> int:
     """Seed an enter_market ruleset from a Strategy buy-entry condition TREE; return its id.
 
-    The base "BUY when bullish and flat" triggers are kept, AND each leaf value-condition in
-    the tree is added as an extra trigger (event_type from _FIELD_EVENT, with the leaf's
-    operator + value). Triggers in one EventAction are ANDed, so this realises a root-AND tree
-    of entry gates (e.g. confidence > X AND expected_profit > Y) — exactly what the optimizer's
-    cond:<id>:value / on-off-toggle genes tune. Unknown fields are skipped. (OR nesting and exit
-    rules are a follow-up; falls back to the bullish+flat default when the tree adds nothing.)
+    The base "BUY when bullish and flat" triggers are kept, AND each leaf condition in the tree
+    is added as an extra trigger (ANDed) — exactly what the optimizer's cond:<id>:value / on-off
+    genes tune. When ``enable_short`` a symmetric SELL rule (bearish + flat + the SAME gates) is
+    added so the strategy can short (gated by the RM's enable_sell). The initial TP/SL bracket is
+    applied at transaction-open by the engine, not as an entry Adjust action (see ``_entry_actions``);
+    ``entry_bracket`` is accepted for forward-compat but unused here. Unknown fields are skipped;
+    falls back to bullish+flat when the tree adds nothing.
     """
-    triggers = {
+    buy_triggers = {
         "bullish": {"event_type": ExpertEventType.F_BULLISH.value},
         "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
     }
-    for i, leaf in enumerate(_tree_leaves(buy_tree)):
-        et = _FIELD_EVENT.get(str(leaf.get("field")))
-        if et is None or leaf.get("value") is None:
-            continue
-        triggers[f"gate_{i}"] = {
-            "event_type": et.value,
-            "operator": leaf.get("op") or leaf.get("operator") or ">",
-            "value": leaf.get("value"),
-        }
+    buy_triggers.update(_gate_triggers(buy_tree))
 
     ruleset = Ruleset(
         name=name,
@@ -251,12 +278,27 @@ def seed_ruleset_from_tree(buy_tree, name: str = "backtest-enter-tree") -> int:
         subtype=AnalysisUseCase.ENTER_MARKET,
     )
     ruleset_id = add_instance(ruleset)
-    ea = _make_event_action(
-        name=f"{name}-enter",
-        triggers=triggers,
-        actions={"buy": {"action_type": ExpertActionType.BUY.value}},
-    )
-    _link(ruleset_id, [ea])
+    eas = [
+        _make_event_action(
+            name=f"{name}-enter-long",
+            triggers=buy_triggers,
+            actions=_entry_actions("buy"),
+        )
+    ]
+    if enable_short:
+        sell_triggers = {
+            "bearish": {"event_type": ExpertEventType.F_BEARISH.value},
+            "no_position": {"event_type": ExpertEventType.F_HAS_NO_POSITION.value},
+        }
+        sell_triggers.update(_gate_triggers(buy_tree))
+        eas.append(
+            _make_event_action(
+                name=f"{name}-enter-short",
+                triggers=sell_triggers,
+                actions=_entry_actions("sell"),
+            )
+        )
+    _link(ruleset_id, eas)
     return ruleset_id
 
 

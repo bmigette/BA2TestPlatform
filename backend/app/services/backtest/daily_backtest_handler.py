@@ -507,6 +507,7 @@ def _build_experts(
     from app.services.backtest.backtest_db import seed_expert_instance
     from app.services.backtest.default_rulesets import (
         seed_enter_long_ruleset,
+        seed_enter_long_short_ruleset,
         seed_open_positions_ruleset,
         seed_ruleset_from_tree,
     )
@@ -519,9 +520,29 @@ def _build_experts(
     # reference_value, action_value, enabled} — seeded into the per-expert OPEN_POSITIONS
     # ruleset so the engine manages held positions via the real RM/evaluator (Adjust TP/SL/Close).
     exit_rules = config.get("exit_rules")
+    # The initial TP/SL bracket the ENTRY rule sets via Adjust actions (like live), driven by the
+    # optimizer's tp/sl genes + reference choice. None -> no entry bracket (the engine's
+    # _apply_initial_brackets still applies it as a fallback). enable_short adds the symmetric
+    # SELL/short entry rule + the RM enable_sell gate.
+    enable_short = bool(config.get("enable_short"))
+    entry_bracket = (
+        {
+            "tp": config.get("initial_tp_percent"),
+            "sl": config.get("initial_sl_percent"),
+            "tp_ref": config.get("initial_tp_ref"),
+            "sl_ref": config.get("initial_sl_ref"),
+        }
+        if config.get("initial_tp_percent") is not None and config.get("initial_sl_percent") is not None
+        else None
+    )
 
     def _seed_enter(nm: str) -> int:
-        return seed_ruleset_from_tree(buy_tree, name=nm) if buy_tree else seed_enter_long_ruleset(name=nm)
+        if buy_tree:
+            return seed_ruleset_from_tree(
+                buy_tree, name=nm, entry_bracket=entry_bracket, enable_short=enable_short
+            )
+        return (seed_enter_long_short_ruleset(name=nm) if enable_short
+                else seed_enter_long_ruleset(name=nm))
 
     def _seed_exit(nm: str) -> Optional[int]:
         return seed_open_positions_ruleset(exit_rules, name=nm) if exit_rules else None
@@ -595,6 +616,8 @@ def _build_experts(
                 "enable_buy": (True, "bool"),
                 # Live gates open-positions management (Adjust TP/SL/Close) on this flag.
                 "allow_automated_trade_modification": (True, "bool"),
+                # SHORT entries (the SELL enter rule) are gated by the RM on enable_sell.
+                "enable_sell": (bool(config.get("enable_short")), "bool"),
             }
             for k, v in decision_settings.items():
                 gate_settings[k] = (v, _setting_type(v))
