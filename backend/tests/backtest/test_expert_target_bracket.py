@@ -314,3 +314,57 @@ def test_default_percent_path_unchanged():
         assert t.stop_loss == pytest.approx(98.0)
     finally:
         ctx.__exit__(None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Moving ONE protective leg must KEEP the other (the inflated open_at_end bug):
+# a break-even-lock adjust_sl was cancelling the OCO and re-issuing an SL-only
+# stop, silently dropping the take-profit so winners rode past +TP% unbounded.
+# ---------------------------------------------------------------------------
+def _active_legs(acct, txn):
+    """Non-terminal protective legs for a transaction (TP carries limit_price, SL stop_price)."""
+    return list(acct._existing_legs(txn))
+
+
+def test_adjust_sl_preserves_existing_tp():
+    """Break-even lock (adjust_sl) must NOT drop the take-profit leg."""
+    acct, ctx, ps = _acct(7101, 7101)
+    try:
+        rec = _seed_recommendation(7101, target_price=150.0)
+        txn = _open_position(acct, 7101, rec, entry_px=100.0)
+        assert acct.adjust_tp_sl(txn, new_tp_price=122.0, new_sl_price=96.0, source="init")
+        # Move the stop up to break-even — the TP (122) must survive.
+        assert acct.adjust_sl(txn, new_sl_price=100.0, source="belock")
+
+        legs = _active_legs(acct, txn)
+        assert any((o.limit_price or 0) > 0 for o in legs), "TP leg was dropped when SL moved"
+        assert any(abs((o.stop_price or 0) - 100.0) < 1e-6 for o in legs), "new BE stop missing"
+
+        from ba2_common.core.db import get_instance
+        from ba2_common.core.models import Transaction
+        t = get_instance(Transaction, txn.id)
+        assert t.take_profit == pytest.approx(122.0)   # TP preserved
+        assert t.stop_loss == pytest.approx(100.0)     # SL moved to BE
+    finally:
+        ctx.__exit__(None, None, None)
+
+
+def test_adjust_tp_preserves_existing_sl():
+    """Symmetric: moving the take-profit must NOT drop the stop-loss leg."""
+    acct, ctx, ps = _acct(7102, 7102)
+    try:
+        rec = _seed_recommendation(7102, target_price=150.0)
+        txn = _open_position(acct, 7102, rec, entry_px=100.0)
+        assert acct.adjust_tp_sl(txn, new_tp_price=122.0, new_sl_price=96.0, source="init")
+        assert acct.adjust_tp(txn, new_tp_price=130.0, source="raise-tp")
+
+        legs = _active_legs(acct, txn)
+        assert any(abs((o.stop_price or 0) - 96.0) < 1e-6 for o in legs), "SL leg was dropped when TP moved"
+
+        from ba2_common.core.db import get_instance
+        from ba2_common.core.models import Transaction
+        t = get_instance(Transaction, txn.id)
+        assert t.take_profit == pytest.approx(130.0)
+        assert t.stop_loss == pytest.approx(96.0)
+    finally:
+        ctx.__exit__(None, None, None)

@@ -1396,6 +1396,16 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         entry = self._entry_order_for_transaction(transaction)
         if entry is None:
             return False
+        # PRESERVE the existing SL: the protective bracket is a SINGLE OCO order, and
+        # _replace_leg cancels ALL existing legs before creating the one passed in. Issuing a
+        # TP-only leg here would silently DROP the stop-loss. If the transaction still carries a
+        # stop_loss, re-issue a full OCO (new TP + existing SL) so moving one leg never nukes the
+        # other. (Symmetric to adjust_sl preserving the TP — the bug behind inflated open_at_end
+        # winners: a break-even-lock adjust_sl was dropping the take-profit.)
+        existing_sl = getattr(transaction, "stop_loss", None)
+        if existing_sl and existing_sl > 0:
+            return self.adjust_tp_sl(transaction, new_tp_price=new_tp_price,
+                                     new_sl_price=existing_sl, source=source)
         is_long = entry.side == OrderDirection.BUY
         leg_type = OrderType.SELL_LIMIT if is_long else OrderType.BUY_LIMIT
         self._replace_leg(transaction, entry, leg="TP", order_type=leg_type,
@@ -1415,6 +1425,15 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         entry = self._entry_order_for_transaction(transaction)
         if entry is None:
             return False
+        # PRESERVE the existing TP: _replace_leg cancels ALL legs (the bracket is a single OCO),
+        # so an SL-only leg here would DROP the take-profit. This was THE bug behind the inflated
+        # open_at_end winners: a break-even-lock (adjust_sl) cancelled the OCO and re-issued an
+        # SL-only stop, leaving the position with NO take-profit so it rode past +TP% unbounded.
+        # If a take_profit is still set, re-issue a full OCO (existing TP + new SL).
+        existing_tp = getattr(transaction, "take_profit", None)
+        if existing_tp and existing_tp > 0:
+            return self.adjust_tp_sl(transaction, new_tp_price=existing_tp,
+                                     new_sl_price=new_sl_price, source=source)
         is_long = entry.side == OrderDirection.BUY
         leg_type = OrderType.SELL_STOP if is_long else OrderType.BUY_STOP
         self._replace_leg(transaction, entry, leg="SL", order_type=leg_type,
