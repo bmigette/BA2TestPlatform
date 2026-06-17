@@ -206,6 +206,29 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
 
         tq = get_task_queue()
 
+        def _persist_live(pct=None) -> None:
+            """Push the live ``best`` + full ``all_results`` to the optimization ROW after
+            EACH individual, so the running-optimizations API (and the UI top-individuals
+            table / Evaluated count) updates WITHIN a generation — not only at generation
+            boundaries (``ga_callback``). Best-effort: a transient DB hiccup must never crash
+            the optimization, so failures are swallowed (the next call reconciles)."""
+            try:
+                row = db.query(StrategyOptimization).filter(
+                    StrategyOptimization.id == opt_id
+                ).first()
+                if row is None:
+                    return
+                if pct is not None:
+                    row.progress = pct
+                if best["fitness"] is not None:
+                    row.best_fitness = best["fitness"]
+                    row.best_params = best["params"]
+                row.all_results = list(all_results)  # new list obj -> JSON change detected
+                db.commit()
+            except Exception as e:  # noqa: BLE001 — live UI refresh is non-critical
+                db.rollback()
+                logger.debug(f"live opt persist skipped: {e}")
+
         def fitness_function(decoded_flat: Dict[str, Any]) -> float:
             if tq.is_task_paused(task_id):
                 raise InterruptedError("paused/cancelled")
@@ -239,6 +262,7 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
             if best["fitness"] is None or fit > best["fitness"]:
                 best["fitness"] = fit
                 best["params"] = decoded_flat
+            _persist_live()  # live top-population refresh after each individual
             return fit
 
         # --- brute_force option for tiny spaces (optimization_type) ---
@@ -366,6 +390,11 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                         best["fitness"] = fit
                         best["params"] = flat
                     done += 1
+                    # Live top-population: push best + all_results to the opt row after EACH
+                    # individual so the UI updates within the generation (not only at gen end).
+                    frac = (done / total_in_batch) if total_in_batch else 1.0
+                    pct = ((gen + frac) / n_gens) * 100.0 if n_gens else 0.0
+                    _persist_live(pct)
                     if done % step == 0 or done == total_in_batch:
                         _emit_intra(done)
                 return fits
