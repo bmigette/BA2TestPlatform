@@ -251,6 +251,72 @@ async def get_compatible_strategies(
     }
 
 
+# IMPORTANT: the single-segment /optimizations route MUST be registered BEFORE the dynamic
+# GET /{strategy_id} below. FastAPI matches routes in registration order, so if /{strategy_id}
+# comes first it swallows /api/strategies/optimizations (strategy_id="optimizations" -> 422
+# int-parse error), which made the Optimization-Jobs tab come back empty. /running before the
+# /{opt_id} catch-all so it isn't shadowed in turn. Helpers (_opt_settings_summary,
+# _top_individuals) are defined further down — fine, they're only called at request time.
+@router.get("/optimizations")
+def list_optimizations(db: Session = Depends(get_db)):
+    """All optimization (StrategyOptimization) jobs for the Optimization-Jobs tab.
+
+    One compact row per job: id/name/status/fitness, the timing fields (created/started/
+    completed) so the UI can render the run date + a derived duration, and a `settings`
+    summary (GA config + optimized expert/RM ranges + screener settings). Newest first.
+    """
+    rows = (db.query(StrategyOptimization)
+            .order_by(StrategyOptimization.id.desc()).all())
+    out = []
+    for r in rows:
+        settings = _opt_settings_summary(r.optimization_config)
+        settings["fitnessMetric"] = r.fitness_metric
+        out.append({
+            "id": r.id,
+            "strategyId": r.strategy_id,
+            "name": r.name,
+            "status": r.status,
+            "optimizationType": r.optimization_type,
+            "fitnessMetric": r.fitness_metric,
+            "bestFitness": r.best_fitness,
+            "progress": r.progress,
+            "errorMessage": r.error_message,
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
+            "startedAt": r.started_at.isoformat() if r.started_at else None,
+            "completedAt": r.completed_at.isoformat() if r.completed_at else None,
+            "settings": settings,
+        })
+    return {"optimizations": out}
+
+
+@router.get("/optimizations/running")
+def list_running_optimizations(db: Session = Depends(get_db)):
+    """Running optimizations enriched with best fitness + top individuals (UI Running tab)."""
+    rows = (db.query(StrategyOptimization)
+            .filter(StrategyOptimization.status == "running")
+            .order_by(StrategyOptimization.id.desc()).all())
+    return {"optimizations": [
+        {
+            "id": r.id, "name": r.name, "status": r.status, "progress": r.progress,
+            "fitnessMetric": r.fitness_metric, "bestFitness": r.best_fitness,
+            "bestParams": r.best_params, "nEvaluated": len(r.all_results or []),
+            "topIndividuals": _top_individuals(r, n=8),
+        }
+        for r in rows
+    ]}
+
+
+@router.get("/optimizations/{opt_id}")
+def get_optimization(opt_id: int, db: Session = Depends(get_db)):
+    """Full optimization detail (config, best params, top individuals) by id."""
+    r = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail=f"Optimization {opt_id} not found")
+    d = r.to_dict()
+    d["topIndividuals"] = _top_individuals(r, n=15)
+    return d
+
+
 @router.get("/{strategy_id}")
 async def get_strategy(
     strategy_id: int,
@@ -444,63 +510,3 @@ def _opt_settings_summary(cfg: Optional[dict]) -> dict:
     return summary
 
 
-# NOTE: register the two-segment /optimizations/* routes; they never collide with the
-# one-segment GET /{strategy_id} (different path-segment count). /running before /{opt_id}.
-@router.get("/optimizations")
-def list_optimizations(db: Session = Depends(get_db)):
-    """All optimization (StrategyOptimization) jobs for the Optimization-Jobs tab.
-
-    One compact row per job: id/name/status/fitness, the timing fields (created/started/
-    completed) so the UI can render the run date + a derived duration, and a `settings`
-    summary (GA config + optimized expert/RM ranges + screener settings). Newest first.
-    """
-    rows = (db.query(StrategyOptimization)
-            .order_by(StrategyOptimization.id.desc()).all())
-    out = []
-    for r in rows:
-        settings = _opt_settings_summary(r.optimization_config)
-        settings["fitnessMetric"] = r.fitness_metric
-        out.append({
-            "id": r.id,
-            "strategyId": r.strategy_id,
-            "name": r.name,
-            "status": r.status,
-            "optimizationType": r.optimization_type,
-            "fitnessMetric": r.fitness_metric,
-            "bestFitness": r.best_fitness,
-            "progress": r.progress,
-            "errorMessage": r.error_message,
-            "createdAt": r.created_at.isoformat() if r.created_at else None,
-            "startedAt": r.started_at.isoformat() if r.started_at else None,
-            "completedAt": r.completed_at.isoformat() if r.completed_at else None,
-            "settings": settings,
-        })
-    return {"optimizations": out}
-
-
-@router.get("/optimizations/running")
-def list_running_optimizations(db: Session = Depends(get_db)):
-    """Running optimizations enriched with best fitness + top individuals (UI Running tab)."""
-    rows = (db.query(StrategyOptimization)
-            .filter(StrategyOptimization.status == "running")
-            .order_by(StrategyOptimization.id.desc()).all())
-    return {"optimizations": [
-        {
-            "id": r.id, "name": r.name, "status": r.status, "progress": r.progress,
-            "fitnessMetric": r.fitness_metric, "bestFitness": r.best_fitness,
-            "bestParams": r.best_params, "nEvaluated": len(r.all_results or []),
-            "topIndividuals": _top_individuals(r, n=8),
-        }
-        for r in rows
-    ]}
-
-
-@router.get("/optimizations/{opt_id}")
-def get_optimization(opt_id: int, db: Session = Depends(get_db)):
-    """Full optimization detail (config, best params, top individuals) by id."""
-    r = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
-    if not r:
-        raise HTTPException(status_code=404, detail=f"Optimization {opt_id} not found")
-    d = r.to_dict()
-    d["topIndividuals"] = _top_individuals(r, n=15)
-    return d

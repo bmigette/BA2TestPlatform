@@ -1121,7 +1121,7 @@ const Backtesting: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Configuration Panel */}
         <div className="xl:col-span-1 space-y-4">
           {/* New Backtest Form */}
@@ -1148,7 +1148,18 @@ const Backtesting: React.FC = () => {
                 }`}
               >
                 <Clock className="w-4 h-4 inline mr-1" />
-                History
+                BT History
+              </button>
+              <button
+                onClick={() => setBacktestCardTab('optjobs')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  backtestCardTab === 'optjobs'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <Sliders className="w-4 h-4 inline mr-1" />
+                Opt History
               </button>
               <button
                 onClick={() => setBacktestCardTab('saved')}
@@ -1174,17 +1185,6 @@ const Backtesting: React.FC = () => {
                 {runningJobCount > 0 && (
                   <span className="ml-1.5 px-1.5 py-0.5 text-xs rounded-full bg-blue-500 text-white">{runningJobCount}</span>
                 )}
-              </button>
-              <button
-                onClick={() => setBacktestCardTab('optjobs')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  backtestCardTab === 'optjobs'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
-              >
-                <Sliders className="w-4 h-4 inline mr-1" />
-                Opti Jobs
               </button>
             </div>
 
@@ -1875,7 +1875,7 @@ const Backtesting: React.FC = () => {
         </div>
 
         {/* Results Panel */}
-        <div className="xl:col-span-2 space-y-4">
+        <div className="xl:col-span-1 space-y-4">
           {selectedBacktest ? (
             <>
               {/* Header: name + engine-type badge (daily expert = multi-asset; ml = model-driven) */}

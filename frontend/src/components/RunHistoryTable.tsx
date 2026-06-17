@@ -3,6 +3,12 @@ import { listBacktests, saveBacktest, exportBacktest, deleteBacktest } from '../
 
 const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
 
+// Max drawdown is stored as a signed percent (e.g. -11.8). Render like the summary card: red, 1dp.
+function fmtDrawdown(v: unknown): string {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? `${n.toFixed(1)}%` : '—';
+}
+
 export function RunHistoryTable({ savedOnly, onSelect }:
   { savedOnly: boolean; onSelect: (id: number) => void; }) {
   const [rows, setRows] = useState<any[]>([]);
@@ -86,6 +92,8 @@ export function RunHistoryTable({ savedOnly, onSelect }:
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">opt#</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">ret%</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">sharpe</th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">trades</th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">DD%</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">saved</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">name</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Actions</th>
@@ -100,6 +108,8 @@ export function RunHistoryTable({ savedOnly, onSelect }:
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.optimizationId ?? r.optimization_id) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.totalReturn ?? r.total_return) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.sharpeRatio ?? r.sharpe_ratio) ?? '—'}</td>
+              <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.totalTrades ?? r.total_trades) ?? '—'}</td>
+              <td className="px-3 py-2 text-sm text-red-600 dark:text-red-400">{fmtDrawdown(r.maxDrawdown ?? r.max_drawdown)}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.isSaved ?? r.is_saved) ? '★' : ''}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{r.name}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">
