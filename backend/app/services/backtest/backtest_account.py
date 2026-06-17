@@ -52,6 +52,7 @@ Field/enum names verified against the installed ba2_common:
 """
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -152,6 +153,10 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         self._positions: Dict[str, _Position] = {}
         # The equity curve: one snapshot per simulated bar (engine appends via snapshot_equity).
         self._equity_snapshots: List[Dict[str, Any]] = []
+        # Parallel ascending list of snapshot dates (snapshots are appended in clock order) so
+        # _bars_between can bisect the count in a window instead of scanning every snapshot per
+        # round-trip trade (was O(trades x snapshots) at results time).
+        self._snapshot_dates: List[Any] = []
         # Monotonic synthetic broker-order-id counter.
         self._broker_seq = 0
         # contract_symbol -> signed option lot (qty in CONTRACTS, multiplier 100). Kept
@@ -280,6 +285,7 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             "equity_value": equity_value,
         }
         self._equity_snapshots.append(snap)
+        self._snapshot_dates.append(as_of)
         return snap
 
     def _update_position(self, symbol: str, signed_qty: float, fill_px: float) -> None:
@@ -1021,11 +1027,10 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         """Number of equity-curve bars between two simulated timestamps (>=0)."""
         if start is None or end is None:
             return 0
-        n = 0
-        for s in self._equity_snapshots:
-            d = s["date"]
-            if start <= d <= end:
-                n += 1
+        # _snapshot_dates is ascending (appended in clock order), so the count of snapshots in
+        # [start, end] is a bisect window (O(log n)) — not a full scan per trade.
+        dates = self._snapshot_dates
+        n = bisect.bisect_right(dates, end) - bisect.bisect_left(dates, start)
         return max(n - 1, 0)
 
     def get_balance_history(
