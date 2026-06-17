@@ -177,6 +177,13 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         # working orders on EVERY bar; on a 5-minute clock the DB round-trip dominated). None
         # means "reload on next read"; see _all_orders / invalidate_order_cache.
         self._order_cache: Optional[List[TradingOrder]] = None
+        # Working-orders sublist: ONLY the active-status orders (the per-bar fill engine's working
+        # set), as references to the SAME objects in _order_cache (so in-place fills/cancels are
+        # visible in both — no divergence). The fill loop must iterate only these, not the
+        # thousands of dead (filled/cancelled) orders a long churning run accumulates. Rebuilt
+        # lazily from _order_cache and invalidated together with it.
+        self._active_order_cache: Optional[List[TradingOrder]] = None
+        self._active_set: Optional[frozenset] = None  # cached frozenset(OrderStatus.get_active_statuses())
 
     # ======================================================================
     # Settings
@@ -376,6 +383,7 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         no-event bars do ZERO order DB reads.
         """
         self._order_cache = None
+        self._active_order_cache = None
 
     def _all_orders(self) -> List[TradingOrder]:
         """This account's TradingOrder rows, loaded once and cached (see invalidate_order_cache)."""
@@ -390,23 +398,44 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 )
         return self._order_cache
 
+    def _active_orders(self) -> List[TradingOrder]:
+        """The working set: this account's ACTIVE-status orders (references to the SAME objects
+        in ``_all_orders``, so the fill engine's in-place mutations are shared).
+
+        This is what the per-bar fill loop iterates — O(active), NOT O(every order ever created).
+        A long churning run accumulates thousands of terminal (filled/cancelled) orders; scanning
+        them every bar (and touching each one's ORM ``.status``) was a top per-bar cost. Rebuilt
+        lazily from ``_all_orders`` and invalidated whenever new orders may have been created.
+        Orders that go terminal in place stay referenced here until the next rebuild but are
+        excluded by the per-call status filter, so results are unchanged."""
+        if self._active_order_cache is None:
+            if self._active_set is None:
+                self._active_set = frozenset(OrderStatus.get_active_statuses())
+            aset = self._active_set
+            self._active_order_cache = [o for o in self._all_orders() if o.status in aset]
+        return self._active_order_cache
+
     def _orders_filtered(self, statuses=None, transaction_id=None) -> List[TradingOrder]:
         """This account's orders, filtered by status / transaction — served from the in-memory
         cache (NO per-call SQL).
 
-        The per-bar fill engine only cares about the few WORKING (or a single transaction's)
-        orders. We hold all of the account's orders in memory (``_all_orders``) and filter in
-        Python; the cached objects are the SAME instances the fill engine mutates in place, so
-        a fill/cancel/activation is immediately visible here without a reload. ``statuses`` is
-        an iterable of OrderStatus; ``transaction_id`` scopes to one transaction's legs.
-        """
-        orders = self._all_orders()
+        Fast path (the per-bar fill engine): a status filter that's a SUBSET of the active
+        statuses is served from the active-only working set (``_active_orders``), so the loop
+        never scans the thousands of terminal orders a long run accumulates. Other filters
+        (terminal statuses, transaction-only) fall back to the full cache. The cached objects are
+        the SAME instances the fill engine mutates in place, so a fill/cancel/activation is
+        immediately visible without a reload."""
         if statuses is not None:
             sset = set(statuses)
-            orders = [o for o in orders if o.status in sset]
+            if self._active_set is None:
+                self._active_set = frozenset(OrderStatus.get_active_statuses())
+            pool = self._active_orders() if sset <= self._active_set else self._all_orders()
+            orders = [o for o in pool if o.status in sset]
+        else:
+            orders = list(self._all_orders())
         if transaction_id is not None:
             orders = [o for o in orders if o.transaction_id == transaction_id]
-        return list(orders)
+        return orders
 
     def get_order(self, order_id: str) -> Any:
         """Look up an order by broker_order_id, then by numeric PK as a fallback."""
