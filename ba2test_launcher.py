@@ -154,6 +154,132 @@ def _cmd_fetch_cache(args) -> int:
     return 0
 
 
+def _cmd_prewarm(args) -> int:
+    """Pre-build the per-symbol FMP history disk cache for the optimization-grid experts
+    BEFORE the GA process pool spawns, so the first individuals read it from disk instead
+    of each paying a cold network fetch.
+
+    Mirrors how fetch-cache / the providers resolve the FMP key (env FMP_API_KEY, mirrored
+    in from the trade app-settings DB by _enter_backend). Runs each expert's per-symbol
+    history fetch in a ThreadPoolExecutor, INSIDE frozen_ttl_cache() so the BACKTEST-ONLY
+    disk cache layer is engaged (the freeze gate is what enables disk writes; live passes
+    through to the API). FactorRanker is skipped — its factor data is not disk-cached.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from ba2_providers.fmp_common import frozen_ttl_cache, _fmp_history_cache_dir
+
+    # Resolve the FMP key the same way the providers / fetch-cache do.
+    key = os.getenv("FMP_API_KEY")
+    if not key:
+        try:
+            from ba2_common.config import get_app_setting
+            key = get_app_setting("FMP_API_KEY")
+        except Exception:  # noqa: BLE001
+            key = None
+    if not key:
+        sys.exit("ba2-test prewarm: FMP_API_KEY not configured (set it in .env or the app-settings DB).")
+
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    experts = [e.strip() for e in args.experts.split(",") if e.strip()]
+    if not symbols:
+        sys.exit("ba2-test prewarm: --symbols is empty.")
+
+    # end_date bounds only the in-Python filtering (the per-symbol histories are full
+    # fetches), but thread it through for correctness. Default = now. Use a tz-aware
+    # datetime to match the real cached_get path (datetime.now(timezone.utc)) — the
+    # insider provider compares end_date against tz-aware filingDates, so a naive value
+    # would raise inside its (post-fetch) filter (the disk cache is written either way).
+    from datetime import timezone as _tz
+    if args.end:
+        end_date = datetime.fromisoformat(args.end)
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=_tz.utc)
+    else:
+        end_date = datetime.now(_tz.utc)
+
+    # Build the (expert, symbol) work items. Each item is a callable doing the cached fetch.
+    from ba2_experts.FMPRating import (
+        fetch_grades_historical_cached, fetch_price_target_history_cached,
+    )
+    from ba2_providers.fundamentals.details.FMPCompanyDetailsProvider import FMPCompanyDetailsProvider
+    from ba2_providers.insider.FMPInsiderProvider import FMPInsiderProvider
+
+    # Lazily construct the providers once (thread-safe enough: they only hold the API key
+    # + do stateless reads through the shared disk cache).
+    _details_provider = None
+    _insider_provider = None
+
+    def _do_fmprating(sym: str) -> None:
+        fetch_grades_historical_cached(key, sym)
+        fetch_price_target_history_cached(key, sym)
+
+    def _do_earnings_drift(sym: str) -> None:
+        nonlocal _details_provider
+        if _details_provider is None:
+            _details_provider = FMPCompanyDetailsProvider()
+        _details_provider.get_past_earnings(
+            sym, frequency="quarterly", end_date=end_date,
+            lookback_periods=8, format_type="dict")
+
+    def _do_insider(sym: str) -> None:
+        nonlocal _insider_provider
+        if _insider_provider is None:
+            _insider_provider = FMPInsiderProvider()
+        _insider_provider.get_insider_transactions(
+            sym, end_date=end_date, lookback_days=400, as_of=end_date,
+            format_type="dict")
+
+    _EXPERT_FETCHERS = {
+        "FMPRating": _do_fmprating,
+        "FMPEarningsDrift": _do_earnings_drift,
+        "FMPInsiderClusterBuy": _do_insider,
+    }
+
+    work = []  # list of (expert, symbol, fetch_callable)
+    for expert in experts:
+        if expert == "FactorRanker":
+            print(f">> skipping FactorRanker — its factor data is not disk-cached (nothing to pre-warm)")
+            continue
+        fetcher = _EXPERT_FETCHERS.get(expert)
+        if fetcher is None:
+            print(f">> skipping unknown expert '{expert}' (no disk-cached history fetcher)")
+            continue
+        for sym in symbols:
+            work.append((expert, sym, fetcher))
+
+    if not work:
+        print("ba2-test prewarm: no disk-cached experts to pre-warm; nothing to do.")
+        return 0
+
+    counts = {}  # expert -> number of symbols successfully cached
+    errors = 0
+    t0 = time.time()
+    # The freeze gate engages the BACKTEST-ONLY disk cache (live would pass through).
+    with frozen_ttl_cache():
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+            futures = {ex.submit(fn, sym): (expert, sym) for (expert, sym, fn) in work}
+            for fut in as_completed(futures):
+                expert, sym = futures[fut]
+                try:
+                    fut.result()
+                    counts[expert] = counts.get(expert, 0) + 1
+                except Exception as e:  # noqa: BLE001 — one bad symbol must not abort
+                    errors += 1
+                    print(f"!! prewarm {expert}/{sym} failed: {e}")
+    elapsed = time.time() - t0
+
+    print("\n>> pre-warm summary")
+    for expert in experts:
+        if expert == "FactorRanker":
+            continue
+        print(f"   {expert}: {counts.get(expert, 0)}/{len(symbols)} symbols cached")
+    print(f"   errors: {errors}")
+    print(f"   elapsed: {elapsed:.1f}s")
+    print(f"   cache dir: {_fmp_history_cache_dir()}")
+    return 0
+
+
 def _cmd_fetch_screener(args) -> int:
     from app.services.screener_history_cache import ScreenerHistoryCache, screened_universe_for_bar
     with open(args.settings_json, "r", encoding="utf-8") as fh:
@@ -1093,6 +1219,17 @@ def main(argv: "list | None" = None) -> int:
     fc.add_argument("--provider", default="fmp", help="OHLCV provider (default fmp).")
     fc.add_argument("--workers", type=int, default=5)
 
+    pw = sub.add_parser("prewarm",
+                        help="Pre-build the per-symbol FMP history disk cache for the grid experts "
+                             "(ratings/earnings/insider) before the GA pool spawns.")
+    pw.add_argument("--symbols", required=True, help="Comma-separated symbols.")
+    pw.add_argument("--experts", default="FMPRating,FMPEarningsDrift,FMPInsiderClusterBuy",
+                    help="Comma-separated experts to pre-warm (FactorRanker is skipped — not "
+                         "disk-cached). Default: the 3 disk-cached history experts.")
+    pw.add_argument("--workers", type=int, default=5, help="Parallel fetch threads (default 5).")
+    pw.add_argument("--end", default=None,
+                    help="ISO end date for the earnings/insider in-Python filter (default today).")
+
     fs = sub.add_parser("fetch-screener", help="Build the screener-history cache for a range.")
     fs.add_argument("--settings-json", required=True, help="Path to a JSON file of screener settings.")
     fs.add_argument("--start", required=True, help="ISO start date.")
@@ -1206,6 +1343,7 @@ def main(argv: "list | None" = None) -> int:
     return {
         "serve": lambda: _cmd_serve(args),
         "fetch-cache": lambda: _cmd_fetch_cache(args),
+        "prewarm": lambda: _cmd_prewarm(args),
         "fetch-screener": lambda: _cmd_fetch_screener(args),
         "fetch-options": lambda: _cmd_fetch_options(args),
         "cache-usage": lambda: _cmd_cache_usage(args),

@@ -56,6 +56,12 @@ echo ">> pre-caching $INTERVAL OHLCV  $CACHE_START..$END"
   --start "$CACHE_START" --end "$END" \
   --provider fmp --workers 5
 
+# ---- 2b. pre-warm the per-symbol FMP history disk cache (ratings/earnings/insider) so the
+#          spawned GA workers read it from disk instead of each cold-fetching from FMP -------
+echo ">> pre-warming FMP history cache for the experts"
+"$BA2_TEST" prewarm --symbols "$UNIVERSE" --experts "$EXPERTS" --end "$END" --workers 5 || \
+  echo "!! prewarm failed (non-fatal — workers will lazily cache); continuing"
+
 # ---- 3. launch ONE grid (do NOT run two at once — duplicate grids corrupt the run) -----
 echo ">> launching optimize-batch grid"
 exec "$BA2_TEST" optimize-batch \
