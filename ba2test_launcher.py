@@ -300,6 +300,67 @@ def _cmd_fetch_screener(args) -> int:
     return 0
 
 
+def _cmd_build_screener_metrics(args) -> int:
+    """Build/extend the screener METRIC store (parquet) from the as-of OHLCV cache.
+
+    Wires ba2_providers.screener.metric_store.build_store to the as-of OHLCV cache
+    (get_provider("ohlcv","fmp") + cached_get.ohlcv_get) and a per-symbol shares source.
+    The FMP screener row carries no per-symbol method on the fundamentals-details provider
+    (no shares_outstanding), so shares are derived from the screener row itself as
+    marketCap / price (current-filing-ish), giving a meaningful as-of market_cap = shares ×
+    close. If a row lacks usable marketCap/price, shares fall back to None (mcap -> NaN,
+    acceptable for v1 per the plan)."""
+    import app.models  # noqa: F401 — register ORM models on Base
+    import pandas as _pd
+    from datetime import datetime as _dt
+    from app.models.database import init_db
+    from ba2_common.config import get_app_setting
+    from ba2_providers.screener import metric_store as ms
+    from ba2_providers.cache.cached_get import ohlcv_get  # as-of OHLCV cache accessor
+    from ba2_providers import get_provider
+    init_db()
+    api_key = os.getenv("FMP_API_KEY") or get_app_setting("FMP_API_KEY")
+    if not api_key:
+        sys.exit("build-screener-metrics: FMP_API_KEY not configured")
+
+    # Shares map derived once from the screener rows (marketCap / price). The fundamentals
+    # details provider exposes no shares_outstanding method, so this is the minimal, real
+    # source of a latest-filing-ish share count without N extra per-symbol API calls.
+    _shares_by_sym = {}
+    for _r in ms._fetch_screener_rows(api_key):
+        _sym = _r.get("symbol")
+        _cap = _r.get("marketCap") or 0
+        _px = _r.get("price") or 0
+        if _sym and _cap > 0 and _px > 0:
+            _shares_by_sym[_sym] = _cap / _px
+
+    prov = get_provider("ohlcv", "fmp")
+
+    def _ohlcv(sym, end):
+        # The as-of OHLCV cache returns a DataFrame with a `Date` COLUMN + int index, rows not
+        # guaranteed sorted, and `Date` parsed tz-AWARE (UTC). compute_daily_metrics expects a
+        # tz-naive, ascending, date-INDEXED frame (and rolling needs ascending order), and the
+        # scan grid is tz-naive — so normalize here (verified against the real cache in a perf
+        # pass; the synthetic unit-test fixture was already clean so it didn't surface this).
+        df = ohlcv_get(prov, sym, as_of=_dt.fromisoformat(end), lookback=4000)
+        if df is None or len(df) == 0:
+            return df
+        idx = _pd.to_datetime(df["Date"])
+        if idx.dt.tz is not None:
+            idx = idx.dt.tz_localize(None)
+        return df.set_index(idx).sort_index()
+
+    def _shares(sym):
+        return _shares_by_sym.get(sym)
+
+    summary = ms.build_store(
+        args.store, api_key, args.start, args.end,
+        market_cap_min=args.market_cap_min, price_min=args.price_min, volume_min=args.volume_min,
+        ohlcv_get=_ohlcv, shares_get=_shares, cadence_days=args.cadence_days, drop_days=args.drop_days)
+    print(f"build-screener-metrics: {summary}")
+    return 0
+
+
 def _cmd_fetch_options(args) -> int:
     # Build the offline options cache from Alpaca. alpaca-py imports lazily inside
     # fetch_options.build_cache, so the editable venv (~/ba2-venvs/test) is required at runtime.
@@ -1247,6 +1308,16 @@ def main(argv: "list | None" = None) -> int:
     fs.add_argument("--cache-db", required=True, help="Path to the screener-history SQLite cache.")
     fs.add_argument("--cadence-days", type=int, default=7, help="Days between scan dates (default 7).")
 
+    bm = sub.add_parser("build-screener-metrics", help="Build/extend the screener METRIC store (parquet).")
+    bm.add_argument("--store", required=True, help="Path to the parquet metric-store dir.")
+    bm.add_argument("--start", required=True)
+    bm.add_argument("--end", required=True)
+    bm.add_argument("--market-cap-min", type=float, required=True, help="LOOSEST cap bound (shortlist superset).")
+    bm.add_argument("--price-min", type=float, default=0.0)
+    bm.add_argument("--volume-min", type=float, default=0.0)
+    bm.add_argument("--cadence-days", type=int, default=7, help="Scan cadence in days (default 7 = weekly). Match the analysis schedule.")
+    bm.add_argument("--drop-days", type=int, default=1)
+
     fo = sub.add_parser("fetch-options", help="Build the offline options cache from Alpaca.")
     fo.add_argument("--underlyings", required=True, help="Comma-separated symbols, or @file.")
     fo.add_argument("--start", required=True, help="ISO start date (>= 2024-02-01).")
@@ -1354,6 +1425,7 @@ def main(argv: "list | None" = None) -> int:
         "fetch-cache": lambda: _cmd_fetch_cache(args),
         "prewarm": lambda: _cmd_prewarm(args),
         "fetch-screener": lambda: _cmd_fetch_screener(args),
+        "build-screener-metrics": lambda: _cmd_build_screener_metrics(args),
         "fetch-options": lambda: _cmd_fetch_options(args),
         "cache-usage": lambda: _cmd_cache_usage(args),
         "cache-clear": lambda: _cmd_cache_clear(args),
