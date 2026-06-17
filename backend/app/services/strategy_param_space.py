@@ -69,6 +69,18 @@ def _collect_expert(expert_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def _collect_screener(screener_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """screener:<setting> ranges from a screener_cfg ({setting: {min,max,step,type,optimize}})."""
+    out: Dict[str, Any] = {}
+    for name, spec in (screener_cfg or {}).items():
+        if not spec or not spec.get("optimize"):
+            continue
+        is_int = spec.get("type") == "int"
+        out[f"screener:{name}"] = _range_entry(spec.get("min"), spec.get("max"),
+                                               spec.get("step"), is_int=is_int)
+    return out
+
+
 def _walk_condition_nodes(cond: Optional[Dict[str, Any]], out: Dict[str, Any]) -> None:
     """Emit cond:<id>:value and cond:<id>:confirmation_bars for optimizable nodes.
 
@@ -143,6 +155,7 @@ def collect_param_space(
     strategy,
     expert_cfg: Optional[Dict[str, Any]] = None,
     bypass: bool = False,
+    screener_cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return the flat joint param_ranges dict for GeneticOptimizer.
 
@@ -161,6 +174,7 @@ def collect_param_space(
     if not bypass:
         space.update(_collect_tp_sl(strategy))
         space.update(_collect_conditions(strategy))
+    space.update(_collect_screener(screener_cfg))  # screener genes apply on BOTH paths
     if not space:
         raise ValueError(
             "No optimizable parameters found: "
@@ -236,6 +250,7 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     exit_option_delta_by_id: Dict[str, Any] = {}
     exit_option_dte_by_id: Dict[str, Any] = {}
     expert_overrides: Dict[str, Any] = {}
+    screener_overrides: Dict[str, Any] = {}
     tp = getattr(strategy, "initial_tp_percent", None)
     sl = getattr(strategy, "initial_sl_percent", None)
 
@@ -246,6 +261,8 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
             sl = val
         elif key.startswith("model:"):
             expert_overrides[key[len("model:"):]] = val
+        elif key.startswith("screener:"):
+            screener_overrides[key[len("screener:"):]] = val
         elif key.startswith("cond:"):
             _, cid, field = key.split(":", 2)
             cond_by_id.setdefault(cid, {})[field] = val
@@ -303,5 +320,6 @@ def decode_params(strategy, flat_params: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "tp": tp, "sl": sl,
         "expert_overrides": expert_overrides,
+        "screener_overrides": screener_overrides,
         "buy_tree": buy_tree, "sell_tree": sell_tree, "exit_rules": exit_rules,
     }
