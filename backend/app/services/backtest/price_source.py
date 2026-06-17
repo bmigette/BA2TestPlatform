@@ -126,6 +126,7 @@ class AsOfPriceSource:
         # symbol -> {bar_key -> bar dict}. The key is a calendar ``date`` for daily/
         # coarser intervals and a tz-naive UTC ``datetime`` for intraday (see ``_norm``).
         self._bars: Dict[str, Dict[Any, Dict[str, float]]] = {}
+        self._clock_key: Any = None  # normalised key of the current clock bar (set in set_clock)
         # symbol -> ascending list of that symbol's bar keys. Built once at load time so
         # ``next_bar``/``next_bar_date`` can binary-search the next key after ``after`` (O(log n))
         # instead of scanning + min-ing the whole series every call — the latter was the #1
@@ -145,6 +146,10 @@ class AsOfPriceSource:
     def set_clock(self, as_of: datetime) -> None:
         """Advance the virtual clock to ``as_of`` (engine calls this once per bar)."""
         self._clock = as_of
+        # Precompute the current bar's normalised key ONCE per bar. bar_at/close_at are called
+        # millions of times per backtest, almost always for the current clock — caching the key
+        # here avoids re-running _norm/_to_datetime on every lookup (a top per-bar cost).
+        self._clock_key = _norm(as_of, self._interval)
 
     def now(self) -> datetime:
         if self._clock is None:
@@ -243,7 +248,14 @@ class AsOfPriceSource:
 
     def bar_at(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[Dict[str, float]]:
         """The bar for ``symbol`` on the as-of bar (or current clock bar), or None."""
-        d = _norm(as_of if as_of is not None else self.now(), self._interval)
+        if as_of is None:
+            if self._clock is None:
+                raise RuntimeError(
+                    "AsOfPriceSource clock not set; the engine must call set_clock() per bar"
+                )
+            d = self._clock_key  # precomputed once per bar in set_clock (hot path)
+        else:
+            d = _norm(as_of, self._interval)
         return self._bars.get(symbol, {}).get(d)
 
     def close_at(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[float]:
