@@ -60,6 +60,50 @@ export const listRunningOptimizations = () =>
   jget<{ optimizations: RunningOpt[] }>(`/strategies/optimizations/running`)
     .then(r => r.optimizations ?? []);
 
+// Optimization-Jobs tab: every StrategyOptimization row + a compact `settings` summary.
+// Shapes confirmed against backend/app/api/strategies.py (_opt_settings_summary).
+export interface OptParamRange {
+  min?: number | string;
+  max?: number | string;
+  step?: number | string;
+  type?: string;
+}
+export interface OptScreenerSettings {
+  screener_settings?: Record<string, number | string>;
+  group?: string;
+  cache_db?: string;
+}
+export interface OptJobSettings {
+  ga: Partial<Record<
+    'populationSize' | 'generations' | 'crossoverProb' | 'mutationProb'
+    | 'earlyStoppingGenerations' | 'elitismPercent' | 'seed', number>>;
+  fitnessMetric?: string | null;
+  engine?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  universeMode?: string | null;
+  expertRanges: Record<string, OptParamRange>;
+  screener?: OptScreenerSettings;
+}
+export interface OptimizationJob {
+  id: number;
+  strategyId?: number;
+  name?: string | null;
+  status: string;
+  optimizationType?: string;
+  fitnessMetric?: string;
+  bestFitness?: number | null;
+  progress?: number;
+  errorMessage?: string | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  settings: OptJobSettings;
+}
+export const listOptimizationJobs = () =>
+  jget<{ optimizations: OptimizationJob[] }>(`/strategies/optimizations`)
+    .then(r => r.optimizations ?? []);
+
 export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean } = {}) => {
   const p = new URLSearchParams();
   if (q.expert) p.set('expert', q.expert);

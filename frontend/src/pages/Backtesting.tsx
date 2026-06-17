@@ -52,6 +52,7 @@ import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
 import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks } from '../lib/btApi';
 import { RunningJobsPanel } from '../components/RunningJobsPanel';
+import { OptimizationJobsTable } from '../components/OptimizationJobsTable';
 import type { Vocabulary } from '../lib/btApi';
 import {
   XAxis,
@@ -476,7 +477,7 @@ const Backtesting: React.FC = () => {
   const [savingStrategy, setSavingStrategy] = useState(false);
 
   // Tab state for New Backtest card
-  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'history' | 'saved' | 'jobs'>('new');
+  const [backtestCardTab, setBacktestCardTab] = useState<'new' | 'history' | 'saved' | 'jobs' | 'optjobs'>('new');
   const [runningJobCount, setRunningJobCount] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -1170,6 +1171,17 @@ const Backtesting: React.FC = () => {
                   <span className="ml-1.5 px-1.5 py-0.5 text-xs rounded-full bg-blue-500 text-white">{runningJobCount}</span>
                 )}
               </button>
+              <button
+                onClick={() => setBacktestCardTab('optjobs')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  backtestCardTab === 'optjobs'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <Sliders className="w-4 h-4 inline mr-1" />
+                Opti Jobs
+              </button>
             </div>
 
             {backtestCardTab === 'new' ? (
@@ -1843,6 +1855,11 @@ const Backtesting: React.FC = () => {
               /* Running Jobs Tab — live per-generation + total progress */
               <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
                 <RunningJobsPanel />
+              </div>
+            ) : backtestCardTab === 'optjobs' ? (
+              /* Optimization Jobs Tab — genetic StrategyOptimization runs + their settings */
+              <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
+                <OptimizationJobsTable />
               </div>
             ) : (
               /* Saved Backtests Tab — fills the viewport height like History */

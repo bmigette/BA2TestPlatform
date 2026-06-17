@@ -393,8 +393,91 @@ def _top_individuals(row, n: int = 8) -> list:
     ]
 
 
+def _opt_settings_summary(cfg: Optional[dict]) -> dict:
+    """Compact, UI-facing summary of a StrategyOptimization's optimization_config.
+
+    No hidden defaults (backend/CLAUDE.md): a key is surfaced only when present, never
+    invented. Pulls (a) the GA config (population/generations + the rest of the GA knobs),
+    (b) the optimized expert/RM param keys with their {min,max,step} ranges, and (c) the
+    screener/universe block when the backtest universe is screener-mode.
+    """
+    cfg = cfg or {}
+    ga = {
+        k: cfg[k]
+        for k in (
+            "populationSize", "generations", "crossoverProb", "mutationProb",
+            "earlyStoppingGenerations", "elitismPercent", "seed",
+        )
+        if k in cfg
+    }
+
+    # Optimized expert/RM params: {param: {optimize, min, max, step, type}}. Keep only the
+    # ones flagged optimize=true, condensed to their ranges for the cell.
+    expert_params = cfg.get("expert_params") or {}
+    expert_ranges = {}
+    for name, spec in expert_params.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("optimize"):
+            expert_ranges[name] = {
+                k: spec[k] for k in ("min", "max", "step", "type") if k in spec
+            }
+
+    # Screener / universe block off the backtest config.
+    backtest = cfg.get("backtest") or {}
+    universe = backtest.get("universe") or {}
+    summary = {
+        "ga": ga,
+        "fitnessMetric": None,  # filled by the caller (column on the row, not in cfg)
+        "engine": backtest.get("engine"),
+        "startDate": backtest.get("start_date"),
+        "endDate": backtest.get("end_date"),
+        "universeMode": universe.get("mode"),
+        "expertRanges": expert_ranges,
+    }
+    if universe.get("mode") == "screener":
+        summary["screener"] = {
+            k: universe[k]
+            for k in ("screener_settings", "group", "cache_db")
+            if k in universe
+        }
+    return summary
+
+
 # NOTE: register the two-segment /optimizations/* routes; they never collide with the
 # one-segment GET /{strategy_id} (different path-segment count). /running before /{opt_id}.
+@router.get("/optimizations")
+def list_optimizations(db: Session = Depends(get_db)):
+    """All optimization (StrategyOptimization) jobs for the Optimization-Jobs tab.
+
+    One compact row per job: id/name/status/fitness, the timing fields (created/started/
+    completed) so the UI can render the run date + a derived duration, and a `settings`
+    summary (GA config + optimized expert/RM ranges + screener settings). Newest first.
+    """
+    rows = (db.query(StrategyOptimization)
+            .order_by(StrategyOptimization.id.desc()).all())
+    out = []
+    for r in rows:
+        settings = _opt_settings_summary(r.optimization_config)
+        settings["fitnessMetric"] = r.fitness_metric
+        out.append({
+            "id": r.id,
+            "strategyId": r.strategy_id,
+            "name": r.name,
+            "status": r.status,
+            "optimizationType": r.optimization_type,
+            "fitnessMetric": r.fitness_metric,
+            "bestFitness": r.best_fitness,
+            "progress": r.progress,
+            "errorMessage": r.error_message,
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
+            "startedAt": r.started_at.isoformat() if r.started_at else None,
+            "completedAt": r.completed_at.isoformat() if r.completed_at else None,
+            "settings": settings,
+        })
+    return {"optimizations": out}
+
+
 @router.get("/optimizations/running")
 def list_running_optimizations(db: Session = Depends(get_db)):
     """Running optimizations enriched with best fitness + top individuals (UI Running tab)."""
