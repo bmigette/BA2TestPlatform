@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import random
 from datetime import date, datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 
@@ -120,8 +120,39 @@ def _as_date(d: Any) -> date:
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
+class _BarDateContext(NamedTuple):
+    """The per-bar date-context the schedule check needs, computed ONCE per bar.
+
+    ``_schedule_allows_entry`` ran per expert AND per bar and recomputed
+    ``as_of_dt.weekday()`` + ``as_of_dt.strftime("%H:%M")`` every call — on a 5-minute clock
+    that strftime alone was a dominant per-bar cost (profiled). Precomputing these once per bar
+    in the engine loop and passing the context in removes the redundant work without changing
+    which bars are entry bars.
+
+      * ``weekday``: ``as_of_dt.weekday()`` (Mon=0 .. Sun=6) — index into ``_WEEKDAYS``.
+      * ``hhmm``: ``"HH:MM"`` of the bar (the intraday ``times`` match key).
+      * ``nth_weekday``: the 1-based occurrence of this weekday within its month
+        (``(day - 1) // 7 + 1`` -> 1st/2nd/3rd/4th/5th such weekday). Precomputed for a
+        future monthly "Nth weekday" schedule mode; the current schedule format has no such
+        mode, so it does not (yet) affect gating.
+    """
+    weekday: int
+    hhmm: str
+    nth_weekday: int
+
+
+def _bar_date_context(as_of_dt: datetime) -> _BarDateContext:
+    """Compute the per-bar date-context (see ``_BarDateContext``) once for a bar."""
+    return _BarDateContext(
+        weekday=as_of_dt.weekday(),
+        hhmm=as_of_dt.strftime("%H:%M"),
+        nth_weekday=(as_of_dt.day - 1) // 7 + 1,
+    )
+
+
 def _schedule_allows_entry(as_of_dt: datetime, schedule: Optional[Dict[str, Any]],
-                           is_intraday: bool) -> bool:
+                           is_intraday: bool,
+                           ctx: Optional[_BarDateContext] = None) -> bool:
     """Whether ``as_of_dt`` is a scheduled ENTRY bar for an expert.
 
     Honours the common ``execution_schedule_enter_market`` setting
@@ -133,11 +164,18 @@ def _schedule_allows_entry(as_of_dt: datetime, schedule: Optional[Dict[str, Any]
 
     A missing/empty schedule means "every bar" (legacy behaviour). On a daily clock the
     ``times`` are ignored (the single daily bar represents the whole session).
+
+    ``ctx`` is the precomputed per-bar date-context (``_bar_date_context(as_of_dt)``). The
+    engine builds it ONCE per bar and passes it to every per-expert call so the weekday /
+    HH:MM are not recomputed per expert per bar. When omitted (external/legacy callers) it is
+    computed on the fly — behaviour is identical either way.
     """
     if not schedule:
         return True
+    if ctx is None:
+        ctx = _bar_date_context(as_of_dt)
     days = schedule.get("days") or {}
-    wd = _WEEKDAYS[as_of_dt.weekday()]
+    wd = _WEEKDAYS[ctx.weekday]
     if not days.get(wd, True):
         return False
     if not is_intraday:
@@ -145,7 +183,7 @@ def _schedule_allows_entry(as_of_dt: datetime, schedule: Optional[Dict[str, Any]
     times = schedule.get("times") or []
     if not times:
         return True
-    return as_of_dt.strftime("%H:%M") in set(times)
+    return ctx.hhmm in set(times)
 
 
 # ---------------------------------------------------------------------------
@@ -327,8 +365,13 @@ class DailyBacktestEngine:
 
         _scheds = [self._entry_schedule(e) for e, _eid, _s, _r in self.experts]
         _is_intraday = self.price.is_intraday
-        analysis_idx = [j for j, a in enumerate(days)
-                        if any(_schedule_allows_entry(_to_aware(a), s, _is_intraday) for s in _scheds)]
+
+        def _day_is_analysis(a: Any) -> bool:
+            aw = _to_aware(a)
+            _ctx = _bar_date_context(aw)  # compute the day's date-context ONCE, reuse per schedule
+            return any(_schedule_allows_entry(aw, s, _is_intraday, _ctx) for s in _scheds)
+
+        analysis_idx = [j for j, a in enumerate(days) if _day_is_analysis(a)]
 
         i = 0
         n_days = len(days)
@@ -345,6 +388,11 @@ class DailyBacktestEngine:
                 as_of_dt = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
             else:
                 as_of_dt = datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc)
+
+            # Per-bar date-context (weekday / HH:MM / nth-weekday) computed ONCE here and passed to
+            # every per-expert _schedule_allows_entry call below, instead of recomputing weekday +
+            # strftime per expert per bar (the dominant per-bar cost on a 5-minute clock).
+            _date_ctx = _bar_date_context(as_of_dt)
 
             # 1. advance the clock + bust the per-account price cache (the gotcha).
             self.price.set_clock(as_of_dt)
@@ -367,7 +415,8 @@ class DailyBacktestEngine:
             for expert, expert_id, settings, ruleset_id in self.experts:
                 if not getattr(expert, "bypasses_classic_rm", False):
                     continue
-                if _schedule_allows_entry(as_of_dt, self._entry_schedule(expert), self.price.is_intraday):
+                if _schedule_allows_entry(as_of_dt, self._entry_schedule(expert),
+                                          self.price.is_intraday, _date_ctx):
                     continue
                 self._apply_bypass_stops(expert, expert_id, settings, as_of_dt)
                 book_dirty = True  # a bypass stop may have submitted a sell order
@@ -385,7 +434,7 @@ class DailyBacktestEngine:
                 # bars the loop still advances — fills + open-position management below
                 # run every bar — but the expert no-ops (no new analysis/orders).
                 if not _schedule_allows_entry(
-                    as_of_dt, self._entry_schedule(expert), self.price.is_intraday
+                    as_of_dt, self._entry_schedule(expert), self.price.is_intraday, _date_ctx
                 ):
                     continue
                 # Safety net: if the schedule pins weekdays but no `times`, the gate above is
