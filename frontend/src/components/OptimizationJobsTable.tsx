@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { listOptimizationJobs } from '../lib/btApi';
-import type { OptimizationJob, OptJobSettings } from '../lib/btApi';
+import { listOptimizationJobs, getOptimization } from '../lib/btApi';
+import type { OptimizationJob, OptJobSettings, OptimizationDetail } from '../lib/btApi';
+import { TopIndividualsTable } from './TopIndividualsTable';
 
 const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
 
@@ -151,6 +152,8 @@ export function OptimizationJobsTable() {
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // Lazily-fetched per-job detail (top individuals). 'loading' while in flight.
+  const [details, setDetails] = useState<Record<number, OptimizationDetail | 'loading'>>({});
 
   useEffect(() => {
     listOptimizationJobs()
@@ -168,12 +171,21 @@ export function OptimizationJobsTable() {
     (!q || (r.name || '').toLowerCase().includes(q.toLowerCase())),
   );
 
-  const toggle = (id: number) =>
+  const toggle = (id: number) => {
     setExpanded(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+    // Fetch top individuals the first time a job is expanded; cache thereafter.
+    setDetails(prev => {
+      if (prev[id]) return prev;
+      getOptimization(id)
+        .then(d => setDetails(p => ({ ...p, [id]: d })))
+        .catch(() => setDetails(p => ({ ...p, [id]: { id, status: 'error' } })));
+      return { ...prev, [id]: 'loading' };
+    });
+  };
 
   if (loaded && rows.length === 0) {
     return (
@@ -239,7 +251,24 @@ export function OptimizationJobsTable() {
                     <span className="text-xs">{isOpen ? '▾' : '▸'}</span>
                     <span className="text-xs text-gray-500 dark:text-gray-400">{settingsPreview(r.settings)}</span>
                   </button>
-                  {isOpen && <SettingsDetail s={r.settings} />}
+                  {isOpen && (
+                    <>
+                      <SettingsDetail s={r.settings} />
+                      <div className="mt-3">
+                        <div className="font-medium text-gray-600 dark:text-gray-300 mb-1 text-xs">
+                          Top individuals
+                        </div>
+                        {details[r.id] === 'loading' || details[r.id] === undefined ? (
+                          <div className="text-xs text-gray-400 dark:text-gray-500">Loading…</div>
+                        ) : (
+                          <TopIndividualsTable
+                            individuals={(details[r.id] as OptimizationDetail).topIndividuals}
+                            fitnessMetric={r.fitnessMetric}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
                 </td>
               </tr>
             );

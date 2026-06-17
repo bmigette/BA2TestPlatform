@@ -111,6 +111,21 @@ export const listOptimizationJobs = () =>
   jget<{ optimizations: OptimizationJob[] }>(`/strategies/optimizations`)
     .then(r => r.optimizations ?? []);
 
+// Full detail for a single optimization (used by the Opt-History tab to lazily fetch the
+// top individuals on expand). Backend GET /optimizations/{id} returns the StrategyOptimization
+// to_dict() plus a `topIndividuals` list (ranked best-first, n=15) — read-only.
+export interface OptimizationDetail {
+  id: number;
+  status: string;
+  fitnessMetric?: string;
+  bestFitness?: number | null;
+  bestParams?: Record<string, unknown> | null;
+  allResults?: Array<Record<string, unknown>> | null;
+  topIndividuals?: OptIndividual[];
+}
+export const getOptimization = (id: number) =>
+  jget<OptimizationDetail>(`/strategies/optimizations/${id}`);
+
 export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean } = {}) => {
   const p = new URLSearchParams();
   if (q.expert) p.set('expert', q.expert);

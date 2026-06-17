@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Activity, XCircle } from 'lucide-react';
 import { listTasks, cancelTask, listRunningOptimizations } from '../lib/btApi';
 import type { TaskInfo, RunningOpt } from '../lib/btApi';
+import { TopIndividualsTable } from './TopIndividualsTable';
 
 const BT_TASK_TYPES = new Set(['daily_backtest', 'backtest', 'strategy_optimization']);
 
@@ -167,31 +168,14 @@ function OptimizationDetail({ opt }: { opt?: RunningOpt }) {
           Evaluated <span className="font-medium text-gray-700 dark:text-gray-300">{opt.nEvaluated ?? 0}</span>
         </span>
       </div>
-      {top.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-gray-400 dark:text-gray-500 text-left">
-                <th className="font-medium py-1 pr-3">#</th>
-                <th className="font-medium py-1 pr-3 text-right">{opt.fitnessMetric ?? 'fitness'}</th>
-                <th className="font-medium py-1 pr-3 text-right">trades</th>
-              </tr>
-            </thead>
-            <tbody>
-              {top.map(ind => (
-                <tr key={ind.rank} className="border-t border-gray-50 dark:border-gray-700/50">
-                  <td className="py-1 pr-3 text-gray-500 dark:text-gray-400">{ind.rank}</td>
-                  <td className="py-1 pr-3 text-right font-medium text-gray-800 dark:text-gray-200">{fmt(ind.fitness)}</td>
-                  <td className="py-1 pr-3 text-right text-gray-600 dark:text-gray-400">{ind.nTrades ?? '–'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-1.5">
-            Full backtests for the top {Math.min(5, top.length)} land in History when the job completes.
-          </div>
-        </div>
-      )}
+      <div className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Top individuals</div>
+      <TopIndividualsTable
+        individuals={top}
+        fitnessMetric={opt.fitnessMetric}
+        note={top.length > 0
+          ? `Full backtests for the top ${Math.min(5, top.length)} land in History when the job completes.`
+          : undefined}
+      />
     </div>
   );
 }
