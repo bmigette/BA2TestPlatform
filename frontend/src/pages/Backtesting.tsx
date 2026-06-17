@@ -225,6 +225,33 @@ interface Backtest {
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';  // override via frontend/.env.local
 
+// Human-readable trade duration. The stored avg_trade_duration / per-trade duration are in
+// fill-clock BARS (meaningless to read on a 5min clock — "30010 bars"), so we derive the real
+// elapsed TIME from the entry/exit timestamps instead (interval-agnostic).
+const formatDuration = (ms: number): string => {
+  if (!isFinite(ms) || ms <= 0) return '—';
+  const min = ms / 60000;
+  if (min < 60) return `${Math.round(min)}m`;
+  const hours = min / 60;
+  if (hours < 24) {
+    const h = Math.floor(hours);
+    const m = Math.round(min - h * 60);
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+  const days = hours / 24;
+  if (days < 10) {
+    const d = Math.floor(days);
+    const h = Math.round(hours - d * 24);
+    return h ? `${d}d ${h}h` : `${d}d`;
+  }
+  return `${Math.round(days)}d`;
+};
+
+const tradeDurationMs = (t: { entryDate?: string; exitDate?: string }): number => {
+  if (!t?.entryDate || !t?.exitDate) return NaN;
+  return Date.parse(t.exitDate) - Date.parse(t.entryDate);
+};
+
 // Generate random backtest name
 const generateBacktestName = (): string => {
   const adjectives = ['Quick', 'Swift', 'Bold', 'Sharp', 'Smooth', 'Steady', 'Active', 'Rapid', 'Dynamic', 'Agile'];
@@ -1818,8 +1845,8 @@ const Backtesting: React.FC = () => {
                 <RunningJobsPanel />
               </div>
             ) : (
-              /* Saved Backtests Tab */
-              <div className="space-y-2 max-h-96 overflow-y-auto pr-4 [scrollbar-gutter:stable]">
+              /* Saved Backtests Tab — fills the viewport height like History */
+              <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
                 <RunHistoryTable savedOnly={true} onSelect={viewBacktest} />
               </div>
             )}
@@ -1831,10 +1858,18 @@ const Backtesting: React.FC = () => {
           {selectedBacktest ? (
             <>
               {/* Header: name + engine-type badge (daily expert = multi-asset; ml = model-driven) */}
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
-                  {selectedBacktest.name}
-                </h3>
+              <div className="flex items-start justify-between flex-wrap gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
+                    {selectedBacktest.name}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {selectedBacktest.startDate} → {selectedBacktest.endDate}
+                    {(selectedBacktest.completedAt || selectedBacktest.createdAt) && (
+                      <> &middot; ran {new Date((selectedBacktest.completedAt || selectedBacktest.createdAt) as string).toLocaleString()}</>
+                    )}
+                  </p>
+                </div>
                 {selectedBacktest.engineType === 'daily_expert' ? (
                   <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
                     Daily expert &middot; multi-asset
@@ -1906,7 +1941,11 @@ const Backtesting: React.FC = () => {
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
                   <p className="text-xs text-gray-500 dark:text-gray-400">Avg Duration</p>
-                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.avgTradeDuration?.toFixed(1)} bars</p>
+                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{(() => {
+                    const ts = (selectedBacktest.results?.trades || [])
+                      .map(tradeDurationMs).filter(ms => isFinite(ms) && ms > 0);
+                    return ts.length ? formatDuration(ts.reduce((a, b) => a + b, 0) / ts.length) : '—';
+                  })()}</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
                   <p className="text-xs text-gray-500 dark:text-gray-400">Best Trade</p>
@@ -2097,7 +2136,7 @@ const Backtesting: React.FC = () => {
                                 <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                   {trade.pnl >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
                                 </td>
-                                <td className="px-3 py-2 text-center text-gray-900 dark:text-gray-100">{trade.duration} bars</td>
+                                <td className="px-3 py-2 text-center text-gray-900 dark:text-gray-100">{formatDuration(tradeDurationMs(trade))}</td>
                                 <td className="px-3 py-2 text-center">
                                   <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-xs text-gray-700 dark:text-gray-300">
                                     {trade.exitReason}
@@ -2133,12 +2172,24 @@ const Backtesting: React.FC = () => {
                         if (!sp && !selectedBacktest.strategyId) {
                           return <p className="text-sm text-gray-500 dark:text-gray-400">No strategy information available for this backtest.</p>;
                         }
-                        const tp = sp?.initialTpPercent ?? sp?.initial_tp_percent;
-                        const sl = sp?.initialSlPercent ?? sp?.initial_sl_percent;
+                        // Optimization-derived backtests store the GA's flat gene dict
+                        // ({tp, sl, model:*, cond:*, exit:*}) in strategyParams, not the
+                        // structured {initialTpPercent, buyEntryConditions} shape — so fall
+                        // back to the flat tp/sl keys.
+                        const tp = sp?.initialTpPercent ?? sp?.initial_tp_percent ?? sp?.tp;
+                        const sl = sp?.initialSlPercent ?? sp?.initial_sl_percent ?? sp?.sl;
                         const buyConditions = sp?.buyEntryConditions?.conditions || [];
                         const sellConditions = sp?.sellEntryConditions?.conditions || [];
                         const exitConditions = sp?.exitConditions || [];
                         const stratName = sp?.strategyName;
+                        // Flat optimized genes (model:*/cond:*/exit:*) — surfaced as a readable
+                        // list so the tab is informative for optimization runs (which carry no
+                        // structured buy/sell/exit conditions).
+                        const optimizedGenes = sp && typeof sp === 'object'
+                          ? Object.entries(sp as Record<string, unknown>)
+                              .filter(([k]) => /^(model:|cond:|exit:)/.test(k))
+                              .map(([k, v]) => [k, typeof v === 'number' ? (Number.isInteger(v) ? String(v) : (v as number).toFixed(2)) : String(v)] as [string, string])
+                          : [];
                         // Resolved-ruleset read-back (B10): when this run came from a
                         // finished optimization that surfaced its flat best-params gene
                         // map (cond:*/exit:* -> value), render the ruleset that ACTUALLY
@@ -2208,6 +2259,19 @@ const Backtesting: React.FC = () => {
                             {exitConditions.length > 0 && bestParams && (
                               <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
                                 <ResolvedRulesetView exitRules={exitConditions} bestParams={bestParams} />
+                              </div>
+                            )}
+                            {buyConditions.length === 0 && sellConditions.length === 0 && exitConditions.length === 0 && optimizedGenes.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">Optimized Parameters ({optimizedGenes.length})</h4>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                  {optimizedGenes.map(([k, v]) => (
+                                    <div key={k} className="flex justify-between text-sm bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-1.5">
+                                      <span className="font-mono text-gray-600 dark:text-gray-400 truncate mr-2">{k}</span>
+                                      <span className="font-medium text-gray-900 dark:text-gray-100">{v}</span>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             )}
                           </>
