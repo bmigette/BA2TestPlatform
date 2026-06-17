@@ -229,8 +229,13 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
     def _open_positions_mtm(self) -> float:
         """Mark-to-market value of all open positions at the current bar's close.
 
-        Signed value (long positions positive, short positions negative). A symbol
-        with no price at the current bar contributes 0 (it cannot be valued today).
+        Signed value (long positions positive, short positions negative). A held symbol
+        with no EXACT bar at the current clock tick is valued at its last-known close
+        (forward-fill) — NOT $0 — because the clock is the union of every symbol's
+        timestamps, so a held symbol routinely lacks a bar on ticks driven by other symbols
+        (and on gaps / half-days / split days). Dropping it to $0 made positions vanish from
+        the equity curve and produced spurious 90%+ drawdowns (corrupting max_drawdown /
+        Calmar / Sharpe). Final fallback is the entry price for a never-yet-priced symbol.
         Equity positions are valued at the equity bar's close; OPTION positions are
         valued separately at the current premium close x qty x multiplier (with a
         fall-back to the entry premium when there is no premium bar for the day).
@@ -240,6 +245,10 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             if p.qty == 0:
                 continue
             px = self._price.close_at(p.symbol)
+            if px is None:
+                px = self._price.close_asof(p.symbol)  # forward-fill: last known close
+            if px is None:
+                px = getattr(p, "avg_price", None)  # never-priced held symbol -> entry
             if px is not None:
                 total += p.qty * px
         return total + self._option_positions_mtm()
@@ -347,6 +356,8 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
             if p.qty == 0:
                 continue
             cur = self._price.close_at(p.symbol)
+            if cur is None:  # no exact bar this tick -> last-known close (not None/stale)
+                cur = self._price.close_asof(p.symbol)
             out.append(
                 _AttrDict(
                     {

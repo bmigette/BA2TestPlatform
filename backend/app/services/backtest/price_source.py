@@ -263,6 +263,26 @@ class AsOfPriceSource:
         bar = self.bar_at(symbol, as_of)
         return float(bar["close"]) if bar is not None else None
 
+    def close_asof(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[float]:
+        """Last-known close AT OR BEFORE the clock (forward-fill), or None if never priced.
+
+        For VALUING a held position on a bar where the symbol has no EXACT bar — the trading
+        clock is the union of every symbol's timestamps, so a held symbol routinely lacks a
+        bar on ticks driven by other symbols (and on data gaps / half-days / split days).
+        ``close_at`` returns None there, which previously made the position vanish from the
+        equity MTM ($0) and produced spurious 90%+ drawdowns. This binary-searches the
+        symbol's keys for the most recent bar <= the clock. It is valuation-only: TP/SL fill
+        checks still use ``bar_at``/``next_bar`` against EXACT bars (never a forward-filled one)."""
+        keys = self._sorted_keys.get(symbol)
+        if not keys:
+            return None
+        d = self._clock_key if as_of is None else _norm(as_of, self._interval)
+        i = bisect.bisect_right(keys, d) - 1
+        if i < 0:
+            return None
+        bar = self._bars[symbol].get(keys[i])
+        return float(bar["close"]) if bar is not None else None
+
     def next_bar(self, symbol: str, after: datetime) -> Optional[Dict[str, float]]:
         """The NEXT trading bar strictly after ``after`` (for next-bar fills)."""
         k = self.next_bar_date(symbol, after)
