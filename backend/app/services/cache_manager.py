@@ -51,6 +51,44 @@ def _asof_roots() -> List[Path]:
     return [base, base / "datasets" / "cache"]
 
 
+def _fmp_history_root() -> List[Path]:
+    """Resolve the backtest-only FMP-history disk cache dir from ba2_providers.
+
+    Per-symbol JSON payloads (analyst grades / price targets / past earnings /
+    insider / financial statements / finnhub reco trends) written under
+    ``<ba2_common CACHE_FOLDER>/fmp_history`` by ba2_providers.fmp_common during
+    a frozen (backtest) run. Owned by ``_fmp_history_cache_dir()``; imported
+    defensively so a backend without ba2_providers still loads the scanner.
+
+    This dir lives UNDER the ``asof`` base root, so it is excluded from the asof
+    scan/clear (see ``_FMP_HISTORY_EXCLUDE``) to avoid double-counting."""
+    try:
+        from ba2_providers.fmp_common import _fmp_history_cache_dir
+    except Exception:
+        return []
+    return [Path(_fmp_history_cache_dir())]
+
+
+def _fmp_history_exclude() -> Optional[Path]:
+    """The fmp_history dir to exclude from the asof scan/clear, or None."""
+    roots = _fmp_history_root()
+    return roots[0] if roots else None
+
+
+_FMP_HISTORY_EXCLUDE = _fmp_history_exclude()
+
+
+def _under(path: Path, ancestor: Optional[Path]) -> bool:
+    """True if ``path`` is ``ancestor`` or nested under it (best-effort)."""
+    if ancestor is None:
+        return False
+    try:
+        path.resolve().relative_to(ancestor.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _resolve(p: "str | Path") -> Path:
     """Resolve a backend-relative path against BACKEND_DIR (absolute passes through)."""
     p = Path(p)
@@ -68,12 +106,20 @@ CACHE_TYPES: Dict[str, Dict[str, Any]] = {
     "exports":  {"roots": [_resolve("news_exports")],         "destructive": False, "ttl_hours": None},
     # ba2_providers as_of cache: parquet time-series + provider_cache spill, under
     # ba2_common.config.CACHE_FOLDER (NOT <backend>/cache). Resolved lazily.
-    "asof":     {"roots": _asof_roots(),                      "destructive": False, "ttl_hours": None},
+    # The fmp_history subtree is excluded here (counted/cleared as its own type).
+    "asof":     {"roots": _asof_roots(),                      "destructive": False, "ttl_hours": None,
+                 "exclude_under": _FMP_HISTORY_EXCLUDE},
+    # ba2_providers backtest-only FMP-history disk cache: per-symbol JSON payloads
+    # under <ba2_common CACHE_FOLDER>/fmp_history (a subtree of the asof base root).
+    "fmp_history": {"roots": _fmp_history_root(),             "destructive": False, "ttl_hours": None},
 }
 
 
-def _scan_dir(root: Path) -> Dict[str, Any]:
-    """Return total bytes, file count, oldest/newest mtime (ISO UTC) for a tree."""
+def _scan_dir(root: Path, exclude_under: Optional[Path] = None) -> Dict[str, Any]:
+    """Return total bytes, file count, oldest/newest mtime (ISO UTC) for a tree.
+
+    ``exclude_under``: optional subtree to skip (e.g. asof excludes fmp_history,
+    which is counted as its own type)."""
     total = 0
     count = 0
     oldest: Optional[float] = None
@@ -82,6 +128,8 @@ def _scan_dir(root: Path) -> Dict[str, Any]:
         return {"bytes": 0, "files": 0, "oldest": None, "newest": None, "exists": False}
     for f in root.rglob("*"):
         if f.is_file():
+            if exclude_under is not None and _under(f, exclude_under):
+                continue
             try:
                 st = f.stat()
             except OSError:
@@ -110,7 +158,7 @@ def get_usage() -> Dict[str, Any]:
             "destructive": cfg["destructive"], "ttl_hours": cfg["ttl_hours"],
         }
         for root in cfg["roots"]:
-            s = _scan_dir(Path(root))
+            s = _scan_dir(Path(root), exclude_under=cfg.get("exclude_under"))
             agg["bytes"] += s["bytes"]
             agg["files"] += s["files"]
             agg["exists"] = agg["exists"] or s["exists"]
@@ -137,7 +185,9 @@ def drill_down(cache_type: str) -> List[Dict[str, Any]]:
     ohlcv: per <SYMBOL>_<interval> file under each provider subfolder.
     news:  per-provider article counts from the DB stats.
     jobs/models: per task_id directory size.
-    datasets/exports/asof: flat file listing.
+    fmp_history: per-namespace rollup (files grouped by the <namespace> prefix
+        before "__" in each <namespace>__<SYMBOL>.json filename).
+    datasets/exports/asof: flat file listing (asof excludes the fmp_history subtree).
     """
     cfg = CACHE_TYPES.get(cache_type)
     if not cfg:
@@ -180,13 +230,38 @@ def drill_down(cache_type: str) -> List[Dict[str, Any]]:
                 if d.is_dir():
                     size = sum(x.stat().st_size for x in d.rglob("*") if x.is_file())
                     items.append({"task_id": d.name, "bytes": size})
+    elif cache_type == "fmp_history":
+        # Per-namespace rollup: group <namespace>__<SYMBOL>.json by the prefix.
+        groups: Dict[str, Dict[str, Any]] = {}
+        for root in cfg["roots"]:
+            root = Path(root)
+            if not root.exists():
+                continue
+            for f in root.rglob("*"):
+                if not (f.is_file() and f.suffix == ".json"):
+                    continue
+                ns = f.name.split("__", 1)[0] if "__" in f.name else f.stem
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                g = groups.setdefault(ns, {"namespace": ns, "files": 0, "bytes": 0, "newest": None})
+                g["files"] += 1
+                g["bytes"] += st.st_size
+                m = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+                if g["newest"] is None or m > g["newest"]:
+                    g["newest"] = m
+        items = sorted(groups.values(), key=lambda g: g["namespace"])
     else:  # datasets, exports, asof — flat file listing
+        exclude_under = cfg.get("exclude_under")
         for root in cfg["roots"]:
             root = Path(root)
             if not root.exists():
                 continue
             for f in root.rglob("*"):
                 if f.is_file():
+                    if exclude_under is not None and _under(f, exclude_under):
+                        continue
                     st = f.stat()
                     items.append({
                         "name": str(f.relative_to(root)),
@@ -238,11 +313,14 @@ def _delete_tree(
     root: "str | Path",
     before: Optional[datetime] = None,
     name_match: Optional[Any] = None,
+    exclude_under: Optional[Path] = None,
 ) -> Dict[str, int]:
     """Delete files under ``root`` (recursive), skipping .tmp staging files.
 
-    ``before``     : only delete files whose mtime is strictly older than this.
-    ``name_match`` : optional predicate(Path)->bool; only matching files deleted.
+    ``before``       : only delete files whose mtime is strictly older than this.
+    ``name_match``   : optional predicate(Path)->bool; only matching files deleted.
+    ``exclude_under``: optional subtree to never delete (e.g. asof excludes the
+                       fmp_history subtree, which is cleared as its own type).
     Empty directories left behind by deletions are pruned (best-effort).
     """
     root = Path(root)
@@ -254,6 +332,8 @@ def _delete_tree(
         if not f.is_file():
             continue
         if _is_tmp(f):
+            continue
+        if exclude_under is not None and _under(f, exclude_under):
             continue
         if name_match is not None and not name_match(f):
             continue
@@ -268,12 +348,15 @@ def _delete_tree(
         if b or not f.exists():
             freed += b
             removed += 1
-    # prune now-empty dirs (deepest first); never remove the root itself
+    # prune now-empty dirs (deepest first); never remove the root itself or the
+    # excluded subtree.
     for d in sorted(
         (p for p in root.rglob("*") if p.is_dir()),
         key=lambda p: len(p.parts),
         reverse=True,
     ):
+        if exclude_under is not None and _under(d, exclude_under):
+            continue
         try:
             next(d.iterdir())
         except StopIteration:
@@ -337,12 +420,14 @@ def clear_type(
                 return False
             return True
 
+    exclude_under = cfg.get("exclude_under")
     result = {"bytes_freed": 0, "files_removed": 0}
     for root in cfg["roots"]:
         target = Path(root)
         if cache_type in ("jobs", "models") and task_id:
             target = target / task_id
-        r = _delete_tree(target, before=before, name_match=name_match)
+        r = _delete_tree(target, before=before, name_match=name_match,
+                         exclude_under=exclude_under)
         result["bytes_freed"] += r["bytes_freed"]
         result["files_removed"] += r["files_removed"]
     return result

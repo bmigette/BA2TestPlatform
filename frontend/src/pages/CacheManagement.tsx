@@ -7,6 +7,7 @@ import {
   Library,
   Download,
   Archive,
+  FileText,
   Trash2,
   RefreshCw,
   Loader,
@@ -48,6 +49,7 @@ const TYPE_META: Record<string, { label: string; icon: React.ComponentType<{ siz
   models: { label: 'Models', icon: Library, description: 'Trained model artifacts (irreplaceable).' },
   exports: { label: 'Exports', icon: Download, description: 'Exported news JSON files.' },
   asof: { label: 'As-Of Cache', icon: Archive, description: 'ba2_providers point-in-time provider cache.' },
+  fmp_history: { label: 'FMP History', icon: FileText, description: 'Backtest-only per-symbol FMP history JSON (analyst grades, price targets, earnings, insider, financial statements).' },
 };
 
 const fmtBytes = (b: number): string => {
@@ -242,6 +244,16 @@ const CacheManagement: React.FC = () => {
           <td className="px-3 py-1 text-right text-gray-600 dark:text-gray-400 text-xs" colSpan={4}>
             {item.articles} articles
           </td>
+        </tr>
+      );
+    }
+    // FMP History: namespace/files/bytes
+    if ('namespace' in item) {
+      return (
+        <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+          <td className="px-3 py-1 text-gray-900 dark:text-gray-100 font-mono text-xs" colSpan={2}>{item.namespace}</td>
+          <td className="px-3 py-1 text-right text-gray-600 dark:text-gray-400 text-xs">{item.files} files</td>
+          <td className="px-3 py-1 text-right text-gray-600 dark:text-gray-400 text-xs" colSpan={2}>{fmtBytes(item.bytes || 0)}</td>
         </tr>
       );
     }
