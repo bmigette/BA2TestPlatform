@@ -22,6 +22,7 @@ Verified against the installed ba2_providers OHLCV provider:
 """
 from __future__ import annotations
 
+import bisect
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
@@ -125,6 +126,12 @@ class AsOfPriceSource:
         # symbol -> {bar_key -> bar dict}. The key is a calendar ``date`` for daily/
         # coarser intervals and a tz-naive UTC ``datetime`` for intraday (see ``_norm``).
         self._bars: Dict[str, Dict[Any, Dict[str, float]]] = {}
+        # symbol -> ascending list of that symbol's bar keys. Built once at load time so
+        # ``next_bar``/``next_bar_date`` can binary-search the next key after ``after`` (O(log n))
+        # instead of scanning + min-ing the whole series every call — the latter was the #1
+        # cost of a dense 5-minute run (next_bar = 41% of profiled time: 158k calls each
+        # scanning ~55k bars).
+        self._sorted_keys: Dict[str, List[Any]] = {}
 
     @property
     def interval(self) -> str:
@@ -193,6 +200,7 @@ class AsOfPriceSource:
             d = _norm(row.get("Date", row.get("date")), self._interval)
             indexed[d] = _bar_from_row(row)
         self._bars[symbol] = indexed
+        self._sorted_keys[symbol] = sorted(indexed.keys())  # for binary-search next_bar
 
     def load_bars_df(self, symbol: str, df: Any) -> None:
         """VECTORIZED index build straight from a pandas OHLCV DataFrame (the hot preload path).
@@ -204,6 +212,7 @@ class AsOfPriceSource:
         so all lookups/semantics are identical to ``load_bars``)."""
         if df is None or len(df) == 0:
             self._bars[symbol] = {}
+            self._sorted_keys[symbol] = []
             return
         import numpy as np
         import pandas as pd
@@ -226,6 +235,7 @@ class AsOfPriceSource:
             keys[i]: {"open": o[i], "high": h[i], "low": low[i], "close": c[i], "volume": v[i]}
             for i in range(len(keys))
         }
+        self._sorted_keys[symbol] = sorted(self._bars[symbol].keys())  # for binary-search next_bar
 
     # ---- queries -----------------------------------------------------------
     def has_symbol(self, symbol: str) -> bool:
@@ -243,17 +253,21 @@ class AsOfPriceSource:
 
     def next_bar(self, symbol: str, after: datetime) -> Optional[Dict[str, float]]:
         """The NEXT trading bar strictly after ``after`` (for next-bar fills)."""
-        cutoff = _norm(after, self._interval)
-        cand = [d for d in self._bars.get(symbol, {}) if d > cutoff]
-        if not cand:
-            return None
-        return self._bars[symbol][min(cand)]
+        k = self.next_bar_date(symbol, after)
+        return self._bars[symbol][k] if k is not None else None
 
     def next_bar_date(self, symbol: str, after: datetime) -> Optional[Any]:
-        """The key of the next trading bar strictly after ``after`` (date or datetime), or None."""
+        """The key of the next trading bar strictly after ``after`` (date or datetime), or None.
+
+        Binary-searches the symbol's ascending key list (``bisect_right`` -> first key strictly
+        greater than the cutoff) — O(log n) vs the old O(n) scan+min over the whole series, which
+        was the dominant cost of dense 5-minute runs (called per working order per bar)."""
+        keys = self._sorted_keys.get(symbol)
+        if not keys:
+            return None
         cutoff = _norm(after, self._interval)
-        cand = [d for d in self._bars.get(symbol, {}) if d > cutoff]
-        return min(cand) if cand else None
+        i = bisect.bisect_right(keys, cutoff)
+        return keys[i] if i < len(keys) else None
 
     def all_dates(self) -> List[Any]:
         """Sorted union of all bar keys across every loaded symbol (the trading clock).
