@@ -336,6 +336,8 @@ git -C BA2TradeProviders commit -m "feat(screener): parquet date-partitioned sto
 ```python
 def _cmd_build_screener_metrics(args) -> int:
     import app.models  # noqa: F401
+    import pandas as _pd
+    from datetime import datetime as _dt
     from app.models.database import init_db
     from ba2_common.config import get_app_setting
     from ba2_providers.screener import metric_store as ms
@@ -347,8 +349,19 @@ def _cmd_build_screener_metrics(args) -> int:
         sys.exit("build-screener-metrics: FMP_API_KEY not configured")
     details = get_provider("fundamentals_details", "fmp")  # for shares_get
     def _ohlcv(sym, end):
+        # The as-of OHLCV cache returns a DataFrame with a `Date` COLUMN + int index, rows not
+        # guaranteed sorted, and `Date` parsed tz-AWARE (UTC). compute_daily_metrics expects a
+        # tz-naive, ascending, date-INDEXED frame (and rolling needs ascending order), and the
+        # scan grid is tz-naive — so normalize here (verified against the real cache in a perf
+        # pass; the synthetic unit-test fixture was already clean so it didn't surface this).
         prov = get_provider("ohlcv", "fmp")
-        return ohlcv_get(prov, sym, as_of=_dt.fromisoformat(end), lookback=4000)
+        df = ohlcv_get(prov, sym, as_of=_dt.fromisoformat(end), lookback=4000)
+        if df is None or len(df) == 0:
+            return df
+        idx = _pd.to_datetime(df["Date"])
+        if idx.dt.tz is not None:
+            idx = idx.dt.tz_localize(None)
+        return df.set_index(idx).sort_index()
     def _shares(sym):
         try:
             return details.shares_outstanding(sym)  # latest filing; static for v1
