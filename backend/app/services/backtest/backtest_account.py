@@ -603,6 +603,18 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
                 if o.status == OrderStatus.FILLED:  # all-or-none parent filled this bar
                     filled = True
                 continue
+            # Cheap PLAIN-FLOAT pre-check: most bars cross NO threshold, so skip the heavier
+            # ORM ``_evaluate_fill`` unless THIS bar's range could actually trigger the order.
+            # Uses the SAME fill bar ``_evaluate_fill`` would (``_bar_for_fill``); a None bar
+            # means no fill (identical to ``_evaluate_fill`` returning None). The gate mirrors
+            # ``_evaluate_fill``'s comparisons exactly, so it lets through precisely the orders
+            # the full path would fill — the real fill decision stays in ``_evaluate_fill``.
+            bar = self._bar_for_fill(o, as_of)
+            if bar is None:
+                continue
+            trig_hi, trig_lo = self._trigger_thresholds(o)
+            if not (bar["high"] >= trig_hi or bar["low"] <= trig_lo):
+                continue
             fill_px = self._evaluate_fill(o, as_of)
             if fill_px is None:
                 continue
@@ -1443,6 +1455,67 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         """Apply slippage in the worsening direction (buys up, sells down)."""
         bps = float(self._cfg["slippage_bps"]) / 10_000.0
         return px * (1.0 + bps) if side_is_buy else px * (1.0 - bps)
+
+    def _trigger_thresholds(self, order) -> tuple:
+        """The (trig_hi, trig_lo) PLAIN-float price thresholds for a working equity order.
+
+        These mirror EXACTLY the price comparisons in ``_evaluate_fill`` so a cheap per-bar
+        pre-check (``bar.high >= trig_hi or bar.low <= trig_lo``) lets through precisely the
+        bars that could trigger a fill — the full (ORM-heavy) ``_evaluate_fill`` then makes the
+        real decision. The thresholds are CACHED as plain (non-mapped) attributes on the order
+        (``_trig_hi`` / ``_trig_lo``) on first evaluation so subsequent bars read plain floats,
+        not instrumented SQLModel columns. A leg is never mutated in place (adjust_tp/sl REPLACES
+        it with a fresh order), so the cache is always consistent with the order's prices.
+
+          * MARKET     -> always triggers (hi=-inf so ``bar.high >= -inf`` is always True).
+          * BUY_LIMIT  -> fills iff bar.low  <= limit  -> trig_lo = limit.
+          * SELL_LIMIT -> fills iff bar.high >= limit  -> trig_hi = limit.
+          * BUY_STOP   -> triggers iff bar.high >= stop -> trig_hi = stop.
+          * SELL_STOP  -> triggers iff bar.low  <= stop -> trig_lo = stop.
+          * OCO        -> both a stop side and a limit side -> trig_hi AND trig_lo set (the
+                         side mapping differs by direction but each side is exactly one of
+                         {bar.high >= X} / {bar.low <= X}; see ``_evaluate_oco_fill``).
+        """
+        hi = getattr(order, "_trig_hi", None)
+        if hi is not None or getattr(order, "_trig_lo", None) is not None:
+            return order._trig_hi, order._trig_lo
+
+        INF = float("inf")
+        trig_hi = INF   # the price bar.high must REACH (>=) to possibly trigger; INF = never via high
+        trig_lo = -INF  # the price bar.low  must REACH (<=) to possibly trigger; -INF = never via low
+        ot = order.order_type
+        if ot == OrderType.MARKET:
+            trig_hi = -INF  # always triggers (bar.high >= -inf is always True)
+        elif ot == OrderType.BUY_LIMIT:
+            trig_lo = float(order.limit_price)
+        elif ot == OrderType.SELL_LIMIT:
+            trig_hi = float(order.limit_price)
+        elif ot == OrderType.BUY_STOP:
+            trig_hi = float(order.stop_price)
+        elif ot == OrderType.SELL_STOP:
+            trig_lo = float(order.stop_price)
+        elif ot == OrderType.OCO:
+            # Both legs present: one side is a {bar.high >= X} test, the other {bar.low <= X}.
+            # SELL OCO (closing long):  TP SELL_LIMIT (high>=limit), SL SELL_STOP (low<=stop).
+            # BUY  OCO (closing short): SL BUY_STOP   (high>=stop),  TP BUY_LIMIT  (low<=limit).
+            is_sell = order.side == OrderDirection.SELL
+            tp = order.limit_price
+            sl = order.stop_price
+            if is_sell:
+                if tp is not None:
+                    trig_hi = float(tp)
+                if sl is not None:
+                    trig_lo = float(sl)
+            else:
+                if sl is not None:
+                    trig_hi = float(sl)
+                if tp is not None:
+                    trig_lo = float(tp)
+        # else: unknown type -> never triggers via the gate (INF/-INF). _evaluate_fill returns
+        # None for it anyway, so the gate (which would skip it) stays results-identical.
+        order._trig_hi = trig_hi
+        order._trig_lo = trig_lo
+        return trig_hi, trig_lo
 
     def _evaluate_fill(self, order, as_of: datetime) -> Optional[float]:
         """Return the fill price for ``order`` against the chosen bar, or None if untriggered.
