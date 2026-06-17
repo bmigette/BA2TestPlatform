@@ -480,7 +480,12 @@ class DailyBacktestEngine:
         try:
             from ba2_common.core.types import OrderStatus
             active = set(OrderStatus.get_active_statuses())
-            return any(getattr(o, "status", None) in active for o in self.account._all_orders())
+            # Any working/waiting order means a fill is still possible. Scan the O(active) working
+            # set (the active-status query) rather than materialising EVERY order ever created. The
+            # cache may hold instances that went terminal IN PLACE this bar (the active query ran
+            # before they filled), so keep the explicit status filter — identical to the old check,
+            # just over the small active set instead of the full one.
+            return any(getattr(o, "status", None) in active for o in self.account._active_orders())
         except Exception:  # noqa: BLE001
             return True
 

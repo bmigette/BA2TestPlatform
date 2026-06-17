@@ -386,7 +386,13 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         self._active_order_cache = None
 
     def _all_orders(self) -> List[TradingOrder]:
-        """This account's TradingOrder rows, loaded once and cached (see invalidate_order_cache)."""
+        """This account's FULL TradingOrder set (incl. terminal), loaded once and cached.
+
+        Kept ONLY for terminal-needing callers (``get_orders``/results/round-trip P&L) — it is
+        NOT used in the per-bar fill path anymore (that goes through the O(active)
+        ``_active_orders`` query). Because the fill engine mutates+persists the SEPARATE active
+        instances, instances in THIS cache may be stale for orders that filled this run; callers
+        that need current state must read fresh (see ``_active_orders``' instance note)."""
         if self._order_cache is None:
             from sqlmodel import select, Session
 
@@ -399,40 +405,85 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         return self._order_cache
 
     def _active_orders(self) -> List[TradingOrder]:
-        """The working set: this account's ACTIVE-status orders (references to the SAME objects
-        in ``_all_orders``, so the fill engine's in-place mutations are shared).
+        """The working set: this account's ACTIVE-status orders, loaded by an ACTIVE-STATUS
+        SQL query — O(active), independent of ``_all_orders`` (which materialises EVERY order
+        ever created).
 
-        This is what the per-bar fill loop iterates — O(active), NOT O(every order ever created).
-        A long churning run accumulates thousands of terminal (filled/cancelled) orders; scanning
-        them every bar (and touching each one's ORM ``.status``) was a top per-bar cost. Rebuilt
-        lazily from ``_all_orders`` and invalidated whenever new orders may have been created.
-        Orders that go terminal in place stay referenced here until the next rebuild but are
-        excluded by the per-call status filter, so results are unchanged."""
+        This is what the per-bar fill loop iterates. A long churning run accumulates thousands
+        of terminal (filled/cancelled) orders; the old design re-scanned ALL of them every bar
+        (and reloaded the full set on each invalidation). Querying only the active statuses keeps
+        the per-bar working set proportional to the (small) number of live orders, not the
+        ever-growing total.
+
+        INSTANCE NOTE (critical): these are SEPARATE instances from ``_all_orders`` — active-only.
+        The fill engine mutates THESE instances in place and persists them. ``FILLED`` is NOT an
+        active status, so once an order fills it drops OUT of this query's next reload; the full
+        ``_all_orders`` cache may still hold a STALE pre-fill instance of it. Any per-bar caller
+        that needs the CURRENT persisted state of a (possibly now-terminal) order must therefore
+        read FRESH (``get_instance`` / a direct query) or via the active cache for active orders —
+        never via a stale ``_all_orders`` instance. Orders that go terminal in place between
+        invalidations stay referenced here but are excluded by the per-call status filter, so
+        results are unchanged."""
         if self._active_order_cache is None:
             if self._active_set is None:
                 self._active_set = frozenset(OrderStatus.get_active_statuses())
-            aset = self._active_set
-            self._active_order_cache = [o for o in self._all_orders() if o.status in aset]
+            from sqlmodel import select, Session
+
+            with Session(get_db().bind) as session:
+                self._active_order_cache = list(
+                    session.exec(
+                        select(TradingOrder).where(
+                            TradingOrder.account_id == self.id,
+                            TradingOrder.status.in_(OrderStatus.get_active_statuses()),
+                        )
+                    ).all()
+                )
         return self._active_order_cache
 
     def _orders_filtered(self, statuses=None, transaction_id=None) -> List[TradingOrder]:
-        """This account's orders, filtered by status / transaction — served from the in-memory
-        cache (NO per-call SQL).
+        """This account's orders, filtered by status / transaction.
 
         Fast path (the per-bar fill engine): a status filter that's a SUBSET of the active
-        statuses is served from the active-only working set (``_active_orders``), so the loop
-        never scans the thousands of terminal orders a long run accumulates. Other filters
-        (terminal statuses, transaction-only) fall back to the full cache. The cached objects are
-        the SAME instances the fill engine mutates in place, so a fill/cancel/activation is
-        immediately visible without a reload."""
+        statuses is served from the O(active) working set (``_active_orders``), so the loop
+        never scans the thousands of terminal orders a long run accumulates. The active cache's
+        objects are the SAME instances the fill engine mutates in place, so a fill/cancel/
+        activation is immediately visible without a reload.
+
+        Transaction-only filter (no statuses — ``_existing_legs`` / ``_cancel_oco_sibling``):
+        read FRESH from the DB. Since the fill engine now persists its mutations on the SEPARATE
+        active instances, the full ``_all_orders`` cache can hold STALE instances of orders that
+        filled/cancelled this run; a fresh per-transaction query is needed so these callers see
+        the current persisted leg statuses (and they only run on rare adjust/cancel/bracket
+        events, so the query cost is negligible). A status filter that is NOT a subset of active
+        (terminal-needing) likewise reads fresh."""
         if statuses is not None:
             sset = set(statuses)
             if self._active_set is None:
                 self._active_set = frozenset(OrderStatus.get_active_statuses())
-            pool = self._active_orders() if sset <= self._active_set else self._all_orders()
-            orders = [o for o in pool if o.status in sset]
+            if sset <= self._active_set:
+                orders = [o for o in self._active_orders() if o.status in sset]
+            else:
+                # Terminal-needing: read fresh so persisted terminal state is reflected (the
+                # cached full set may be stale). Rare path.
+                from sqlmodel import select, Session
+
+                with Session(get_db().bind) as session:
+                    rows = session.exec(
+                        select(TradingOrder).where(TradingOrder.account_id == self.id)
+                    ).all()
+                orders = [o for o in rows if o.status in sset]
         else:
-            orders = list(self._all_orders())
+            # Transaction-only (no status filter): fresh read for current persisted state. Push
+            # transaction_id into SQL so this loads ONLY the (few) legs of this transaction, not
+            # every order ever created — keeps the rare adjust/cancel path O(legs), not O(total).
+            from sqlmodel import select, Session
+
+            with Session(get_db().bind) as session:
+                stmt = select(TradingOrder).where(TradingOrder.account_id == self.id)
+                if transaction_id is not None:
+                    stmt = stmt.where(TradingOrder.transaction_id == transaction_id)
+                orders = list(session.exec(stmt).all())
+            return orders
         if transaction_id is not None:
             orders = [o for o in orders if o.transaction_id == transaction_id]
         return orders
@@ -671,13 +722,16 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         waiting = self._orders_filtered(statuses=[OrderStatus.WAITING_TRIGGER])
         if not waiting:
             return
-        # Look the parent up in the SAME in-memory order set (no per-leg DB round-trip); the
-        # parent is one of this account's orders, mutated in place by the fill engine.
-        by_id = {o.id: o for o in self._all_orders() if o.id is not None}
+        # Look the parent up FRESH per waiting leg. The parent is usually the entry order, which
+        # by the time a leg waits is typically FILLED (TERMINAL) — so it is NOT in the active
+        # working set, and a cached ``_all_orders`` instance of it may be STALE (the fill engine
+        # persists fills on the separate active instances). ``get_instance`` reads the current
+        # persisted status. Only runs when waiting legs exist (a handful per run), so the per-leg
+        # read is negligible.
         for leg in waiting:
             if leg.depends_on_order is None:
                 continue
-            parent = by_id.get(leg.depends_on_order)
+            parent = get_instance(TradingOrder, leg.depends_on_order)
             if parent is None:
                 continue
             trigger = leg.depends_order_status_trigger or OrderStatus.FILLED
