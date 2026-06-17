@@ -137,6 +137,35 @@ def test_all_metrics_finite_and_present():
         assert math.isfinite(float(v)), f"{k} is not finite: {v}"
 
 
+def test_annualized_return_is_calendar_based_not_point_count():
+    """Regression: annualised_return / Calmar must depend on the equity curve's CALENDAR span,
+    NOT its point count. The 5min fill clock + skip-flat-bars optimisation produce curves with
+    tens of thousands of (irregularly spaced) points; annualising over the point count made a
+    short run look like hundreds of "years", collapsing annualised_return -> ~0 and Calmar ->
+    ~0.01. Two curves with the SAME start/end dates and SAME total return must yield the SAME
+    annualised_return regardless of how many intermediate points they carry.
+    """
+    start, end = datetime(2024, 1, 2), datetime(2024, 4, 2)  # ~3 months
+    sparse = [_snap(start, 100_000.0), _snap(end, 120_000.0)]
+    # Same span + endpoints, but 200 dense intermediate points (mimicking a 5min fill clock).
+    span = (end - start)
+    dense = []
+    n = 200
+    for k in range(n + 1):
+        d = start + span * (k / n)
+        nlv = 100_000.0 + 20_000.0 * (k / n)  # monotone ramp to the same 120k endpoint
+        dense.append(_snap(d, nlv))
+
+    r_sparse = build_results(_AccountStub(sparse, []), CONFIG)
+    r_dense = build_results(_AccountStub(dense, []), CONFIG)
+
+    # Endpoints identical -> annualised_return must match within rounding, NOT differ by orders
+    # of magnitude (the old point-count bug made the dense curve's value ~100x smaller).
+    assert r_sparse["annualized_return"] == pytest.approx(r_dense["annualized_return"], rel=0.02)
+    # And it must be a sane, non-collapsed figure (a +20% gain over a quarter annualises high).
+    assert r_dense["annualized_return"] > 50.0
+
+
 def test_empty_run_is_safe():
     """No snapshots / no trades -> all-zero metrics, equity defaults to initial capital."""
     r = build_results(_AccountStub([], []), CONFIG)

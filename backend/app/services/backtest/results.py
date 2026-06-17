@@ -159,11 +159,15 @@ def _compute_metrics(
     equity_peak = max(equities) if equities else initial
 
     # --- per-step returns (for risk metrics) -------------------------------
+    # Annualise from the ACTUAL calendar time the equity curve spans, not the point COUNT —
+    # the fill clock may be daily, 5min, or a skip-flat (irregularly-spaced) curve.
+    years = _years_spanned(equity_curve)
+    periods_per_year = _periods_per_year(n_points, years)
     step_returns = _step_returns(equities)
-    volatility = _annualized_volatility(step_returns)
-    annualized_return = _annualized_return(initial, final, n_points)
-    sharpe = _sharpe(step_returns)
-    sortino = _sortino(step_returns)
+    volatility = _annualized_volatility(step_returns, periods_per_year)
+    annualized_return = _annualized_return(initial, final, years)
+    sharpe = _sharpe(step_returns, periods_per_year)
+    sortino = _sortino(step_returns, periods_per_year)
 
     # --- drawdown ----------------------------------------------------------
     dd_values = [pt["drawdown"] for pt in drawdown_curve]  # <= 0
@@ -287,30 +291,58 @@ def _std(xs: List[float]) -> float:
     return math.sqrt(var)
 
 
-def _annualized_volatility(step_returns: List[float]) -> float:
-    """Annualised volatility (%) of per-bar returns (daily bars -> sqrt(252) scaling)."""
-    return _std(step_returns) * math.sqrt(_TRADING_DAYS_PER_YEAR) * 100.0
+def _years_spanned(equity_curve: List[Dict[str, Any]]) -> float:
+    """Calendar years between the first and last equity-curve timestamps.
 
-
-def _annualized_return(initial: float, final: float, n_points: int) -> float:
-    """Geometric annualised return (%) over the ``n_points`` daily bars."""
-    if initial <= 0 or final <= 0 or n_points < 2:
+    Annualisation must be driven by the ACTUAL elapsed wall-clock time, NOT the equity-point
+    COUNT. The fill clock can be daily, 5min, or — with the skip-flat-bars optimisation — an
+    irregularly-spaced curve where the point count bears no fixed relationship to elapsed time.
+    Using the point count (the old ``(n_points-1)/252`` assumption) made a 5min curve look like
+    hundreds of "years", collapsing annualised_return -> ~0 and therefore Calmar -> ~0.01.
+    """
+    if not equity_curve:
         return 0.0
-    years = (n_points - 1) / _TRADING_DAYS_PER_YEAR
-    if years <= 0:
+    first = _parse_date(equity_curve[0]["date"])
+    last = _parse_date(equity_curve[-1]["date"])
+    if first is None or last is None:
+        return 0.0
+    secs = (last - first).total_seconds()
+    return secs / (365.25 * 86400.0) if secs > 0 else 0.0
+
+
+def _periods_per_year(n_points: int, years: float) -> float:
+    """Empirical sampling frequency (return-steps per calendar year), used to annualise the
+    per-bar volatility / Sharpe / Sortino instead of the hard-coded daily ``252``.
+
+    Derived from the real curve cadence (``(n_points-1) / years``) so the same scaling is
+    correct for daily, 5min, AND skip-flat curves. Falls back to the daily convention when the
+    calendar span is unavailable (single-point or undated curve)."""
+    if years > 0 and n_points >= 2:
+        return (n_points - 1) / years
+    return float(_TRADING_DAYS_PER_YEAR)
+
+
+def _annualized_volatility(step_returns: List[float], periods_per_year: float) -> float:
+    """Annualised volatility (%) of per-bar returns, scaled by the curve's actual cadence."""
+    return _std(step_returns) * math.sqrt(periods_per_year) * 100.0
+
+
+def _annualized_return(initial: float, final: float, years: float) -> float:
+    """Geometric annualised return (%) over the actual ``years`` of calendar time elapsed."""
+    if initial <= 0 or final <= 0 or years <= 0:
         return 0.0
     return ((final / initial) ** (1.0 / years) - 1.0) * 100.0
 
 
-def _sharpe(step_returns: List[float]) -> float:
+def _sharpe(step_returns: List[float], periods_per_year: float) -> float:
     """Annualised Sharpe ratio (risk-free rate = 0), from per-bar returns."""
     sd = _std(step_returns)
     if sd == 0:
         return 0.0
-    return _mean(step_returns) / sd * math.sqrt(_TRADING_DAYS_PER_YEAR)
+    return _mean(step_returns) / sd * math.sqrt(periods_per_year)
 
 
-def _sortino(step_returns: List[float]) -> float:
+def _sortino(step_returns: List[float], periods_per_year: float) -> float:
     """Annualised Sortino ratio (downside deviation, risk-free rate = 0)."""
     downside = [r for r in step_returns if r < 0]
     if len(downside) < 1:
@@ -318,7 +350,7 @@ def _sortino(step_returns: List[float]) -> float:
     dd = math.sqrt(sum(r * r for r in downside) / len(downside))
     if dd == 0:
         return 0.0
-    return _mean(step_returns) / dd * math.sqrt(_TRADING_DAYS_PER_YEAR)
+    return _mean(step_returns) / dd * math.sqrt(periods_per_year)
 
 
 def _sqn(pnls: List[float]) -> float:
