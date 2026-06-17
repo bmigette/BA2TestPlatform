@@ -63,6 +63,16 @@ def _collect_expert(expert_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         return out
     for name, spec in expert_cfg.items():
         if spec and spec.get("optimize"):
+            if spec.get("type") == "choice":
+                # Categorical expert setting (e.g. FMPRating target_price_type). Encoded as an
+                # int index into 'choices'; the GA evolves the index and decode_individual maps
+                # it back to the choice VALUE, which flows through model:<name> -> expert_overrides.
+                choices = list(spec["choices"])
+                out[f"model:{name}"] = {
+                    "type": "choice", "choices": choices,
+                    "min": 0, "max": len(choices) - 1, "step": 1,
+                }
+                continue
             is_int = spec.get("type") == "int"
             out[f"model:{name}"] = _range_entry(spec.get("min"), spec.get("max"),
                                                 spec.get("step"), is_int=is_int)

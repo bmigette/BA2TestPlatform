@@ -523,8 +523,12 @@ _EXPERT_OPT = {
             "profit_ratio": {"optimize": True, "min": 0.5, "max": 1.5, "step": 0.1, "type": "float"},
             "min_analysts": {"optimize": True, "min": 5, "max": 25, "step": 5, "type": "int"},
             "price_target_window_days": {"optimize": True, "min": 30, "max": 180, "step": 30, "type": "int"},
+            # CATEGORICAL: which analyst reference price the rating + the (S4) target-anchored TP
+            # use. Optimized as a choice; the offset-from-target is the initial_tp gene (S4).
+            "target_price_type": {"optimize": True, "type": "choice",
+                                  "choices": ["low", "consensus", "median", "high", "low_consensus_avg"]},
         },
-        "fixed_settings": {"target_price_type": "consensus"},
+        "fixed_settings": {},
     },
     "FMPEarningsDrift": {
         "expert_params": {
@@ -804,17 +808,40 @@ def _build_strategy_S1(name: str, expert: str):
     )
 
 
+def _build_strategy_S4(name: str, expert: str):
+    """S4 — TARGET-TRAIL. Same live trailing ruleset as S1 (trail-TP-to-target rule live-34 +
+    the trailing-SL ladder), but the INITIAL TP is ANCHORED on the expert's analyst target
+    price (optimize-batch sets initial_tp_reference="expert_target_price" for S4) instead of
+    off entry. The optimizable initial_tp gene becomes the OFFSET-FROM-TARGET and is allowed
+    NEGATIVE (TP below target, e.g. -10 -> TP = target*0.90). Validated: target-anchoring rode
+    NVDA to +1065% and exited via take_profit (~2.3x the entry-anchored return). Pairs with the
+    optimizable target_price_type (which analyst reference price to anchor on)."""
+    strat = _build_strategy_S1(name, expert)
+    # Re-anchor the initial TP as a NEGATIVE-CAPABLE offset-from-target (the GA samples
+    # uniform(min,max) + clips, so a negative min is fine — only the RANGE had to open up).
+    strat.initial_tp_percent = 0.0
+    strat.initial_tp_min = -20.0
+    strat.initial_tp_max = 10.0
+    strat.initial_tp_step = 2.0
+    return strat
+
+
 _STRATEGY_BUILDERS = {
     "S1": _build_strategy_S1,   # (name, expert)
     "S2": _build_strategy_S2,   # (name)
     "S3": _build_strategy_S3,   # (name)
+    "S4": _build_strategy_S4,   # (name, expert) — target-anchored TP (expert_target_price)
 }
+
+# Strategy kinds whose INITIAL TP anchors on the expert's analyst target price (the
+# optimize-batch run config sets initial_tp_reference="expert_target_price" for these).
+_TARGET_ANCHORED_STRATEGIES = {"S4"}
 
 
 def _build_strategy(kind: str, name: str, expert: str):
-    """Dispatch to the right strategy builder. S1 is expert-specific (loads its live JSON)."""
-    if kind == "S1":
-        return _build_strategy_S1(name, expert)
+    """Dispatch to the right strategy builder. S1/S4 are expert-specific (load the live JSON)."""
+    if kind in ("S1", "S4"):
+        return _STRATEGY_BUILDERS[kind](name, expert)
     builder = _STRATEGY_BUILDERS.get(kind)
     if builder is None:
         sys.exit(f"optimize: unknown strategy {kind!r}; have {sorted(_STRATEGY_BUILDERS)}")
@@ -1043,6 +1070,11 @@ def _cmd_optimize_batch(args) -> int:
                 "backtest_id": int(_dt.now().timestamp()),
                 "name": f"{name}-trial",
             }
+            # Target-anchored variants (S4): the INITIAL TP bracket references the expert's
+            # analyst target price; the optimizable initial_tp gene is the (negative-capable)
+            # offset-from-target. Other kinds keep the default percent-off-entry TP.
+            if strat_kind in _TARGET_ANCHORED_STRATEGIES:
+                backtest_block["initial_tp_reference"] = "expert_target_price"
             cfg = {
                 "populationSize": int(args.population),
                 "generations": int(args.generations),

@@ -129,3 +129,23 @@ def test_bypass_with_no_expert_params_raises():
                   initial_tp_step=0.5)
     with pytest.raises(ValueError):
         collect_param_space(s, expert_cfg=None, bypass=True)
+
+
+def test_collect_expert_choice_param_emits_choice_range():
+    """A categorical expert param (type='choice') -> a model:<name> choice gene the GA can
+    evolve as an int index and decode back to the string (e.g. FMPRating target_price_type)."""
+    from app.services.strategy_param_space import _collect_expert
+    ecfg = {"target_price_type": {"optimize": True, "type": "choice",
+                                  "choices": ["low", "consensus", "median", "high"]}}
+    space = _collect_expert(ecfg)
+    g = space["model:target_price_type"]
+    assert g["type"] == "choice"
+    assert g["choices"] == ["low", "consensus", "median", "high"]
+    assert g["min"] == 0 and g["max"] == 3 and g["step"] == 1
+
+    # End-to-end: the GA decodes the int index back to a valid choice STRING.
+    from app.services.genetic import GeneticOptimizer
+    opt = GeneticOptimizer(param_ranges=space, population_size=4, n_generations=1)
+    for _ in range(15):
+        dec = opt.decode_individual(opt._create_individual())
+        assert dec["model:target_price_type"] in g["choices"]

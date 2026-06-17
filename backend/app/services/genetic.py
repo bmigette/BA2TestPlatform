@@ -160,6 +160,11 @@ class GeneticOptimizer:
         for i, (param_name, config) in enumerate(self.param_ranges.items()):
             if config['type'] == 'int':
                 value = random.randint(config['min'], config['max'])
+            elif config['type'] == 'choice':
+                # Categorical gene: encoded as an int INDEX into config['choices']
+                # (decode_individual maps it back to the choice value, e.g. a target_price_type
+                # string). The GA evolves the index; min/max are 0..len-1.
+                value = random.randint(0, len(config['choices']) - 1)
             else:
                 value = random.uniform(config['min'], config['max'])
             individual.append(value)
@@ -178,7 +183,13 @@ class GeneticOptimizer:
         """
         for i, (param_name, config) in enumerate(self.param_ranges.items()):
             if random.random() < indpb:
-                if config['type'] == 'int':
+                if config['type'] == 'choice':
+                    # Categorical: nudge the int index, clamped to 0..len-1.
+                    n = len(config['choices'])
+                    sigma = max(1.0, (n - 1) / 6)
+                    individual[i] = int(np.clip(
+                        round(individual[i] + random.gauss(0, sigma)), 0, n - 1))
+                elif config['type'] == 'int':
                     # Gaussian mutation for integers
                     sigma = (config['max'] - config['min']) / 6
                     individual[i] = int(np.clip(
@@ -212,7 +223,12 @@ class GeneticOptimizer:
         raw_params = {}
         for i, (param_name, config) in enumerate(self.param_ranges.items()):
             value = individual[i]
-            if config['type'] == 'int':
+            if config['type'] == 'choice':
+                # Map the evolved int index back to the categorical VALUE (e.g. the
+                # target_price_type string). Clamp defensively to a valid index.
+                idx = int(np.clip(round(value), 0, len(config['choices']) - 1))
+                value = config['choices'][idx]
+            elif config['type'] == 'int':
                 # Round to step size
                 step = config.get('step', 1)
                 value = int(round(value / step) * step)
