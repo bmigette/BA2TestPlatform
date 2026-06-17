@@ -21,6 +21,13 @@ async function jdelete<T>(path: string): Promise<T> {
   return r.json();
 }
 
+export interface OhlcvBar { Date: string; Open: number; High: number; Low: number; Close: number; Volume?: number; }
+/** Daily (or any-interval) OHLCV bars for one symbol over [start,end] — feeds the trade-list chart. */
+export const getOhlcvBars = (symbol: string, start: string, end: string, interval = '1d') =>
+  jget<{ symbol: string; interval: string; bars: OhlcvBar[] }>(
+    `/tools/ohlcv/bars?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&interval=${encodeURIComponent(interval)}`,
+  );
+
 export const listExperts = () => jget<{ experts: ExpertInfo[] }>('/experts').then(r => r.experts);
 export const getExpertSettings = (cls: string) => jget<{ definitions: Record<string, SettingDef> }>(`/experts/${cls}/settings-definitions`).then(r => r.definitions);
 export const importRules = (json: unknown, which: 'enter' | 'exit') => jpost<{ tree: unknown }>('/strategies/import-rules', { json, which }).then(r => r.tree);

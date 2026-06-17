@@ -46,6 +46,7 @@ import type { ExpertSettingsValue } from '../components/ExpertSettingsForm';
 import { UniversePicker } from '../components/UniversePicker';
 import type { UniverseValue } from '../components/UniversePicker';
 import { RuleIO } from '../components/RuleIO';
+import TradeChartModal from '../components/TradeChartModal';
 import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import ResolvedRulesetView from '../components/ResolvedRulesetView';
@@ -166,6 +167,7 @@ const FITNESS_METRICS: Array<{ value: string; label: string }> = [
 
 interface Trade {
   id: string | number;
+  symbol?: string;
   entryDate: string;
   exitDate: string;
   entryPrice: number;
@@ -469,6 +471,7 @@ const Backtesting: React.FC = () => {
   const [tradeFilter, setTradeFilter] = useState<'all' | 'profit' | 'loss'>('all');
   const [tradeSortField, setTradeSortField] = useState<'pnl' | 'date' | 'duration'>('date');
   const [tradeSortAsc, setTradeSortAsc] = useState(false);
+  const [chartTrade, setChartTrade] = useState<Trade | null>(null);  // trade-list click -> daily chart
 
   // Dialogs
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -1101,6 +1104,7 @@ const Backtesting: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6">
+      <TradeChartModal trade={chartTrade} onClose={() => setChartTrade(null)} />
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold flex items-center gap-2 text-gray-900 dark:text-gray-100">
           <BarChart3 className="w-8 h-8 text-blue-500" />
@@ -2118,6 +2122,7 @@ const Backtesting: React.FC = () => {
                         <table className="w-full text-sm">
                           <thead className="bg-gray-50 dark:bg-gray-700/50 sticky top-0">
                             <tr>
+                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Symbol</th>
                               <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Entry</th>
                               <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Exit</th>
                               <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Entry $</th>
@@ -2132,16 +2137,18 @@ const Backtesting: React.FC = () => {
                           </thead>
                           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                             {getFilteredTrades().map(trade => (
-                              <tr key={trade.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                              <tr key={trade.id}
+                                  onClick={() => setChartTrade(trade)}
+                                  title="Click to view the daily chart with entry/exit markers"
+                                  className="cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                                <td className="px-3 py-2 font-medium text-gray-900 dark:text-gray-100">{trade.symbol || '—'}</td>
                                 <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.entryDate}</td>
                                 <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.exitDate}</td>
                                 <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.entryPrice.toFixed(2)}</td>
                                 <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.exitPrice.toFixed(2)}</td>
                                 <td className="px-3 py-2 text-center">
-                                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                    trade.direction === 'long'
-                                      ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
-                                      : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                                  <span className={`px-2 py-0.5 rounded text-xs font-semibold text-white ${
+                                    trade.direction === 'long' ? 'bg-green-600' : 'bg-red-600'
                                   }`}>
                                     {trade.direction}
                                   </span>

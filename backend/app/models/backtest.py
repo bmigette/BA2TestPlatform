@@ -116,6 +116,7 @@ class Backtest(Base):
 
             transformed.append({
                 'id': i + 1,
+                'symbol': trade.get('symbol', ''),
                 'entryDate': trade.get('entry_time', ''),
                 'exitDate': trade.get('exit_time', ''),
                 'entryPrice': trade.get('entry_price', 0),

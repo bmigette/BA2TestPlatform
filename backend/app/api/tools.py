@@ -1027,6 +1027,45 @@ async def list_ohlcv_providers():
     }
 
 
+@router.get("/ohlcv/bars")
+def get_ohlcv_bars(symbol: str, start: str, end: str, interval: str = "1d", provider: str = "fmp"):
+    """Return OHLCV bars for ONE symbol over [start, end] for charting (e.g. the trade-list
+    click-through chart with entry/exit markers). Read-only; uses the cached provider so a
+    repeat view is served from disk. Sync def -> FastAPI runs it in a threadpool (the provider
+    fetch is blocking).
+
+    Query: symbol, start, end (ISO dates), interval (default 1d), provider (default fmp).
+    Returns: {symbol, interval, bars: [{Date, Open, High, Low, Close, Volume}]}.
+    """
+    from datetime import datetime as _dt
+    from app.api.datasets import get_ohlcv_provider
+
+    def _parse(s: str):
+        try:
+            return _dt.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"invalid ISO date: {s!r}")
+
+    sd, ed = _parse(start), _parse(end)
+    try:
+        prov = get_ohlcv_provider(provider)
+        df = prov.get_ohlcv_data(symbol=symbol.upper(), start_date=sd, end_date=ed, interval=interval)
+    except Exception as e:
+        logger.error(f"ohlcv/bars fetch failed for {symbol} {interval}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"OHLCV fetch failed: {e}")
+    bars = []
+    if df is not None and len(df) > 0:
+        for _, row in df.iterrows():
+            d = row["Date"]
+            bars.append({
+                "Date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                "Open": float(row["Open"]), "High": float(row["High"]),
+                "Low": float(row["Low"]), "Close": float(row["Close"]),
+                "Volume": float(row.get("Volume", 0) or 0),
+            })
+    return {"symbol": symbol.upper(), "interval": interval, "bars": bars}
+
+
 @router.post("/ohlcv/fetch-cache")
 async def fetch_ohlcv_cache(request: Dict[str, Any]):
     """
