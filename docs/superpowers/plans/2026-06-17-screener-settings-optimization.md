@@ -177,8 +177,10 @@ def compute_daily_metrics(ohlcv: "pd.DataFrame", shares: Optional[float],
     """
     close = ohlcv["Close"].astype(float)
     vol = ohlcv["Volume"].astype(float)
-    # RVOL: today's volume / trailing average INCLUDING today (matches the live screener intent).
-    avg_vol = vol.rolling(rvol_window, min_periods=1).mean()
+    # RVOL: today's volume / trailing average of the PRIOR rvol_window days (EXCLUDES today via
+    # shift(1) — point-in-time: today is the spike measured against its prior baseline). The
+    # first row's avg is NaN -> .where(avg_vol > 0) leaves RVOL 0.
+    avg_vol = vol.shift(1).rolling(rvol_window, min_periods=1).mean()
     rvol = (vol / avg_vol).where(avg_vol > 0, 0.0)
     # Price drop %: peak of the trailing window (inclusive) vs today's close.
     peak = close.rolling(max(1, drop_days), min_periods=1).max()
