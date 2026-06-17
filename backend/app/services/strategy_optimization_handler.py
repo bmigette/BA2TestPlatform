@@ -408,11 +408,16 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
 
         # Suppress per-trial verbose logging for the optimization's duration — across many
         # trials it's pure noise (only a SINGLE standalone backtest should log in detail).
+        # A per-name setLevel() list was used before but did NOT hold: the levels get clobbered
+        # back to DEBUG during trial setup, and the list also missed the per-instance expert
+        # loggers ("fmprating_exp1" is not a child of "ba2_experts"). A GLOBAL logging.disable()
+        # short-circuits Logger.isEnabledFor at the manager level BEFORE any LogRecord is
+        # built/formatted/flushed, for EVERY logger regardless of name or level — killing the
+        # ~17k INFO/DEBUG records/trial (the dominant optimize wall-time cost). Floor is INFO so
+        # WARNING+ (e.g. the "trial failed in worker" notice and the post-run summary) survive.
         import logging as _logging
-        _quiet = ("ba2_common", "ba2_providers", "ba2_experts", "app.services.backtest")
-        _prior = {n: _logging.getLogger(n).level for n in _quiet}
-        for n in _quiet:
-            _logging.getLogger(n).setLevel(_logging.WARNING)
+        _prior_disable = _logging.root.manager.disable
+        _logging.disable(_logging.INFO)
 
         # Spin up the process pool once for the whole run (spawn -> each worker pays the
         # import cost once). batch_fitness routes the per-generation batch through it.
@@ -441,8 +446,7 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                 batch_fitness=batch_fitness,
             )
         finally:
-            for n, lv in _prior.items():
-                _logging.getLogger(n).setLevel(lv)
+            _logging.disable(_prior_disable)
             if _pool is not None:
                 _pool.shutdown(wait=True, cancel_futures=True)
 

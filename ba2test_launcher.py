@@ -1026,6 +1026,14 @@ def _persist_top_backtests(opt_id: int, expert: str, n: int = 5) -> int:
     from app.services.backtest.daily_backtest_handler import run_daily_backtest, _persist_results
     from app.services.strategy_param_space import decode_params
 
+    # The top-N re-runs invoke the full run_daily_backtest per saved backtest — the same
+    # per-bar ruleset/RM/order INFO spam the GA loop already suppresses. Nobody reads those
+    # logs during a headless optimize, so silence them here too (global disable short-circuits
+    # before LogRecord creation; floor is INFO so a failed re-run still surfaces at WARNING+).
+    import logging as _logging
+    _prior_disable = _logging.root.manager.disable
+    _logging.disable(_logging.INFO)
+
     db = SessionLocal()
     try:
         opt = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
@@ -1077,6 +1085,7 @@ def _persist_top_backtests(opt_id: int, expert: str, n: int = 5) -> int:
         return persisted
     finally:
         db.close()
+        _logging.disable(_prior_disable)
 
 
 def _cmd_runs(args) -> int:
