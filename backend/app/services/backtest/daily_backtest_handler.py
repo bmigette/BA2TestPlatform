@@ -463,6 +463,12 @@ def run_daily_backtest(
         **config,
         "start_date": _parse_dt(config["start_date"], "start_date"),
         "end_date": _parse_dt(config["end_date"], "end_date"),
+        # Per-day DYNAMIC screener universe (screener-settings optimization). The optimizer's
+        # trial config sets ``screener_runtime`` ({"store", "settings"[, "cadence_days"]}); the
+        # engine reads it (``self._screener_runtime``) to gate ENTRIES to the per-day screened
+        # universe. Forwarded explicitly here so the engine constructor receives it; absent/None
+        # on every non-screener run -> the engine's entry gate is a no-op (behaviour unchanged).
+        "screener_runtime": config.get("screener_runtime"),
     }
 
     # Options seam: a present ``options_cache_db`` flags an options run. Build the as-of

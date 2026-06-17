@@ -91,6 +91,32 @@ def resolve_universe(as_of: datetime, config: Dict[str, Any], price_source) -> L
     return [s for s in universe if price_source.bar_at(s, as_of) is not None]
 
 
+def _screened_symbols_for_bar(
+    screener_runtime: Optional[Dict[str, Any]], as_of_dt: datetime
+) -> Optional[List[str]]:
+    """The dynamic per-day universe of symbols ALLOWED TO ENTER on this bar.
+
+    Returns ``None`` when this run carries no screener (the common case — the gate is then a
+    cheap no-op and behaviour is byte-identical to a non-screener run). Otherwise resolves the
+    run's effective screener settings against the precomputed metric store AS-OF this bar: the
+    LATEST scan date <= the bar (the scan cadence is weekly by default, so the universe holds
+    constant between scans). The returned list gates ENTRIES only — open-position management /
+    exits are NOT restricted (handled at the call site).
+
+    ``screener_runtime`` is the ``screener_runtime`` config block the optimizer's trial config
+    sets: ``{"store": <metric-store dir>, "settings": {screener_* thresholds}}``. The store is
+    memoised per worker by ``load_store`` so this is an in-memory pandas filter (microseconds).
+    """
+    if not screener_runtime:
+        return None
+    from ba2_providers.screener import metric_store as ms
+
+    df = ms.load_store(screener_runtime["store"])
+    return ms.screen_universe_as_of(
+        df, as_of_dt.strftime("%Y-%m-%d"), screener_runtime["settings"]
+    )
+
+
 def _to_dt(d: Any) -> datetime:
     """Normalise a date/datetime/str bar key to a tz-naive ``datetime`` for comparison.
 
@@ -311,6 +337,11 @@ class DailyBacktestEngine:
         self.progress_cb = progress_cb or (lambda pct, msg: None)
         self.seed = config["seed"]
         self._indicator_provider = indicator_provider
+        # Per-day dynamic screener universe (screener-settings optimization). The optimizer's
+        # trial config sets ``screener_runtime`` ({"store", "settings"[, "cadence_days"]}); when
+        # absent (every non-screener run) this is None and the per-bar entry gate is a no-op, so
+        # behaviour is byte-identical to before.
+        self._screener_runtime = config.get("screener_runtime")
 
     # -- the loop -----------------------------------------------------------
     def run(self) -> Dict[str, Any]:
@@ -401,6 +432,24 @@ class DailyBacktestEngine:
             # 2. universe for the bar.
             universe = resolve_universe(as_of_dt, self.config, self.price)
 
+            # 2a. per-day DYNAMIC screener gate (screener-settings optimization). Computed ONCE
+            #     per bar from this run's effective screener settings, resolving to the latest
+            #     scan date <= the bar (the universe holds between weekly scans). When
+            #     ``allowed is not None`` it restricts which symbols may ENTER this bar — the
+            #     ENTRY candidate universe fed to ``_run_expert_bar`` is intersected with it,
+            #     PRESERVING bar order so determinism is unchanged. Open-position management /
+            #     exits are NOT gated: ``_manage_open_positions``, ``_apply_bypass_stops``,
+            #     the bypass rebalance, ``_apply_option_expiry`` and the OCO bracket fills all
+            #     run over held positions / the full universe regardless. When no screener is
+            #     configured ``_screened_symbols_for_bar`` returns None and this is a no-op
+            #     (byte-identical to a non-screener run — the hot path is untouched).
+            entry_universe = universe
+            if self._screener_runtime:
+                allowed = _screened_symbols_for_bar(self._screener_runtime, as_of_dt)
+                if allowed is not None:
+                    allowed_set = set(allowed)
+                    entry_universe = [s for s in universe if s in allowed_set]
+
             # The fill engine reads working orders from BacktestAccount's in-memory order cache
             # (no per-bar DB query). That cache only goes stale when this bar CREATES new orders —
             # a bypass stop pass, an expert analysis/management pass, or a post-fill bracket
@@ -450,7 +499,7 @@ class DailyBacktestEngine:
                     self._run_bypass_expert_bar(expert, expert_id, settings, as_of_dt)
                     continue
                 created_any = self._run_expert_bar(
-                    expert, expert_id, settings, ruleset_id, universe, as_of_dt
+                    expert, expert_id, settings, ruleset_id, entry_universe, as_of_dt
                 )
                 if created_any:
                     self._size_and_submit(expert_id, indicator_provider)
