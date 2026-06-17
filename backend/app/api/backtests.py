@@ -112,6 +112,7 @@ async def list_backtests(
     expert: Optional[str] = None,
     optimization_id: Optional[int] = None,
     saved: Optional[bool] = None,
+    single: Optional[bool] = None,
     db: Session = Depends(get_db)
 ):
     """List all backtests (summary only, no curves/trades).
@@ -120,6 +121,11 @@ async def list_backtests(
       * ``expert``         — only runs of that expert (``Backtest.expert_name``).
       * ``optimization_id``— only runs belonging to that optimization job.
       * ``saved``          — only saved (``True``) / only unsaved (``False``) runs.
+      * ``single``         — ``True`` -> only STANDALONE runs (``optimization_id IS NULL``,
+                             i.e. not the TOP-N rows persisted by an optimization);
+                             ``False`` -> only optimization-derived runs
+                             (``optimization_id IS NOT NULL``). Used by the BT-History tab
+                             which lists single backtests only.
     """
     from sqlalchemy import text
 
@@ -145,6 +151,12 @@ async def list_backtests(
     if saved is not None:
         where_clauses.append("b.is_saved = :saved")
         params["saved"] = 1 if saved else 0
+    if single is not None:
+        # single=true  -> standalone runs only (no optimization parent);
+        # single=false -> optimization-derived (TOP-N) runs only.
+        where_clauses.append(
+            "b.optimization_id IS NULL" if single else "b.optimization_id IS NOT NULL"
+        )
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     result = db.execute(text(f"""
@@ -580,6 +592,87 @@ async def delete_backtest(
 
     logger.info(f"Deleted backtest: {backtest.name} (id={backtest_id})")
     return {"message": f"Backtest {backtest_id} deleted"}
+
+
+def _derive_export_payload(backtest: Backtest, kind: str) -> dict:
+    """Build the chosen read-only export payload from a backtest's strategy_params.
+
+    Two ``kind`` values are supported:
+
+      * ``expert_settings`` — the expert this run used + its decision/RM settings. We surface
+        the expert class name (``Backtest.expert_name``) and the settings we can recover from
+        ``strategy_params``: the TP/SL bracket (structured ``initialTpPercent``/``initialSlPercent``
+        OR the GA's flat ``tp``/``sl`` genes) plus any flat optimized ``model:*`` genes (the
+        expert/RM decision settings an optimization tunes).
+      * ``ruleset`` — the conditions ruleset (buy/sell entry trees + exit conditions). Structured
+        runs carry ``buyEntryConditions``/``sellEntryConditions``/``exitConditions``; optimization
+        TOP-N runs instead carry the flat ``cond:*``/``exit:*`` genes, which we pass through so the
+        export is still self-describing.
+
+    Pure derivation from the persisted ``strategy_params`` — NO server filesystem writes.
+    """
+    sp = backtest.strategy_params or {}
+
+    def _pick(*keys):
+        for k in keys:
+            if isinstance(sp, dict) and k in sp and sp[k] is not None:
+                return sp[k]
+        return None
+
+    if kind == "expert_settings":
+        model_genes = (
+            {k: v for k, v in sp.items() if isinstance(k, str) and k.startswith("model:")}
+            if isinstance(sp, dict) else {}
+        )
+        return {
+            "backtest_id": backtest.id,
+            "name": backtest.name,
+            "expert": backtest.expert_name,
+            "engine_type": backtest.engine_type or "ml",
+            "settings": {
+                "initial_tp_percent": _pick("initialTpPercent", "initial_tp_percent", "tp"),
+                "initial_sl_percent": _pick("initialSlPercent", "initial_sl_percent", "sl"),
+                "expert_params": model_genes,
+            },
+        }
+
+    if kind == "ruleset":
+        cond_genes = (
+            {k: v for k, v in sp.items()
+             if isinstance(k, str) and (k.startswith("cond:") or k.startswith("exit:"))}
+            if isinstance(sp, dict) else {}
+        )
+        return {
+            "backtest_id": backtest.id,
+            "name": backtest.name,
+            "buy_entry_conditions": _pick("buyEntryConditions", "buy_entry_conditions"),
+            "sell_entry_conditions": _pick("sellEntryConditions", "sell_entry_conditions"),
+            "exit_conditions": _pick("exitConditions", "exit_conditions") or [],
+            "optimized_genes": cond_genes,
+        }
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported export kind: {kind!r}. Use 'expert_settings' or 'ruleset'.",
+    )
+
+
+@router.get("/{backtest_id}/export")
+async def export_backtest_json(
+    backtest_id: int,
+    kind: str = "expert_settings",
+    db: Session = Depends(get_db)
+):
+    """Return a downloadable export payload for a backtest as JSON (no filesystem writes).
+
+    ``kind`` selects WHAT to export — ``expert_settings`` (the expert + its settings) or
+    ``ruleset`` (the buy/sell/exit conditions). The frontend downloads the returned JSON via
+    a Blob + temporary anchor; the server never writes to disk. Read-only.
+    """
+    backtest = db.query(Backtest).filter(Backtest.id == backtest_id).first()
+    if not backtest:
+        raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
+    return _derive_export_payload(backtest, kind)
 
 
 @router.post("/{backtest_id}/export")

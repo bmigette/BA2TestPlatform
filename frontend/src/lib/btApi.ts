@@ -126,22 +126,30 @@ export interface OptimizationDetail {
 export const getOptimization = (id: number) =>
   jget<OptimizationDetail>(`/strategies/optimizations/${id}`);
 
-export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean } = {}) => {
+export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean; single?: boolean } = {}) => {
   const p = new URLSearchParams();
   if (q.expert) p.set('expert', q.expert);
   if (q.optimization_id != null) p.set('optimization_id', String(q.optimization_id));
   if (q.saved != null) p.set('saved', String(q.saved));
+  // single=true -> standalone runs only (optimization_id IS NULL); used by BT History.
+  if (q.single != null) p.set('single', String(q.single));
   return jget<{ backtests: any[] }>(`/backtests?${p.toString()}`).then(r => r.backtests);
 };
 
 // Per-run actions (confirmed against backend/app/api/backtests.py):
 //   POST /backtests/{id}/save  body {name}        -> marks is_saved, returns the run dict
-//   POST /backtests/{id}/export?format=csv        -> {message, format, path, trades}
+//   GET  /backtests/{id}/export?kind=...          -> read-only JSON payload (browser download)
 //   DELETE /backtests/{id}                        -> {message}
 export const saveBacktest = (id: number, name: string) =>
   jpost<any>(`/backtests/${id}/save`, { name });
-export const exportBacktest = (id: number) =>
-  jpost<{ path: string }>(`/backtests/${id}/export?format=csv`, {});
+
+// What a backtest can export: the expert + its settings, or the conditions ruleset.
+export type ExportKind = 'expert_settings' | 'ruleset';
+// Fetch the chosen read-only export payload (NO server-side file write). The caller turns
+// this into a browser download via a Blob + temporary <a download>.
+export const fetchBacktestExport = (id: number, kind: ExportKind) =>
+  jget<Record<string, unknown>>(`/backtests/${id}/export?kind=${kind}`);
+
 export const deleteBacktest = (id: number) =>
   jdelete<{ message: string }>(`/backtests/${id}`);
 

@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
-import { listBacktests, saveBacktest, exportBacktest, deleteBacktest } from '../lib/btApi';
+import { listBacktests, saveBacktest, fetchBacktestExport, deleteBacktest } from '../lib/btApi';
+import type { ExportKind } from '../lib/btApi';
+
+// Trigger a browser download of a JSON object via a Blob + temporary <a download>.
+// No server filesystem write — the bytes are produced entirely client-side.
+function downloadJson(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 const inputClass = "px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
 
@@ -21,6 +36,9 @@ export function RunHistoryTable({ savedOnly, onSelect }:
   useEffect(() => {
     listBacktests({
       saved: savedOnly ? true : undefined,
+      // BT History (savedOnly=false) lists STANDALONE backtests only — the optimization-derived
+      // TOP-N rows live under the Opt History tab. Saved tab is unfiltered (shows all saved).
+      single: savedOnly ? undefined : true,
       expert: expert || undefined,
       optimization_id: optId ? Number(optId) : undefined,
     })
@@ -40,9 +58,27 @@ export function RunHistoryTable({ savedOnly, onSelect }:
   };
 
   const handleExport = async (r: any) => {
+    // Ask WHAT to export, then download the chosen JSON via the browser (no server file write).
+    // window.prompt keeps this dependency-free; '1'/'2' map to the two export kinds, cancel aborts.
+    const choice = window.prompt(
+      `Export backtest #${r.id} (${r.name || 'unnamed'}) — type a number:\n` +
+      `  1 = Expert settings\n` +
+      `  2 = Conditions ruleset`,
+      '1',
+    );
+    if (choice == null) return;  // cancelled
+    const kind: ExportKind | null =
+      choice.trim() === '1' ? 'expert_settings'
+      : choice.trim() === '2' ? 'ruleset'
+      : null;
+    if (!kind) {
+      alert('Export cancelled: enter 1 (Expert settings) or 2 (Conditions ruleset).');
+      return;
+    }
     try {
-      const res = await exportBacktest(r.id);
-      alert(`Exported to: ${res.path}`);
+      const payload = await fetchBacktestExport(r.id, kind);
+      const suffix = kind === 'expert_settings' ? 'expert-settings' : 'ruleset';
+      downloadJson(`backtest-${r.id}-${suffix}.json`, payload);
     } catch (e) {
       alert(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
     }

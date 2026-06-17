@@ -53,8 +53,9 @@ import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
 import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks } from '../lib/btApi';
 import { RunningJobsPanel } from '../components/RunningJobsPanel';
-import { OptimizationJobsTable } from '../components/OptimizationJobsTable';
-import type { Vocabulary } from '../lib/btApi';
+import { OptimizationJobsTable, OptJobSettingsDetail } from '../components/OptimizationJobsTable';
+import { TopIndividualsTable } from '../components/TopIndividualsTable';
+import type { Vocabulary, OptimizationJob, OptimizationDetail } from '../lib/btApi';
 import {
   XAxis,
   YAxis,
@@ -467,6 +468,12 @@ const Backtesting: React.FC = () => {
 
   // Results view
   const [selectedBacktest, setSelectedBacktest] = useState<Backtest | null>(null);
+  // Opt-History: the currently-selected optimization job. When set (and no backtest is
+  // selected), the RIGHT panel shows this job's settings + top individuals. Selecting a
+  // backtest from the job's saved-backtests table clears this and shows the full result.
+  const [selectedOptJob, setSelectedOptJob] = useState<
+    { job: OptimizationJob; detail?: OptimizationDetail } | null
+  >(null);
   const [activeTab, setActiveTab] = useState<'equity' | 'drawdown' | 'trades' | 'strategy'>('equity');
   const [tradeFilter, setTradeFilter] = useState<'all' | 'profit' | 'loss'>('all');
   const [tradeSortField, setTradeSortField] = useState<'pnl' | 'date' | 'duration'>('date');
@@ -856,6 +863,8 @@ const Backtesting: React.FC = () => {
       const res = await fetch(`${API_BASE}/backtests/${id}`);
       if (res.ok) {
         const data = await res.json();
+        // A selected backtest takes over the right panel from any job-settings view.
+        setSelectedOptJob(null);
         setSelectedBacktest(data);
       }
     } catch (err) {
@@ -1861,9 +1870,18 @@ const Backtesting: React.FC = () => {
                 <RunningJobsPanel />
               </div>
             ) : backtestCardTab === 'optjobs' ? (
-              /* Optimization Jobs Tab — genetic StrategyOptimization runs + their settings */
+              /* Opt History Tab — 2 areas: jobs table (top) + selected job's saved backtests
+                 (bottom). Selecting a job shows its settings + top individuals on the RIGHT;
+                 selecting a saved backtest loads its full result on the RIGHT. */
               <div className="h-[calc(100vh-15rem)] overflow-y-auto pr-4 [scrollbar-gutter:stable]">
-                <OptimizationJobsTable />
+                <OptimizationJobsTable
+                  selectedJobId={selectedOptJob?.job.id ?? null}
+                  onSelectJob={(job, detail) => {
+                    setSelectedBacktest(null);
+                    setSelectedOptJob({ job, detail });
+                  }}
+                  onSelectBacktest={viewBacktest}
+                />
               </div>
             ) : (
               /* Saved Backtests Tab — fills the viewport height like History */
@@ -2306,6 +2324,47 @@ const Backtesting: React.FC = () => {
                 </div>
               </div>
             </>
+          ) : selectedOptJob ? (
+            /* Opt-History job view: the selected job's settings + top individuals. */
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-4">
+              <div className="flex items-start justify-between flex-wrap gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
+                    {selectedOptJob.job.name || `Optimization #${selectedOptJob.job.id}`}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    Optimization job #{selectedOptJob.job.id}
+                    {selectedOptJob.job.fitnessMetric ? ` · ${selectedOptJob.job.fitnessMetric}` : ''}
+                    {selectedOptJob.job.bestFitness != null ? ` · best ${selectedOptJob.job.bestFitness.toFixed(4)}` : ''}
+                  </p>
+                </div>
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                  {selectedOptJob.job.status}
+                </span>
+              </div>
+
+              <div>
+                <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
+                  <Sliders className="w-4 h-4" /> Optimization settings
+                </h4>
+                <OptJobSettingsDetail s={selectedOptJob.job.settings} />
+              </div>
+
+              <div>
+                <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
+                  <Award className="w-4 h-4" /> Top individuals
+                </h4>
+                {selectedOptJob.detail === undefined ? (
+                  <div className="text-xs text-gray-400 dark:text-gray-500">Loading…</div>
+                ) : (
+                  <TopIndividualsTable
+                    individuals={selectedOptJob.detail.topIndividuals}
+                    fitnessMetric={selectedOptJob.job.fitnessMetric ?? undefined}
+                    note="Select a saved backtest below the jobs table to view its full result (equity curve, trades)."
+                  />
+                )}
+              </div>
+            </div>
           ) : (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
               <BarChart3 className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
