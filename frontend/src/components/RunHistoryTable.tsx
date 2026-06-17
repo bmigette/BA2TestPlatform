@@ -94,6 +94,7 @@ export function RunHistoryTable({ savedOnly, onSelect }:
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">sharpe</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">trades</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">DD%</th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">win%</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">saved</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">name</th>
             <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Actions</th>
@@ -110,6 +111,7 @@ export function RunHistoryTable({ savedOnly, onSelect }:
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.sharpeRatio ?? r.sharpe_ratio) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.totalTrades ?? r.total_trades) ?? '—'}</td>
               <td className="px-3 py-2 text-sm text-red-600 dark:text-red-400">{fmtDrawdown(r.maxDrawdown ?? r.max_drawdown)}</td>
+              <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(() => { const w = r.winRate ?? r.win_rate; return w != null ? `${Number(w).toFixed(1)}%` : '—'; })()}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{(r.isSaved ?? r.is_saved) ? '★' : ''}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{r.name}</td>
               <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">
