@@ -165,6 +165,21 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
             )
         expert_cfg = ga.get("expert_params")  # may be None (expert frozen)
 
+        # SCREENER genes share the expert_params dict (the launcher merges them in pre-namespaced
+        # with ``screener:``). Split them out so they route to the screener namespace instead of
+        # being mis-prefixed as ``model:screener:*`` by _collect_expert: the model space gets the
+        # non-screener keys, and a screener_cfg (prefix stripped back to the bare setting name) is
+        # passed alongside so collect_param_space emits the ``screener:<setting>`` genes.
+        model_cfg = None
+        screener_cfg = None
+        if expert_cfg:
+            model_cfg = {k: v for k, v in expert_cfg.items() if not k.startswith("screener:")}
+            screener_cfg = {
+                k[len("screener:"):]: v
+                for k, v in expert_cfg.items()
+                if k.startswith("screener:")
+            } or None
+
         # BYPASS expert (piece 1c): if the backtest's expert declares ``bypasses_classic_rm``
         # (e.g. FactorRanker) the search space must EXCLUDE tp/sl/cond:*/exit:* and search
         # ONLY the expert's own params (model:*). Detected from the backtest_cfg experts here so
@@ -174,7 +189,8 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         # --- Build the joint param space (Task 1) ---
         try:
             param_space = collect_param_space(
-                strategy, expert_cfg=expert_cfg, bypass=bypass_expert
+                strategy, expert_cfg=model_cfg, bypass=bypass_expert,
+                screener_cfg=screener_cfg,
             )
         except ValueError as e:
             return _fail(opt_id, db, str(e))
@@ -346,7 +362,9 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                     if cached is not None:
                         fits[i] = cached
                         continue
-                    config = _build_daily_trial_config(backtest_cfg, decode_params(strategy, flat))
+                    config = _build_daily_trial_config(
+                        backtest_cfg, decode_params(strategy, flat), hoisted
+                    )
                     jobs.append((i, flat, key, config))
 
                 # Intra-generation progress: report individuals evaluated WITHIN the current
@@ -542,9 +560,23 @@ def _build_hoisted_state(backtest_cfg: Dict[str, Any]) -> Dict[str, Any]:
     the AsOfPriceSource per call. A future optimization can pre-build and reuse the
     AsOfPriceSource bundle here; until then this is an explicit known perf-todo.
 
+    SCREENER: when the run optimizes screener settings (``backtest.screener_opt`` present)
+    the parquet metric store is loaded ONCE here to warm the per-worker memo (so every trial's
+    per-day filter reads it in-memory), and the store path + base settings + scan cadence are
+    stashed for ``_build_daily_trial_config`` to weave into each individual's runtime block.
+
     Returns an opaque dict consumed by ``_run_trial_backtest``.
     """
-    return {"backtest_cfg": backtest_cfg}
+    hoisted: Dict[str, Any] = {"backtest_cfg": backtest_cfg}
+    screener_opt = backtest_cfg.get("screener_opt")
+    if screener_opt:
+        from ba2_providers.screener import metric_store as _ms
+
+        _ms.load_store(screener_opt["store"])  # warms the per-worker memo
+        hoisted["screener_store"] = screener_opt["store"]
+        hoisted["screener_base"] = screener_opt.get("base_settings", {})
+        hoisted["screener_cadence_days"] = int(screener_opt.get("cadence_days", 7))  # default weekly
+    return hoisted
 
 
 def _run_trial_backtest(
@@ -573,7 +605,7 @@ def _run_trial_backtest(
     if engine == "daily":
         from app.services.backtest.daily_backtest_handler import run_daily_backtest
 
-        config = _build_daily_trial_config(backtest_cfg, decoded)
+        config = _build_daily_trial_config(backtest_cfg, decoded, hoisted)
         return run_daily_backtest(config)
 
     if engine == "ml":
@@ -585,7 +617,9 @@ def _run_trial_backtest(
 
 
 def _build_daily_trial_config(
-    backtest_cfg: Dict[str, Any], decoded: Dict[str, Any]
+    backtest_cfg: Dict[str, Any],
+    decoded: Dict[str, Any],
+    hoisted: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble the ``run_daily_backtest`` config for one trial from the run-level
     backtest_cfg + the decoded trial params.
@@ -644,6 +678,23 @@ def _build_daily_trial_config(
         else:
             experts_out.append({"class": spec, "settings": dict(overrides)})
 
+    # SCREENER runtime: when the run hoisted a metric store, this individual's EFFECTIVE screener
+    # settings are base (run-level, non-optimized) overlaid with the per-individual decoded
+    # screener overrides. The engine reads ``screener_runtime`` to gate entries to the per-day
+    # screened universe (latest scan <= bar; cadence held between scans). Absent for non-screener
+    # runs -> the engine's gating is a no-op and the config is byte-identical to before.
+    screener_runtime = None
+    if hoisted and hoisted.get("screener_store"):
+        eff = {
+            **(hoisted.get("screener_base") or {}),
+            **(decoded.get("screener_overrides") or {}),
+        }
+        screener_runtime = {
+            "store": hoisted["screener_store"],
+            "settings": eff,
+            "cadence_days": hoisted.get("screener_cadence_days", 7),
+        }
+
     # UNIQUE per-trial id: parallel trials each name their OWN per-run sqlite, so they never
     # collide on the same file (WinError 32 / cross-thread session). The run-level id is a base.
     import uuid as _uuid
@@ -681,6 +732,9 @@ def _build_daily_trial_config(
         # option exit rule (and its option_delta/option_dte genes) can fetch a chain. None for an
         # equity-only trial (byte-identical to the prior behaviour).
         "options_cache_db": options_cache_db,
+        # SCREENER seam: the per-individual effective screener settings + store path the engine
+        # uses to gate entries to the per-day screened universe. None for non-screener runs.
+        "screener_runtime": screener_runtime,
     }
 
 

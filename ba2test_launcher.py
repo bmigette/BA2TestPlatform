@@ -569,6 +569,18 @@ _RM_OPT = {
     "max_virtual_equity_per_instrument_percent": {"optimize": True, "min": 5.0, "max": 30.0, "step": 5.0, "type": "float"},
 }
 
+# Screener-settings genes (only added to the search when --screener is passed). The STATIC cap
+# range is kept small — its loosest bound sizes the metric store's shortlist superset — while the
+# dynamic ranges (RVOL / price-drop / max_stocks) may be wide. These are merged into expert_params
+# pre-namespaced with `screener:` so collect_param_space / decode_params route them to the screener
+# namespace (see _collect_screener / decode_params in strategy_param_space.py).
+_SCREENER_OPT = {
+    "screener_market_cap_min": {"min": 2e9, "max": 1e10, "step": 1e9, "type": "float", "optimize": True},
+    "screener_relative_volume_min": {"min": 1.0, "max": 3.0, "step": 0.1, "type": "float", "optimize": True},
+    "screener_price_drop_pct": {"min": 0.0, "max": 25.0, "step": 1.0, "type": "float", "optimize": True},
+    "screener_max_stocks": {"min": 5, "max": 30, "step": 5, "type": "int", "optimize": True},
+}
+
 
 def _build_strategy_row(name: str):
     """A Strategy whose TP/SL + the 5 classic-RM params (the RM's sizing/stop conditions &
@@ -868,6 +880,30 @@ def _cmd_optimize(args) -> int:
             "backtest_id": int(_dt.now().timestamp()),
             "name": f"opt-{expert}-trial",
         }
+
+        # Screener-settings optimization: when --screener, attach a screener_opt block to the
+        # backtest config (store + base settings + scan cadence — an OPTIMIZATION config option,
+        # default weekly) and merge the screener genes into expert_params (pre-namespaced so the
+        # param-space router sends them to the screener namespace). The run-level universe becomes
+        # the metric store's FULL symbol union so the engine has OHLCV for any per-day pick.
+        screener_genes: dict = {}
+        if getattr(args, "screener", False):
+            if not args.screener_store:
+                sys.exit("optimize: --screener requires --screener-store")
+            base = json.load(open(args.screener_base_json)) if args.screener_base_json else {}
+            backtest_block["screener_opt"] = {
+                "store": args.screener_store,
+                "base_settings": base,
+                "cadence_days": int(args.screener_cadence_days),  # default 7 = weekly
+            }
+            from ba2_providers.screener import metric_store as _ms
+            store_syms = sorted(str(s) for s in _ms.load_store(args.screener_store)["symbol"].unique())
+            if not store_syms:
+                sys.exit(f"optimize: --screener-store {args.screener_store!r} has no symbols")
+            backtest_block["enabled_instruments"] = store_syms
+            universe = store_syms  # for the progress line / submit description below
+            screener_genes = {f"screener:{k}": v for k, v in _SCREENER_OPT.items()}
+
         cfg = {
             "populationSize": int(args.population),
             "generations": int(args.generations),
@@ -877,7 +913,8 @@ def _cmd_optimize(args) -> int:
             "parallelIndividuals": int(args.parallel),
             # Expert decision params + the classic-RM sizing params (model:* namespace, real ba2
             # setting names). Without the RM block the RM stays fixed at its interface defaults.
-            "expert_params": {**spec["expert_params"], **_RM_OPT},
+            # Screener genes (screener:* namespace) are merged in ONLY when --screener is set.
+            "expert_params": {**spec["expert_params"], **_RM_OPT, **screener_genes},
             "backtest": backtest_block,
         }
         opt = StrategyOptimization(
@@ -1381,6 +1418,17 @@ def main(argv: "list | None" = None) -> int:
     op.add_argument("--run-schedule", default="weekly", choices=["daily", "weekly"])
     op.add_argument("--run-schedule-day", default="monday")
     op.add_argument("--name", default=None)
+    op.add_argument("--screener", action="store_true",
+                    help="Optimize a screener-selected dynamic universe (screener:* genes). "
+                         "Requires --screener-store; the run universe becomes the store's full "
+                         "symbol union and entries are gated to each day's screened picks.")
+    op.add_argument("--screener-store", default=None,
+                    help="Path to the parquet metric store (build-screener-metrics).")
+    op.add_argument("--screener-base-json", default=None,
+                    help="JSON file of base (non-optimized) screener settings merged under the genes.")
+    op.add_argument("--screener-cadence-days", type=int, default=7,
+                    help="Scan cadence in days (default 7 = weekly). Must match the metric store's "
+                         "build cadence; align with --run-schedule.")
     op.add_argument("--submit", action="store_true",
                     help="Enqueue on the running serve queue (live in the UI Running-jobs strip) "
                          "instead of running in-process. Submit jobs one at a time to avoid "
