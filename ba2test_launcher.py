@@ -135,21 +135,36 @@ def _cmd_backtest(rest: list) -> int:
 
 
 def _cmd_fetch_cache(args) -> int:
+    """Populate the as-of OHLCV cache. SYMBOLS are fetched in PARALLEL (a thread per symbol,
+    ``--workers`` threads) — each symbol writes its OWN per-symbol cache file under its own
+    lock, so concurrent DIFFERENT-symbol fetches are safe and a SAME-symbol race can't occur
+    (one thread owns each symbol). The global FMP rate-limit gate (fmp_common) serialises/backs
+    off so the extra concurrency never 429-storms. Per-symbol chunk-parallelism is kept small so
+    total concurrency stays ~= workers x chunk."""
     from app.services.ohlcv_cache_handler import handle_ohlcv_cache_fetch
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     timeframes = [t.strip() for t in args.timeframes.split(",") if t.strip()]
     overall = {"fetched": [], "failed": []}
-    for sym in symbols:
+    n_workers = max(1, int(args.workers))
+    chunk_workers = max(1, min(3, n_workers))  # per-symbol chunk threads (bounded)
+
+    def _one(sym: str):
         payload = {
-            "provider": args.provider,
-            "symbol": sym,
-            "timeframes": timeframes,
-            "start_date": args.start,
-            "end_date": args.end,
-            "executor_workers": args.workers,
+            "provider": args.provider, "symbol": sym, "timeframes": timeframes,
+            "start_date": args.start, "end_date": args.end, "executor_workers": chunk_workers,
         }
-        res = handle_ohlcv_cache_fetch(f"cli-fetch-{sym}", payload)
-        (overall["fetched"] if res.get("status") == "completed" else overall["failed"]).append({sym: res})
+        return sym, handle_ohlcv_cache_fetch(f"cli-fetch-{sym}", payload)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        for fut in as_completed([ex.submit(_one, s) for s in symbols]):
+            sym, res = fut.result()
+            (overall["fetched"] if res.get("status") == "completed" else overall["failed"]).append({sym: res})
+            done += 1
+            if done % 25 == 0 or done == len(symbols):
+                print(f"  fetch-cache: {done}/{len(symbols)} symbols "
+                      f"({len(overall['failed'])} failed)", flush=True)
     print(json.dumps(overall, indent=2, default=str))
     return 0
 
