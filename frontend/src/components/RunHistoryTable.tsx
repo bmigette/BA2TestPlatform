@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { listBacktests, saveBacktest, fetchBacktestExport, deleteBacktest } from '../lib/btApi';
 import type { ExportKind } from '../lib/btApi';
+import { ExportDialog } from './ExportDialog';
 
 // Trigger a browser download of a JSON object via a Blob + temporary <a download>.
 // No server filesystem write — the bytes are produced entirely client-side.
@@ -32,6 +33,8 @@ export function RunHistoryTable({ savedOnly, onSelect }:
   const [q, setQ] = useState('');
   // Bumped after a save/delete to re-run the fetch effect below.
   const [refresh, setRefresh] = useState(0);
+  // The run whose Export dialog is open (null = closed).
+  const [exportRow, setExportRow] = useState<any | null>(null);
 
   useEffect(() => {
     listBacktests({
@@ -57,24 +60,12 @@ export function RunHistoryTable({ savedOnly, onSelect }:
     }
   };
 
-  const handleExport = async (r: any) => {
-    // Ask WHAT to export, then download the chosen JSON via the browser (no server file write).
-    // window.prompt keeps this dependency-free; '1'/'2' map to the two export kinds, cancel aborts.
-    const choice = window.prompt(
-      `Export backtest #${r.id} (${r.name || 'unnamed'}) — type a number:\n` +
-      `  1 = Expert settings\n` +
-      `  2 = Conditions ruleset`,
-      '1',
-    );
-    if (choice == null) return;  // cancelled
-    const kind: ExportKind | null =
-      choice.trim() === '1' ? 'expert_settings'
-      : choice.trim() === '2' ? 'ruleset'
-      : null;
-    if (!kind) {
-      alert('Export cancelled: enter 1 (Expert settings) or 2 (Conditions ruleset).');
-      return;
-    }
+  // Called by the ExportDialog with the chosen kind: fetch the read-only payload and trigger a
+  // browser download (no server-side file write). Closes the dialog regardless of outcome.
+  const handleExport = async (kind: ExportKind) => {
+    const r = exportRow;
+    setExportRow(null);
+    if (!r) return;
     try {
       const payload = await fetchBacktestExport(r.id, kind);
       const suffix = kind === 'expert_settings' ? 'expert-settings' : 'ruleset';
@@ -108,6 +99,7 @@ export function RunHistoryTable({ savedOnly, onSelect }:
   const filtered = rows.filter(r => !q || (r.name || '').toLowerCase().includes(q.toLowerCase()));
 
   return (
+    <>
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
       <div className="flex gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
         <select value={expert} onChange={(e) => setExpert(e.target.value)} className={inputClass}>
@@ -162,7 +154,7 @@ export function RunHistoryTable({ savedOnly, onSelect }:
                   </button>
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); handleExport(r); }}
+                    onClick={(e) => { e.stopPropagation(); setExportRow(r); }}
                     title="Export this run"
                     className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
                   >
@@ -183,5 +175,13 @@ export function RunHistoryTable({ savedOnly, onSelect }:
         </tbody>
       </table>
     </div>
+    <ExportDialog
+      isOpen={exportRow != null}
+      backtestId={exportRow?.id ?? 0}
+      backtestName={exportRow?.name}
+      onExport={handleExport}
+      onClose={() => setExportRow(null)}
+    />
+    </>
   );
 }

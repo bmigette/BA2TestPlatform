@@ -173,7 +173,7 @@ function OptimizationDetail({ opt }: { opt?: RunningOpt }) {
         individuals={top}
         fitnessMetric={opt.fitnessMetric}
         note={top.length > 0
-          ? `Full backtests for the top ${Math.min(5, top.length)} land in History when the job completes.`
+          ? `Informational only — these running individuals have no saved backtest yet. The top ${Math.min(5, top.length)} are persisted as full backtests when the job completes; select them in the Opt History tab to view their results.`
           : undefined}
       />
     </div>
