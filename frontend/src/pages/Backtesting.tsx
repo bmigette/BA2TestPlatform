@@ -581,12 +581,13 @@ const Backtesting: React.FC = () => {
       };
       if (universe.mode === 'screener' && universe.screener_param_ranges
           && Object.values(universe.screener_param_ranges).some(r => r.optimize)) {
-        if (!screenerStore.trim()) throw new Error('Screener metric-store path is required.');
         body.screener_opt = {
-          store: screenerStore.trim(),
           param_ranges: universe.screener_param_ranges,
           cadence_days: screenerCadenceDays,
           base_settings: universe.screener_settings,
+          // store omitted -> backend defaults to ba2_common SCREENER_STORE_DIR (a sub-path of the
+          // shared cache folder). Only sent when the user overrides the path.
+          ...(screenerStore.trim() ? { store: screenerStore.trim() } : {}),
         };
       }
       const res = await optimizeBatch(body);
@@ -688,7 +689,9 @@ const Backtesting: React.FC = () => {
   const [runScheduleDay, setRunScheduleDay] = useState<string>('Monday');
   // Screener metric-store path for screener-settings optimization (P1.4). Defaults to the
   // backend default; required when screener_opt is sent.
-  const [screenerStore, setScreenerStore] = useState<string>('~/Documents/ba2/trade/screener/metric_store');
+  // Blank -> the backend uses ba2_common's SCREENER_STORE_DIR (a sub-path of the shared cache
+  // folder). Only set this to override the metric-store location.
+  const [screenerStore, setScreenerStore] = useState<string>('');
   // Cadence (days) for rebuilding the screener universe during screener-settings optimization.
   const [screenerCadenceDays, setScreenerCadenceDays] = useState<number>(7);
 
@@ -1460,14 +1463,13 @@ const Backtesting: React.FC = () => {
       // metric-store names produced by UniversePicker (market_cap_min, relative_volume_min, ...).
       if (universe.mode === 'screener' && universe.screener_param_ranges
           && Object.values(universe.screener_param_ranges).some(r => r.optimize)) {
-        if (!screenerStore.trim()) {
-          throw new Error('Screener metric-store path is required to optimize screener settings.');
-        }
         body.screener_opt = {
-          store: screenerStore.trim(),
           param_ranges: universe.screener_param_ranges,
           cadence_days: screenerCadenceDays,
           base_settings: universe.screener_settings,
+          // store omitted -> backend defaults to ba2_common SCREENER_STORE_DIR (under the shared
+          // cache folder). Only sent when the user overrides the path.
+          ...(screenerStore.trim() ? { store: screenerStore.trim() } : {}),
         };
       }
 
@@ -3196,8 +3198,9 @@ const Backtesting: React.FC = () => {
                 </div>
 
                 {/* Screener-settings optimization (P1.4). Shown when the universe is a screener
-                    with at least one metric range toggled to Opt — collects the metric-store path
-                    (required) + the rebuild cadence sent as screener_opt. */}
+                    with at least one metric range toggled to Opt — an OPTIONAL metric-store path
+                    override (blank => backend default under the shared cache folder) + the rebuild
+                    cadence, sent as screener_opt. */}
                 {universe.mode === 'screener'
                   && universe.screener_param_ranges
                   && Object.values(universe.screener_param_ranges).some(r => r.optimize) && (
@@ -3206,12 +3209,12 @@ const Backtesting: React.FC = () => {
                       Screener optimization
                     </h4>
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Screener metric-store path</label>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Screener metric-store path <span className="text-gray-400 dark:text-gray-500">(optional — defaults to the shared cache folder)</span></label>
                       <input
                         type="text"
                         value={screenerStore}
                         onChange={e => setScreenerStore(e.target.value)}
-                        placeholder="~/Documents/ba2/trade/screener/metric_store"
+                        placeholder="default: <cache>/screener/metric_store"
                         className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                       />
                     </div>

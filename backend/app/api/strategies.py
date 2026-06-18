@@ -648,21 +648,18 @@ def _merge_screener_opt(cfg: dict, screener_opt: dict) -> None:
 
       1. ``cfg["backtest"]["screener_opt"]`` gets {store, base_settings, cadence_days,
          apply_to_expert_settings} — the block the handler's ``_build_hoisted_state`` reads to
-         load the parquet metric store once + gate per-day entries. ``store`` is required
-         (fail-early, no silent default). ``base_settings`` defaults to {} and ``cadence_days``
-         to 7 (weekly) — matching the handler's own ``.get`` defaults.
+         load the parquet metric store once + gate per-day entries. ``store`` defaults to the
+         shared ``ba2_common.config.SCREENER_STORE_DIR`` (``<BA2_HOME>/trade/screener/metric_store``)
+         when omitted, and a provided value is ``expanduser``-ed (so a UI-supplied ``~/...`` works).
+         ``base_settings`` defaults to {} and ``cadence_days`` to 7 (weekly).
       2. ``param_ranges`` ({setting: {optimize,min,max,step,type}}) are merged into
          ``cfg["expert_params"]`` with each key prefixed ``screener:`` so the handler routes them
          to the screener namespace (it splits ``screener:``-prefixed keys out of expert_params).
-
-    Raises HTTPException(400) on a missing store (the only hard requirement).
     """
+    import os as _os
+    from ba2_common.config import SCREENER_STORE_DIR as _DEFAULT_SCREENER_STORE
     store = screener_opt.get("store")
-    if not store:
-        raise HTTPException(
-            status_code=400,
-            detail="screener_opt.store is required (path to the parquet metric store)",
-        )
+    store = _os.path.expanduser(str(store)) if store else _os.path.expanduser(str(_DEFAULT_SCREENER_STORE))
     backtest = dict(cfg.get("backtest") or {})
     backtest["screener_opt"] = {
         "store": store,
