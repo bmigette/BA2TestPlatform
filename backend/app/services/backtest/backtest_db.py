@@ -45,10 +45,11 @@ def backtest_db_path(run_id: int | str) -> pathlib.Path:
 
 
 # Credential app-settings carried from the live app DB into each throwaway run DB so that
-# live-flavoured providers constructed inside the run (e.g. FMPOHLCVProvider, which reads
-# get_app_setting("FMP_API_KEY")) resolve their keys. Only credentials needed by the OHLCV /
-# data providers — never trading config. Absent keys are skipped (hermetic runs carry nothing).
-_CARRIED_APP_SETTINGS = ("FMP_API_KEY",)
+# live-flavoured providers/experts constructed inside the run (e.g. FMPOHLCVProvider, which reads
+# get_app_setting("FMP_API_KEY"); FinnHubRating, which reads get_setting("finnhub_api_key"))
+# resolve their keys. Only credentials needed by the data providers/experts — never trading
+# config. Absent keys are skipped (hermetic runs carry nothing).
+_CARRIED_APP_SETTINGS = ("FMP_API_KEY", "finnhub_api_key")
 
 
 def _read_carry_settings(keys: tuple[str, ...]) -> Dict[str, str]:

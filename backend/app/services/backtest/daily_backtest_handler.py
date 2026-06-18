@@ -130,6 +130,15 @@ _SUPPORTED_EXPERTS = {
     # FactorPortfolioManager. ``_build_experts`` detects the marker and skips ruleset seeding /
     # RM-gate enabling for it; the engine routes its targets straight to the portfolio manager.
     "FactorRanker": "ba2_experts.FactorRanker",
+    # Classic (non-bypass) signal experts, also no-LLM + analyze_as_of-driven:
+    #  * FinnHubRating — analyst recommendation-trend rating (needs the ``finnhub_api_key`` setting;
+    #    no LLM). Recommendation trends are disk-cached (backtest-only) like the FMP histories.
+    #  * FMPSenateTraderWeight / FMPSenateTraderCopy — US congressional-trade signal (FMP). Copy
+    #    declares ``required_instrument_selection_method: "expert"`` (it surfaces its own names),
+    #    so it is best run with a screener/expert universe rather than a narrow static list.
+    "FinnHubRating": "ba2_experts.FinnHubRating",
+    "FMPSenateTraderWeight": "ba2_experts.FMPSenateTraderWeight",
+    "FMPSenateTraderCopy": "ba2_experts.FMPSenateTraderCopy",
 }
 
 
@@ -141,6 +150,9 @@ _EXPERT_WARMUP_BARS = {
     "FMPRating": 10,
     "FMPEarningsDrift": 10,
     "FMPInsiderClusterBuy": 10,
+    "FinnHubRating": 10,          # recommendation-trend rating; no long OHLCV lookback
+    "FMPSenateTraderWeight": 10,  # recent congressional trades; ATR floor governs warmup
+    "FMPSenateTraderCopy": 10,
 }
 _WARMUP_FLOOR_DAYS = 60           # never warm up less than this (ATR + safety)
 _BARS_TO_CALDAYS = 1.45           # trading bars -> calendar days (≈252 bars/year -> ~365 days)
