@@ -342,6 +342,43 @@ class DailyBacktestEngine:
         # absent (every non-screener run) this is None and the per-bar entry gate is a no-op, so
         # behaviour is byte-identical to before.
         self._screener_runtime = config.get("screener_runtime")
+        # BYPASS-expert (FactorRanker) per-run caches. The FactorPortfolioManager holds only
+        # run-CONSTANT state (the resolver expert/account instances + ids), and the per-bar stop
+        # pass runs on ~every non-rebalance 5min bar — so reconstructing the manager (and its
+        # ExpertInstance DB query) per bar was a profiled hotspot (~44% of the loop on a held
+        # book). Build it ONCE per expert and reuse. virtual_equity_pct is likewise run-constant,
+        # cached so the per-bar stop equity is account.get_balance() * pct with NO per-bar
+        # ExpertInstance query (get_virtual_balance's hidden DB round-trip). Results-identical:
+        # the cached manager reads live account/holdings on each call exactly as a fresh one did,
+        # and the passed equity equals get_virtual_balance()'s value bit-for-bit (same balance,
+        # same pct, same multiply order).
+        self._bypass_pm: Dict[int, Any] = {}
+        self._bypass_veq_pct: Dict[int, float] = {}
+
+    def _bypass_manager(self, expert_id: int) -> Any:
+        """Lazily build + cache the FactorPortfolioManager for a bypass expert (run-constant).
+
+        Also caches the expert's ``virtual_equity_pct`` (read ONCE here, not per bar) so the
+        per-bar stop can compute equity without re-querying ExpertInstance. Both are stable for
+        the whole run; the manager itself reads live account state on every call.
+        """
+        pm = self._bypass_pm.get(expert_id)
+        if pm is None:
+            from ba2_experts.FactorRanker.portfolio import FactorPortfolioManager
+
+            pm = FactorPortfolioManager(expert_id)
+            self._bypass_pm[expert_id] = pm
+            try:
+                from ba2_common.core.db import get_instance
+                from ba2_common.core.models import ExpertInstance
+
+                inst = get_instance(ExpertInstance, expert_id)
+                self._bypass_veq_pct[expert_id] = float(
+                    getattr(inst, "virtual_equity_pct", None) or 100.0
+                )
+            except Exception:  # noqa: BLE001 — fall back to equity=None (method self-computes)
+                self._bypass_veq_pct[expert_id] = 100.0
+        return pm
 
     # -- the loop -----------------------------------------------------------
     def run(self) -> Dict[str, Any]:
@@ -841,10 +878,9 @@ class DailyBacktestEngine:
         if not targets:
             return  # no target weights this bar -> nothing to rebalance.
 
-        from ba2_experts.FactorRanker.portfolio import FactorPortfolioManager
-
         try:
-            FactorPortfolioManager(expert_id).rebalance(targets)
+            # Reuse the run-constant portfolio manager (built once; see _bypass_manager).
+            self._bypass_manager(expert_id).rebalance(targets)
         except Exception as e:  # noqa: BLE001 — a rebalance failure must not kill the run
             self._log(f"bypass rebalance failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
 
@@ -876,10 +912,20 @@ class DailyBacktestEngine:
         if not self.account.get_positions():
             return False
 
-        from ba2_experts.FactorRanker.portfolio import FactorPortfolioManager
+        # Reuse the run-constant portfolio manager (built once) and compute the stop equity
+        # cheaply from the account cash + cached virtual_equity_pct — byte-identical to
+        # apply_stop_losses' own get_virtual_balance() (same balance, same pct) but WITHOUT the
+        # two per-bar ExpertInstance DB queries (manager __init__ + get_virtual_balance). When
+        # the balance is unavailable, pass equity=None so the method self-computes (old path).
+        pm = self._bypass_manager(expert_id)
+        balance = self.account.get_balance()
+        if balance is None:
+            equity = None
+        else:
+            equity = balance * (self._bypass_veq_pct.get(expert_id, 100.0) / 100.0)
 
         try:
-            submitted = FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct))
+            submitted = pm.apply_stop_losses(float(stop_pct), equity=equity)
         except Exception as e:  # noqa: BLE001 — a stop failure must not kill the run
             self._log(f"bypass stop failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
             # Unknown whether an order was submitted before the failure -> assume YES so the fill

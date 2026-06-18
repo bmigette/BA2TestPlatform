@@ -251,18 +251,30 @@ def test_apply_bypass_stops_noop_when_risk_pct_unset(monkeypatch):
 
 
 def test_apply_bypass_stops_invokes_manager_when_risk_pct_set(monkeypatch):
-    """When ``risk_per_trade_pct`` is positive, the helper calls
-    FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct))."""
+    """When ``risk_per_trade_pct`` is positive, the helper builds (once) and calls
+    FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct), equity=...).
+
+    The manager + virtual_equity_pct are cached per run (perf #47): the per-bar stop reuses the
+    same manager and passes a cheaply-computed equity (account.get_balance() * pct) instead of
+    re-querying ExpertInstance twice per bar."""
     from app.services.backtest.daily_engine import DailyBacktestEngine
     from ba2_experts.FactorRanker import portfolio as pf_mod
+    import ba2_common.core.db as _db_mod
 
     engine = DailyBacktestEngine.__new__(DailyBacktestEngine)
+    # Per-run caches normally set in __init__ (bypassed here via __new__).
+    engine._bypass_pm = {}
+    engine._bypass_veq_pct = {}
 
     # The flat-account fast path gates on account.get_positions(); give the engine a stub
-    # account that reports a held position so the helper proceeds to the manager.
+    # account that reports a held position (so the helper proceeds) and a cash balance (used to
+    # compute the stop equity = balance * virtual_equity_pct/100).
     class _Account:
         def get_positions(self):
             return [{"symbol": "AAPL", "qty": 1}]
+
+        def get_balance(self):
+            return 1000.0
 
     engine.account = _Account()
 
@@ -278,12 +290,24 @@ def test_apply_bypass_stops_invokes_manager_when_risk_pct_set(monkeypatch):
     def _fake_init(self, expert_instance_id):
         init_calls.append(expert_instance_id)
 
+    class _Inst:
+        virtual_equity_pct = 100.0
+
     monkeypatch.setattr(pf_mod.FactorPortfolioManager, "__init__", _fake_init, raising=True)
     monkeypatch.setattr(
         pf_mod.FactorPortfolioManager, "apply_stop_losses",
-        lambda self, stop_pct: apply_calls.append(stop_pct), raising=True,
+        lambda self, stop_pct, equity=None, prices=None: apply_calls.append((stop_pct, equity)),
+        raising=True,
     )
+    # _bypass_manager reads virtual_equity_pct via get_instance — stub it (no DB in this unit test).
+    monkeypatch.setattr(_db_mod, "get_instance", lambda *a, **k: _Inst(), raising=True)
 
     engine._apply_bypass_stops(_Expert(), 77, {}, datetime(2024, 1, 5))
+    # Manager built ONCE for the expert; stop invoked with the pct and equity = 1000 * 100/100.
     assert init_calls == [77]
-    assert apply_calls == [1.0]
+    assert apply_calls == [(1.0, 1000.0)]
+
+    # A SECOND bar reuses the cached manager (no new construction) — the perf win.
+    engine._apply_bypass_stops(_Expert(), 77, {}, datetime(2024, 1, 6))
+    assert init_calls == [77]
+    assert apply_calls == [(1.0, 1000.0), (1.0, 1000.0)]
