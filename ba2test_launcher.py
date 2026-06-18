@@ -544,6 +544,33 @@ _EXPERT_OPT = {
         },
         "fixed_settings": {},
     },
+    # FinnHubRating — analyst-consensus rating (like FMPRating but FinnHub source); large-cap
+    # NDQ30 universe. Optimizes the rating bucket thresholds. (No analyst target price -> S4
+    # target-anchoring falls back to entry-percent; run S1/S2/S3.)
+    "FinnHubRating": {
+        "expert_params": {
+            "buy_threshold": {"optimize": True, "min": 3.8, "max": 5.0, "step": 0.1, "type": "float"},
+            "overweight_threshold": {"optimize": True, "min": 3.0, "max": 4.0, "step": 0.1, "type": "float"},
+            "hold_threshold": {"optimize": True, "min": 2.0, "max": 3.0, "step": 0.1, "type": "float"},
+            "underweight_threshold": {"optimize": True, "min": 1.0, "max": 2.0, "step": 0.1, "type": "float"},
+        },
+        "fixed_settings": {},
+    },
+    # FMPSenateTraderWeight — congressional (senate) disclosed-trade signal. Sparse per symbol,
+    # so it needs a BROAD universe where senators actually trade (NDQ30 is too narrow; assess a
+    # wider list). Optimizes the disclosure/recency/consensus knobs.
+    "FMPSenateTraderWeight": {
+        "expert_params": {
+            "max_disclose_date_days": {"optimize": True, "min": 15, "max": 60, "step": 5, "type": "int"},
+            "max_trade_exec_days": {"optimize": True, "min": 30, "max": 120, "step": 15, "type": "int"},
+            "max_trade_price_delta_pct": {"optimize": True, "min": 5.0, "max": 20.0, "step": 2.5, "type": "float"},
+            "growth_confidence_multiplier": {"optimize": True, "min": 2.0, "max": 8.0, "step": 1.0, "type": "float"},
+            "confidence_to_profit_factor": {"optimize": True, "min": 0.05, "max": 0.30, "step": 0.05, "type": "float"},
+            "min_traders": {"optimize": True, "min": 1, "max": 4, "step": 1, "type": "int"},
+            "min_trades": {"optimize": True, "min": 1, "max": 4, "step": 1, "type": "int"},
+        },
+        "fixed_settings": {},
+    },
     # FactorRanker is a BYPASS expert: it ignores enter/exit rulesets and the classic RM, and
     # rebalances a portfolio by factor score. So its optimization searches ONLY the factor-model
     # params (one strategy, no S1/S2/S3 variants, no RM block). Marked bypass=True for the grid.

@@ -91,3 +91,62 @@ currently shares one `--universe`) + the screener-history cache (`fetch-screener
 - **Deferred (task #46):** Phase 2 screener/midcap jobs + screener-in-opt, after a perf pass.
 - Best clean Phase-1 numbers so far (FMPRating, OCO/DD-fixed): S1 Calmar 5.65, S2 4.89,
   S3 4.72, drawdowns ~10–17%.
+
+---
+
+# Expert coverage review (2026-06-18)
+
+Audit of every expert configured in the **dev account** (`expertinstance`) vs the optimization
+plan. Goal: each expert has mixed settings/strategies in use; the optimizer finds the best
+config per expert. LLM experts are **out of scope** (per direction).
+
+| Expert | Dev instances | Backtestable | In opt plan | Strategies | Universe | Status |
+|---|---|---|---|---|---|---|
+| **FMPRating** | 21 | yes | ✅ | S1/S2/S3/S4 | NDQ30 | **running** (S4 re-run) |
+| **FactorRanker** | 10 | yes (bypass) | ✅ | FACTOR | NDQ30 | deferred — perf pass (#47) |
+| **FinnHubRating** | 2 | yes (clean) | ✅ **added** | S1/S2/S3¹ | NDQ30 | ready to run |
+| **FMPEarningsDrift** | 1 | yes | ✅ | S1/S2/S3 | screener midcap | deferred (#46) |
+| **FMPInsiderClusterBuy** | 1 | yes | ✅ | S1/S2/S3 | screener midcap | deferred (#46) |
+| **FMPSenateTraderWeight** | 1 | yes (clean) | ✅ **added** | S1/S2/S3 | **broad (TBD²)** | needs universe |
+| PennyMomentumTrader | 1 | LLM | ❌ skip | — | — | **out of scope (LLM)** |
+| TradingAgents | — | LLM | ❌ skip | — | — | **out of scope (LLM)** |
+
+¹ FinnHubRating gives a rating bucket, **not** an analyst target price → S4 (target-anchored TP)
+  degrades to entry-percent, so run S1/S2/S3. Genes: buy/overweight/hold/underweight thresholds.
+² FMPSenateTraderWeight signal is **sparse per symbol** (disclosed congressional trades), so
+  NDQ30 is too narrow — it needs a **broad universe** of names senators actually traded
+  (assess + cache that universe before running). Genes: disclosure-recency, exec-window,
+  price-delta, confidence multipliers, min_traders/min_trades.
+
+**Newly added to `_EXPERT_OPT`** (this commit): FinnHubRating (4 genes), FMPSenateTraderWeight
+(7 genes). With the RM sizing block + S1/S2/S3 TP/SL + condition/exit genes, the optimizer now
+searches the full space for both.
+
+**Net:** all 6 non-LLM dev experts are now in the plan. Run order:
+1. **Now:** FMPRating S1/S2/S3/S4 (running) — large-cap, the validated path.
+2. **Next (NDQ30, ready):** FinnHubRating S1/S2/S3.
+3. **Deferred to perf pass:** FactorRanker (#47), and the screener/midcap experts —
+   FMPEarningsDrift, FMPInsiderClusterBuy, **FMPSenateTraderWeight** — on a screener-derived
+   universe (#46), plus the screener itself in-opt.
+
+---
+
+# Options backtest (defined; tested later)
+
+The backtest already supports options end-to-end — defining it here for when we run it.
+
+- **Trigger:** a run is an *options run* iff any exit/RM rule names an **option action**
+  (`buy_call`, `buy_put`, `sell_covered_call`, `buy_protective_put`) — detected by
+  `strategy_uses_options(cfg)`. The handler then builds a **HistoricalOptionsProvider** from an
+  `options_cache.sqlite` (built via `ba2-test fetch-options`) and injects it into the account.
+- **Data window:** options history floor is **2024-02-01** (`validate_options_window`) — options
+  runs must start on/after that, so this is a **2024-2025** test, not the full 2023-2026 window.
+- **Optimizable option genes (per option exit rule):** `option_delta` (strike delta) and
+  `option_dte` (days-to-expiry window center) — already in `collect_param_space` / `decode_params`
+  (tests: `test_option_optimize_genes`, `test_options_optimization_ga_e2e`).
+- **Capital:** options-expert optimization should use a **$20k** balance (per project note), not $10k.
+- **Strategy shape (proposed S-variant "SO"):** an FMPRating/FinnHub long entry whose exit ruleset
+  uses option actions — e.g. **sell a covered call** against a held long (income) and/or **buy a
+  protective put** (hedge), with delta + DTE optimized. Calmar fitness, 5min fill clock.
+- **Status:** infrastructure done + unit-tested; **run after** the equity grids (needs the
+  options cache fetched for the universe + the 2024-02 floor).
