@@ -21,7 +21,10 @@ import math
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from app.services.backtest_handler import _safe_float, _safe_duration_days
+# Import the metric-coercion helpers from the lightweight ``metrics_utils`` module, NOT from
+# ``backtest_handler`` (the legacy ML path), which top-imports the tsai/torch/darts training
+# stack (~7s of startup) that the expert backtest never uses. See metrics_utils for details.
+from app.services.backtest.metrics_utils import _safe_float, _safe_duration_days
 
 
 # Trading days per year — the standard convention used by backtesting.py for annualisation.

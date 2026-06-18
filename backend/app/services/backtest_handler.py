@@ -27,6 +27,10 @@ from app.services.data_preparation import DataPreparationService
 from app.services.tsai_training import TSAITrainingService
 from app.services.job_handler import ffill_sparse_indicators
 from app.services.perf import perf_timer
+# Metric-coercion helpers now live in a lightweight module so the expert backtest path can
+# use them without importing THIS module (and its ML training stack). Re-imported here so the
+# legacy ML conversion code below keeps using the same single definition.
+from app.services.backtest.metrics_utils import _safe_float, _safe_duration_days
 
 logger = logging.getLogger(__name__)
 
@@ -796,33 +800,6 @@ def _run_chronos_backtest(
         exit_conditions=exit_conditions,
         n_classes=n_classes,
     )
-
-
-def _safe_float(value, default=0.0) -> float:
-    """Safely convert a value to float, handling NaN and Inf."""
-    if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
-        return default
-    try:
-        result = float(value)
-        if np.isnan(result) or np.isinf(result):
-            return default
-        return result
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_duration_days(duration, default=0.0) -> float:
-    """Safely extract days from a duration/timedelta."""
-    if duration is None:
-        return default
-    if hasattr(duration, 'days'):
-        return float(duration.days) + duration.seconds / 86400
-    if hasattr(duration, 'total_seconds'):
-        return duration.total_seconds() / 86400
-    try:
-        return float(duration)
-    except (TypeError, ValueError):
-        return default
 
 
 def _convert_bt_results(
