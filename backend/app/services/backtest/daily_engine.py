@@ -467,8 +467,10 @@ class DailyBacktestEngine:
                 if _schedule_allows_entry(as_of_dt, self._entry_schedule(expert),
                                           self.price.is_intraday, _date_ctx):
                     continue
-                self._apply_bypass_stops(expert, expert_id, settings, as_of_dt)
-                book_dirty = True  # a bypass stop may have submitted a sell order
+                if self._apply_bypass_stops(expert, expert_id, settings, as_of_dt):
+                    # Only mark dirty when a stop SELL was actually submitted; flat/no-sell bars
+                    # leave the order cache byte-identical and skip the invalidate_order_cache.
+                    book_dirty = True
 
             # 3. each expert: analyze_as_of -> persist rec -> ruleset -> RM -> submit.
             #    BYPASS experts (piece 1b): an expert that declares ``bypasses_classic_rm``
@@ -846,13 +848,18 @@ class DailyBacktestEngine:
         except Exception as e:  # noqa: BLE001 — a rebalance failure must not kill the run
             self._log(f"bypass rebalance failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
 
-    def _apply_bypass_stops(self, expert, expert_id, settings, as_of) -> None:
+    def _apply_bypass_stops(self, expert, expert_id, settings, as_of) -> bool:
         """Per-name EQUITY-loss stop for a BYPASS expert (FactorRanker), reusing
         risk_per_trade_pct as a max-loss-per-name cap (% of equity). Sells any held name
         whose unrealized loss has reached that % of equity. Runs only on NON-rebalance bars
         (the rebalance pass owns the book on its scheduled bars). Lookahead-safe: submits a
         MARKET sell that fills on a later bar per the fill model (same discipline as
         _apply_initial_brackets). A per-bar failure is logged and swallowed.
+
+        Returns True iff at least one stop SELL was actually submitted, so the caller can mark
+        the order cache dirty ONLY when there is a new order for the fill engine to see. When it
+        returns False nothing was submitted (no stop_pct, flat account, or no name breached) so
+        the cache is byte-identical and need not be invalidated.
         """
         try:
             stop_pct = expert.get_setting_with_interface_default(
@@ -861,14 +868,25 @@ class DailyBacktestEngine:
         except Exception:  # noqa: BLE001 — a stub/unschedulable expert -> no stop
             stop_pct = None
         if not (stop_pct and stop_pct > 0):
-            return
+            return False
+
+        # Flat account -> nothing to stop. Results-identical fast path: skips a pass that could
+        # only ever sell nothing (no positions exist). Avoids constructing the portfolio manager
+        # and its expert-scoped OPENED-Transaction query on the (common) no-position bars.
+        if not self.account.get_positions():
+            return False
 
         from ba2_experts.FactorRanker.portfolio import FactorPortfolioManager
 
         try:
-            FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct))
+            submitted = FactorPortfolioManager(expert_id).apply_stop_losses(float(stop_pct))
         except Exception as e:  # noqa: BLE001 — a stop failure must not kill the run
             self._log(f"bypass stop failed for expert {expert_id} @ {as_of:%Y-%m-%d}: {e}")
+            # Unknown whether an order was submitted before the failure -> assume YES so the fill
+            # engine cannot miss a sell (the safe default: an unnecessary cache reload is harmless,
+            # a missed one changes results).
+            return True
+        return bool(submitted)
 
     # -- option expiry / exercise / assignment ------------------------------
     def _apply_option_expiry(self, as_of: datetime) -> None:

@@ -258,6 +258,14 @@ def test_apply_bypass_stops_invokes_manager_when_risk_pct_set(monkeypatch):
 
     engine = DailyBacktestEngine.__new__(DailyBacktestEngine)
 
+    # The flat-account fast path gates on account.get_positions(); give the engine a stub
+    # account that reports a held position so the helper proceeds to the manager.
+    class _Account:
+        def get_positions(self):
+            return [{"symbol": "AAPL", "qty": 1}]
+
+    engine.account = _Account()
+
     class _Expert:
         bypasses_classic_rm = True
 
