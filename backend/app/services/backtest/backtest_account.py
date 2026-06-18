@@ -190,6 +190,13 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         self._active_order_cache: Optional[List[TradingOrder]] = None
         self._active_set: Optional[frozenset] = None  # cached frozenset(OrderStatus.get_active_statuses())
 
+        # Per-expert snapshot of OPENED transactions (expert_id -> {symbol: [(txn_id, open_price,
+        # open_qty)]}), read by per-bar position managers. The OPENED set only changes when an
+        # order fills, so this is cached here and dropped in _update_position (the universal ledger
+        # fill path) — the same "cache + invalidate on mutation" discipline as _order_cache. See
+        # opened_position_snapshot. Empty dict means "nothing cached yet".
+        self._opened_txn_snapshot: Dict[int, Dict[str, List[tuple]]] = {}
+
     # ======================================================================
     # Settings
     # ======================================================================
@@ -303,6 +310,12 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         Increasing (same-sign) exposure updates the weighted-average price; reducing or
         flipping realises P&L on the closed portion. ``signed_qty`` is +buy / -sell.
         """
+        # A fill changes this account's OPENED-transaction set, so drop the per-expert snapshot
+        # (rebuilt lazily on the next read). This is the universal equity ledger fill path
+        # (order fills + option assignment), mirroring invalidate_order_cache's discipline.
+        if self._opened_txn_snapshot:
+            self._opened_txn_snapshot = {}
+
         pos = self._positions.get(symbol)
         if pos is None:
             pos = _Position(symbol=symbol)
@@ -401,6 +414,46 @@ class BacktestAccount(AccountInterface, OptionsAccountInterface):
         """
         self._order_cache = None
         self._active_order_cache = None
+
+    def opened_position_snapshot(self, expert_id: int) -> Dict[str, List[tuple]]:
+        """Expert-scoped snapshot of this account's OPENED transactions, cached + invalidated on
+        every ledger fill (see ``_update_position``).
+
+        Returns ``{symbol: [(transaction_id, open_price, open_qty), ...]}`` where ``open_qty`` is
+        the transaction's net filled quantity (``Transaction.get_current_open_qty``). This is
+        GENERAL account infrastructure (keyed by ``expert_id``, no expert-specific logic): a per-bar
+        position manager — any expert's, classic or bypass — can read the OPENED set + cost basis
+        without re-querying the DB on every bar. The set only changes when an order FILLS, which is
+        exactly when ``_update_position`` drops the cache (same discipline as
+        ``invalidate_order_cache``). On a 5-minute clock holding positions across thousands of
+        bars this turns ~one OPENED ``SELECT`` + one ``get_current_open_qty`` query PER OPENED
+        transaction PER BAR into one rebuild per fill.
+
+        Built with the SAME query (no ``order_by``) + the SAME per-transaction qty computation the
+        direct DB path used, so any consumer's results stay byte-identical to the un-cached path.
+        """
+        cached = self._opened_txn_snapshot.get(expert_id)
+        if cached is not None:
+            return cached
+
+        from sqlmodel import select, Session
+
+        snapshot: Dict[str, List[tuple]] = {}
+        with Session(get_db().bind) as session:
+            txns = session.exec(
+                select(Transaction)
+                .where(Transaction.expert_id == expert_id)
+                .where(Transaction.status == TransactionStatus.OPENED)
+            ).all()
+            # Build inside the session so attribute access is safe; get_current_open_qty opens its
+            # own session (keyed by txn id) and is computed ONCE here, not per bar.
+            for t in txns:
+                snapshot.setdefault(t.symbol, []).append(
+                    (t.id, t.open_price, t.get_current_open_qty())
+                )
+
+        self._opened_txn_snapshot[expert_id] = snapshot
+        return snapshot
 
     def _all_orders(self) -> List[TradingOrder]:
         """This account's FULL TradingOrder set (incl. terminal), loaded once and cached.
