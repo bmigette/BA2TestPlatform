@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Server, Plus, Trash2, Edit2, X, RefreshCw, Cpu, HardDrive,
   Activity, Clock, Download, Upload, Power, PowerOff, AlertCircle,
-  CheckCircle, Loader2
+  CheckCircle, Loader2, KeyRound
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -57,6 +57,8 @@ const Settings: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [healthChecking, setHealthChecking] = useState<number | null>(null);
+  const [importingKeys, setImportingKeys] = useState(false);
+  const [keyImportMessage, setKeyImportMessage] = useState<string | null>(null);
 
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -90,6 +92,31 @@ const Settings: React.FC = () => {
   useEffect(() => {
     fetchWorkers();
   }, [fetchWorkers]);
+
+  const handleImportKeysFromTrade = async () => {
+    try {
+      setImportingKeys(true);
+      setKeyImportMessage(null);
+      setError(null);
+      const response = await fetch(`${API_BASE}/settings/import-keys-from-trade`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Failed to import keys from trade platform');
+      }
+      const data = await response.json();
+      setKeyImportMessage(
+        data.count > 0
+          ? `Imported ${data.count} key(s) from the trade platform: ${data.imported.join(', ')}`
+          : 'No credential keys found in the trade platform DB.'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to import keys from trade platform');
+    } finally {
+      setImportingKeys(false);
+    }
+  };
 
   const handleAddWorker = async () => {
     try {
@@ -266,6 +293,42 @@ const Settings: React.FC = () => {
           </button>
         </div>
       )}
+
+      {/* API Keys Section */}
+      <div className="mb-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <KeyRound className="w-5 h-5 text-blue-500" />
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">API Keys</h2>
+          </div>
+          <button
+            onClick={handleImportKeysFromTrade}
+            disabled={importingKeys}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-60"
+            title="Copy provider API keys from the live trade platform's database"
+          >
+            {importingKeys ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            Import keys from trade platform
+          </button>
+        </div>
+        <div className="p-4">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Copy provider credentials (API keys, tokens, secrets) from the live trade
+            platform's database into this platform's keys database so backtests can
+            resolve them.
+          </p>
+          {keyImportMessage && (
+            <div className="mt-3 p-3 bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 rounded-lg flex items-start gap-2 text-sm">
+              <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{keyImportMessage}</span>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Workers Section */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">

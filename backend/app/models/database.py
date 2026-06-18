@@ -12,8 +12,14 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Get database URL from environment
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dl_forecasting.db")
+# The test platform's app DB is DATA -> it lives in the test/ bucket of BA2_HOME
+# (NOT inside the repo). Build the absolute default from ba2_common.config.TEST_DIR
+# (single source of truth for the layout). DATABASE_URL env still wins.
+from ba2_common.config import TEST_DIR as _TEST_DIR
+
+os.makedirs(_TEST_DIR, exist_ok=True)
+_default_db_path = os.path.join(_TEST_DIR, "dl_forecasting.db")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_db_path}")
 
 # SQLite connection args for better concurrency
 sqlite_connect_args = {

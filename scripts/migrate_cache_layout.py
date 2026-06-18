@@ -7,20 +7,29 @@ under ~/Documents/ba2_trade_platform) into the locked single-root layout:
     BA2_HOME (default ~/Documents/ba2)
       common/
         cache/                      shared raw provider cache (OHLCV/asof/fmp_history)
-        db.sqlite                   shared app-settings/keys DB
         options/                    options-history cache
       test/
+        db.sqlite                   test platform keys/app DB (ba2_common DB_FILE)
+        dl_forecasting.db           test platform FastAPI app DB
         datasets/                   generated dataset CSVs
         trained_models/             saved model artifacts
         cache/jobs/                 per-job cache
         cache/news/                 news content files
         news_exports/               exported news JSON
       trade/
+        db.sqlite                   live trade instance DB (was the legacy shared DB)
         screener/                   screener metric store + history db
 
-DRY-RUN by default — prints the planned moves + sizes. Pass ``--apply`` to
-perform them. Idempotent: skips a move when the source is missing OR the
-destination already exists. Never deletes a source if the move fails.
+DB placement: a DB is DATA, not a shared cache, so DBs are bucketed by owner —
+the live trade DB -> trade/, the test platform DBs -> test/. Only shared raw
+provider caches (OHLCV/fmp_history/screener/options) stay in common/cache. The
+legacy shared ~/Documents/ba2_trade_platform/db.sqlite is the TRADE DB; it is
+MOVED to trade/db.sqlite AND additionally COPIED to test/db.sqlite to seed the
+test platform's keys (so test backtests have API keys post-migrate).
+
+DRY-RUN by default — prints the planned moves/copies + sizes. Pass ``--apply``
+to perform them. Idempotent: skips an op when the source is missing OR the
+destination already exists. Never deletes a source if a move fails.
 
 Run with the backend venv:
 
@@ -96,35 +105,51 @@ def _backend_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "backend"
 
 
-def _build_moves(new: dict) -> List[Tuple[str, Path, Path]]:
-    """Return the list of (label, src, dst) moves for the migration."""
+def _build_moves(new: dict) -> List[Tuple[str, Path, Path, str]]:
+    """Return the list of (label, src, dst, op) operations for the migration.
+
+    ``op`` is "move" (relocate) or "copy" (duplicate, leaving the source in
+    place). DBs are bucketed by owner: the legacy shared DB is the TRADE DB ->
+    moved to trade/db.sqlite, and additionally COPIED to the test keys DB so the
+    test platform has API keys post-migrate. Only shared raw provider caches stay
+    in common/cache."""
     legacy = _legacy_root()
     backend = _backend_dir()
+    trade_db = new["TRADE_DIR"] / "db.sqlite"
     # ORDER MATTERS: the sub-caches that live UNDER backend/datasets/cache (job
     # cache, news cache, options cache) are relocated to DIFFERENT destinations
     # than the wholesale `datasets` move, so they must be moved out FIRST — before
     # the parent `datasets` tree is moved — or they'd be swept into test/datasets.
-    moves: List[Tuple[str, Path, Path]] = [
-        # --- common bucket: shared provider cache + app-settings/keys DB ---
-        ("legacy common cache", legacy / "cache", new["CACHE_FOLDER"]),
-        ("legacy app-settings DB", legacy / "db.sqlite", new["DB_FILE"]),
+    # Likewise the trade DB is COPIED to seed the test keys DB BEFORE it is moved,
+    # so the copy still has a source to read.
+    moves: List[Tuple[str, Path, Path, str]] = [
+        # --- common bucket: shared provider cache ---
+        ("legacy common cache", legacy / "cache", new["CACHE_FOLDER"], "move"),
+        # --- DB placement (DATA, bucketed by owner) ---
+        # The legacy shared DB is the LIVE trade DB. Seed the test keys DB from it
+        # (copy) FIRST, then move the original into the trade/ bucket.
+        ("seed test keys DB (copy of legacy trade DB)", legacy / "db.sqlite",
+         new["DB_FILE"], "copy"),
+        ("legacy trade DB", legacy / "db.sqlite", trade_db, "move"),
+        ("legacy test app DB", backend / "dl_forecasting.db",
+         new["TEST_DIR"] / "dl_forecasting.db", "move"),
         # --- test sub-caches (move BEFORE the parent datasets tree) ---
         ("job cache", backend / "datasets" / "cache" / "jobs",
-         new["TEST_DIR"] / "cache" / "jobs"),
+         new["TEST_DIR"] / "cache" / "jobs", "move"),
         ("news cache", backend / "datasets" / "cache" / "news",
-         new["TEST_DIR"] / "cache" / "news"),
+         new["TEST_DIR"] / "cache" / "news", "move"),
         # --- options cache -> common (also under backend/datasets/cache) ---
         ("options cache (legacy backend)", backend / "datasets" / "cache" / "options_cache.sqlite",
-         new["OPTIONS_CACHE_DB"]),
+         new["OPTIONS_CACHE_DB"], "move"),
         # --- test bucket: BA2TestPlatform artifacts (were inside the repo) ---
-        ("datasets", backend / "datasets", new["TEST_DIR"] / "datasets"),
-        ("trained_models", backend / "trained_models", new["TEST_DIR"] / "trained_models"),
-        ("news exports", backend / "news_exports", new["TEST_DIR"] / "news_exports"),
+        ("datasets", backend / "datasets", new["TEST_DIR"] / "datasets", "move"),
+        ("trained_models", backend / "trained_models", new["TEST_DIR"] / "trained_models", "move"),
+        ("news exports", backend / "news_exports", new["TEST_DIR"] / "news_exports", "move"),
         # --- trade bucket: screener caches ---
         ("screener store (legacy backend)", backend / "screener" / "metric_store",
-         new["SCREENER_STORE_DIR"]),
+         new["SCREENER_STORE_DIR"], "move"),
         ("screener history db (legacy backend)", backend / "screener" / "screener_history.sqlite",
-         new["SCREENER_HISTORY_DB"]),
+         new["SCREENER_HISTORY_DB"], "move"),
     ]
     return moves
 
@@ -142,15 +167,16 @@ def _is_empty_dir(path: Path) -> bool:
         return False
 
 
-def _plan(moves: List[Tuple[str, Path, Path]]) -> List[dict]:
-    """Classify each move as do/skip with a reason + size (no I/O beyond stat).
+def _plan(moves: List[Tuple[str, Path, Path, str]]) -> List[dict]:
+    """Classify each op as do/skip with a reason + size (no I/O beyond stat).
 
-    An EMPTY destination directory (e.g. one auto-created by ``app.paths`` on
-    import) is NOT treated as "already migrated": it is removed first so the real
-    source data still moves into place. A NON-empty destination is left alone."""
+    ``op`` ("move"/"copy") is preserved on the entry. An EMPTY destination
+    directory (e.g. one auto-created by ``app.paths`` on import) is NOT treated as
+    "already migrated": it is removed first so the real source data still lands.
+    A NON-empty destination is left alone (idempotent)."""
     plan: List[dict] = []
-    for label, src, dst in moves:
-        entry = {"label": label, "src": src, "dst": dst, "action": None,
+    for label, src, dst, op in moves:
+        entry = {"label": label, "src": src, "dst": dst, "op": op, "action": None,
                  "reason": "", "bytes": 0, "clear_empty_dst": False}
         if not src.exists():
             entry["action"] = "skip"
@@ -159,25 +185,33 @@ def _plan(moves: List[Tuple[str, Path, Path]]) -> List[dict]:
             entry["action"] = "skip"
             entry["reason"] = "destination already exists"
         else:
-            entry["action"] = "move"
+            entry["action"] = op
             entry["bytes"] = _tree_size(src)
             entry["clear_empty_dst"] = _is_empty_dir(dst)
         plan.append(entry)
     return plan
 
 
-def _apply_move(src: Path, dst: Path, clear_empty_dst: bool = False) -> Optional[str]:
-    """Perform one move. Returns an error string on failure, else None.
+def _apply_move(src: Path, dst: Path, clear_empty_dst: bool = False,
+                op: str = "move") -> Optional[str]:
+    """Perform one move/copy. Returns an error string on failure, else None.
 
-    If ``clear_empty_dst`` the (empty) destination dir is removed first so
-    ``shutil.move`` replaces it rather than nesting the source inside it. Creates
-    parent dirs first; never deletes the source on failure (shutil.move leaves the
-    source intact if it raises)."""
+    ``op`` is "move" (relocate) or "copy" (duplicate; source left in place — used
+    to seed the test keys DB from the trade DB). If ``clear_empty_dst`` the
+    (empty) destination dir is removed first so the op replaces it rather than
+    nesting the source inside it. Creates parent dirs first; never deletes the
+    source on failure (shutil.move/copy2 leave the source intact if they raise)."""
     try:
         if clear_empty_dst and _is_empty_dir(dst):
             dst.rmdir()
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
+        if op == "copy":
+            if src.is_dir():
+                shutil.copytree(str(src), str(dst))
+            else:
+                shutil.copy2(str(src), str(dst))
+        else:
+            shutil.move(str(src), str(dst))
         return None
     except Exception as exc:  # noqa: BLE001
         return str(exc)
@@ -201,24 +235,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  trade  = {new['TRADE_DIR']}")
     print("")
 
-    to_move = [p for p in plan if p["action"] == "move"]
+    to_move = [p for p in plan if p["action"] in ("move", "copy")]
     skipped = [p for p in plan if p["action"] == "skip"]
 
-    print("Planned moves:")
+    print("Planned operations:")
     if not to_move:
         print("  (none — nothing to migrate)")
     for p in to_move:
-        print(f"  MOVE  {p['label']:<32} {_human(p['bytes']):>10}")
+        verb = "COPY" if p["op"] == "copy" else "MOVE"
+        print(f"  {verb}  {p['label']:<44} {_human(p['bytes']):>10}")
         print(f"        {p['src']}")
         print(f"     -> {p['dst']}")
     print("")
     print("Skipped:")
     for p in skipped:
-        print(f"  SKIP  {p['label']:<32} ({p['reason']})")
+        print(f"  SKIP  {p['label']:<44} ({p['reason']})")
     print("")
 
     total = sum(p["bytes"] for p in to_move)
-    print(f"Total to move: {len(to_move)} item(s), {_human(total)}")
+    print(f"Total to move/copy: {len(to_move)} item(s), {_human(total)}")
 
     if not args.apply:
         print("")
@@ -229,12 +264,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("Applying...")
     failures = 0
     for p in to_move:
-        err = _apply_move(p["src"], p["dst"], clear_empty_dst=p.get("clear_empty_dst", False))
+        err = _apply_move(p["src"], p["dst"],
+                          clear_empty_dst=p.get("clear_empty_dst", False),
+                          op=p["op"])
         if err:
             failures += 1
             print(f"  FAILED  {p['label']}: {err} (source left intact)")
         else:
-            print(f"  moved   {p['label']} -> {p['dst']}")
+            verb = "copied" if p["op"] == "copy" else "moved"
+            print(f"  {verb:<7} {p['label']} -> {p['dst']}")
 
     print("")
     print("=== Summary ===")

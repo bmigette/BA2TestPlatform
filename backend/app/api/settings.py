@@ -778,3 +778,103 @@ def check_can_start_job() -> tuple:
     except Exception as e:
         logger.error(f"Error checking GPU memory: {e}")
         return True, f"Error checking GPU memory: {str(e)}"
+
+
+# ---------------------------------------------------------------------------
+# Import API keys from the live trade platform's DB
+# ---------------------------------------------------------------------------
+# After the DB-layout split, the test platform's keys live in its own keys DB
+# (the ba2_common-configured DB = ba2_common.config.DB_FILE, under test/). The
+# live trade platform keeps its own credentials in the trade DB (under trade/).
+# This endpoint lets a user copy the credential AppSetting rows from the trade DB
+# into the test keys DB so backtests can resolve provider keys without a manual
+# DB import.
+
+class ImportKeysResponse(BaseModel):
+    """Response model for importing keys from the trade platform DB."""
+    imported: List[str]
+    count: int
+    source_db: str
+
+
+def _credential_like(key: str) -> bool:
+    """True if an AppSetting key looks like a credential worth importing."""
+    k = key.lower()
+    return any(tok in k for tok in ("api_key", "_key", "token", "secret"))
+
+
+def _trade_db_path() -> str:
+    """Resolve the live trade platform's DB path.
+
+    Prefer the live config (ba2_trade_platform.config.DB_FILE) if it is importable
+    on this box; otherwise fall back to the layout default <TRADE_DIR>/db.sqlite."""
+    try:
+        import ba2_trade_platform.config as trade_cfg  # type: ignore
+        return trade_cfg.DB_FILE
+    except Exception:  # noqa: BLE001 — live package may not be installed in the test venv
+        from ba2_common.config import TRADE_DIR
+        return os.path.join(TRADE_DIR, "db.sqlite")
+
+
+@router.post("/import-keys-from-trade", response_model=ImportKeysResponse)
+async def import_keys_from_trade():
+    """Import credential AppSetting rows from the live trade platform's DB into the
+    test platform's keys DB (the ba2_common-configured DB).
+
+    Opens the trade DB READ-ONLY, selects AppSetting rows whose key looks like a
+    credential (contains api_key/_key/token/secret, case-insensitive), and upserts
+    each into the test keys DB. Returns the imported keys and a count."""
+    import sqlite3
+
+    trade_db = _trade_db_path()
+    if not os.path.exists(trade_db):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Trade platform DB not found at {trade_db}. "
+                   "Run the live platform (or the migration) first."
+        )
+
+    # --- read credential rows from the trade DB (read-only, no engine pollution) ---
+    pairs: Dict[str, Optional[str]] = {}
+    try:
+        uri = f"file:{trade_db}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            rows = conn.execute("SELECT key, value_str FROM appsetting").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not read AppSetting rows from trade DB: {e}"
+        )
+    for key, value_str in rows:
+        if key and _credential_like(key) and value_str:
+            pairs[key] = value_str
+
+    if not pairs:
+        return ImportKeysResponse(imported=[], count=0, source_db=trade_db)
+
+    # --- upsert into the test keys DB (the ba2_common-configured engine) ---
+    from ba2_common.core.db import get_engine, init_db
+    from ba2_common.core.models import AppSetting
+    from sqlmodel import Session, select
+
+    init_db()  # ensure the AppSetting table exists in a fresh test keys DB
+    imported: List[str] = []
+    engine = get_engine()
+    with Session(engine) as session:
+        for key, value_str in pairs.items():
+            existing = session.exec(
+                select(AppSetting).where(AppSetting.key == key)
+            ).first()
+            if existing:
+                existing.value_str = value_str
+                session.add(existing)
+            else:
+                session.add(AppSetting(key=key, value_str=value_str))
+            imported.append(key)
+        session.commit()
+
+    logger.info(f"Imported {len(imported)} credential key(s) from trade DB {trade_db}")
+    return ImportKeysResponse(imported=imported, count=len(imported), source_db=trade_db)
