@@ -78,6 +78,33 @@ def _fmp_history_exclude() -> Optional[Path]:
 _FMP_HISTORY_EXCLUDE = _fmp_history_exclude()
 
 
+def _ohlcv_roots() -> List[Path]:
+    """OHLCV price-bar parquet dirs INSIDE the as_of provider cache.
+
+    OHLCV is no longer a separate per-provider CSV cache under ``<backend>/cache`` (that path
+    is dead — nothing writes it, which is why the old ``ohlcv`` type read 0 B). The live OHLCV
+    bars are the native parquet time-series at ``<ba2_common CACHE_FOLDER>/<Provider>/`` where
+    the provider class name carries ``OHLCV`` (FMPOHLCVProvider, AlpacaOHLCVProvider,
+    EODHDOHLCVProvider, PolygonOHLCVProvider, AlphaVantageOHLCVProvider) — plus the odd-named
+    YFinanceDataProvider. We resolve those dirs so the ``ohlcv`` type reports the REAL bar cache,
+    and EXCLUDE them from the ``asof`` total so the two don't double-count."""
+    try:
+        from ba2_common.config import CACHE_FOLDER as ASOF_CACHE_FOLDER
+    except Exception:
+        return []
+    base = Path(ASOF_CACHE_FOLDER)
+    if not base.exists():
+        return []
+    out: List[Path] = []
+    for d in sorted(base.iterdir()):
+        if d.is_dir() and ("OHLCV" in d.name or d.name == "YFinanceDataProvider"):
+            out.append(d)
+    return out
+
+
+_OHLCV_ROOTS = _ohlcv_roots()
+
+
 def _under(path: Path, ancestor: Optional[Path]) -> bool:
     """True if ``path`` is ``ancestor`` or nested under it (best-effort)."""
     if ancestor is None:
@@ -89,6 +116,15 @@ def _under(path: Path, ancestor: Optional[Path]) -> bool:
         return False
 
 
+def _excluded(path: Path, exclude_under: Any) -> bool:
+    """True if ``path`` is under any excluded subtree. ``exclude_under`` may be None, a single
+    Path, or a list/tuple of Paths (asof excludes both fmp_history and the OHLCV provider dirs)."""
+    if exclude_under is None:
+        return False
+    excs = exclude_under if isinstance(exclude_under, (list, tuple)) else [exclude_under]
+    return any(_under(path, a) for a in excs if a is not None)
+
+
 def _resolve(p: "str | Path") -> Path:
     """Resolve a backend-relative path against BACKEND_DIR (absolute passes through)."""
     p = Path(p)
@@ -98,7 +134,9 @@ def _resolve(p: "str | Path") -> Path:
 # Cache-type -> on-disk root(s) + metadata. Mirrors the cache_ui_scope contract.
 # DESTRUCTIVE types (datasets, models) are excluded from "clean all".
 CACHE_TYPES: Dict[str, Dict[str, Any]] = {
-    "ohlcv":    {"roots": [CACHE_FOLDER],                      "destructive": False, "ttl_hours": 24},
+    # OHLCV price bars: the native parquet under the as_of cache (<ba2_common CACHE_FOLDER>/
+    # <*OHLCV*Provider>/), NOT the dead legacy <backend>/cache path. Resolved by _ohlcv_roots.
+    "ohlcv":    {"roots": _OHLCV_ROOTS,                        "destructive": False, "ttl_hours": 24},
     "jobs":     {"roots": [_resolve("datasets/cache/jobs")],  "destructive": False, "ttl_hours": None},
     "news":     {"roots": [_resolve("datasets/cache/news")],  "destructive": False, "ttl_hours": None, "db_backed": True},
     "datasets": {"roots": [_resolve("datasets")],             "destructive": True,  "ttl_hours": None},
@@ -106,20 +144,27 @@ CACHE_TYPES: Dict[str, Dict[str, Any]] = {
     "exports":  {"roots": [_resolve("news_exports")],         "destructive": False, "ttl_hours": None},
     # ba2_providers as_of cache: parquet time-series + provider_cache spill, under
     # ba2_common.config.CACHE_FOLDER (NOT <backend>/cache). Resolved lazily.
-    # The fmp_history subtree is excluded here (counted/cleared as its own type).
+    # The fmp_history subtree AND the OHLCV provider parquet dirs are excluded here (each is
+    # counted/cleared as its own type) so the asof total = the OTHER as_of providers only.
     "asof":     {"roots": _asof_roots(),                      "destructive": False, "ttl_hours": None,
-                 "exclude_under": _FMP_HISTORY_EXCLUDE},
+                 "exclude_under": [p for p in ([_FMP_HISTORY_EXCLUDE] + _OHLCV_ROOTS) if p is not None]},
     # ba2_providers backtest-only FMP-history disk cache: per-symbol JSON payloads
     # under <ba2_common CACHE_FOLDER>/fmp_history (a subtree of the asof base root).
     "fmp_history": {"roots": _fmp_history_root(),             "destructive": False, "ttl_hours": None},
 }
 
 
-def _scan_dir(root: Path, exclude_under: Optional[Path] = None) -> Dict[str, Any]:
+def _scan_dir(root: Path, exclude_under: Optional[Any] = None) -> Dict[str, Any]:
     """Return total bytes, file count, oldest/newest mtime (ISO UTC) for a tree.
 
-    ``exclude_under``: optional subtree to skip (e.g. asof excludes fmp_history,
-    which is counted as its own type)."""
+    ``exclude_under``: optional subtree(s) to skip — a single Path or a list of Paths (e.g.
+    asof excludes fmp_history AND the OHLCV provider dirs, each counted as its own type)."""
+    if exclude_under is None:
+        excludes: List[Path] = []
+    elif isinstance(exclude_under, (list, tuple)):
+        excludes = [p for p in exclude_under if p is not None]
+    else:
+        excludes = [exclude_under]
     total = 0
     count = 0
     oldest: Optional[float] = None
@@ -128,7 +173,7 @@ def _scan_dir(root: Path, exclude_under: Optional[Path] = None) -> Dict[str, Any
         return {"bytes": 0, "files": 0, "oldest": None, "newest": None, "exists": False}
     for f in root.rglob("*"):
         if f.is_file():
-            if exclude_under is not None and _under(f, exclude_under):
+            if any(_under(f, anc) for anc in excludes):
                 continue
             try:
                 st = f.stat()
@@ -333,7 +378,7 @@ def _delete_tree(
             continue
         if _is_tmp(f):
             continue
-        if exclude_under is not None and _under(f, exclude_under):
+        if _excluded(f, exclude_under):
             continue
         if name_match is not None and not name_match(f):
             continue
@@ -355,7 +400,7 @@ def _delete_tree(
         key=lambda p: len(p.parts),
         reverse=True,
     ):
-        if exclude_under is not None and _under(d, exclude_under):
+        if _excluded(d, exclude_under):
             continue
         try:
             next(d.iterdir())
