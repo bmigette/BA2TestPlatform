@@ -713,6 +713,36 @@ const Backtesting: React.FC = () => {
   // opt-settings / individual JSON into the form fields (part 5).
   const [importNote, setImportNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  const expertSettingsFileRef = useRef<HTMLInputElement>(null);
+
+  // Import expert settings JSON exported from the live trade platform
+  // (expert_settings_<type>_<id>_<ts>.json). Maps expert_settings key-value pairs to form fields.
+  const importExpertSettingsJson = (raw: string) => {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      setImportNote({ kind: 'err', text: 'Invalid JSON — could not parse the expert settings file.' });
+      return;
+    }
+    const settings = (parsed.expert_settings ?? {}) as Record<string, unknown>;
+    if (!parsed.expert_type && !parsed.expert_settings) {
+      setImportNote({ kind: 'err', text: 'Unrecognized format. Expected an expert settings JSON exported from the live trade platform.' });
+      return;
+    }
+    applyIndividualParams(settings);
+    const expertType = typeof parsed.expert_type === 'string' ? parsed.expert_type : '';
+    setImportNote({
+      kind: 'ok',
+      text: `Imported expert settings${expertType ? ` from "${expertType}"` : ''}: pre-filled TP/SL and other params.`,
+    });
+  };
+  const handleExpertSettingsFile = (file: File | undefined) => {
+    if (!file) return;
+    file.text().then(importExpertSettingsJson).catch(() =>
+      setImportNote({ kind: 'err', text: 'Could not read the selected expert settings file.' }),
+    );
+  };
 
   // Import-JSON ruleset (#159): load an expert ruleset JSON file (buy/sell enter trees + exit
   // rules) into the condition builders, normalizing snake->camel so loaded rules populate.
@@ -724,6 +754,22 @@ const Backtesting: React.FC = () => {
     } catch {
       setLiveImportNote({ kind: 'err', text: 'Invalid JSON — could not parse the ruleset file.' });
       return;
+    }
+    // Detect live platform trigger/action format (export_type: "rulesets" or "ruleset" with
+    // triggers dict). This format is incompatible with the backtester's condition-tree schema.
+    const exportType = parsed.export_type as string | undefined;
+    if (exportType === 'rulesets' || exportType === 'ruleset') {
+      const firstRuleset = Array.isArray(parsed.rulesets) ? parsed.rulesets[0] : parsed;
+      const firstRule = Array.isArray((firstRuleset as Record<string, unknown>)?.rules)
+        ? ((firstRuleset as Record<string, unknown>).rules as Record<string, unknown>[])[0]
+        : null;
+      if (firstRule?.triggers) {
+        setLiveImportNote({
+          kind: 'err',
+          text: 'This file contains live platform rulesets (trigger/action format). The backtester uses a different condition-tree schema — they cannot be imported directly. Recreate the conditions using the condition builder below.',
+        });
+        return;
+      }
     }
     try {
       const buyRaw = parsed.buy_entry_conditions ?? parsed.buyEntryConditions;
@@ -2066,16 +2112,24 @@ const Backtesting: React.FC = () => {
             <div className="space-y-4">
               {/* Import optimization / individual settings (part 5). Accepts the JSON exported
                   from the Opt-History tab (opt-settings OR individual) and pre-fills the form
-                  fields below (dates, universe, capital, interval, TP/SL + any mappable params). */}
-              <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40 p-2">
+                  fields below (dates, universe, capital, interval, TP/SL + any mappable params).
+                  Also accepts expert_settings_*.json from the live trade platform. */}
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Import settings:</span>
+                  <span className="text-xs font-medium text-gray-700 dark:text-gray-200">Import settings:</span>
                   <button
                     type="button"
                     onClick={() => importFileRef.current?.click()}
-                    className="flex items-center gap-1 px-2.5 py-1 text-sm rounded border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50"
+                    className="flex items-center gap-1 px-2.5 py-1 text-sm rounded border border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-800/60"
                   >
-                    <Upload className="w-4 h-4" /> Import JSON file
+                    <Upload className="w-4 h-4" /> Import opt/individual JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => expertSettingsFileRef.current?.click()}
+                    className="flex items-center gap-1 px-2.5 py-1 text-sm rounded border border-purple-300 dark:border-purple-600 bg-purple-50 dark:bg-purple-900/50 text-purple-700 dark:text-purple-200 hover:bg-purple-100 dark:hover:bg-purple-800/60"
+                  >
+                    <Upload className="w-4 h-4" /> Import expert settings
                   </button>
                   <button
                     type="button"
@@ -2083,7 +2137,7 @@ const Backtesting: React.FC = () => {
                       const txt = window.prompt('Paste exported opt-settings / individual JSON:');
                       if (txt != null && txt.trim()) importSettingsJson(txt);
                     }}
-                    className="px-2.5 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="px-2.5 py-1 text-sm rounded border border-gray-300 dark:border-gray-500 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
                   >
                     Paste JSON
                   </button>
@@ -2093,6 +2147,13 @@ const Backtesting: React.FC = () => {
                     accept=".json,application/json"
                     className="hidden"
                     onChange={(e) => { handleImportFile(e.target.files?.[0]); e.currentTarget.value = ''; }}
+                  />
+                  <input
+                    ref={expertSettingsFileRef}
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    onChange={(e) => { handleExpertSettingsFile(e.target.files?.[0]); e.currentTarget.value = ''; }}
                   />
                 </div>
                 {importNote && (
