@@ -181,15 +181,17 @@ optimized genes. **No code change needed.**
 - **Keep** `nas30` (static large-cap NDQ30). **Add** `n50` (NASDAQ-50, static).
 - **Drop** `ark26`.
 - **Screener flavours** (cap FIXED, other screener settings OPTIMIZED): `scr-large`
-  (cap_min=10B, cap_max=0), `scr-mid` (cap_min=2B, cap_max=10B). Optimized screener genes:
-  `relative_volume_min`, `price_drop_pct`, `max_stocks`, `weinstein_stage2_only`.
+  (cap_min=10B, cap_max=0), `scr-mid` (cap_min=2B, cap_max=10B), `scr-small`
+  (cap_min=300M, cap_max=2B). Optimized screener genes: `relative_volume_min`,
+  `price_drop_pct`, `max_stocks`, `weinstein_stage2_only`.
 
-## Profile matrix (~20 runs)
-**FMPRating** × {nas30, n50, scr-large, scr-mid} × {S1, S2, S3, S4} = **16 runs**.
-**FactorRanker** × {n50, scr-large, scr-mid} = **3 runs** (factor weights are genes; screener
-settings optimized on the scr ones). Deferred to perf pass (#47).
+## Profile matrix (~24 runs)
+**FMPRating** × {nas30, n50, scr-large, scr-mid, scr-small} × {S1, S2, S3, S4} = **20 runs**.
+**FactorRanker** × {n50, scr-large, scr-mid, scr-small} = **4 runs** (factor weights are genes;
+screener settings optimized on the scr ones). Deferred to perf pass (#47).
 **Other FMP experts:**
-- **FMPEarningsDrift**, **FMPInsiderClusterBuy** → **scr-mid** × {S1,S2,S3} (small/midcap edge; #46).
+- **FMPEarningsDrift**, **FMPInsiderClusterBuy** → **scr-mid + scr-small** × {S1,S2,S3}
+  (small/midcap edge; #46).
 - **FMPSenateTraderWeight** → **broad universe** (senate trades are sparse; assess a wide list /
   screener with no/low cap floor) × {S1,S2,S3}.
 - **FinnHubRating** → **dropped** (redundant with FMPRating).
@@ -202,7 +204,7 @@ ruleset, optimized via `option_delta`/`option_dte` genes (2024-02 floor, $20k ca
 are the bulk of the options-backtest work — one template each — run **after** the equity grids.
 
 ## Build order
-1. **Now:** FMPRating S1/S2/S3/S4 on **nas30** (running).
-2. Build broad metric store(s) → FMPRating on **n50 / scr-large / scr-mid**.
-3. Screener/midcap FMP experts (#46) + FactorRanker (#47) after the perf pass.
+1. **Done:** FMPRating S1/S2/S3/S4 on **nas30** (Calmar S1 5.27 / S2 4.35 / S3 5.37 / S4 5.31).
+2. Build broad metric store(s) covering small→large → FMPRating on **n50 / scr-large / scr-mid / scr-small**.
+3. Screener/small-mid FMP experts (#46) + FactorRanker (#47) after the perf pass.
 4. Options templates (11) after the equity grids.
