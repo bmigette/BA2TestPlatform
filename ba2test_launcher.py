@@ -245,17 +245,36 @@ def _cmd_prewarm(args) -> int:
             sym, end_date=end_date, lookback_days=400, as_of=end_date,
             format_type="dict")
 
+    # FactorRanker (bypass/rebalance expert): warm ALL of its factor inputs by calling the SAME
+    # data-layer fetchers the rebalance path uses (so coverage auto-tracks the real fetch surface
+    # and can't drift). Per symbol this writes the fmp_history namespaces income_statement_annual /
+    # balance_sheet_annual / cashflow_statement_annual (value+quality), past_earnings_quarterly +
+    # earnings_estimates_quarterly (pead), AND the 1d OHLCV parquet (momentum + value as_of price).
+    # All factor inputs are fetched regardless of weight because the GA varies factor_weight_* per
+    # individual — any factor can be active. ohlcv_provider is intentionally omitted so the fetchers
+    # construct an FMPOHLCVProvider() and the parquet path engages.
+    # NOTE: this warms the FACTOR stage of the default static universe. It does NOT warm the
+    # min_price universe price-guard or the live screener path — neither is reachable from the
+    # static NDQ30 grid (FactorRanker pins universe_source=static; min_price/screener are not in its
+    # optimize params). OHLCV is warmed only for ~400d ending at end_date; for a multi-bar backtest
+    # span run `ba2-test fetch-cache --timeframes 1d` over [start-warmup, end] (reminder printed below).
+    from ba2_experts.FactorRanker import data as _fr_data
+
+    def _do_factorranker(sym: str) -> None:
+        _fr_data.fetch_value_inputs([sym], as_of=end_date)    # income/balance/cashflow annual + OHLCV as_of price
+        _fr_data.fetch_quality_inputs([sym], as_of=end_date)  # income/balance/cashflow annual (disk hits)
+        _fr_data.fetch_pead_inputs([sym], as_of=end_date)     # past_earnings + earnings_estimates quarterly
+        _fr_data.fetch_close_prices([sym], as_of=end_date)    # momentum: 1d OHLCV parquet
+
     _EXPERT_FETCHERS = {
         "FMPRating": _do_fmprating,
         "FMPEarningsDrift": _do_earnings_drift,
         "FMPInsiderClusterBuy": _do_insider,
+        "FactorRanker": _do_factorranker,
     }
 
     work = []  # list of (expert, symbol, fetch_callable)
     for expert in experts:
-        if expert == "FactorRanker":
-            print(f">> skipping FactorRanker — its factor data is not disk-cached (nothing to pre-warm)")
-            continue
         fetcher = _EXPERT_FETCHERS.get(expert)
         if fetcher is None:
             print(f">> skipping unknown expert '{expert}' (no disk-cached history fetcher)")
@@ -286,12 +305,20 @@ def _cmd_prewarm(args) -> int:
 
     print("\n>> pre-warm summary")
     for expert in experts:
-        if expert == "FactorRanker":
-            continue
         print(f"   {expert}: {counts.get(expert, 0)}/{len(symbols)} symbols cached")
     print(f"   errors: {errors}")
     print(f"   elapsed: {elapsed:.1f}s")
     print(f"   cache dir: {_fmp_history_cache_dir()}")
+    # FactorRanker's momentum/value factors read the 1d OHLCV PARQUET cache (separate from the
+    # fmp_history JSON cache warmed above). This prewarm only warmed ~400d of 1d bars ending at
+    # end_date; a multi-bar backtest rebalances across [start, end] and needs ~400d ending at EACH
+    # bar. If the 1d parquet does not already span the full backtest range, also run:
+    if "FactorRanker" in experts:
+        print(
+            "   note: FactorRanker also needs 1d OHLCV parquet spanning the full backtest range — "
+            "if not already cached, run: ba2-test fetch-cache --symbols <universe> --timeframes 1d "
+            "--start <backtest_start_minus_~450d> --end <backtest_end>"
+        )
     return 0
 
 
