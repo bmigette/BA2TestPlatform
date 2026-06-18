@@ -408,7 +408,7 @@ const Settings: React.FC = () => {
                       <button
                         onClick={() => handleToggleEnabled(worker)}
                         className={`p-2 rounded-lg ${
-                          worker.isEnabled ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'
+                          worker.isEnabled ? 'text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
                         }`}
                         title={worker.isEnabled ? 'Disable' : 'Enable'}
                       >
@@ -528,7 +528,7 @@ const Settings: React.FC = () => {
                   setEditingWorker(null);
                   setFormData({ name: '', url: '', description: '', capabilities: { train: true, infer: true } });
                 }}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
               >
                 Cancel
               </button>

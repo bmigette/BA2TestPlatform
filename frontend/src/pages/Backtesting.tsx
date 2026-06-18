@@ -1515,8 +1515,10 @@ const Backtesting: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Trade Table */}
-                      <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                      {/* Trade Table — fills the viewport height down to the bottom of the
+                          page (matching the left BT-History list's full-height convention)
+                          so more trades are visible without a cramped inner scroll. */}
+                      <div className="overflow-x-auto h-[calc(100vh-22rem)] overflow-y-auto">
                         <table className="w-full text-sm">
                           <thead className="bg-gray-50 dark:bg-gray-700/50 sticky top-0">
                             <tr>

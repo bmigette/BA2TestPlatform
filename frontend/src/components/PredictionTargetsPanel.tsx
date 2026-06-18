@@ -950,7 +950,7 @@ const PredictionTargetsPanel: React.FC<PredictionTargetsPanelProps> = ({
                       </button>
                       <button
                         onClick={() => setShowRemoveConfirm(null)}
-                        className="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-600 rounded hover:bg-gray-400"
+                        className="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-600 rounded hover:bg-gray-400 dark:hover:bg-gray-500"
                       >
                         No
                       </button>
