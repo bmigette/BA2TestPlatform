@@ -121,10 +121,18 @@ export interface OptimizationDetail {
   bestFitness?: number | null;
   bestParams?: Record<string, unknown> | null;
   allResults?: Array<Record<string, unknown>> | null;
+  // Full GA + backtest config (engine/universe/window/capital). Present on the detail endpoint
+  // (StrategyOptimization.to_dict()), not on the compact /optimizations list rows.
+  optimizationConfig?: Record<string, unknown> | null;
   topIndividuals?: OptIndividual[];
 }
 export const getOptimization = (id: number) =>
   jget<OptimizationDetail>(`/strategies/optimizations/${id}`);
+
+// Read-only opt-job settings export (GET /optimizations/{id}/export). Returns the documented
+// OptSettingsExport schema (see lib/btExport.ts). The caller downloads it via a Blob.
+export const fetchOptSettingsExport = (id: number) =>
+  jget<Record<string, unknown>>(`/strategies/optimizations/${id}/export`);
 
 export const listBacktests = (q: { expert?: string; optimization_id?: number; saved?: boolean; single?: boolean } = {}) => {
   const p = new URLSearchParams();

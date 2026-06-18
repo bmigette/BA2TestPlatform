@@ -34,56 +34,95 @@ function paramsPreview(params?: Record<string, unknown>): string {
 }
 
 /**
- * Shared top-individuals mini-table used by both the running-jobs panel (live) and the
- * Opt-History tab (completed jobs). Rows are already ranked best-first by the backend
- * (`_top_individuals`); we just render rank / fitness / trades / a compact params preview.
+ * Shared top-individuals table used by both the running-jobs panel (live) and the Opt-History
+ * panel (completed jobs). Rows are already ranked best-first by the backend (`_top_individuals`).
+ *
+ * Styled to match RunHistoryTable: a header row with a tinted background + bottom border, row
+ * dividers, a visible row hover, and right-aligned numeric columns. Columns: # | <metric> |
+ * trades | params.
+ *
+ * Interactivity is opt-in (the running panel renders it read-only):
+ *  - `onSelect(ind)` makes rows clickable (used in Opt-History to load an individual's backtest);
+ *  - `selectedRank` highlights the active row;
+ *  - `onExport(ind)` renders a per-row "Export" button (downloads that individual's params).
  */
 export function TopIndividualsTable({
   individuals,
   fitnessMetric,
   note,
+  onSelect,
+  selectedRank,
+  onExport,
 }: {
   individuals?: OptIndividual[];
   fitnessMetric?: string;
   note?: string;
+  onSelect?: (ind: OptIndividual) => void;
+  selectedRank?: number | null;
+  onExport?: (ind: OptIndividual) => void;
 }) {
   const top = individuals ?? [];
   if (top.length === 0) {
     return (
-      <div className="text-xs text-gray-400 dark:text-gray-500">
+      <div className="text-xs text-gray-500 dark:text-gray-400">
         No individuals evaluated yet.
       </div>
     );
   }
+  const clickable = !!onSelect;
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-gray-400 dark:text-gray-500 text-left">
-            <th className="font-medium py-1 pr-3">#</th>
-            <th className="font-medium py-1 pr-3 text-right">{fitnessMetric ?? 'fitness'}</th>
-            <th className="font-medium py-1 pr-3 text-right">trades</th>
-            <th className="font-medium py-1 pr-3">params</th>
-          </tr>
-        </thead>
-        <tbody>
-          {top.map(ind => {
-            const preview = paramsPreview(ind.params);
-            return (
-              <tr key={ind.rank} className="border-t border-gray-50 dark:border-gray-700/50">
-                <td className="py-1 pr-3 text-gray-500 dark:text-gray-400">{ind.rank}</td>
-                <td className="py-1 pr-3 text-right font-medium text-gray-800 dark:text-gray-200">{fmt(ind.fitness)}</td>
-                <td className="py-1 pr-3 text-right text-gray-600 dark:text-gray-400">{ind.nTrades ?? '–'}</td>
-                <td className="py-1 pr-3 font-mono text-gray-500 dark:text-gray-400">
-                  {preview || <span className="text-gray-300 dark:text-gray-600">–</span>}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+            <tr>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700 dark:text-gray-300">#</th>
+              <th className="px-3 py-2 text-right font-semibold text-gray-700 dark:text-gray-300">{fitnessMetric ?? 'fitness'}</th>
+              <th className="px-3 py-2 text-right font-semibold text-gray-700 dark:text-gray-300">trades</th>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700 dark:text-gray-300">params</th>
+              {onExport && <th className="px-3 py-2 text-right font-semibold text-gray-700 dark:text-gray-300"></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {top.map(ind => {
+              const preview = paramsPreview(ind.params);
+              const isSelected = selectedRank != null && ind.rank === selectedRank;
+              return (
+                <tr
+                  key={ind.rank}
+                  onClick={clickable ? () => onSelect!(ind) : undefined}
+                  className={`border-b border-gray-200 dark:border-gray-700 transition-colors ${
+                    isSelected
+                      ? 'bg-blue-50 dark:bg-blue-900/20'
+                      : clickable ? 'hover:bg-gray-50 dark:hover:bg-gray-700/50' : ''
+                  } ${clickable ? 'cursor-pointer' : ''}`}
+                >
+                  <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{ind.rank}</td>
+                  <td className="px-3 py-2 text-right font-semibold text-gray-900 dark:text-gray-100">{fmt(ind.fitness)}</td>
+                  <td className="px-3 py-2 text-right text-gray-800 dark:text-gray-200">{ind.nTrades ?? '–'}</td>
+                  <td className="px-3 py-2 font-mono text-gray-700 dark:text-gray-300">
+                    {preview || <span className="text-gray-400 dark:text-gray-500">–</span>}
+                  </td>
+                  {onExport && (
+                    <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onExport(ind); }}
+                        title="Export this individual's params as JSON"
+                        className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Export
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       {note && (
-        <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-1.5">{note}</div>
+        <div className="px-3 py-2 text-[11px] text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/30">{note}</div>
       )}
     </div>
   );

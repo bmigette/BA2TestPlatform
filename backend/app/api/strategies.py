@@ -317,6 +317,61 @@ def get_optimization(opt_id: int, db: Session = Depends(get_db)):
     return d
 
 
+@router.get("/optimizations/{opt_id}/export")
+def export_optimization_settings(opt_id: int, db: Session = Depends(get_db)):
+    """Read-only, self-describing export of an optimization JOB's settings as JSON.
+
+    The frontend downloads this via a Blob + <a download> (NO server filesystem write). The
+    shape matches frontend/src/lib/btExport.ts `OptSettingsExport` so it round-trips into the
+    New-Backtest form's importer: GA config + engine/window + universe (static symbols OR
+    screener settings) + the optimized expert/RM param RANGES.
+    """
+    r = db.query(StrategyOptimization).filter(StrategyOptimization.id == opt_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail=f"Optimization {opt_id} not found")
+
+    from datetime import datetime as _dt
+
+    cfg = r.optimization_config or {}
+    summary = _opt_settings_summary(cfg)
+    backtest = cfg.get("backtest") or {}
+    universe = backtest.get("universe") or {}
+
+    # Universe block: keep the full static symbol list / screener settings (the compact summary
+    # drops the symbols). Falls back to {mode: <mode or None>} when neither is present.
+    if universe.get("mode") == "static" and isinstance(universe.get("symbols"), list):
+        universe_out = {"mode": "static", "symbols": [str(s) for s in universe["symbols"]]}
+    elif universe.get("mode") == "screener":
+        universe_out = {
+            "mode": "screener",
+            "screener_settings": universe.get("screener_settings") or {},
+        }
+        if universe.get("group") is not None:
+            universe_out["group"] = universe["group"]
+        if universe.get("cache_db") is not None:
+            universe_out["cache_db"] = universe["cache_db"]
+    else:
+        universe_out = {"mode": universe.get("mode")}
+
+    return {
+        "schema": "ba2.opt-settings",
+        "version": 1,
+        "exportedAt": _dt.utcnow().isoformat() + "Z",
+        "optimizationId": r.id,
+        "name": r.name,
+        "fitnessMetric": r.fitness_metric,
+        "optimizationType": r.optimization_type,
+        "ga": summary.get("ga") or {},
+        "engine": backtest.get("engine"),
+        "startDate": backtest.get("start_date"),
+        "endDate": backtest.get("end_date"),
+        "executionInterval": backtest.get("execution_interval"),
+        "initialCapital": backtest.get("initial_capital"),
+        "universe": universe_out,
+        "expertRanges": summary.get("expertRanges") or {},
+    }
+
+
 @router.get("/{strategy_id}")
 async def get_strategy(
     strategy_id: int,

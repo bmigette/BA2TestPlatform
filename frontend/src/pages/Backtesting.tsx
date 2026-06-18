@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Play,
@@ -23,7 +23,9 @@ import {
   Database,
   Layers,
   Sliders,
-  Shield
+  Shield,
+  Download,
+  Upload
 } from 'lucide-react';
 import Tooltip from '../components/Tooltip';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -51,11 +53,18 @@ import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
-import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks } from '../lib/btApi';
+import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport } from '../lib/btApi';
 import { RunningJobsPanel } from '../components/RunningJobsPanel';
 import { OptimizationJobsTable, OptJobSettingsDetail } from '../components/OptimizationJobsTable';
 import { TopIndividualsTable } from '../components/TopIndividualsTable';
-import type { Vocabulary, OptimizationJob, OptimizationDetail } from '../lib/btApi';
+import type { Vocabulary, OptimizationJob, OptimizationDetail, OptIndividual } from '../lib/btApi';
+import {
+  downloadJson,
+  buildOptSettingsExport,
+  buildIndividualExport,
+  parseExport,
+} from '../lib/btExport';
+import type { OptSettingsExport, IndividualExport, BtExportCommon, ExportUniverse } from '../lib/btExport';
 import {
   XAxis,
   YAxis,
@@ -474,6 +483,15 @@ const Backtesting: React.FC = () => {
   const [selectedOptJob, setSelectedOptJob] = useState<
     { job: OptimizationJob; detail?: OptimizationDetail } | null
   >(null);
+  // Opt-History right panel: which sub-tab is active when a job is selected, and which top
+  // individual (by rank) the user clicked. The Individual Backtest tab renders that
+  // individual's persisted full backtest (loaded via viewBacktest) or, if it has none, a
+  // note + its params.
+  const [optSubTab, setOptSubTab] = useState<'optimization' | 'individual'>('optimization');
+  const [selectedIndividual, setSelectedIndividual] = useState<OptIndividual | null>(null);
+  // Set when the clicked individual has no persisted full backtest (rank beyond the saved
+  // top-N): the Individual Backtest tab shows this note + the individual's params instead.
+  const [individualNoBacktest, setIndividualNoBacktest] = useState<OptIndividual | null>(null);
   const [activeTab, setActiveTab] = useState<'equity' | 'drawdown' | 'trades' | 'strategy'>('equity');
   const [tradeFilter, setTradeFilter] = useState<'all' | 'profit' | 'loss'>('all');
   const [tradeSortField, setTradeSortField] = useState<'pnl' | 'date' | 'duration'>('date');
@@ -514,6 +532,11 @@ const Backtesting: React.FC = () => {
   // Required by the daily_expert engine on the backend.
   const [fillModel, setFillModel] = useState<string>('next_bar_open');
   const [runSeed, setRunSeed] = useState<number>(42);
+
+  // New-Backtest "Import settings" control: outcome note after importing an exported
+  // opt-settings / individual JSON into the form fields (part 5).
+  const [importNote, setImportNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -872,6 +895,141 @@ const Backtesting: React.FC = () => {
     }
   };
 
+  // Opt-History: a top-individual row was clicked. Only the top-N (~5) individuals are persisted
+  // as full Backtest rows (optimization_id == job.id, named `TOP{rank}-...`). Match the clicked
+  // individual to its persisted backtest by the TOP{rank} name (primary) or strategy_params
+  // equality (fallback), then load it into the Individual Backtest tab via the existing
+  // viewBacktest flow. If none exists (rank beyond the saved top-N) show a clear note + params.
+  const selectTopIndividual = async (ind: OptIndividual) => {
+    if (!selectedOptJob) return;
+    const jobId = selectedOptJob.job.id;
+    setSelectedIndividual(ind);
+    setIndividualNoBacktest(null);
+    setOptSubTab('individual');
+    try {
+      const rows = await listBacktests({ optimization_id: jobId });
+      // Primary: the persisted top-N are named TOP{rank}-... and ranked the SAME way the
+      // top-individuals list is (distinct fitness, best first), so rank lines up 1:1.
+      const byName = rows.find(
+        (r: any) => typeof r.name === 'string' && new RegExp(`^TOP${ind.rank}\\b`).test(r.name),
+      );
+      // Fallback: positional match (rows come back newest-first; the persisted set is small).
+      const target = byName ?? rows[ind.rank - 1];
+      if (target?.id != null) {
+        const res = await fetch(`${API_BASE}/backtests/${target.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSelectedBacktest(data);  // full result for the Individual Backtest tab
+          return;
+        }
+      }
+      // No persisted full backtest for this individual.
+      setSelectedBacktest(null);
+      setIndividualNoBacktest(ind);
+    } catch {
+      setSelectedBacktest(null);
+      setIndividualNoBacktest(ind);
+    }
+  };
+
+  // Export the selected optimization JOB's settings as JSON. Prefer the backend export endpoint
+  // (it carries the full static-universe symbol list); fall back to a client-side build from the
+  // already-loaded job if the endpoint is unavailable. Browser download — no server file write.
+  const exportOptSettings = async (job: OptimizationJob, detail?: OptimizationDetail) => {
+    let payload: Record<string, unknown> | OptSettingsExport;
+    try {
+      payload = await fetchOptSettingsExport(job.id);
+    } catch {
+      payload = buildOptSettingsExport(job, detail?.optimizationConfig ?? null);
+    }
+    downloadJson(`opt-${job.id}-settings.json`, payload);
+  };
+
+  // Export ONE top-individual's concrete params (tp/sl/model:*/cond:*/exit:*/screener:*) as JSON.
+  const exportIndividual = (job: OptimizationJob, ind: OptIndividual, detail?: OptimizationDetail) => {
+    const payload: IndividualExport = buildIndividualExport(job, ind, detail?.optimizationConfig ?? null);
+    downloadJson(`opt-${job.id}-individual-${ind.rank}.json`, payload);
+  };
+
+  // Apply the universe block from an imported export to the New-Backtest universe picker.
+  const applyImportedUniverse = (u: ExportUniverse | undefined) => {
+    if (!u) return;
+    if (u.mode === 'static' && Array.isArray((u as any).symbols)) {
+      setUniverse({ mode: 'static', symbols: (u as any).symbols });
+    } else if (u.mode === 'screener') {
+      setUniverse({ mode: 'screener', screener_settings: (u as any).screener_settings ?? {} });
+    }
+  };
+
+  // Map the flat gene dict {tp, sl, model:*, ...} of an individual export onto the form's TP/SL.
+  const applyIndividualParams = (params: Record<string, unknown>) => {
+    const tp = params.tp ?? params.initialTpPercent ?? params.initial_tp_percent;
+    const sl = params.sl ?? params.initialSlPercent ?? params.initial_sl_percent;
+    if (typeof tp === 'number' && isFinite(tp)) setInitialTpPercent(tp);
+    if (typeof sl === 'number' && isFinite(sl)) setInitialSlPercent(sl);
+    // An individual carries concrete (resolved) values, not ranges — turn opt toggles off.
+    setInitialTpOptimize(false);
+    setInitialSlOptimize(false);
+  };
+
+  // Part 5: read an exported opt-settings / individual JSON and populate the New-Backtest form.
+  // Round-trips the schema produced by part 4 (lib/btExport.ts). Switches to the New tab so the
+  // user sees the populated fields.
+  const importSettingsJson = (raw: string) => {
+    let parsed;
+    try {
+      parsed = parseExport(raw);
+    } catch (e) {
+      setImportNote({ kind: 'err', text: e instanceof Error ? e.message : 'Failed to parse import.' });
+      return;
+    }
+    setSource('expert');
+    setBacktestCardTab('new');
+    // Common backtest context lives on both shapes (BtExportCommon).
+    const d: BtExportCommon = parsed.data;
+    if (d.executionInterval) setExecutionInterval(d.executionInterval);
+    if (d.startDate) setStartDate(d.startDate);
+    if (d.endDate) setEndDate(d.endDate);
+    if (typeof d.initialCapital === 'number') setInitialCapital(d.initialCapital);
+    applyImportedUniverse(d.universe);
+    if (parsed.kind === 'individual') {
+      const ind = parsed.data;
+      applyIndividualParams(ind.params ?? {});
+      setImportNote({
+        kind: 'ok',
+        text: `Imported individual #${ind.rank} from optimization #${ind.optimizationId}: pre-filled dates, universe, capital, and concrete TP/SL. Set the expert before running (exported params don't carry the expert class).`,
+      });
+    } else {
+      const opt = parsed.data;
+      // Opt-settings carry RANGES (min/max/step), not concrete values — pre-fill TP/SL ranges if
+      // the export's expertRanges include them; otherwise leave the form's current TP/SL.
+      const tpR = opt.expertRanges?.['tp'] ?? opt.expertRanges?.['initialTpPercent'];
+      const slR = opt.expertRanges?.['sl'] ?? opt.expertRanges?.['initialSlPercent'];
+      if (tpR && tpR.min != null && tpR.max != null) {
+        setInitialTpOptimize(true);
+        setInitialTpMin(Number(tpR.min)); setInitialTpMax(Number(tpR.max));
+        if (tpR.step != null) setInitialTpStep(Number(tpR.step));
+      }
+      if (slR && slR.min != null && slR.max != null) {
+        setInitialSlOptimize(true);
+        setInitialSlMin(Number(slR.min)); setInitialSlMax(Number(slR.max));
+        if (slR.step != null) setInitialSlStep(Number(slR.step));
+      }
+      const nRanges = Object.keys(opt.expertRanges ?? {}).length;
+      setImportNote({
+        kind: 'ok',
+        text: `Imported opt-settings from optimization #${opt.optimizationId} ("${opt.name ?? 'unnamed'}"): pre-filled dates, universe, capital${nRanges ? `, and ${nRanges} optimized param range(s)` : ''}. Set the expert before running.`,
+      });
+    }
+  };
+
+  const handleImportFile = (file: File | undefined) => {
+    if (!file) return;
+    file.text().then(importSettingsJson).catch(() =>
+      setImportNote({ kind: 'err', text: 'Could not read the selected file.' }),
+    );
+  };
+
   const getFilteredTrades = () => {
     if (!selectedBacktest?.results?.trades) return [];
 
@@ -1111,6 +1269,444 @@ const Backtesting: React.FC = () => {
     );
   }
 
+  // The full backtest result view (header + metrics + chart/trade/strategy tabs). Reused by
+  // BOTH the standalone result panel AND the Opt-History "Individual Backtest" sub-tab so a
+  // top individual's persisted backtest renders identically. The param shadows the outer
+  // `selectedBacktest` state with a non-null Backtest so all references inside stay valid.
+  function renderBacktestResult(selectedBacktest: Backtest) {
+    return (
+            <>
+              {/* Header: name + engine-type badge (daily expert = multi-asset; ml = model-driven) */}
+              <div className="flex items-start justify-between flex-wrap gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
+                    {selectedBacktest.name}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {selectedBacktest.startDate} → {selectedBacktest.endDate}
+                    {(selectedBacktest.completedAt || selectedBacktest.createdAt) && (
+                      <> &middot; ran {new Date((selectedBacktest.completedAt || selectedBacktest.createdAt) as string).toLocaleString()}</>
+                    )}
+                  </p>
+                </div>
+                {selectedBacktest.engineType === 'daily_expert' ? (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                    Daily expert &middot; multi-asset
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                    ML strategy{selectedBacktest.modelId != null ? ` · Model #${selectedBacktest.modelId}` : ''}
+                  </span>
+                )}
+              </div>
+              {/* Metrics Summary */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Total Return</p>
+                      <p className={`text-2xl font-bold ${(selectedBacktest.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {(selectedBacktest.totalReturn || 0) >= 0 ? '+' : ''}{selectedBacktest.totalReturn?.toFixed(1)}%
+                      </p>
+                    </div>
+                    {(selectedBacktest.totalReturn || 0) >= 0 ? (
+                      <TrendingUp className="w-8 h-8 text-green-500" />
+                    ) : (
+                      <TrendingDown className="w-8 h-8 text-red-500" />
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Sharpe Ratio</p>
+                      <p className="text-2xl font-bold text-blue-600">{selectedBacktest.sharpeRatio?.toFixed(2)}</p>
+                    </div>
+                    <Activity className="w-8 h-8 text-blue-500" />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Max Drawdown</p>
+                      <p className="text-2xl font-bold text-red-600">-{selectedBacktest.maxDrawdown?.toFixed(1)}%</p>
+                    </div>
+                    <ArrowDownRight className="w-8 h-8 text-red-500" />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Win Rate</p>
+                      <p className="text-2xl font-bold text-purple-600">{selectedBacktest.winRate?.toFixed(1)}%</p>
+                    </div>
+                    <Award className="w-8 h-8 text-purple-500" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Additional Metrics */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Profit Factor</p>
+                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.profitFactor?.toFixed(2)}</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Total Trades</p>
+                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.totalTrades}</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Avg Duration</p>
+                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{(() => {
+                    const ts = (selectedBacktest.results?.trades || [])
+                      .map(tradeDurationMs).filter(ms => isFinite(ms) && ms > 0);
+                    return ts.length ? formatDuration(ts.reduce((a, b) => a + b, 0) / ts.length) : '—';
+                  })()}</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Best Trade</p>
+                  <p className="text-lg font-bold text-green-600">+{selectedBacktest.bestTrade?.toFixed(1)}%</p>
+                </div>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Worst Trade</p>
+                  <p className="text-lg font-bold text-red-600">{selectedBacktest.worstTrade?.toFixed(1)}%</p>
+                </div>
+              </div>
+
+              {/* Description / Notes */}
+              {selectedBacktest.description && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Notes</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{selectedBacktest.description}</p>
+                </div>
+              )}
+
+              {/* Chart Tabs */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
+                <div className="border-b border-gray-200 dark:border-gray-700">
+                  <nav className="flex">
+                    {[
+                      { id: 'equity', label: 'Equity Curve', icon: TrendingUp },
+                      { id: 'drawdown', label: 'Drawdown', icon: TrendingDown },
+                      { id: 'trades', label: 'Trade List', icon: Activity },
+                      { id: 'strategy', label: 'Strategy', icon: Award }
+                    ].map(tab => (
+                      <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'trades' | 'strategy')}
+                        className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors text-sm ${
+                          activeTab === tab.id
+                            ? 'border-blue-500 text-blue-600'
+                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        <tab.icon className="w-4 h-4" />
+                        {tab.label}
+                      </button>
+                    ))}
+                  </nav>
+                </div>
+
+                <div className="p-4">
+                  {activeTab === 'equity' && selectedBacktest.results?.equityCurve && (
+                    <div className="h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={selectedBacktest.results.equityCurve}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                          <XAxis
+                            dataKey="date"
+                            tickFormatter={(d: string) => {
+                              const date = new Date(d);
+                              return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+                            }}
+                            tick={{ fontSize: 11 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis
+                            domain={['auto', 'auto']}
+                            tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`}
+                            width={65}
+                            tick={{ fontSize: 11 }}
+                          />
+                          <RechartsTooltip
+                            formatter={(value) => [`$${(value as number)?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '0'}`, 'Equity']}
+                            labelFormatter={(label) => {
+                              const date = new Date(String(label));
+                              return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                            }}
+                          />
+                          <Area type="monotone" dataKey="equity" stroke="#22c55e" fill="#22c55e" fillOpacity={0.2} />
+                          <ReferenceLine y={selectedBacktest.initialCapital || 10000} stroke="#888" strokeDasharray="3 3" label={{ value: 'Initial', position: 'right', fontSize: 11 }} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {activeTab === 'drawdown' && selectedBacktest.results?.drawdownCurve && (
+                    <div className="h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={selectedBacktest.results.drawdownCurve}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                          <XAxis
+                            dataKey="date"
+                            tickFormatter={(d: string) => {
+                              const date = new Date(d);
+                              return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+                            }}
+                            tick={{ fontSize: 11 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis
+                            domain={[0, 'auto']}
+                            tickFormatter={(v: number) => `${v.toFixed(1)}%`}
+                            width={50}
+                            tick={{ fontSize: 11 }}
+                            reversed
+                          />
+                          <RechartsTooltip
+                            formatter={(value) => [`${((value as number) ?? 0).toFixed(2)}%`, 'Drawdown']}
+                            labelFormatter={(label) => {
+                              const date = new Date(String(label));
+                              return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                            }}
+                          />
+                          <Area type="monotone" dataKey="drawdown" stroke="#ef4444" fill="#ef4444" fillOpacity={0.3} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {activeTab === 'trades' && selectedBacktest.results?.trades && (
+                    <div>
+                      {/* Trade Filters */}
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className="flex items-center gap-2">
+                          <Filter className="w-4 h-4 text-gray-500" />
+                          <select
+                            value={tradeFilter}
+                            onChange={e => setTradeFilter(e.target.value as 'all' | 'profit' | 'loss')}
+                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          >
+                            <option value="all">All Trades</option>
+                            <option value="profit">Profitable</option>
+                            <option value="loss">Losing</option>
+                          </select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-500 dark:text-gray-400">Sort:</span>
+                          <select
+                            value={tradeSortField}
+                            onChange={e => setTradeSortField(e.target.value as 'pnl' | 'date' | 'duration')}
+                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          >
+                            <option value="date">Date</option>
+                            <option value="pnl">P&L</option>
+                            <option value="duration">Duration</option>
+                          </select>
+                          <button
+                            onClick={() => setTradeSortAsc(!tradeSortAsc)}
+                            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                          >
+                            {tradeSortAsc ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Trade Table */}
+                      <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 dark:bg-gray-700/50 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Symbol</th>
+                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Entry</th>
+                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Exit</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Entry $</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Exit $</th>
+                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Dir</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Size</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">P&L</th>
+                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">P&L %</th>
+                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Duration</th>
+                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                            {getFilteredTrades().map(trade => (
+                              <tr key={trade.id}
+                                  onClick={() => setChartTrade(trade)}
+                                  title="Click to view the daily chart with entry/exit markers"
+                                  className="cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                                <td className="px-3 py-2 font-medium text-gray-900 dark:text-gray-100">{trade.symbol || '—'}</td>
+                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.entryDate}</td>
+                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.exitDate}</td>
+                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.entryPrice.toFixed(2)}</td>
+                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.exitPrice.toFixed(2)}</td>
+                                <td className="px-3 py-2 text-center">
+                                  <span className={`px-2 py-0.5 rounded text-xs font-semibold text-white ${
+                                    trade.direction === 'long' ? 'bg-green-600' : 'bg-red-600'
+                                  }`}>
+                                    {trade.direction}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">{trade.size}</td>
+                                <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {trade.pnl >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
+                                </td>
+                                <td className="px-3 py-2 text-center text-gray-900 dark:text-gray-100">{formatDuration(tradeDurationMs(trade))}</td>
+                                <td className="px-3 py-2 text-center">
+                                  <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-xs text-gray-700 dark:text-gray-300">
+                                    {trade.exitReason}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'strategy' && (
+                    <div className="p-4 space-y-4">
+                      {/* Strategy info from strategyParams or strategyId */}
+                      {(() => {
+                        // Try strategyParams first, fall back to loading from strategies list
+                        let sp = selectedBacktest.strategyParams as any;
+                        if (!sp && selectedBacktest.strategyId) {
+                          const strat = strategies.find(s => s.id === selectedBacktest.strategyId);
+                          if (strat) {
+                            sp = {
+                              initialTpPercent: strat.initialTpPercent,
+                              initialSlPercent: strat.initialSlPercent,
+                              buyEntryConditions: strat.buyEntryConditions,
+                              sellEntryConditions: strat.sellEntryConditions,
+                              exitConditions: strat.exitConditions,
+                              strategyName: strat.name,
+                            };
+                          }
+                        }
+                        if (!sp && !selectedBacktest.strategyId) {
+                          return <p className="text-sm text-gray-500 dark:text-gray-400">No strategy information available for this backtest.</p>;
+                        }
+                        // Optimization-derived backtests store the GA's flat gene dict
+                        // ({tp, sl, model:*, cond:*, exit:*}) in strategyParams, not the
+                        // structured {initialTpPercent, buyEntryConditions} shape — so fall
+                        // back to the flat tp/sl keys.
+                        const tp = sp?.initialTpPercent ?? sp?.initial_tp_percent ?? sp?.tp;
+                        const sl = sp?.initialSlPercent ?? sp?.initial_sl_percent ?? sp?.sl;
+                        const buyConditions = sp?.buyEntryConditions?.conditions || [];
+                        const sellConditions = sp?.sellEntryConditions?.conditions || [];
+                        const exitConditions = sp?.exitConditions || [];
+                        const stratName = sp?.strategyName;
+                        // Flat optimized genes (model:*/cond:*/exit:*) — surfaced as a readable
+                        // list so the tab is informative for optimization runs (which carry no
+                        // structured buy/sell/exit conditions).
+                        const optimizedGenes = sp && typeof sp === 'object'
+                          ? Object.entries(sp as Record<string, unknown>)
+                              .filter(([k]) => /^(model:|cond:|exit:)/.test(k))
+                              .map(([k, v]) => [k, typeof v === 'number' ? (Number.isInteger(v) ? String(v) : (v as number).toFixed(2)) : String(v)] as [string, string])
+                          : [];
+                        // Resolved-ruleset read-back (B10): when this run came from a
+                        // finished optimization that surfaced its flat best-params gene
+                        // map (cond:*/exit:* -> value), render the ruleset that ACTUALLY
+                        // ran (dropped rules greyed, tuned values filled). The backtest
+                        // results object does not yet carry best_params on its own — this
+                        // renders only when strategyParams includes a bestParams/
+                        // best_params dict (e.g. surfaced via /jobs/{id}/individuals
+                        // best_individual.params). See lib/resolveRuleset.ts.
+                        const bestParams = (sp?.bestParams ?? sp?.best_params) as BestParams | undefined;
+                        return (
+                          <>
+                            {stratName && (
+                              <div className="text-sm">
+                                <span className="text-gray-500 dark:text-gray-400">Strategy: </span>
+                                <span className="font-medium text-gray-900 dark:text-gray-100">{stratName}</span>
+                              </div>
+                            )}
+                            {!sp && selectedBacktest.strategyId && (
+                              <p className="text-sm text-gray-500 dark:text-gray-400">Strategy ID: {selectedBacktest.strategyId} (strategy not found)</p>
+                            )}
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit</div>
+                                <div className="text-lg font-bold text-green-600">{tp != null ? `${tp}%` : 'None'}</div>
+                              </div>
+                              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Stop Loss</div>
+                                <div className="text-lg font-bold text-red-600">{sl != null ? `${sl}%` : 'None'}</div>
+                              </div>
+                            </div>
+                            {buyConditions.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-green-600 mb-2">Buy Entry Conditions ({buyConditions.length})</h4>
+                                <div className="space-y-1">
+                                  {buyConditions.map((c: any, i: number) => (
+                                    <div key={i} className="text-sm bg-green-50 dark:bg-green-900/20 rounded px-3 py-1.5 text-green-800 dark:text-green-300">
+                                      {c.field} <span className="font-mono">{c.comparison}</span> {c.value}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {sellConditions.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-red-600 mb-2">Sell Entry Conditions ({sellConditions.length})</h4>
+                                <div className="space-y-1">
+                                  {sellConditions.map((c: any, i: number) => (
+                                    <div key={i} className="text-sm bg-red-50 dark:bg-red-900/20 rounded px-3 py-1.5 text-red-800 dark:text-red-300">
+                                      {c.field} <span className="font-mono">{c.comparison}</span> {c.value}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {exitConditions.length > 0 && !bestParams && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-yellow-600 mb-2">Exit Conditions ({exitConditions.length})</h4>
+                                <div className="space-y-1">
+                                  {exitConditions.map((rule: any, i: number) => (
+                                    <div key={i} className="text-sm bg-yellow-50 dark:bg-yellow-900/20 rounded px-3 py-1.5 text-yellow-800 dark:text-yellow-300">
+                                      {rule.name || `Exit Rule ${i + 1}`}: {rule.conditions?.conditions?.map((c: any) => `${c.field} ${c.comparison} ${c.value}`).join(' AND ') || 'N/A'}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {exitConditions.length > 0 && bestParams && (
+                              <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
+                                <ResolvedRulesetView exitRules={exitConditions} bestParams={bestParams} />
+                              </div>
+                            )}
+                            {buyConditions.length === 0 && sellConditions.length === 0 && exitConditions.length === 0 && optimizedGenes.length > 0 && (
+                              <div>
+                                <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">Optimized Parameters ({optimizedGenes.length})</h4>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                  {optimizedGenes.map(([k, v]) => (
+                                    <div key={k} className="flex justify-between text-sm bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-1.5">
+                                      <span className="font-mono text-gray-600 dark:text-gray-400 truncate mr-2">{k}</span>
+                                      <span className="font-medium text-gray-900 dark:text-gray-100">{v}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
       <TradeChartModal trade={chartTrade} onClose={() => setChartTrade(null)} />
@@ -1199,6 +1795,46 @@ const Backtesting: React.FC = () => {
 
             {backtestCardTab === 'new' ? (
             <div className="space-y-4">
+              {/* Import optimization / individual settings (part 5). Accepts the JSON exported
+                  from the Opt-History tab (opt-settings OR individual) and pre-fills the form
+                  fields below (dates, universe, capital, interval, TP/SL + any mappable params). */}
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40 p-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Import settings:</span>
+                  <button
+                    type="button"
+                    onClick={() => importFileRef.current?.click()}
+                    className="flex items-center gap-1 px-2.5 py-1 text-sm rounded border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50"
+                  >
+                    <Upload className="w-4 h-4" /> Import JSON file
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const txt = window.prompt('Paste exported opt-settings / individual JSON:');
+                      if (txt != null && txt.trim()) importSettingsJson(txt);
+                    }}
+                    className="px-2.5 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    Paste JSON
+                  </button>
+                  <input
+                    ref={importFileRef}
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    onChange={(e) => { handleImportFile(e.target.files?.[0]); e.currentTarget.value = ''; }}
+                  />
+                </div>
+                {importNote && (
+                  <p className={`mt-2 text-xs ${importNote.kind === 'ok'
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-amber-600 dark:text-amber-400'}`}>
+                    {importNote.text}
+                  </p>
+                )}
+              </div>
+
               {/* Source selector: Expert engine vs ML model */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -1877,7 +2513,16 @@ const Backtesting: React.FC = () => {
                 <OptimizationJobsTable
                   selectedJobId={selectedOptJob?.job.id ?? null}
                   onSelectJob={(job, detail) => {
-                    setSelectedBacktest(null);
+                    // Reset the sub-tab + individual selection only when a DIFFERENT job is
+                    // picked — OptimizationJobsTable re-fires this (detail=undefined then loaded)
+                    // for the same job as it lazily fetches the top individuals.
+                    const isNewJob = selectedOptJob?.job.id !== job.id;
+                    if (isNewJob) {
+                      setSelectedBacktest(null);
+                      setSelectedIndividual(null);
+                      setIndividualNoBacktest(null);
+                      setOptSubTab('optimization');
+                    }
                     setSelectedOptJob({ job, detail });
                   }}
                   onSelectBacktest={viewBacktest}
@@ -1894,477 +2539,130 @@ const Backtesting: React.FC = () => {
 
         {/* Results Panel */}
         <div className="xl:col-span-1 space-y-4">
-          {selectedBacktest ? (
-            <>
-              {/* Header: name + engine-type badge (daily expert = multi-asset; ml = model-driven) */}
-              <div className="flex items-start justify-between flex-wrap gap-2">
-                <div className="min-w-0">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
-                    {selectedBacktest.name}
-                  </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    {selectedBacktest.startDate} → {selectedBacktest.endDate}
-                    {(selectedBacktest.completedAt || selectedBacktest.createdAt) && (
-                      <> &middot; ran {new Date((selectedBacktest.completedAt || selectedBacktest.createdAt) as string).toLocaleString()}</>
-                    )}
-                  </p>
-                </div>
-                {selectedBacktest.engineType === 'daily_expert' ? (
-                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
-                    Daily expert &middot; multi-asset
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                    ML strategy{selectedBacktest.modelId != null ? ` · Model #${selectedBacktest.modelId}` : ''}
-                  </span>
-                )}
-              </div>
-              {/* Metrics Summary */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Total Return</p>
-                      <p className={`text-2xl font-bold ${(selectedBacktest.totalReturn || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {(selectedBacktest.totalReturn || 0) >= 0 ? '+' : ''}{selectedBacktest.totalReturn?.toFixed(1)}%
-                      </p>
-                    </div>
-                    {(selectedBacktest.totalReturn || 0) >= 0 ? (
-                      <TrendingUp className="w-8 h-8 text-green-500" />
-                    ) : (
-                      <TrendingDown className="w-8 h-8 text-red-500" />
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Sharpe Ratio</p>
-                      <p className="text-2xl font-bold text-blue-600">{selectedBacktest.sharpeRatio?.toFixed(2)}</p>
-                    </div>
-                    <Activity className="w-8 h-8 text-blue-500" />
-                  </div>
-                </div>
-
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Max Drawdown</p>
-                      <p className="text-2xl font-bold text-red-600">-{selectedBacktest.maxDrawdown?.toFixed(1)}%</p>
-                    </div>
-                    <ArrowDownRight className="w-8 h-8 text-red-500" />
-                  </div>
-                </div>
-
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Win Rate</p>
-                      <p className="text-2xl font-bold text-purple-600">{selectedBacktest.winRate?.toFixed(1)}%</p>
-                    </div>
-                    <Award className="w-8 h-8 text-purple-500" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Additional Metrics */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Profit Factor</p>
-                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.profitFactor?.toFixed(2)}</p>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Total Trades</p>
-                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedBacktest.totalTrades}</p>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Avg Duration</p>
-                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{(() => {
-                    const ts = (selectedBacktest.results?.trades || [])
-                      .map(tradeDurationMs).filter(ms => isFinite(ms) && ms > 0);
-                    return ts.length ? formatDuration(ts.reduce((a, b) => a + b, 0) / ts.length) : '—';
-                  })()}</p>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Best Trade</p>
-                  <p className="text-lg font-bold text-green-600">+{selectedBacktest.bestTrade?.toFixed(1)}%</p>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Worst Trade</p>
-                  <p className="text-lg font-bold text-red-600">{selectedBacktest.worstTrade?.toFixed(1)}%</p>
-                </div>
-              </div>
-
-              {/* Description / Notes */}
-              {selectedBacktest.description && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Notes</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{selectedBacktest.description}</p>
-                </div>
-              )}
-
-              {/* Chart Tabs */}
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
-                <div className="border-b border-gray-200 dark:border-gray-700">
-                  <nav className="flex">
-                    {[
-                      { id: 'equity', label: 'Equity Curve', icon: TrendingUp },
-                      { id: 'drawdown', label: 'Drawdown', icon: TrendingDown },
-                      { id: 'trades', label: 'Trade List', icon: Activity },
-                      { id: 'strategy', label: 'Strategy', icon: Award }
-                    ].map(tab => (
-                      <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id as 'equity' | 'drawdown' | 'trades' | 'strategy')}
-                        className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors text-sm ${
-                          activeTab === tab.id
-                            ? 'border-blue-500 text-blue-600'
-                            : 'border-transparent text-gray-500 hover:text-gray-700'
-                        }`}
-                      >
-                        <tab.icon className="w-4 h-4" />
-                        {tab.label}
-                      </button>
-                    ))}
-                  </nav>
-                </div>
-
-                <div className="p-4">
-                  {activeTab === 'equity' && selectedBacktest.results?.equityCurve && (
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={selectedBacktest.results.equityCurve}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                          <XAxis
-                            dataKey="date"
-                            tickFormatter={(d: string) => {
-                              const date = new Date(d);
-                              return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-                            }}
-                            tick={{ fontSize: 11 }}
-                            interval="preserveStartEnd"
-                          />
-                          <YAxis
-                            domain={['auto', 'auto']}
-                            tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`}
-                            width={65}
-                            tick={{ fontSize: 11 }}
-                          />
-                          <RechartsTooltip
-                            formatter={(value) => [`$${(value as number)?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '0'}`, 'Equity']}
-                            labelFormatter={(label) => {
-                              const date = new Date(String(label));
-                              return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-                            }}
-                          />
-                          <Area type="monotone" dataKey="equity" stroke="#22c55e" fill="#22c55e" fillOpacity={0.2} />
-                          <ReferenceLine y={selectedBacktest.initialCapital || 10000} stroke="#888" strokeDasharray="3 3" label={{ value: 'Initial', position: 'right', fontSize: 11 }} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-
-                  {activeTab === 'drawdown' && selectedBacktest.results?.drawdownCurve && (
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={selectedBacktest.results.drawdownCurve}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                          <XAxis
-                            dataKey="date"
-                            tickFormatter={(d: string) => {
-                              const date = new Date(d);
-                              return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-                            }}
-                            tick={{ fontSize: 11 }}
-                            interval="preserveStartEnd"
-                          />
-                          <YAxis
-                            domain={[0, 'auto']}
-                            tickFormatter={(v: number) => `${v.toFixed(1)}%`}
-                            width={50}
-                            tick={{ fontSize: 11 }}
-                            reversed
-                          />
-                          <RechartsTooltip
-                            formatter={(value) => [`${((value as number) ?? 0).toFixed(2)}%`, 'Drawdown']}
-                            labelFormatter={(label) => {
-                              const date = new Date(String(label));
-                              return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-                            }}
-                          />
-                          <Area type="monotone" dataKey="drawdown" stroke="#ef4444" fill="#ef4444" fillOpacity={0.3} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-
-                  {activeTab === 'trades' && selectedBacktest.results?.trades && (
-                    <div>
-                      {/* Trade Filters */}
-                      <div className="flex items-center gap-4 mb-4">
-                        <div className="flex items-center gap-2">
-                          <Filter className="w-4 h-4 text-gray-500" />
-                          <select
-                            value={tradeFilter}
-                            onChange={e => setTradeFilter(e.target.value as 'all' | 'profit' | 'loss')}
-                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                          >
-                            <option value="all">All Trades</option>
-                            <option value="profit">Profitable</option>
-                            <option value="loss">Losing</option>
-                          </select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-500 dark:text-gray-400">Sort:</span>
-                          <select
-                            value={tradeSortField}
-                            onChange={e => setTradeSortField(e.target.value as 'pnl' | 'date' | 'duration')}
-                            className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                          >
-                            <option value="date">Date</option>
-                            <option value="pnl">P&L</option>
-                            <option value="duration">Duration</option>
-                          </select>
-                          <button
-                            onClick={() => setTradeSortAsc(!tradeSortAsc)}
-                            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
-                          >
-                            {tradeSortAsc ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Trade Table */}
-                      <div className="overflow-x-auto max-h-64 overflow-y-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-gray-50 dark:bg-gray-700/50 sticky top-0">
-                            <tr>
-                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Symbol</th>
-                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Entry</th>
-                              <th className="px-3 py-2 text-left text-gray-700 dark:text-gray-300">Exit</th>
-                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Entry $</th>
-                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Exit $</th>
-                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Dir</th>
-                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">Size</th>
-                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">P&L</th>
-                              <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-300">P&L %</th>
-                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Duration</th>
-                              <th className="px-3 py-2 text-center text-gray-700 dark:text-gray-300">Reason</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {getFilteredTrades().map(trade => (
-                              <tr key={trade.id}
-                                  onClick={() => setChartTrade(trade)}
-                                  title="Click to view the daily chart with entry/exit markers"
-                                  className="cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20">
-                                <td className="px-3 py-2 font-medium text-gray-900 dark:text-gray-100">{trade.symbol || '—'}</td>
-                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.entryDate}</td>
-                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{trade.exitDate}</td>
-                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.entryPrice.toFixed(2)}</td>
-                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">${trade.exitPrice.toFixed(2)}</td>
-                                <td className="px-3 py-2 text-center">
-                                  <span className={`px-2 py-0.5 rounded text-xs font-semibold text-white ${
-                                    trade.direction === 'long' ? 'bg-green-600' : 'bg-red-600'
-                                  }`}>
-                                    {trade.direction}
-                                  </span>
-                                </td>
-                                <td className="px-3 py-2 text-right text-gray-900 dark:text-gray-100">{trade.size}</td>
-                                <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                  {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
-                                </td>
-                                <td className={`px-3 py-2 text-right font-medium ${trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                  {trade.pnl >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
-                                </td>
-                                <td className="px-3 py-2 text-center text-gray-900 dark:text-gray-100">{formatDuration(tradeDurationMs(trade))}</td>
-                                <td className="px-3 py-2 text-center">
-                                  <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-xs text-gray-700 dark:text-gray-300">
-                                    {trade.exitReason}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {activeTab === 'strategy' && (
-                    <div className="p-4 space-y-4">
-                      {/* Strategy info from strategyParams or strategyId */}
-                      {(() => {
-                        // Try strategyParams first, fall back to loading from strategies list
-                        let sp = selectedBacktest.strategyParams as any;
-                        if (!sp && selectedBacktest.strategyId) {
-                          const strat = strategies.find(s => s.id === selectedBacktest.strategyId);
-                          if (strat) {
-                            sp = {
-                              initialTpPercent: strat.initialTpPercent,
-                              initialSlPercent: strat.initialSlPercent,
-                              buyEntryConditions: strat.buyEntryConditions,
-                              sellEntryConditions: strat.sellEntryConditions,
-                              exitConditions: strat.exitConditions,
-                              strategyName: strat.name,
-                            };
-                          }
-                        }
-                        if (!sp && !selectedBacktest.strategyId) {
-                          return <p className="text-sm text-gray-500 dark:text-gray-400">No strategy information available for this backtest.</p>;
-                        }
-                        // Optimization-derived backtests store the GA's flat gene dict
-                        // ({tp, sl, model:*, cond:*, exit:*}) in strategyParams, not the
-                        // structured {initialTpPercent, buyEntryConditions} shape — so fall
-                        // back to the flat tp/sl keys.
-                        const tp = sp?.initialTpPercent ?? sp?.initial_tp_percent ?? sp?.tp;
-                        const sl = sp?.initialSlPercent ?? sp?.initial_sl_percent ?? sp?.sl;
-                        const buyConditions = sp?.buyEntryConditions?.conditions || [];
-                        const sellConditions = sp?.sellEntryConditions?.conditions || [];
-                        const exitConditions = sp?.exitConditions || [];
-                        const stratName = sp?.strategyName;
-                        // Flat optimized genes (model:*/cond:*/exit:*) — surfaced as a readable
-                        // list so the tab is informative for optimization runs (which carry no
-                        // structured buy/sell/exit conditions).
-                        const optimizedGenes = sp && typeof sp === 'object'
-                          ? Object.entries(sp as Record<string, unknown>)
-                              .filter(([k]) => /^(model:|cond:|exit:)/.test(k))
-                              .map(([k, v]) => [k, typeof v === 'number' ? (Number.isInteger(v) ? String(v) : (v as number).toFixed(2)) : String(v)] as [string, string])
-                          : [];
-                        // Resolved-ruleset read-back (B10): when this run came from a
-                        // finished optimization that surfaced its flat best-params gene
-                        // map (cond:*/exit:* -> value), render the ruleset that ACTUALLY
-                        // ran (dropped rules greyed, tuned values filled). The backtest
-                        // results object does not yet carry best_params on its own — this
-                        // renders only when strategyParams includes a bestParams/
-                        // best_params dict (e.g. surfaced via /jobs/{id}/individuals
-                        // best_individual.params). See lib/resolveRuleset.ts.
-                        const bestParams = (sp?.bestParams ?? sp?.best_params) as BestParams | undefined;
-                        return (
-                          <>
-                            {stratName && (
-                              <div className="text-sm">
-                                <span className="text-gray-500 dark:text-gray-400">Strategy: </span>
-                                <span className="font-medium text-gray-900 dark:text-gray-100">{stratName}</span>
-                              </div>
-                            )}
-                            {!sp && selectedBacktest.strategyId && (
-                              <p className="text-sm text-gray-500 dark:text-gray-400">Strategy ID: {selectedBacktest.strategyId} (strategy not found)</p>
-                            )}
-                            <div className="grid grid-cols-2 gap-4">
-                              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-                                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Take Profit</div>
-                                <div className="text-lg font-bold text-green-600">{tp != null ? `${tp}%` : 'None'}</div>
-                              </div>
-                              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-                                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Stop Loss</div>
-                                <div className="text-lg font-bold text-red-600">{sl != null ? `${sl}%` : 'None'}</div>
-                              </div>
-                            </div>
-                            {buyConditions.length > 0 && (
-                              <div>
-                                <h4 className="text-sm font-semibold text-green-600 mb-2">Buy Entry Conditions ({buyConditions.length})</h4>
-                                <div className="space-y-1">
-                                  {buyConditions.map((c: any, i: number) => (
-                                    <div key={i} className="text-sm bg-green-50 dark:bg-green-900/20 rounded px-3 py-1.5 text-green-800 dark:text-green-300">
-                                      {c.field} <span className="font-mono">{c.comparison}</span> {c.value}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {sellConditions.length > 0 && (
-                              <div>
-                                <h4 className="text-sm font-semibold text-red-600 mb-2">Sell Entry Conditions ({sellConditions.length})</h4>
-                                <div className="space-y-1">
-                                  {sellConditions.map((c: any, i: number) => (
-                                    <div key={i} className="text-sm bg-red-50 dark:bg-red-900/20 rounded px-3 py-1.5 text-red-800 dark:text-red-300">
-                                      {c.field} <span className="font-mono">{c.comparison}</span> {c.value}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {exitConditions.length > 0 && !bestParams && (
-                              <div>
-                                <h4 className="text-sm font-semibold text-yellow-600 mb-2">Exit Conditions ({exitConditions.length})</h4>
-                                <div className="space-y-1">
-                                  {exitConditions.map((rule: any, i: number) => (
-                                    <div key={i} className="text-sm bg-yellow-50 dark:bg-yellow-900/20 rounded px-3 py-1.5 text-yellow-800 dark:text-yellow-300">
-                                      {rule.name || `Exit Rule ${i + 1}`}: {rule.conditions?.conditions?.map((c: any) => `${c.field} ${c.comparison} ${c.value}`).join(' AND ') || 'N/A'}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {exitConditions.length > 0 && bestParams && (
-                              <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
-                                <ResolvedRulesetView exitRules={exitConditions} bestParams={bestParams} />
-                              </div>
-                            )}
-                            {buyConditions.length === 0 && sellConditions.length === 0 && exitConditions.length === 0 && optimizedGenes.length > 0 && (
-                              <div>
-                                <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">Optimized Parameters ({optimizedGenes.length})</h4>
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                                  {optimizedGenes.map(([k, v]) => (
-                                    <div key={k} className="flex justify-between text-sm bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-1.5">
-                                      <span className="font-mono text-gray-600 dark:text-gray-400 truncate mr-2">{k}</span>
-                                      <span className="font-medium text-gray-900 dark:text-gray-100">{v}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </>
-          ) : selectedOptJob ? (
-            /* Opt-History job view: the selected job's settings + top individuals. */
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-4">
+          {selectedOptJob ? (
+            /* Opt-History: 2 sub-tabs — "Optimization" (settings + top individuals) and
+               "Individual Backtest" (the selected top individual's full backtest result). */
+            <div className="space-y-4">
               <div className="flex items-start justify-between flex-wrap gap-2">
                 <div className="min-w-0">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
                     {selectedOptJob.job.name || `Optimization #${selectedOptJob.job.id}`}
                   </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
                     Optimization job #{selectedOptJob.job.id}
                     {selectedOptJob.job.fitnessMetric ? ` · ${selectedOptJob.job.fitnessMetric}` : ''}
                     {selectedOptJob.job.bestFitness != null ? ` · best ${selectedOptJob.job.bestFitness.toFixed(4)}` : ''}
                   </p>
                 </div>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                <span className="px-2 py-0.5 text-xs font-semibold rounded-full border bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-500/20 dark:text-indigo-200 dark:border-indigo-500/40">
                   {selectedOptJob.job.status}
                 </span>
               </div>
 
-              <div>
-                <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
-                  <Sliders className="w-4 h-4" /> Optimization settings
-                </h4>
-                <OptJobSettingsDetail s={selectedOptJob.job.settings} />
+              {/* Sub-tab bar */}
+              <div className="flex border-b border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => setOptSubTab('optimization')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    optSubTab === 'optimization'
+                      ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <Sliders className="w-4 h-4 inline mr-1" />
+                  Optimization
+                </button>
+                <button
+                  onClick={() => setOptSubTab('individual')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    optSubTab === 'individual'
+                      ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4 inline mr-1" />
+                  Individual Backtest
+                </button>
               </div>
 
-              <div>
-                <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
-                  <Award className="w-4 h-4" /> Top individuals
-                </h4>
-                {selectedOptJob.detail === undefined ? (
-                  <div className="text-xs text-gray-400 dark:text-gray-500">Loading…</div>
-                ) : (
-                  <TopIndividualsTable
-                    individuals={selectedOptJob.detail.topIndividuals}
-                    fitnessMetric={selectedOptJob.job.fitnessMetric ?? undefined}
-                    note="Select a saved backtest below the jobs table to view its full result (equity curve, trades)."
-                  />
-                )}
-              </div>
+              {optSubTab === 'optimization' ? (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-1">
+                      <Sliders className="w-4 h-4" /> Optimization settings
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => exportOptSettings(selectedOptJob.job, selectedOptJob.detail)}
+                      title="Download this optimization's settings as JSON"
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Export settings
+                    </button>
+                  </div>
+                  <OptJobSettingsDetail s={selectedOptJob.job.settings} />
+
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center gap-1">
+                      <Award className="w-4 h-4" /> Top individuals
+                    </h4>
+                    {selectedOptJob.detail === undefined ? (
+                      <div className="text-xs text-gray-500 dark:text-gray-400">Loading…</div>
+                    ) : (
+                      <TopIndividualsTable
+                        individuals={selectedOptJob.detail.topIndividuals}
+                        fitnessMetric={selectedOptJob.job.fitnessMetric ?? undefined}
+                        selectedRank={selectedIndividual?.rank ?? null}
+                        onSelect={selectTopIndividual}
+                        onExport={(ind) => exportIndividual(selectedOptJob.job, ind, selectedOptJob.detail)}
+                        note="Click a row to load that individual's full backtest in the Individual Backtest tab. Only the top ~5 are saved as full backtests."
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : selectedBacktest ? (
+                renderBacktestResult(selectedBacktest)
+              ) : individualNoBacktest ? (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-3">
+                  <div className="text-sm text-gray-700 dark:text-gray-300">
+                    Only the top N individuals are saved as full backtests; this one
+                    (#{individualNoBacktest.rank}) wasn't — its params are shown below.
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                      Individual #{individualNoBacktest.rank} params
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => exportIndividual(selectedOptJob.job, individualNoBacktest, selectedOptJob.detail)}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Export
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {Object.entries(individualNoBacktest.params ?? {}).map(([k, v]) => (
+                      <div key={k} className="flex justify-between text-sm bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-1.5">
+                        <span className="font-mono text-gray-700 dark:text-gray-300 truncate mr-2">{k}</span>
+                        <span className="font-medium text-gray-900 dark:text-gray-100">
+                          {typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
+                  <BarChart3 className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">No individual selected</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Pick a row in the Top Individuals table (Optimization tab) to view its full backtest here.
+                  </p>
+                </div>
+              )}
             </div>
+          ) : selectedBacktest ? (
+            renderBacktestResult(selectedBacktest)
           ) : (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
               <BarChart3 className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />

@@ -37,17 +37,22 @@ function fmtFitness(v?: number | null): string {
   return typeof v === 'number' && isFinite(v) ? v.toFixed(4) : '—';
 }
 
+// Status pills: high-contrast, readable text on a solid-tint pill with a matching border in
+// both themes. completed=green · running=blue · cancelled/stopped=gray · failed=red · pending=amber.
 const STATUS_STYLES: Record<string, string> = {
-  completed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
-  running: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-  pending: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-  failed: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  completed: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-200 dark:border-emerald-500/40',
+  running: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-500/20 dark:text-blue-200 dark:border-blue-500/40',
+  pending: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/20 dark:text-amber-200 dark:border-amber-500/40',
+  cancelled: 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50',
+  stopped: 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50',
+  failed: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-500/20 dark:text-red-200 dark:border-red-500/40',
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const cls = STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300';
+  const cls = STATUS_STYLES[status]
+    ?? 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50';
   return (
-    <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${cls}`}>
+    <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded-full border ${cls}`}>
       {status}
     </span>
   );
@@ -78,10 +83,10 @@ export function OptJobSettingsDetail({ s }: { s: OptJobSettings }) {
       {/* Genetic config */}
       {gaEntries.length > 0 && (
         <div>
-          <div className="font-medium text-gray-600 dark:text-gray-300 mb-1">Genetic config</div>
-          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-600 dark:text-gray-400">
+          <div className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Genetic config</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-800 dark:text-gray-200">
             {gaEntries.map(([k, v]) => (
-              <span key={k}><span className="text-gray-400 dark:text-gray-500">{k}:</span> {String(v)}</span>
+              <span key={k}><span className="text-gray-500 dark:text-gray-400">{k}:</span> {String(v)}</span>
             ))}
           </div>
         </div>
@@ -89,28 +94,28 @@ export function OptJobSettingsDetail({ s }: { s: OptJobSettings }) {
 
       {/* Backtest window / engine */}
       {(s.engine || s.startDate || s.endDate) && (
-        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-600 dark:text-gray-400">
-          {s.engine && <span><span className="text-gray-400 dark:text-gray-500">engine:</span> {s.engine}</span>}
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-800 dark:text-gray-200">
+          {s.engine && <span><span className="text-gray-500 dark:text-gray-400">engine:</span> {s.engine}</span>}
           {(s.startDate || s.endDate) && (
-            <span><span className="text-gray-400 dark:text-gray-500">window:</span> {s.startDate ?? '?'} → {s.endDate ?? '?'}</span>
+            <span><span className="text-gray-500 dark:text-gray-400">window:</span> {s.startDate ?? '?'} → {s.endDate ?? '?'}</span>
           )}
         </div>
       )}
 
       {/* Optimized expert / RM param ranges */}
       <div>
-        <div className="font-medium text-gray-600 dark:text-gray-300 mb-1">
+        <div className="font-semibold text-gray-900 dark:text-gray-100 mb-1">
           Optimized params {rangeEntries.length ? `(${rangeEntries.length})` : ''}
         </div>
         {rangeEntries.length === 0 ? (
-          <div className="text-gray-400 dark:text-gray-500">None (expert frozen)</div>
+          <div className="text-gray-600 dark:text-gray-300">None (expert frozen)</div>
         ) : (
           <table className="text-xs">
             <tbody>
               {rangeEntries.map(([name, r]) => (
                 <tr key={name}>
-                  <td className="pr-3 py-0.5 font-mono text-gray-700 dark:text-gray-300">{name}</td>
-                  <td className="py-0.5 text-gray-500 dark:text-gray-400">
+                  <td className="pr-3 py-0.5 font-mono text-gray-900 dark:text-gray-100">{name}</td>
+                  <td className="py-0.5 text-gray-700 dark:text-gray-300">
                     [{r.min ?? '?'} … {r.max ?? '?'}]
                     {r.step != null ? ` step ${r.step}` : ''}
                     {r.type ? ` · ${r.type}` : ''}
@@ -125,15 +130,15 @@ export function OptJobSettingsDetail({ s }: { s: OptJobSettings }) {
       {/* Screener settings (only when universe is screener-mode) */}
       {s.universeMode === 'screener' && (
         <div>
-          <div className="font-medium text-gray-600 dark:text-gray-300 mb-1">Screener</div>
-          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-600 dark:text-gray-400">
-            {s.screener?.group && <span><span className="text-gray-400 dark:text-gray-500">group:</span> {s.screener.group}</span>}
-            {s.screener?.cache_db && <span className="truncate max-w-xs"><span className="text-gray-400 dark:text-gray-500">cache:</span> {s.screener.cache_db}</span>}
+          <div className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Screener</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-800 dark:text-gray-200">
+            {s.screener?.group && <span><span className="text-gray-500 dark:text-gray-400">group:</span> {s.screener.group}</span>}
+            {s.screener?.cache_db && <span className="truncate max-w-xs"><span className="text-gray-500 dark:text-gray-400">cache:</span> {s.screener.cache_db}</span>}
           </div>
           {screenerEntries.length > 0 && (
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5 text-gray-600 dark:text-gray-400">
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5 text-gray-800 dark:text-gray-200">
               {screenerEntries.map(([k, v]) => (
-                <span key={k}><span className="text-gray-400 dark:text-gray-500">{k}:</span> {String(v)}</span>
+                <span key={k}><span className="text-gray-500 dark:text-gray-400">{k}:</span> {String(v)}</span>
               ))}
             </div>
           )}
@@ -323,9 +328,9 @@ export function OptimizationJobsTable({
                   }`}>
                   <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">{r.id}</td>
                   <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100 max-w-xs break-words">
-                    {r.name || <span className="text-gray-400">unnamed</span>}
+                    {r.name || <span className="text-gray-500 dark:text-gray-400">unnamed</span>}
                     {r.fitnessMetric && (
-                      <span className="block text-xs text-gray-400 dark:text-gray-500">{r.fitnessMetric}</span>
+                      <span className="block text-xs text-gray-600 dark:text-gray-400">{r.fitnessMetric}</span>
                     )}
                   </td>
                   <td className="px-3 py-2 text-sm">
@@ -339,7 +344,7 @@ export function OptimizationJobsTable({
                   <td className="px-3 py-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">{fmtFitness(r.bestFitness)}</td>
                   <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">{fmtDate(r.createdAt)}</td>
                   <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">{humanDuration(r.createdAt, r.completedAt)}</td>
-                  <td className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                  <td className="px-3 py-2 text-sm text-gray-800 dark:text-gray-200">
                     <span className="text-xs">{settingsPreview(r.settings)}</span>
                   </td>
                 </tr>
