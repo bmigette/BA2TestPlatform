@@ -583,6 +583,10 @@ _SCREENER_OPT = {
     "screener_relative_volume_min": {"min": 1.0, "max": 3.0, "step": 0.1, "type": "float", "optimize": True},
     "screener_price_drop_pct": {"min": 0.0, "max": 25.0, "step": 1.0, "type": "float", "optimize": True},
     "screener_max_stocks": {"min": 5, "max": 30, "step": 5, "type": "int", "optimize": True},
+    # Weinstein stage-2 gate (price above a rising 30-week SMA = confirmed uptrend). Optimized
+    # as a 0/1 toggle: the GA decides whether requiring Stage-2 helps. (A richer "which stage(s)"
+    # categorical would need a multi-stage screener setting; stage2-only is the current knob.)
+    "screener_weinstein_stage2_only": {"min": 0, "max": 1, "step": 1, "type": "int", "optimize": True},
 }
 
 
