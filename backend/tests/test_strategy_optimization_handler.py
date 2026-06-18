@@ -469,6 +469,109 @@ def test_build_daily_trial_config_bypass_drops_rm_tp_sl():
     assert backtest_cfg["experts"][0]["settings"] == {"top_n": 20}
 
 
+def test_build_daily_trial_config_bypass_screener_applies_to_expert_settings():
+    """For a BYPASS expert (FactorRanker) on a screener-optimized run tagged
+    ``apply_to_expert_settings``, _build_daily_trial_config pushes ``universe_source=screener`` +
+    the store path + the decoded screener genes (base overlaid with per-individual overrides)
+    onto the expert's OWN per-trial settings (so its DYNAMIC metric_store universe is GA-tuned),
+    while leaving the classic ``screener_runtime`` block populated for the non-bypass path."""
+    backtest_cfg = {
+        "backtest_id": 11,
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-08",
+        "enabled_instruments": ["AAPL", "MSFT", "NVDA"],
+        "experts": [{"class": "FactorRanker", "settings": {"weighting": "equal"}}],
+        "initial_capital": 100000.0,
+        "account_settings": {"starting_cash": 100000.0},
+        "warmup_days": 30,
+        "seed": 42,
+        "screener_opt": {
+            "store": "/tmp/mstore_unit",
+            "base_settings": {"screener_price_min": 20.0},
+            "cadence_days": 7,
+            "apply_to_expert_settings": True,
+        },
+    }
+    hoisted = {
+        "backtest_cfg": backtest_cfg,
+        "screener_store": "/tmp/mstore_unit",
+        "screener_base": {"screener_price_min": 20.0},
+        "screener_cadence_days": 7,
+        "screener_apply_to_expert_settings": True,
+    }
+    decoded = {
+        "tp": 8.0, "sl": 3.0,  # bypass -> must not be forwarded
+        "expert_overrides": {"top_n": 15},
+        "screener_overrides": {
+            "screener_market_cap_min": 5e9,
+            "screener_relative_volume_min": 1.5,
+            "screener_price_drop_pct": 4.0,
+            "screener_max_stocks": 20,
+        },
+        "buy_tree": None, "sell_tree": None, "exit_rules": [],
+    }
+    cfg = H._build_daily_trial_config(backtest_cfg, decoded, hoisted)
+    settings = cfg["experts"][0]["settings"]
+    # FactorRanker now reads the metric_store dynamic-universe path off its OWN settings.
+    assert settings["universe_source"] == "screener"
+    assert settings["screener_store"] == "/tmp/mstore_unit"
+    # Base screener settings overlaid with per-individual decoded genes (the screener_*-prefixed
+    # keys FactorRanker._metric_store_settings translates).
+    assert settings["screener_price_min"] == 20.0
+    assert settings["screener_market_cap_min"] == 5e9
+    assert settings["screener_relative_volume_min"] == 1.5
+    assert settings["screener_price_drop_pct"] == 4.0
+    assert settings["screener_max_stocks"] == 20
+    # The expert's own model:* override still wins, and tp/sl are NOT leaked (bypass).
+    assert settings["top_n"] == 15
+    assert settings["weighting"] == "equal"
+    assert "initial_tp_percent" not in settings and "initial_sl_percent" not in settings
+    # The classic screener_runtime block is still built (the non-bypass entry-gate path is intact).
+    assert cfg["screener_runtime"] is not None
+    assert cfg["screener_runtime"]["store"] == "/tmp/mstore_unit"
+    # The run-level backtest_cfg must NOT be mutated.
+    assert backtest_cfg["experts"][0]["settings"] == {"weighting": "equal"}
+
+
+def test_build_daily_trial_config_non_bypass_screener_untouched():
+    """A NON-bypass screener run (apply_to_expert_settings False / absent) must NOT push
+    universe_source / screener_store onto the expert settings — only the classic
+    ``screener_runtime`` gate carries the screener (behaviour UNCHANGED)."""
+    backtest_cfg = {
+        "backtest_id": 12,
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-08",
+        "enabled_instruments": ["AAPL", "MSFT"],
+        "experts": [{"class": "FMPRating", "settings": {}}],
+        "initial_capital": 100000.0,
+        "account_settings": {"starting_cash": 100000.0},
+        "warmup_days": 30,
+        "seed": 42,
+        "screener_opt": {"store": "/tmp/mstore_unit", "base_settings": {}, "cadence_days": 7},
+    }
+    hoisted = {
+        "backtest_cfg": backtest_cfg,
+        "screener_store": "/tmp/mstore_unit",
+        "screener_base": {},
+        "screener_cadence_days": 7,
+        "screener_apply_to_expert_settings": False,
+    }
+    decoded = {
+        "tp": 8.0, "sl": 3.0,
+        "expert_overrides": {"profit_ratio": 1.0},
+        "screener_overrides": {"screener_market_cap_min": 5e9},
+        "buy_tree": None, "sell_tree": None, "exit_rules": [],
+    }
+    cfg = H._build_daily_trial_config(backtest_cfg, decoded, hoisted)
+    settings = cfg["experts"][0]["settings"]
+    assert "universe_source" not in settings
+    assert "screener_store" not in settings
+    assert "screener_market_cap_min" not in settings
+    # The classic gate still carries the screener for the non-bypass path.
+    assert cfg["screener_runtime"] is not None
+    assert cfg["screener_runtime"]["settings"]["screener_market_cap_min"] == 5e9
+
+
 def test_all_trials_failing_marks_optimization_failed():
     """Trust guard: if every trial errors (here: engine='stub' is not a real engine and is
     NOT monkeypatched), the run must report 'failed', not silently 'completed' with 0 trials."""

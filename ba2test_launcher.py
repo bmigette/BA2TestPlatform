@@ -926,6 +926,15 @@ def _cmd_optimize(args) -> int:
                 "store": args.screener_store,
                 "base_settings": base,
                 "cadence_days": int(args.screener_cadence_days),  # default 7 = weekly
+                # BYPASS experts (e.g. FactorRanker) ignore the classic entry-gate path, so the
+                # CLASSIC `screener_runtime` gate (which gates entries to the per-day screened
+                # universe) has no effect on them. Instead they read `universe_source` /
+                # `screener_store` / `screener_*` straight off their OWN expert settings to build
+                # their DYNAMIC universe from the fast metric_store. This flag tells
+                # `_build_daily_trial_config` to push the store + decoded screener genes onto the
+                # bypass expert's per-trial settings each generation. For NON-bypass experts the
+                # flag is False and only the classic `screener_runtime` path applies (unchanged).
+                "apply_to_expert_settings": bool(spec.get("bypass")),
             }
             from ba2_providers.screener import metric_store as _ms
             store_syms = sorted(str(s) for s in _ms.load_store(args.screener_store)["symbol"].unique())

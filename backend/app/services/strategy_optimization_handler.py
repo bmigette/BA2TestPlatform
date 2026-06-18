@@ -576,6 +576,13 @@ def _build_hoisted_state(backtest_cfg: Dict[str, Any]) -> Dict[str, Any]:
         hoisted["screener_store"] = screener_opt["store"]
         hoisted["screener_base"] = screener_opt.get("base_settings", {})
         hoisted["screener_cadence_days"] = int(screener_opt.get("cadence_days", 7))  # default weekly
+        # BYPASS experts (e.g. FactorRanker) build their DYNAMIC universe from the metric store by
+        # reading universe_source / screener_store / screener_* off their OWN settings — NOT the
+        # classic ``screener_runtime`` entry gate. When the launcher tags this run for a bypass
+        # expert, push those settings onto the expert's per-trial config (see _build_daily_trial_config).
+        hoisted["screener_apply_to_expert_settings"] = bool(
+            screener_opt.get("apply_to_expert_settings")
+        )
     return hoisted
 
 
@@ -666,17 +673,46 @@ def _build_daily_trial_config(
     initial_tp = None if bypass else decoded.get("tp")
     initial_sl = None if bypass else decoded.get("sl")
 
+    # BYPASS-expert screener wiring: a bypass expert (e.g. FactorRanker) builds its DYNAMIC
+    # universe from the fast metric_store by reading ``universe_source`` / ``screener_store`` /
+    # ``screener_*`` off its OWN settings — it does NOT consult the classic ``screener_runtime``
+    # entry gate (which only affects the classic entry-gate path). So when the run is tagged to
+    # apply the screener to the bypass expert's settings, push the store path + universe_source +
+    # the decoded per-individual screener genes onto that expert's per-trial settings so the GA
+    # optimizes its screener thresholds each generation. (The screener_overrides keys are the
+    # ``screener_*``-prefixed names FactorRanker._metric_store_settings() translates.) For
+    # non-bypass / non-screener runs this dict is empty and nothing changes.
+    bypass_screener_settings: Dict[str, Any] = {}
+    if (
+        bypass
+        and hoisted
+        and hoisted.get("screener_store")
+        and hoisted.get("screener_apply_to_expert_settings")
+    ):
+        bypass_screener_settings = {
+            "universe_source": "screener",
+            "screener_store": hoisted["screener_store"],
+            # Base (run-level, non-optimized) screener settings overlaid with the per-individual
+            # decoded screener genes — same precedence as the classic screener_runtime path.
+            **(hoisted.get("screener_base") or {}),
+            **(decoded.get("screener_overrides") or {}),
+        }
+
     # Merge the per-trial overrides into each expert spec's settings (do NOT mutate the
-    # run-level backtest_cfg — build fresh spec dicts).
+    # run-level backtest_cfg — build fresh spec dicts). The bypass screener settings are layered
+    # UNDER the model:* overrides so an explicitly-optimized expert param still wins.
     experts_in = backtest_cfg["experts"]
     experts_out = []
     for spec in experts_in:
         if isinstance(spec, dict):
             merged_settings = dict(spec.get("settings") or {})
+            merged_settings.update(bypass_screener_settings)
             merged_settings.update(overrides)
             experts_out.append({"class": spec["class"], "settings": merged_settings})
         else:
-            experts_out.append({"class": spec, "settings": dict(overrides)})
+            merged_settings = dict(bypass_screener_settings)
+            merged_settings.update(overrides)
+            experts_out.append({"class": spec, "settings": merged_settings})
 
     # SCREENER runtime: when the run hoisted a metric store, this individual's EFFECTIVE screener
     # settings are base (run-level, non-optimized) overlaid with the per-individual decoded
