@@ -235,7 +235,7 @@ const Dashboard: React.FC = () => {
               <p className="text-sm">Create datasets and run optimization jobs to see activity here</p>
             </div>
           ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+            <div className="space-y-3 max-h-[calc(100vh-15rem)] overflow-y-auto pr-2">
               {recentActivity.map((item) => (
                 <div
                   key={item.id}
@@ -250,11 +250,11 @@ const Dashboard: React.FC = () => {
                       {formatTimestamp(item.timestamp)}
                     </p>
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    item.type === 'job' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' :
-                    item.type === 'dataset' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300' :
-                    item.type === 'model' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' :
-                    'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300'
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                    item.type === 'job' ? 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:border-blue-500/40' :
+                    item.type === 'dataset' ? 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-500/15 dark:text-purple-200 dark:border-purple-500/40' :
+                    item.type === 'model' ? 'bg-green-100 text-green-800 border-green-200 dark:bg-green-500/15 dark:text-green-200 dark:border-green-500/40' :
+                    'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:border-amber-500/40'
                   }`}>
                     {item.type}
                   </span>
