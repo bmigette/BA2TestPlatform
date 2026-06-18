@@ -134,8 +134,8 @@ export function OptJobSettingsDetail({ s }: { s: OptJobSettings }) {
         <div>
           <div className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Screener</div>
           <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-800 dark:text-gray-200">
-            {s.screener?.group && <span><span className="text-gray-500 dark:text-gray-400">group:</span> {s.screener.group}</span>}
-            {s.screener?.cache_db && <span className="truncate max-w-xs"><span className="text-gray-500 dark:text-gray-400">cache:</span> {s.screener.cache_db}</span>}
+            {s.screener?.screener_store && <span className="truncate max-w-xs"><span className="text-gray-500 dark:text-gray-400">store:</span> {s.screener.screener_store}</span>}
+            {s.screener?.screener_cadence_days != null && <span><span className="text-gray-500 dark:text-gray-400">cadence:</span> {s.screener.screener_cadence_days}d</span>}
           </div>
           {screenerEntries.length > 0 && (
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5 text-gray-800 dark:text-gray-200">

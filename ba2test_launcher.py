@@ -7,7 +7,7 @@ covers the platform's operations without the API:
   ba2-test serve [--host --port --reload]      launch the FastAPI API (uvicorn app.main:app)
   ba2-test backtest <run_daily_backtest args>  run a daily expert backtest (full passthrough)
   ba2-test fetch-cache --symbols .. [...]       populate the as-of OHLCV cache
-  ba2-test fetch-screener --settings-json F ..  build the survivorship-free screener history
+  ba2-test build-screener-metrics --store .. [..] build the screener metric_store (parquet)
   ba2-test fetch-options --underlyings .. [...]  build the offline options cache from Alpaca
   ba2-test cache-usage                          show cache disk usage per type
   ba2-test cache-clear [--type T] [--before D]  clear cache (all, or one type, optional date)
@@ -51,7 +51,7 @@ def _enter_backend() -> str:
         pass
     # The test platform's legacy OHLCV providers read FMP_API_KEY from the ENV, but the key is
     # configured in the trade app-settings DB (ba2_common). Mirror it into the env (in-process
-    # only — never written to disk) so fetch-cache/fetch-screener resolve it, matching how the
+    # only — never written to disk) so fetch-cache/build-screener-metrics resolve it, matching how the
     # backtest path forwards the key. No-op if already set or unavailable.
     if not os.getenv("FMP_API_KEY"):
         try:
@@ -319,29 +319,6 @@ def _cmd_prewarm(args) -> int:
             "if not already cached, run: ba2-test fetch-cache --symbols <universe> --timeframes 1d "
             "--start <backtest_start_minus_~450d> --end <backtest_end>"
         )
-    return 0
-
-
-def _cmd_fetch_screener(args) -> int:
-    from app.services.screener_history_cache import ScreenerHistoryCache, screened_universe_for_bar
-    with open(args.settings_json, "r", encoding="utf-8") as fh:
-        settings = json.load(fh)
-    start = datetime.fromisoformat(args.start)
-    end = datetime.fromisoformat(args.end)
-    _parent = os.path.dirname(args.cache_db)
-    if _parent:
-        os.makedirs(_parent, exist_ok=True)
-    cache = ScreenerHistoryCache(args.cache_db)
-    # Walk scan dates at the requested cadence (calendar days) and build/replay each bar.
-    from datetime import timedelta
-    built = 0
-    d = start
-    while d <= end:
-        rows = screened_universe_for_bar(settings, d, args.group, cache)
-        print(f"{d.date()}: {len(rows)} survivors")
-        built += 1
-        d += timedelta(days=max(1, args.cadence_days))
-    print(f"done: {built} scan dates into {args.cache_db}")
     return 0
 
 
@@ -1420,12 +1397,10 @@ def main(argv: "list | None" = None) -> int:
     try:
         from ba2_common.config import (
             SCREENER_STORE_DIR as _DEFAULT_SCREENER_STORE_DIR,
-            SCREENER_HISTORY_DB as _DEFAULT_SCREENER_HISTORY_DB,
             OPTIONS_CACHE_DB as _DEFAULT_OPTIONS_CACHE_DB,
         )
     except Exception:  # pragma: no cover - ba2_common always installed in practice
         _DEFAULT_SCREENER_STORE_DIR = None
-        _DEFAULT_SCREENER_HISTORY_DB = None
         _DEFAULT_OPTIONS_CACHE_DB = None
 
     p = argparse.ArgumentParser(prog="ba2-test", description="BA2 Test Platform CLI.")
@@ -1461,15 +1436,6 @@ def main(argv: "list | None" = None) -> int:
     pw.add_argument("--workers", type=int, default=5, help="Parallel fetch threads (default 5).")
     pw.add_argument("--end", default=None,
                     help="ISO end date for the earnings/insider in-Python filter (default today).")
-
-    fs = sub.add_parser("fetch-screener", help="Build the screener-history cache for a range.")
-    fs.add_argument("--settings-json", required=True, help="Path to a JSON file of screener settings.")
-    fs.add_argument("--start", required=True, help="ISO start date.")
-    fs.add_argument("--end", required=True, help="ISO end date.")
-    fs.add_argument("--group", default="cli", help="Group label for the cached survivors.")
-    fs.add_argument("--cache-db", default=_DEFAULT_SCREENER_HISTORY_DB,
-                    help=f"Path to the screener-history SQLite cache (default {_DEFAULT_SCREENER_HISTORY_DB}).")
-    fs.add_argument("--cadence-days", type=int, default=7, help="Days between scan dates (default 7).")
 
     bm = sub.add_parser("build-screener-metrics", help="Build/extend the screener METRIC store (parquet).")
     bm.add_argument("--store", default=_DEFAULT_SCREENER_STORE_DIR,
@@ -1600,7 +1566,6 @@ def main(argv: "list | None" = None) -> int:
         "serve": lambda: _cmd_serve(args),
         "fetch-cache": lambda: _cmd_fetch_cache(args),
         "prewarm": lambda: _cmd_prewarm(args),
-        "fetch-screener": lambda: _cmd_fetch_screener(args),
         "build-screener-metrics": lambda: _cmd_build_screener_metrics(args),
         "fetch-options": lambda: _cmd_fetch_options(args),
         "cache-usage": lambda: _cmd_cache_usage(args),

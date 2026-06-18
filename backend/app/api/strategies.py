@@ -346,10 +346,10 @@ def export_optimization_settings(opt_id: int, db: Session = Depends(get_db)):
             "mode": "screener",
             "screener_settings": universe.get("screener_settings") or {},
         }
-        if universe.get("group") is not None:
-            universe_out["group"] = universe["group"]
-        if universe.get("cache_db") is not None:
-            universe_out["cache_db"] = universe["cache_db"]
+        if universe.get("screener_store") is not None:
+            universe_out["screener_store"] = universe["screener_store"]
+        if universe.get("screener_cadence_days") is not None:
+            universe_out["screener_cadence_days"] = universe["screener_cadence_days"]
     else:
         universe_out = {"mode": universe.get("mode")}
 
@@ -746,7 +746,7 @@ def _opt_settings_summary(cfg: Optional[dict]) -> dict:
     if universe.get("mode") == "screener":
         summary["screener"] = {
             k: universe[k]
-            for k in ("screener_settings", "group", "cache_db")
+            for k in ("screener_settings", "screener_store", "screener_cadence_days")
             if k in universe
         }
     return summary

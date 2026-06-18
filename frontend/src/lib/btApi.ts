@@ -77,8 +77,8 @@ export interface OptParamRange {
 }
 export interface OptScreenerSettings {
   screener_settings?: Record<string, number | string>;
-  group?: string;
-  cache_db?: string;
+  screener_store?: string;
+  screener_cadence_days?: number;
 }
 export interface OptJobSettings {
   ga: Partial<Record<

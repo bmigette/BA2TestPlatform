@@ -257,6 +257,49 @@ def handle_daily_backtest(task_id: str, payload: Dict[str, Any]) -> Dict[str, An
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+# metric_store.screen_universe_as_of reads these UNPREFIXED keys (see ba2_providers.screener
+# .metric_store.screen_universe_for_day). The UI / saved screener_settings may carry a
+# ``screener_`` prefix (base-interface naming) and extra keys metric_store doesn't use
+# (float_*/price_drop_days) — map to the recognized subset so the per-bar gate gets a clean dict.
+_METRIC_STORE_KEYS = (
+    "market_cap_min", "market_cap_max", "price_min", "price_max",
+    "volume_min", "volume_max", "relative_volume_min", "price_drop_pct",
+    "weinstein_stage2_only", "max_stocks", "sort_metric",
+)
+
+
+def _metric_store_settings(screener_settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a universe ``screener_settings`` dict to metric_store's unprefixed key subset."""
+    out: Dict[str, Any] = {}
+    for k, v in (screener_settings or {}).items():
+        key = k[len("screener_"):] if k.startswith("screener_") else k
+        if key in _METRIC_STORE_KEYS and v is not None:
+            out[key] = v
+    return out
+
+
+def _build_screener_runtime(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """For a ``universe.mode=='screener'`` run, build the per-bar gate config the engine reads.
+
+    ``{store, settings, cadence_days}`` — identical shape to the optimizer's
+    ``strategy_optimization_handler._build_daily_trial_config``. The engine's
+    ``_screened_symbols_for_bar`` resolves ``metric_store.screen_universe_as_of`` at each bar
+    (point-in-time, cached), restricting entries to that bar's survivors. None for non-screener
+    runs -> the engine gate is a no-op (byte-identical to a static run).
+    """
+    universe = payload.get("universe") or {}
+    if universe.get("mode") != "screener":
+        return None
+    store = universe.get("screener_store")
+    if not store:
+        return None
+    return {
+        "store": store,
+        "settings": _metric_store_settings(universe.get("screener_settings") or {}),
+        "cadence_days": int(universe.get("screener_cadence_days") or 7),
+    }
+
+
 def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Parse + assemble the engine run config from the validated payload.
 
@@ -359,53 +402,46 @@ def _build_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # when the strategy's exit/RM rules name an option action; absent/None -> equity-only
         # (unchanged).
         "options_cache_db": options_cache_db,
+        # Screener (universe.mode=='screener'): per-bar metric_store entry gate (point-in-time,
+        # cached) — same mechanism the optimizer uses. None for static runs (engine gate no-op).
+        "screener_runtime": _build_screener_runtime(payload),
     }
 
 
 def _resolve_enabled_instruments(
     payload: Dict[str, Any], start_date: datetime, end_date: datetime
 ) -> List[str]:
-    """Resolve the run's instrument list: static symbols OR an offline screener-cache union.
+    """Resolve the run's instrument list: static symbols OR the screener metric_store union.
 
     Two universe shapes are supported (discriminated by ``payload['universe']['mode']``):
 
       * static (default, or ``universe.mode == 'static'``): the explicit ``enabled_instruments``
         list the payload carries — behaviour unchanged.
-      * screener (``universe.mode == 'screener'``): resolve the symbols from the OFFLINE
-        screener-history cache (built via ``ba2-test fetch-screener``) by unioning the cached
-        survivors across the scan dates in ``[start_date, end_date]``. READ-ONLY — never
-        live-screens; a cache miss raises ``ScreenerCacheMiss`` which propagates to fail the
-        run early (build the cache first). The screener block carries ``screener_settings`` +
-        ``cache_db`` + ``group`` (no defaults — fail-early per ``backend/CLAUDE.md``).
+      * screener (``universe.mode == 'screener'``): the CANDIDATE superset is the symbol union of
+        the prebuilt ``metric_store`` parquet (``universe.screener_store``, built via
+        ``ba2-test build-screener-metrics``). The engine then GATES entries PER BAR to the
+        point-in-time screened set via ``screener_runtime`` (see ``_build_screener_runtime``) —
+        the SAME path the optimizer uses. (Replaces the old offline ``ScreenerHistoryCache``
+        static-union, which was both non-dynamic AND a lookahead — it admitted names that only
+        passed the screen LATER in the range.)
     """
     universe = payload.get("universe") or {}
     mode = universe.get("mode")
 
     if mode == "screener":
-        from app.services.backtest.universe_resolver import resolve_screener_universe
+        from ba2_providers.screener import metric_store as ms
 
-        screener_settings = universe.get("screener_settings")
-        if screener_settings is None:
-            raise ValueError("universe.screener_settings is required for screener mode")
-        cache_db = universe.get("cache_db")
-        if not cache_db:
-            raise ValueError("universe.cache_db is required for screener mode")
-        group = universe.get("group")
-        if not group:
-            raise ValueError("universe.group is required for screener mode")
-
-        # ScreenerCacheMiss (RuntimeError) is intentionally NOT caught here: it bubbles to the
-        # handler's generic failure path so the run fails with the build-the-cache message.
-        instruments = resolve_screener_universe(
-            screener_settings=screener_settings,
-            start=start_date,
-            end=end_date,
-            cache_db=cache_db,
-            group=group,
-        )
+        store = universe.get("screener_store")
+        if not store:
+            raise ValueError("universe.screener_store is required for screener mode")
+        # The candidate superset = the store's full symbol union; the per-bar screener_runtime
+        # gate restricts entries to each bar's screened survivors. Engine loads OHLCV for all.
+        df = ms.load_store(store)
+        instruments = sorted(str(s) for s in df["symbol"].unique())
         if not instruments:
             raise ValueError(
-                "screener universe resolved to zero symbols for the requested range"
+                f"screener metric_store {store!r} has no symbols (build it first via "
+                f"ba2-test build-screener-metrics)"
             )
         return instruments
 

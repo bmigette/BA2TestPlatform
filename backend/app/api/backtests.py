@@ -66,7 +66,7 @@ class BacktestCreate(BaseModel):
     strategy_params: Optional[dict] = None
     # daily_expert-engine fields (required only when engine == "daily_expert").
     expert: Optional[dict] = None  # {"class": "FMPRating", "settings": {...}}
-    universe: Optional[dict] = None  # {"mode": "static"|"screener", "symbols": [...], "screener_settings": {...}}
+    universe: Optional[dict] = None  # static: {"mode":"static","symbols":[...]} | screener: {"mode":"screener","screener_store":<metric_store dir>,"screener_settings":{...},"screener_cadence_days"?:int}
     # Strategy conditions + initial TP/SL bracket (daily_expert path). When supplied, the
     # buy-entry condition TREE seeds the enter ruleset (seed_ruleset_from_tree) and the TP/SL
     # percents apply per opened position so trades close. All optional: omitted -> the handler
@@ -382,40 +382,27 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
             detail="universe.mode must be 'static' or 'screener' for engine='daily_expert'",
         )
 
-    # Screener mode: the daily handler resolves instruments from the OFFLINE screener-history
-    # cache (built via ``ba2-test fetch-screener``) at run time — READ-ONLY, fail-early on a
-    # cache miss. The create path validates that the screener block carries the criteria +
-    # cache location (no-defaults rule) and passes it through; it does NOT resolve here (the
-    # resolution + fail-fast happens in the task so a cache miss surfaces on the run row).
+    # Screener mode: the candidate universe = the prebuilt metric_store symbol union; the engine
+    # GATES entries PER BAR to the point-in-time screened set (same path as the optimizer). The
+    # create path validates the screener block carries a metric_store dir + criteria and passes
+    # it through; resolution happens in the task (a missing/empty store fails on the run row).
     screener_universe = None
     symbols: list = []
     if mode == "screener":
-        screener_settings = universe.get("screener_settings")
-        if not screener_settings:
+        screener_store = universe.get("screener_store")
+        if not screener_store:
             raise HTTPException(
                 status_code=400,
-                detail="universe.screener_settings is required for universe.mode='screener'",
-            )
-        cache_db = universe.get("cache_db")
-        if not cache_db:
-            raise HTTPException(
-                status_code=400,
-                detail="universe.cache_db is required for universe.mode='screener' "
-                       "(the offline screener-history cache built via ba2-test fetch-screener)",
-            )
-        group = universe.get("group")
-        if not group:
-            raise HTTPException(
-                status_code=400,
-                detail="universe.group is required for universe.mode='screener' "
-                       "(the --group label used when building the cache)",
+                detail="universe.screener_store is required for universe.mode='screener' "
+                       "(the metric_store dir built via ba2-test build-screener-metrics)",
             )
         screener_universe = {
             "mode": "screener",
-            "screener_settings": screener_settings,
-            "cache_db": cache_db,
-            "group": group,
+            "screener_store": screener_store,
+            "screener_settings": universe.get("screener_settings") or {},
         }
+        if universe.get("screener_cadence_days") is not None:
+            screener_universe["screener_cadence_days"] = universe["screener_cadence_days"]
     else:
         symbols = universe.get("symbols") or []
         if not symbols:
@@ -465,8 +452,9 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
     experts_payload = [{"class": expert_class, "settings": expert_settings}]
 
     # Universe plumbing: static runs carry the explicit symbol list; screener runs carry the
-    # ``universe`` block (mode/screener_settings/cache_db/group) which the handler resolves
-    # from the offline cache (read-only, fail-fast on a miss).
+    # ``universe`` block (mode/screener_store/screener_settings) — the handler uses the
+    # metric_store symbol union as the candidate set and gates entries per bar (fail-fast if
+    # the store is missing/empty).
     payload = {
         'backtest_id': db_backtest.id,
         'name': backtest.name,
@@ -487,7 +475,7 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
         payload['run_schedule_override'] = run_schedule_override
     if screener_universe is not None:
         payload['universe'] = screener_universe
-        universe_desc = f"screener cache (group {screener_universe['group']})"
+        universe_desc = f"screener metric_store ({screener_universe['screener_store']})"
     else:
         payload['enabled_instruments'] = list(symbols)
         universe_desc = f"{len(symbols)} instruments"

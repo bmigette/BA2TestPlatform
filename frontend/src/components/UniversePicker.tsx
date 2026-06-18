@@ -10,7 +10,13 @@ export type UniverseValue =
   | { mode: 'static'; symbols: string[] }
   | {
       mode: 'screener';
+      // Path to the prebuilt metric_store parquet dir (built by `ba2-test build-screener-metrics`).
+      // The candidate universe = the store's symbol union; the engine gates entries PER BAR
+      // (point-in-time) from it. Required to run a screener backtest.
+      screener_store: string;
       screener_settings: Record<string, number | string>;
+      // Optional rebuild cadence for the per-bar screen (days); backend defaults to 7 (weekly).
+      screener_cadence_days?: number;
       // Optional GA ranges for the optimizer; absent => behaves as a plain backtest.
       screener_param_ranges?: Record<string, ScreenerOptRange>;
     };
@@ -50,15 +56,24 @@ export function UniversePicker({ value, onChange }: { value: UniverseValue; onCh
 
   // Snapshot the screener variant for the helpers below. Each helper rebuilds the
   // discriminated-union value so existing callers keep getting a typed UniverseValue.
+  const screenerStore = value.mode === 'screener' ? (value.screener_store ?? '') : '';
+  const screenerCadence = value.mode === 'screener' ? value.screener_cadence_days : undefined;
   const screenerSettings = value.mode === 'screener' ? value.screener_settings : {};
   const screenerRanges = value.mode === 'screener' ? (value.screener_param_ranges ?? {}) : {};
 
-  const setSetting = (k: string, v: number | string) =>
+  // Rebuild the screener value, preserving store/cadence/settings/ranges, applying overrides.
+  const emitScreener = (over: Partial<Extract<UniverseValue, { mode: 'screener' }>> = {}) =>
     onChange({
       mode: 'screener',
-      screener_settings: { ...screenerSettings, [k]: v },
+      screener_store: screenerStore,
+      screener_settings: screenerSettings,
+      ...(screenerCadence != null ? { screener_cadence_days: screenerCadence } : {}),
       ...(Object.keys(screenerRanges).length ? { screener_param_ranges: screenerRanges } : {}),
+      ...over,
     });
+
+  const setSetting = (k: string, v: number | string) =>
+    emitScreener({ screener_settings: { ...screenerSettings, [k]: v } });
 
   const setRange = (key: string, on: boolean, range?: Partial<ScreenerOptRange>, def?: ScreenerOptRange) => {
     const ranges = { ...screenerRanges };
@@ -73,11 +88,7 @@ export function UniversePicker({ value, onChange }: { value: UniverseValue; onCh
     } else {
       delete ranges[key];
     }
-    onChange({
-      mode: 'screener',
-      screener_settings: screenerSettings,
-      ...(Object.keys(ranges).length ? { screener_param_ranges: ranges } : {}),
-    });
+    emitScreener({ screener_param_ranges: Object.keys(ranges).length ? ranges : undefined });
   };
 
   return (
@@ -87,7 +98,7 @@ export function UniversePicker({ value, onChange }: { value: UniverseValue; onCh
           <input type="radio" checked={value.mode === 'static'} onChange={() => onChange({ mode: 'static', symbols: value.mode === 'static' ? value.symbols : [] })} /> Static list
         </label>
         <label className="flex items-center gap-1 text-sm text-gray-700 dark:text-gray-300">
-          <input type="radio" checked={value.mode === 'screener'} onChange={() => onChange({ mode: 'screener', screener_settings: value.mode === 'screener' ? value.screener_settings : {} })} /> Screener
+          <input type="radio" checked={value.mode === 'screener'} onChange={() => onChange({ mode: 'screener', screener_store: screenerStore, screener_settings: value.mode === 'screener' ? value.screener_settings : {} })} /> Screener
         </label>
       </div>
 
@@ -108,6 +119,23 @@ export function UniversePicker({ value, onChange }: { value: UniverseValue; onCh
         </div>
       ) : (
         <div className="space-y-2">
+          {/* metric_store dir: the candidate universe + per-bar (point-in-time) screen source. */}
+          <div className="flex items-center justify-between gap-3 p-2 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600">
+            <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">
+              Metric store dir
+              <span className="block text-xs text-gray-500 dark:text-gray-400">built by <code>ba2-test build-screener-metrics</code></span>
+            </span>
+            <input type="text" className={`${inputClass} w-64`} placeholder="/path/to/metric_store"
+              value={screenerStore}
+              onChange={(e) => emitScreener({ screener_store: e.target.value })} />
+          </div>
+          <div className="flex items-center justify-between gap-3 p-2 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600">
+            <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">Screen cadence (days)</span>
+            <input type="number" className={`${inputClass} w-24`} placeholder="7"
+              value={screenerCadence ?? ''}
+              onChange={(e) => emitScreener({ screener_cadence_days: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          </div>
+
           {SCREENER_NUMBER_FIELDS.map(([k, label]) => (
             <div key={k} className="flex items-center justify-between gap-3 p-2 bg-gray-50 dark:bg-gray-700/50 rounded border border-gray-200 dark:border-gray-600">
               <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">{label}</span>
