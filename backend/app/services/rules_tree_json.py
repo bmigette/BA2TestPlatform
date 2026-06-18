@@ -8,12 +8,14 @@ become flag leaves (no operator/value) and are re-added on seed-back.
 import uuid
 from typing import Any, Dict, List
 
-from app.services.backtest.default_rulesets import _FIELD_EVENT
+# Single source of truth: the canonical field/flag maps live in ba2_common.core.rule_builders.
+from ba2_common.core.rule_builders import FIELD_EVENT as _FIELD_EVENT, FLAG_FIELD_EVENT
 
 # event_type value -> strategy field (reverse of _FIELD_EVENT, by enum .value)
 _EVENT_FIELD = {et.value: field for field, et in _FIELD_EVENT.items()}
-# flag event_types kept as flag leaves
-_FLAG_EVENTS = {"bullish", "bearish", "has_no_position"}
+# flag event_types kept as flag leaves — the COMPLETE flag vocabulary (all 16), not a 3-flag
+# subset. Derived from the shared FLAG_FIELD_EVENT so it can never drift again.
+_FLAG_EVENTS = set(FLAG_FIELD_EVENT.keys())
 
 
 def _new_id() -> str:

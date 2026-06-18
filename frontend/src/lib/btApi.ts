@@ -180,6 +180,19 @@ export const importLiveRuleset = (expertId: number) =>
 export const importLiveEnterMarket = (expertId: number) =>
   jget<{ buy_entry_conditions: any; sell_entry_conditions: any }>(`/experts/${expertId}/enter-market-ruleset`);
 
+// Convert a LIVE-platform ruleset EXPORT FILE (export_type rulesets/ruleset/rule) into the
+// backtester's strategy shapes. DB-free — pure transform of the uploaded JSON, so it works
+// without a live-DB connection (unlike the /experts/{id}/* endpoints).
+//   POST /ruleset/convert-live  body {payload} -> {buy_entry_conditions, sell_entry_conditions, exit_conditions, summary}
+export interface ConvertLiveResult {
+  buy_entry_conditions: any;
+  sell_entry_conditions: any;
+  exit_conditions: any[];
+  summary?: Record<string, number>;
+}
+export const convertLiveRuleset = (payload: unknown) =>
+  jpost<ConvertLiveResult>('/ruleset/convert-live', { payload });
+
 // ---------------------------------------------------------------------------
 // Data build / prewarm endpoints (async). Each returns either {task_id} or
 // {tasks:[...]}; poll GET /api/tasks/{id} (listTasks/getTask) for progress.

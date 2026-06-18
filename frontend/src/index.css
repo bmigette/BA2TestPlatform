@@ -337,6 +337,43 @@ body {
 .dark .hover\:bg-gray-50:hover { background-color: rgb(30 41 59) !important; }
 .dark .hover\:bg-gray-100:hover { background-color: rgb(51 65 85) !important; }
 
+/* ----------------------------------------------------------------------------
+   Colored light backgrounds (bg-<color>-50) in dark mode.
+   This app's dark mode is driven by `.dark .<light-class>` overrides, NOT by
+   Tailwind's native `dark:` variant (which is media-query gated and never fires
+   while the app toggles a `.dark` class). Components pair a light `bg-blue-50`
+   with a `dark:bg-blue-900/NN` that does nothing here — so the light `-50`
+   surface bleeds through and selected/toggle/import buttons render near-white,
+   breaking the dark theme. Darken every colored `-50` surface (and its hover
+   form) to a subtle tint matching the intended `dark:bg-<color>-900/20-30` look
+   (≈ the color-900 blended over the slate-800 panel). The existing
+   `.dark .bg-<color>-50 p/span` text rules already assume a dark surface here. */
+.dark .bg-blue-50    { background-color: rgb(30 46 83)  !important; }
+.dark .bg-green-50   { background-color: rgb(27 54 55)  !important; }
+.dark .bg-purple-50  { background-color: rgb(47 37 82)  !important; }
+.dark .bg-red-50     { background-color: rgb(59 37 50)  !important; }
+.dark .bg-amber-50   { background-color: rgb(57 45 46)  !important; }
+.dark .bg-yellow-50  { background-color: rgb(55 48 47)  !important; }
+.dark .bg-orange-50  { background-color: rgb(58 42 47)  !important; }
+.dark .bg-indigo-50  { background-color: rgb(36 43 80)  !important; }
+.dark .bg-cyan-50    { background-color: rgb(28 52 71)  !important; }
+.dark .bg-pink-50    { background-color: rgb(60 36 61)  !important; }
+.dark .bg-teal-50    { background-color: rgb(27 52 64)  !important; }
+.dark .bg-sky-50     { background-color: rgb(25 51 74)  !important; }
+.dark .bg-violet-50  { background-color: rgb(44 37 86)  !important; }
+.dark .bg-rose-50    { background-color: rgb(62 34 57)  !important; }
+.dark .bg-lime-50    { background-color: rgb(37 54 47)  !important; }
+.dark .bg-fuchsia-50 { background-color: rgb(55 37 76)  !important; }
+
+.dark .hover\:bg-blue-50:hover    { background-color: rgb(30 46 83)  !important; }
+.dark .hover\:bg-green-50:hover   { background-color: rgb(27 54 55)  !important; }
+.dark .hover\:bg-purple-50:hover  { background-color: rgb(47 37 82)  !important; }
+.dark .hover\:bg-red-50:hover     { background-color: rgb(59 37 50)  !important; }
+.dark .hover\:bg-amber-50:hover   { background-color: rgb(57 45 46)  !important; }
+.dark .hover\:bg-yellow-50:hover  { background-color: rgb(55 48 47)  !important; }
+.dark .hover\:bg-orange-50:hover  { background-color: rgb(58 42 47)  !important; }
+.dark .hover\:bg-indigo-50:hover  { background-color: rgb(36 43 80)  !important; }
+
 .dark .border-gray-100,
 .dark .border-gray-200,
 .dark .border-gray-300 { border-color: rgb(51 65 85) !important; } /* slate-700 borders */

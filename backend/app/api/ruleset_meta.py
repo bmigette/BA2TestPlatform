@@ -27,14 +27,24 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException
 
-from ba2_common.core.rule_builders import FIELD_EVENT, FLAG_FIELD_EVENT
+# All trigger/action <-> condition-tree conversion now lives in ba2_common (single source of
+# truth). This file keeps only the backtester-specific glue: the live-DB SQL readers, the HTTP
+# endpoints, and the vocabulary endpoint.
+from ba2_common.core.rule_builders import (
+    entry_action_side as _entry_action_side,
+    eventaction_to_entry_group as _eventaction_to_entry_group,
+    eventaction_to_exit_rule as _eventaction_to_exit_rule,
+    groups_to_tree as _groups_to_tree,
+    live_export_to_strategy,
+)
 from ba2_common.core.types import (
     ExpertActionType,
     ExpertEventType,
-    ReferenceValue,
     get_reference_value_options,
     is_option_action,
 )
+from pydantic import BaseModel
+
 from app.services.ruleset_presets import EXIT_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -42,26 +52,6 @@ router = APIRouter(prefix="/api")
 
 OPERATORS = [">", ">=", "<", "<=", "==", "!=", "between"]
 _NEEDS_REFERENCE = ("adjust_take_profit", "adjust_stop_loss")
-
-# --- live-import conversion vocabulary (reverse of default_rulesets mappings) -------------
-# ExpertEventType .value -> True if it is a numeric (N_*) condition (carries operator+value).
-_NUMERIC_EVENT_VALUES = {m.value for m in ExpertEventType if m.name.startswith("N_")}
-_FLAG_EVENT_VALUES = {m.value for m in ExpertEventType if m.name.startswith("F_")}
-# live EventAction action_type .value -> API ``action`` value (close/sell/adjust_*/option_*).
-# Identity for every ExpertActionType value (the API ``action`` vocabulary IS the enum value).
-_ACTION_VALUES = {m.value for m in ExpertActionType}
-# action_types whose action_value (the % offset) the UI/optimizer tunes.
-_ADJUST_ACTIONS = {ExpertActionType.ADJUST_TAKE_PROFIT.value, ExpertActionType.ADJUST_STOP_LOSS.value}
-
-# --- enter_market import: reverse of triggers_from_condition_tree (event_type -> field) -----
-# Inverse of the SHARED FIELD_EVENT / FLAG_FIELD_EVENT maps, keyed by ExpertEventType .value.
-# Multiple synonym fields can map to the same event_type (e.g. expected_profit*); the reverse
-# keeps the LAST field per event_type, which is a canonical UI field name — fine for import.
-_EVENT_NUMERIC_FIELD = {et.value: field for field, et in FIELD_EVENT.items()}
-_EVENT_FLAG_FIELD = {et.value: field for field, et in FLAG_FIELD_EVENT.items()}
-# action_types that OPEN a position (which entry-tree the rule's leaves belong to).
-_BUY_ACTION = ExpertActionType.BUY.value
-_SELL_ACTION = ExpertActionType.SELL.value
 
 
 def _label(value: str) -> str:
@@ -104,101 +94,6 @@ def get_vocabulary():
 def get_exit_presets():
     """The packaged default exit-rule presets (each ``rule`` validates against ExitCondition)."""
     return {"presets": EXIT_PRESETS}
-
-
-def _opt_range(value):
-    """Sensible default optimize range for a numeric leaf/action value: ±50%, step ≈ |v|/5.
-
-    Returns ``(min, max, step)``. A zero/None value yields a small symmetric default so the
-    optimizer still has a range to explore. Negative values (e.g. a -3% SL offset) keep the
-    correct ordering (min <= max).
-    """
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        v = 0.0
-    if v == 0.0:
-        return (-1.0, 1.0, 0.2)
-    lo, hi = sorted((v * 0.5, v * 1.5))
-    step = abs(v) / 5.0
-    return (lo, hi, step)
-
-
-def _trigger_to_leaf(idx: int, trig: dict) -> dict | None:
-    """Convert one live EventAction trigger to a ConditionBase-shaped leaf dict, or None.
-
-    Flag triggers (F_*) become value-less leaves; numeric triggers (N_*) carry
-    field/comparison/value and are marked optimizable with a default ±50% range. Unknown
-    event types are skipped (return None) so a partial live rule never breaks the import.
-    """
-    et = trig.get("event_type")
-    leaf_id = f"c{idx}"
-    if et in _FLAG_EVENT_VALUES:
-        return {"id": leaf_id, "field": et, "field_type": "flag"}
-    if et in _NUMERIC_EVENT_VALUES:
-        value = trig.get("value")
-        vmin, vmax, vstep = _opt_range(value)
-        return {
-            "id": leaf_id,
-            "field": et,
-            "field_type": "numeric",
-            "comparison": trig.get("operator") or ">",
-            "value": value,
-            "optimize": True,
-            "optimize_enabled": True,
-            "value_min": vmin,
-            "value_max": vmax,
-            "value_step": vstep,
-        }
-    return None
-
-
-def _eventaction_to_exit_rule(ea_id, name: str, triggers: dict, actions: dict) -> dict | None:
-    """Convert one live ``EventAction`` (open_positions) into an ExitCondition-shaped dict.
-
-    Returns None when the action_type is unknown/unsupported (skip the rule rather than emit
-    something that fails ExitCondition validation). Numeric conditions and adjust action_values
-    are marked optimizable with sensible default ranges; the whole rule carries
-    ``toggle_optimize`` so the optimizer can drop it.
-    """
-    # The live ``actions`` JSON is ``{"<key>": {"action_type": ..., reference_value?, value?}}``.
-    # An open_positions rule has exactly one action; take the first usable one.
-    action_cfg = None
-    for cfg in (actions or {}).values():
-        if isinstance(cfg, dict) and cfg.get("action_type") in _ACTION_VALUES:
-            action_cfg = cfg
-            break
-    if action_cfg is None:
-        return None
-    action = action_cfg["action_type"]
-
-    leaves = []
-    for i, trig in enumerate((triggers or {}).values()):
-        if not isinstance(trig, dict):
-            continue
-        leaf = _trigger_to_leaf(i, trig)
-        if leaf is not None:
-            leaves.append(leaf)
-
-    rule: dict = {
-        "id": f"live-{ea_id}",
-        "name": name,
-        "conditions": {"id": f"grp-{ea_id}", "operator": "AND", "conditions": leaves},
-        "action": action,
-        "toggle_optimize": True,
-    }
-
-    if action in _ADJUST_ACTIONS:
-        rule["reference_value"] = action_cfg.get("reference_value") or ReferenceValue.ORDER_OPEN_PRICE.value
-        av = action_cfg.get("value")
-        rule["action_value"] = av
-        amin, amax, astep = _opt_range(av)
-        rule["action_value_optimize"] = True
-        rule["action_value_min"] = amin
-        rule["action_value_max"] = amax
-        rule["action_value_step"] = astep
-
-    return rule
 
 
 def _expert_ruleset_eas(db_path: str, expert_id: int, ruleset_id_column: str) -> list[dict]:
@@ -291,82 +186,7 @@ def get_open_positions_ruleset(expert_id: int):
     return {"rules": rules}
 
 
-# --- enter_market import (inverse of triggers_from_condition_tree) -------------------------
-
-def _trigger_to_entry_leaf(idx: int, trig: dict) -> dict | None:
-    """Convert one live enter_market trigger to a ConditionBase-shaped tree leaf, or None.
-
-    Inverse of ``triggers_from_condition_tree``: flag triggers (event_type in the flag map)
-    become value-less ``{id, field, field_type:"flag"}`` leaves; numeric triggers become
-    ``{id, field, field_type:"numeric", comparison, value, optimize_enabled, value_min/max/step}``
-    marked optimizable with a default ±50% range. Unknown event_types are skipped (return None)
-    so a partial live rule never breaks the import.
-    """
-    et = trig.get("event_type")
-    leaf_id = f"c{idx}"
-    flag_field = _EVENT_FLAG_FIELD.get(et)
-    if flag_field is not None:
-        return {"id": leaf_id, "field": flag_field, "field_type": "flag"}
-    num_field = _EVENT_NUMERIC_FIELD.get(et)
-    if num_field is not None:
-        value = trig.get("value")
-        vmin, vmax, vstep = _opt_range(value)
-        return {
-            "id": leaf_id,
-            "field": num_field,
-            "field_type": "numeric",
-            "comparison": trig.get("operator") or ">",
-            "value": value,
-            "optimize": True,
-            "optimize_enabled": True,
-            "value_min": vmin,
-            "value_max": vmax,
-            "value_step": vstep,
-        }
-    return None
-
-
-def _eventaction_to_entry_group(ea_id, triggers: dict) -> tuple[dict, list[dict]] | None:
-    """Convert one live enter_market EventAction's triggers into an AND-group of tree leaves.
-
-    Returns ``(group, leaves)`` where ``group`` is ``{id, operator:"AND", conditions:[leaves]}``,
-    or None if the EventAction yields no recognizable leaves (so an all-unknown rule is dropped
-    rather than emitting an empty group).
-    """
-    leaves: list[dict] = []
-    for i, trig in enumerate((triggers or {}).values()):
-        if not isinstance(trig, dict):
-            continue
-        leaf = _trigger_to_entry_leaf(i, trig)
-        if leaf is not None:
-            leaves.append(leaf)
-    if not leaves:
-        return None
-    group = {"id": f"grp-{ea_id}", "operator": "AND", "conditions": leaves}
-    return group, leaves
-
-
-def _entry_action_side(actions: dict) -> str | None:
-    """Return "buy"/"sell" for an enter_market EventAction's open action, or None if neither."""
-    for cfg in (actions or {}).values():
-        if not isinstance(cfg, dict):
-            continue
-        at = cfg.get("action_type")
-        if at == _BUY_ACTION:
-            return "buy"
-        if at == _SELL_ACTION:
-            return "sell"
-    return None
-
-
-def _groups_to_tree(groups: list[dict]) -> dict | None:
-    """Combine AND-groups into one entry condition tree: single group as-is, multiple OR-ed."""
-    if not groups:
-        return None
-    if len(groups) == 1:
-        return groups[0]
-    return {"id": "grp-or", "operator": "OR", "conditions": groups}
-
+# --- enter_market import (uses the shared ba2_common converters) ---------------------------
 
 def _read_live_enter_market_trees(db_path: str, expert_id: int) -> dict:
     """READ-ONLY read of an expert's enter_market ruleset -> buy/sell entry condition trees.
@@ -420,3 +240,26 @@ def get_enter_market_ruleset(expert_id: int):
             detail="could not read live DB; paste the ruleset JSON instead",
         )
     return trees
+
+
+# --- live ruleset EXPORT FILE import (DB-free, pure transform) ------------------------------
+
+class ConvertLiveRequest(BaseModel):
+    payload: dict  # the raw live export-file JSON (export_type rulesets/ruleset/rule)
+
+
+@router.post("/ruleset/convert-live")
+def convert_live_ruleset(req: ConvertLiveRequest):
+    """Convert a LIVE-platform ruleset EXPORT FILE into backtester strategy shapes.
+
+    Unlike the ``/experts/{id}/*`` live-import endpoints this needs NO DB — it is a pure
+    transform of the uploaded JSON (``export_type`` rulesets/ruleset/rule), so the UI can
+    import rules exported from the live platform without a live-DB connection. Returns
+    ``{buy_entry_conditions, sell_entry_conditions, exit_conditions, summary}``. 200 even for a
+    partial file (unknown triggers/actions are skipped); 422 only on a structurally broken body.
+    """
+    try:
+        return live_export_to_strategy(req.payload or {})
+    except Exception as exc:  # noqa: BLE001 — never 500 on a malformed upload
+        logger.warning("convert-live failed: %s", exc)
+        raise HTTPException(status_code=422, detail=f"could not convert ruleset export: {exc}")

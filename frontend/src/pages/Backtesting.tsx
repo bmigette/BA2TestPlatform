@@ -55,7 +55,7 @@ import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
-import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport, listExperts, optimizeBatch } from '../lib/btApi';
+import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, convertLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport, listExperts, optimizeBatch } from '../lib/btApi';
 import type { ExpertInfo, OptimizeBatchJob, OptimizeBatchBody } from '../lib/btApi';
 import { RunningJobsPanel } from '../components/RunningJobsPanel';
 import { OptimizationJobsTable, OptJobSettingsDetail } from '../components/OptimizationJobsTable';
@@ -747,7 +747,7 @@ const Backtesting: React.FC = () => {
   // Import-JSON ruleset (#159): load an expert ruleset JSON file (buy/sell enter trees + exit
   // rules) into the condition builders, normalizing snake->camel so loaded rules populate.
   const rulesetFileRef = useRef<HTMLInputElement>(null);
-  const importRulesetJson = (raw: string) => {
+  const importRulesetJson = async (raw: string) => {
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(raw);
@@ -755,21 +755,45 @@ const Backtesting: React.FC = () => {
       setLiveImportNote({ kind: 'err', text: 'Invalid JSON — could not parse the ruleset file.' });
       return;
     }
-    // Detect live platform trigger/action format (export_type: "rulesets" or "ruleset" with
-    // triggers dict). This format is incompatible with the backtester's condition-tree schema.
+    // Live-platform trigger/action export (export_type rulesets/ruleset/rule). Convert it via
+    // the shared ba2_common converter (POST /api/ruleset/convert-live) and apply the result the
+    // SAME way handleImportFromLive does — so rules round-trip between the live and test platforms.
     const exportType = parsed.export_type as string | undefined;
-    if (exportType === 'rulesets' || exportType === 'ruleset') {
-      const firstRuleset = Array.isArray(parsed.rulesets) ? parsed.rulesets[0] : parsed;
-      const firstRule = Array.isArray((firstRuleset as Record<string, unknown>)?.rules)
-        ? ((firstRuleset as Record<string, unknown>).rules as Record<string, unknown>[])[0]
-        : null;
-      if (firstRule?.triggers) {
+    if (exportType === 'rulesets' || exportType === 'ruleset' || exportType === 'rule') {
+      try {
+        const res = await convertLiveRuleset(parsed);
+        let buyCount = 0;
+        let sellCount = 0;
+        if (res.buy_entry_conditions && isConditionGroup(res.buy_entry_conditions)) {
+          setBuyEntryConditions(res.buy_entry_conditions);
+          buyCount = res.buy_entry_conditions.conditions.length;
+        }
+        if (res.sell_entry_conditions && isConditionGroup(res.sell_entry_conditions)) {
+          setSellEntryConditions(res.sell_entry_conditions);
+          sellCount = res.sell_entry_conditions.conditions.length;
+          // Auto-enable "Allow short" when the imported ruleset carries a short (sell) tree.
+          if (sellCount > 0) setAllowShort(true);
+        }
+        const exitRules = Array.isArray(res.exit_conditions) ? res.exit_conditions : [];
+        setExitConditions(
+          exitRules.map((r, i) => ({
+            ...exitConditionFromStored(r as Record<string, unknown>),
+            id: `exit-live-${Date.now()}-${i}`,
+          })),
+        );
+        const skipped = res.summary?.skipped_rules ?? 0;
+        setLiveImportNote({
+          kind: 'ok',
+          text: `Imported live ruleset: ${buyCount} buy / ${sellCount} sell condition(s), ${exitRules.length} exit rule(s)`
+            + (skipped ? ` (${skipped} rule(s) skipped: no backtester equivalent).` : '.'),
+        });
+      } catch (e) {
         setLiveImportNote({
           kind: 'err',
-          text: 'This file contains live platform rulesets (trigger/action format). The backtester uses a different condition-tree schema — they cannot be imported directly. Recreate the conditions using the condition builder below.',
+          text: 'Could not convert the live ruleset file. ' + (e instanceof Error ? e.message : ''),
         });
-        return;
       }
+      return;
     }
     try {
       const buyRaw = parsed.buy_entry_conditions ?? parsed.buyEntryConditions;
