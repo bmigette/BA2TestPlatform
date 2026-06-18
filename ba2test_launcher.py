@@ -301,6 +301,9 @@ def _cmd_fetch_screener(args) -> int:
         settings = json.load(fh)
     start = datetime.fromisoformat(args.start)
     end = datetime.fromisoformat(args.end)
+    _parent = os.path.dirname(args.cache_db)
+    if _parent:
+        os.makedirs(_parent, exist_ok=True)
     cache = ScreenerHistoryCache(args.cache_db)
     # Walk scan dates at the requested cadence (calendar days) and build/replay each bar.
     from datetime import timedelta
@@ -368,6 +371,7 @@ def _cmd_build_screener_metrics(args) -> int:
     def _shares(sym):
         return _shares_by_sym.get(sym)
 
+    os.makedirs(args.store, exist_ok=True)
     summary = ms.build_store(
         args.store, api_key, args.start, args.end,
         market_cap_min=args.market_cap_min, price_min=args.price_min, volume_min=args.volume_min,
@@ -383,6 +387,9 @@ def _cmd_fetch_options(args) -> int:
     from datetime import date
     unders = (open(args.underlyings[1:]).read().split() if args.underlyings.startswith("@")
               else [s.strip() for s in args.underlyings.split(",") if s.strip()])
+    _parent = os.path.dirname(args.cache_db)
+    if _parent:
+        os.makedirs(_parent, exist_ok=True)
     fetch_options.build_cache(args.cache_db, unders, date.fromisoformat(args.start),
                               date.fromisoformat(args.end), args.feed)
     return 0
@@ -1380,6 +1387,20 @@ def main(argv: "list | None" = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _enter_backend()
 
+    # Default cache locations for the data-build commands. Resolved from the shared
+    # ba2_common config so NOTHING is cached inside the repo: screener caches under
+    # the trade bucket, options under common. All remain overridable via the flags.
+    try:
+        from ba2_common.config import (
+            SCREENER_STORE_DIR as _DEFAULT_SCREENER_STORE_DIR,
+            SCREENER_HISTORY_DB as _DEFAULT_SCREENER_HISTORY_DB,
+            OPTIONS_CACHE_DB as _DEFAULT_OPTIONS_CACHE_DB,
+        )
+    except Exception:  # pragma: no cover - ba2_common always installed in practice
+        _DEFAULT_SCREENER_STORE_DIR = None
+        _DEFAULT_SCREENER_HISTORY_DB = None
+        _DEFAULT_OPTIONS_CACHE_DB = None
+
     p = argparse.ArgumentParser(prog="ba2-test", description="BA2 Test Platform CLI.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -1419,11 +1440,13 @@ def main(argv: "list | None" = None) -> int:
     fs.add_argument("--start", required=True, help="ISO start date.")
     fs.add_argument("--end", required=True, help="ISO end date.")
     fs.add_argument("--group", default="cli", help="Group label for the cached survivors.")
-    fs.add_argument("--cache-db", required=True, help="Path to the screener-history SQLite cache.")
+    fs.add_argument("--cache-db", default=_DEFAULT_SCREENER_HISTORY_DB,
+                    help=f"Path to the screener-history SQLite cache (default {_DEFAULT_SCREENER_HISTORY_DB}).")
     fs.add_argument("--cadence-days", type=int, default=7, help="Days between scan dates (default 7).")
 
     bm = sub.add_parser("build-screener-metrics", help="Build/extend the screener METRIC store (parquet).")
-    bm.add_argument("--store", required=True, help="Path to the parquet metric-store dir.")
+    bm.add_argument("--store", default=_DEFAULT_SCREENER_STORE_DIR,
+                    help=f"Path to the parquet metric-store dir (default {_DEFAULT_SCREENER_STORE_DIR}).")
     bm.add_argument("--start", required=True)
     bm.add_argument("--end", required=True)
     bm.add_argument("--market-cap-min", type=float, required=True, help="LOOSEST cap bound (shortlist superset).")
@@ -1436,7 +1459,8 @@ def main(argv: "list | None" = None) -> int:
     fo.add_argument("--underlyings", required=True, help="Comma-separated symbols, or @file.")
     fo.add_argument("--start", required=True, help="ISO start date (>= 2024-02-01).")
     fo.add_argument("--end", required=True, help="ISO end date.")
-    fo.add_argument("--cache-db", required=True, help="Path to the options-history SQLite cache.")
+    fo.add_argument("--cache-db", default=_DEFAULT_OPTIONS_CACHE_DB,
+                    help=f"Path to the options-history SQLite cache (default {_DEFAULT_OPTIONS_CACHE_DB}).")
     fo.add_argument("--feed", default="indicative", help="Option chain feed (default indicative).")
 
     cc = sub.add_parser("cache-clear", help="Clear cache (all, or one type).")

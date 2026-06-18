@@ -90,12 +90,19 @@ _DEFAULT_OPTIONS_CACHE_FILENAME = "options_cache.sqlite"
 def default_options_cache_db() -> str:
     """Path to the offline options cache used when a strategy needs options but the payload
     did not pin ``options_cache_db``. ``BACKTEST_OPTIONS_CACHE_DB`` overrides the full path;
-    else ``<BACKTEST_CACHE_DIR or datasets/cache>/options_cache.sqlite``. The directory is
-    created on demand so the path is usable (the cache builder/reader opens the sqlite there)."""
+    else ``<BACKTEST_CACHE_DIR>/options_cache.sqlite`` when that env is set, otherwise the
+    shared options cache dir under ba2_common (``~/Documents/ba2/common/options``) — never the
+    repo/CWD. The directory is created on demand so the path is usable (the cache builder/reader
+    opens the sqlite there)."""
     explicit = os.environ.get("BACKTEST_OPTIONS_CACHE_DB")
     if explicit:
         return explicit
-    cache_dir = pathlib.Path(os.environ.get("BACKTEST_CACHE_DIR") or "datasets/cache")
+    backtest_cache_dir = os.environ.get("BACKTEST_CACHE_DIR")
+    if backtest_cache_dir:
+        cache_dir = pathlib.Path(backtest_cache_dir)
+    else:
+        from ba2_common.config import OPTIONS_CACHE_DB
+        cache_dir = pathlib.Path(OPTIONS_CACHE_DB).parent
     cache_dir.mkdir(parents=True, exist_ok=True)
     return str(cache_dir / _DEFAULT_OPTIONS_CACHE_FILENAME)
 

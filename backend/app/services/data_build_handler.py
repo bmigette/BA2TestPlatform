@@ -46,11 +46,22 @@ def handle_build_screener_metrics(task_id: str, payload: Dict[str, Any]) -> Dict
     map from the FMP screener rows (marketCap / price), wires the as-of OHLCV cache accessor, and
     calls ``metric_store.build_store``. Required payload keys: store, start, end, market_cap_min.
     """
+    # Default the store dir to the shared ba2_common screener store (trade bucket)
+    # when omitted — nothing is cached inside the repo. Still overridable.
+    if payload.get("store") is None:
+        try:
+            from ba2_common.config import SCREENER_STORE_DIR
+            payload = {**payload, "store": SCREENER_STORE_DIR}
+        except Exception:  # noqa: BLE001
+            pass
     for key in ("store", "start", "end", "market_cap_min"):
         if payload.get(key) is None:
             return {"status": "failed", "error": f"payload.{key} is required"}
 
     try:
+        import os as _os
+        # Ensure the (possibly nested, trade-bucket) store dir exists.
+        _os.makedirs(payload["store"], exist_ok=True)
         import app.models  # noqa: F401 — register ORM models on Base
         import pandas as _pd
         from datetime import datetime as _dt
@@ -114,11 +125,24 @@ def handle_build_options(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any
     symbols), start, end (ISO, start >= 2024-02-01), cache_db. Optional: feed (default
     "indicative").
     """
+    # Default the options cache DB to the shared ba2_common path (common bucket)
+    # when omitted — nothing is cached inside the repo. Still overridable.
+    if payload.get("cache_db") is None:
+        try:
+            from ba2_common.config import OPTIONS_CACHE_DB
+            payload = {**payload, "cache_db": OPTIONS_CACHE_DB}
+        except Exception:  # noqa: BLE001
+            pass
     for key in ("underlyings", "start", "end", "cache_db"):
         if payload.get(key) is None:
             return {"status": "failed", "error": f"payload.{key} is required"}
 
     try:
+        import os as _os
+        # Ensure the (possibly nested, common-bucket) options cache parent dir exists.
+        _parent = _os.path.dirname(str(payload["cache_db"]))
+        if _parent:
+            _os.makedirs(_parent, exist_ok=True)
         from app.services.backtest import fetch_options
         from datetime import date
 

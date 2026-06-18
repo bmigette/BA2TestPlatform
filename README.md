@@ -320,3 +320,70 @@ For educational and research purposes.
 - [backtesting.py](https://github.com/kernc/backtesting.py) - Backtesting framework
 - [yfinance](https://github.com/ranaroussi/yfinance) - Yahoo Finance data
 - [TA-Lib](https://github.com/mrjbq7/ta-lib) - Technical analysis library
+
+## Install / first run
+
+Two virtualenvs are used:
+
+- **`backend/venv`** — the FastAPI backend + scripts. Always use
+  `./venv/bin/python` (see `backend/CLAUDE.md`):
+  ```bash
+  cd backend
+  ./venv/bin/pip install -e ../../BA2TradeCommon -e ../../BA2TradeProviders -e ../../BA2TradeExperts
+  ./venv/bin/pip install -r requirements.txt
+  ./venv/bin/python -m uvicorn app.main:app --reload
+  ```
+- **`~/ba2-venvs/test`** — the headless `ba2-test` CLI (`ba2test_launcher.py`):
+  ```bash
+  ~/ba2-venvs/test/bin/python ba2test_launcher.py --help
+  ```
+
+On startup the backend creates its data dirs under `BA2_HOME` (see below), not
+inside the repo.
+
+## Data & cache layout
+
+Nothing is cached inside the repo anymore. All artifacts live under a single
+root, **`BA2_HOME`** (env-overridable, default `~/Documents/ba2`):
+
+```
+BA2_HOME  (default ~/Documents/ba2)
+├── common/                 # shared with the live trader
+│   ├── cache/              # raw provider cache: OHLCV parquet, as_of cache, fmp_history   (CACHE_FOLDER)
+│   ├── db.sqlite           # shared app-settings / API-keys DB (FMP, Finnhub, ...)         (DB_FILE)
+│   └── options/            # options-history cache
+├── test/                   # THIS app's artifacts (were inside backend/ — the bug)
+│   ├── datasets/           # generated dataset CSVs
+│   ├── trained_models/     # saved model artifacts
+│   ├── cache/jobs/         # per-job cache
+│   ├── cache/news/         # news content files
+│   └── news_exports/       # exported news JSON
+└── trade/
+    └── screener/           # metric_store/ (parquet) + screener_history.sqlite
+```
+
+Paths are centralized in `backend/app/paths.py` (test bucket) and
+`ba2_common/config.py` (common/trade buckets). Each is env-overridable:
+
+- `BA2_HOME` relocates everything.
+- `CACHE_FOLDER`, `DB_FILE`, and the per-dir vars
+  `BA2_DATASETS_DIR` / `BA2_MODELS_DIR` / `BA2_JOBS_CACHE_DIR` /
+  `BA2_NEWS_CACHE_DIR` / `BA2_NEWS_EXPORTS_DIR` still win when set
+  (backward-compatible).
+
+### Migrating from the old layout
+
+The old layout cached under `~/Documents/ba2_trade_platform` and inside
+`backend/`. Migrate with:
+
+```bash
+# dry-run: prints the planned moves + sizes (default)
+backend/venv/bin/python scripts/migrate_cache_layout.py
+# perform the moves
+backend/venv/bin/python scripts/migrate_cache_layout.py --apply
+```
+
+The script is idempotent (skips missing sources / non-empty destinations) and
+never deletes a source if its move fails. **Restart any running instances after
+migrating** so they pick up the new locations (the shared app-settings DB with
+your API keys moves to `common/db.sqlite`).

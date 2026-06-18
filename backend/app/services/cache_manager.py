@@ -30,9 +30,19 @@ from typing import Any, Dict, List, Optional
 # (app/services/cache_manager.py -> app/services -> app -> backend)
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
-# CACHE_FOLDER as the backend provider layer sees it
-# (MarketDataProviderInterface.py:23, env-overridable, default <backend>/cache).
-CACHE_FOLDER = Path(os.getenv("CACHE_FOLDER", str(BACKEND_DIR / "cache")))
+# CACHE_FOLDER as the backend provider layer sees it. Now defers to the shared
+# ba2_common cache (default ~/Documents/ba2/common/cache), NOT the old
+# <backend>/cache path — nothing is cached inside the repo anymore. (Unused for
+# ohlcv now; kept resolved here to avoid confusion.)
+try:
+    from ba2_common.config import CACHE_FOLDER as _COMMON_CACHE_FOLDER
+except Exception:  # pragma: no cover
+    _COMMON_CACHE_FOLDER = str(BACKEND_DIR / "cache")
+CACHE_FOLDER = Path(os.getenv("CACHE_FOLDER", str(_COMMON_CACHE_FOLDER)))
+
+# Test-bucket artifact dirs (datasets/models/job+news caches/exports) live under
+# ba2_common.config.TEST_DIR, resolved centrally in app.paths — NOT BACKEND_DIR.
+from app import paths as _paths
 
 
 def _asof_roots() -> List[Path]:
@@ -137,11 +147,11 @@ CACHE_TYPES: Dict[str, Dict[str, Any]] = {
     # OHLCV price bars: the native parquet under the as_of cache (<ba2_common CACHE_FOLDER>/
     # <*OHLCV*Provider>/), NOT the dead legacy <backend>/cache path. Resolved by _ohlcv_roots.
     "ohlcv":    {"roots": _OHLCV_ROOTS,                        "destructive": False, "ttl_hours": 24},
-    "jobs":     {"roots": [_resolve("datasets/cache/jobs")],  "destructive": False, "ttl_hours": None},
-    "news":     {"roots": [_resolve("datasets/cache/news")],  "destructive": False, "ttl_hours": None, "db_backed": True},
-    "datasets": {"roots": [_resolve("datasets")],             "destructive": True,  "ttl_hours": None},
-    "models":   {"roots": [_resolve("trained_models")],       "destructive": True,  "ttl_hours": None},
-    "exports":  {"roots": [_resolve("news_exports")],         "destructive": False, "ttl_hours": None},
+    "jobs":     {"roots": [_paths.JOBS_CACHE_DIR],            "destructive": False, "ttl_hours": None},
+    "news":     {"roots": [_paths.NEWS_CACHE_DIR],            "destructive": False, "ttl_hours": None, "db_backed": True},
+    "datasets": {"roots": [_paths.DATASETS_DIR],              "destructive": True,  "ttl_hours": None},
+    "models":   {"roots": [_paths.MODELS_DIR],               "destructive": True,  "ttl_hours": None},
+    "exports":  {"roots": [_paths.NEWS_EXPORTS_DIR],          "destructive": False, "ttl_hours": None},
     # ba2_providers as_of cache: parquet time-series + provider_cache spill, under
     # ba2_common.config.CACHE_FOLDER (NOT <backend>/cache). Resolved lazily.
     # The fmp_history subtree AND the OHLCV provider parquet dirs are excluded here (each is

@@ -218,15 +218,11 @@ async def startup_event():
     """Run on application startup"""
     logger.info("Starting Deep Learning Financial Forecasting Platform API")
 
-    # Create necessary directories
-    directories = [
-        "datasets",
-        "trained_models",
-        "logs"
-    ]
-
-    for directory in directories:
-        Path(directory).mkdir(exist_ok=True)
+    # Create necessary directories. Test-bucket artifact dirs (datasets,
+    # trained_models, caches, exports) live under ba2_common.config.TEST_DIR and
+    # are created on import of app.paths — NOT inside the repo/CWD.
+    from app import paths as _paths  # noqa: F401 (import triggers dir creation)
+    Path("logs").mkdir(exist_ok=True)
 
     # Initialize database tables
     # Import all models before init_db to ensure tables are created

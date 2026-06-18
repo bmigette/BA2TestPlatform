@@ -48,15 +48,20 @@ class DartsTrainingService(ITrainingService):
     Darts-based training service for time series regression/forecasting.
     """
 
-    def __init__(self, models_dir: str = "trained_models"):
+    def __init__(self, models_dir: str = None):
         """
         Initialize TrainingService.
 
         Args:
-            models_dir: Directory to save trained models
+            models_dir: Directory to save trained models. Defaults to the
+                test-bucket models dir (app.paths.MODELS_DIR) — not the repo/CWD.
         """
-        self.models_dir = Path(models_dir)
-        self.models_dir.mkdir(exist_ok=True)
+        if models_dir is None:
+            from app.paths import MODELS_DIR
+            self.models_dir = Path(MODELS_DIR)
+        else:
+            self.models_dir = Path(models_dir)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         self.scaler = None
 
     def prepare_data(

@@ -38,7 +38,7 @@ class BuildOhlcvRequest(BaseModel):
 
 class BuildScreenerMetricsRequest(BaseModel):
     """Build/extend the screener METRIC store (parquet) — mirrors CLI build-screener-metrics."""
-    store: str                               # path to the parquet metric-store dir
+    store: Optional[str] = None              # parquet metric-store dir (default: ba2_common SCREENER_STORE_DIR)
     start: str
     end: str
     market_cap_min: float                    # LOOSEST cap bound (shortlist superset)
@@ -53,7 +53,7 @@ class BuildOptionsRequest(BaseModel):
     underlyings: List[str]
     start: str                               # ISO (>= 2024-02-01)
     end: str
-    cache_db: str                            # path to the options-history SQLite cache
+    cache_db: Optional[str] = None           # options-history SQLite cache (default: ba2_common OPTIONS_CACHE_DB)
     feed: Optional[str] = "indicative"
 
 
@@ -101,12 +101,17 @@ async def build_ohlcv(req: BuildOhlcvRequest):
 
 @router.post("/build-screener-metrics")
 async def build_screener_metrics(req: BuildScreenerMetricsRequest):
-    """Enqueue a ``build_screener_metrics`` task on the main queue. Returns {task_id}."""
+    """Enqueue a ``build_screener_metrics`` task on the main queue. Returns {task_id}.
+
+    ``store`` defaults to the shared ba2_common screener store dir (trade bucket)
+    when omitted — nothing is cached inside the repo."""
+    from ba2_common.config import SCREENER_STORE_DIR
+    store = req.store or SCREENER_STORE_DIR
     task_id = get_task_queue().queue_task(
         task_type="build_screener_metrics",
-        name=f"Build screener metrics: {req.store}",
+        name=f"Build screener metrics: {store}",
         payload={
-            "store": req.store,
+            "store": store,
             "start": req.start,
             "end": req.end,
             "market_cap_min": req.market_cap_min,
@@ -115,7 +120,7 @@ async def build_screener_metrics(req: BuildScreenerMetricsRequest):
             "cadence_days": req.cadence_days if req.cadence_days is not None else 7,
             "drop_days": req.drop_days if req.drop_days is not None else 1,
         },
-        description=f"Build screener metric store {req.store} ({req.start}..{req.end})",
+        description=f"Build screener metric store {store} ({req.start}..{req.end})",
         timeout_seconds=24 * 3600,  # store builds can take many minutes
     )
     logger.info(f"build-screener-metrics enqueued task {task_id}")
@@ -128,17 +133,19 @@ async def build_options(req: BuildOptionsRequest):
     underlyings = [s.strip().upper() for s in (req.underlyings or []) if s and s.strip()]
     if not underlyings:
         raise HTTPException(status_code=400, detail="underlyings must be non-empty")
+    from ba2_common.config import OPTIONS_CACHE_DB
+    cache_db = req.cache_db or OPTIONS_CACHE_DB
     task_id = get_task_queue().queue_task(
         task_type="build_options",
-        name=f"Build options cache: {req.cache_db}",
+        name=f"Build options cache: {cache_db}",
         payload={
             "underlyings": underlyings,
             "start": req.start,
             "end": req.end,
-            "cache_db": req.cache_db,
+            "cache_db": cache_db,
             "feed": req.feed or "indicative",
         },
-        description=f"Build options cache {req.cache_db} for {len(underlyings)} underlyings",
+        description=f"Build options cache {cache_db} for {len(underlyings)} underlyings",
         timeout_seconds=24 * 3600,
     )
     logger.info(f"build-options enqueued task {task_id}")

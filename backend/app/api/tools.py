@@ -240,8 +240,9 @@ async def list_news_providers():
     }
 
 
-# Directory for exported news files
-NEWS_EXPORTS_DIR = Path("news_exports")
+# Directory for exported news files + trained models (test bucket, app.paths;
+# not the repo/CWD — nothing is cached inside the repo anymore).
+from app.paths import NEWS_EXPORTS_DIR, MODELS_DIR
 
 
 @router.post("/news/export")
@@ -841,7 +842,7 @@ async def scan_orphan_models():
         load_jobs_from_database()
 
         # Get the base trained_models directory
-        base_models_dir = Path("trained_models")
+        base_models_dir = MODELS_DIR
         if not base_models_dir.exists():
             return {"orphan_models": [], "total": 0, "total_size_mb": 0}
 
@@ -921,7 +922,7 @@ async def cleanup_orphan_models(dry_run: bool = Query(True, description="If True
         load_jobs_from_database()
 
         # Get the base trained_models directory
-        base_models_dir = Path("trained_models")
+        base_models_dir = MODELS_DIR
         if not base_models_dir.exists():
             return {"deleted": [], "total": 0, "total_size_mb": 0, "dry_run": dry_run}
 
@@ -1150,7 +1151,10 @@ async def get_ohlcv_cache_status():
     Returns:
         List of cache file entries with symbol, interval, size, and modification time
     """
-    cache_dir = Path("datasets/cache/ohlcv")
+    from app.services.ohlcv_cache_provider import DEFAULT_OHLCV_CACHE_DIR
+    # Wrap in Path(...) so the OHLCV cache root is the shared common cache (not the
+    # repo/CWD) while keeping the `app.api.tools.Path` patch point that tests rely on.
+    cache_dir = Path(DEFAULT_OHLCV_CACHE_DIR)
     entries = []
 
     if cache_dir.exists():
@@ -1236,7 +1240,9 @@ async def check_ohlcv_gaps():
     """
     import pandas as pd
 
-    cache_dir = Path("datasets/cache/ohlcv")
+    from app.services.ohlcv_cache_provider import DEFAULT_OHLCV_CACHE_DIR
+    # Path(...) keeps the patch point for tests while defaulting to the common cache.
+    cache_dir = Path(DEFAULT_OHLCV_CACHE_DIR)
     results = []
 
     if cache_dir.exists():

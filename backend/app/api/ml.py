@@ -707,7 +707,8 @@ async def list_saved_models():
     Returns:
         List of saved model files
     """
-    models_dir = Path("trained_models")
+    from app.paths import MODELS_DIR
+    models_dir = MODELS_DIR
 
     if not models_dir.exists():
         return {"models": [], "count": 0}

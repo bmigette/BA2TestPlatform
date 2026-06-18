@@ -14,9 +14,11 @@ as a mixin. ``wrap_with_cache`` layers it onto a shared provider instance so the
 cache handler keeps working unchanged; ``OHLCVCacheProviderBase`` is the abstract
 base the cache tests subclass (same shape the local base had).
 
-Cache files live under ``datasets/cache/ohlcv/<provider_name>/<SYMBOL>_<interval>.parquet``
-(CWD-relative, matching the legacy local-tree behaviour). Legacy ``.csv`` caches
-are read transparently and migrated to Parquet on the next write.
+Cache files live under
+``<ba2_common CACHE_FOLDER>/ohlcv/<provider_name>/<SYMBOL>_<interval>.parquet``
+(default ``~/Documents/ba2/common/cache/ohlcv`` — NOT the repo/CWD; see
+``DEFAULT_OHLCV_CACHE_DIR``). Legacy ``.csv`` caches are read transparently and
+migrated to Parquet on the next write.
 """
 
 from abc import ABC, abstractmethod
@@ -32,6 +34,16 @@ import threading
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Shared OHLCV disk-cache root. Lives under the shared ba2_common cache
+# (default ~/Documents/ba2/common/cache/ohlcv) so NOTHING is cached inside the
+# repo. ``CACHE_FOLDER`` env still wins (via ba2_common.config). Resolved
+# defensively so the module still imports without ba2_common.
+try:
+    from ba2_common.config import CACHE_FOLDER as _COMMON_CACHE_FOLDER
+    DEFAULT_OHLCV_CACHE_DIR = Path(_COMMON_CACHE_FOLDER) / "ohlcv"
+except Exception:  # pragma: no cover
+    DEFAULT_OHLCV_CACHE_DIR = Path("datasets/cache/ohlcv")
 
 # Per-file write locks so parallel optimization trials that fill the SAME symbol's
 # cache don't corrupt the parquet (a half-written file). Different files lock
@@ -55,8 +67,9 @@ class OHLCVCacheMixin:
     defaults to the legacy local-tree location and may be overridden per instance.
     """
 
-    # Default cache root (CWD-relative), matching the legacy dataproviders.base.
-    cache_folder: Path = Path("datasets/cache/ohlcv")
+    # Default cache root: shared ba2_common cache (common/cache/ohlcv), NOT the
+    # repo/CWD. Overridable per instance.
+    cache_folder: Path = DEFAULT_OHLCV_CACHE_DIR
     cache_max_age_hours: int = 24
 
     def _ensure_cache_folder(self) -> Path:
@@ -293,7 +306,7 @@ class OHLCVCacheProviderBase(OHLCVCacheMixin, ABC):
     """
 
     def __init__(self):
-        self.cache_folder = Path("datasets/cache/ohlcv")
+        self.cache_folder = DEFAULT_OHLCV_CACHE_DIR
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.cache_max_age_hours = 24
 
@@ -349,6 +362,6 @@ def wrap_with_cache(shared_provider):
     for name in _MIXIN_METHODS:
         func = getattr(OHLCVCacheMixin, name)
         setattr(shared_provider, name, types.MethodType(func, shared_provider))
-    shared_provider.cache_folder = Path("datasets/cache/ohlcv")
+    shared_provider.cache_folder = DEFAULT_OHLCV_CACHE_DIR
     shared_provider.cache_max_age_hours = 24
     return shared_provider

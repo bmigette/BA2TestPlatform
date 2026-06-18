@@ -611,7 +611,10 @@ async def run_model_predictions(
     # Try to load from job cache first (contains all computed features from training)
     dataset_path = None
     if job_id:
+        from app.paths import JOBS_CACHE_DIR
         cache_paths = [
+            JOBS_CACHE_DIR / job_id / "combined_dataset.csv",
+            # legacy CWD-relative fallbacks (pre-cache-layout-refactor)
             Path(f"datasets/cache/jobs/{job_id}/combined_dataset.csv"),
             Path(f"cache/jobs/{job_id}/combined_dataset.csv"),
         ]

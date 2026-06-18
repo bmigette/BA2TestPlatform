@@ -16,6 +16,7 @@ import threading
 import concurrent.futures
 
 from app.models.database import get_db, SessionLocal
+from app.paths import DATASETS_DIR
 from app.models.dataset import Dataset, DatasetStatus
 from app.schemas.dataset import DatasetCreate, DatasetResponse, DatasetListResponse, DatasetUpdate, DatasetDuplicate, DatasetRegenerate, BatchRegenerateRequest
 from app.indicators import TechnicalIndicators
@@ -789,9 +790,9 @@ async def create_dataset(
             "created_at": datetime.now().isoformat()
         }
 
-        # Create datasets directory if it doesn't exist
-        datasets_dir = Path("datasets")
-        datasets_dir.mkdir(exist_ok=True)
+        # Datasets live under the test-bucket dir (app.paths), not the repo/CWD.
+        datasets_dir = DATASETS_DIR
+        datasets_dir.mkdir(parents=True, exist_ok=True)
         file_path = datasets_dir / f"{dataset_create.name}.csv"
 
         # Create database record in BUILDING status first
@@ -917,8 +918,8 @@ async def create_batch_datasets(
                 "batch_name": batch_name
             }
 
-            datasets_dir = Path("datasets")
-            datasets_dir.mkdir(exist_ok=True)
+            datasets_dir = DATASETS_DIR
+            datasets_dir.mkdir(parents=True, exist_ok=True)
             file_path = datasets_dir / f"{dataset_name}.csv"
 
             db_dataset = Dataset(
@@ -2177,8 +2178,8 @@ async def duplicate_dataset(
             logger.info(f"[Duplicate] Trimmed to {len(df)} rows after removing warmup period")
 
         # Save to new file
-        datasets_dir = Path("datasets")
-        datasets_dir.mkdir(exist_ok=True)
+        datasets_dir = DATASETS_DIR
+        datasets_dir.mkdir(parents=True, exist_ok=True)
         file_path = datasets_dir / f"{new_name}.csv"
         df.to_csv(file_path, index=False)
 

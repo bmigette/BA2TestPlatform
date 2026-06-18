@@ -18,8 +18,8 @@ from app.models.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
-# Dataset cache directory
-DATASET_CACHE_DIR = Path(__file__).parent.parent.parent / 'datasets' / 'cache' / 'jobs'
+# Per-job cache directory (test bucket, app.paths — not the repo tree).
+from app.paths import JOBS_CACHE_DIR as DATASET_CACHE_DIR
 
 
 def get_job_cache_dir(task_id: str) -> Path:
@@ -621,8 +621,9 @@ def clear_ga_checkpoint(task_id: str):
 
 
 def get_job_models_dir(task_id: str) -> Path:
-    """Get the directory for storing job models."""
-    models_dir = Path("trained_models") / task_id
+    """Get the directory for storing job models (test bucket, app.paths)."""
+    from app.paths import MODELS_DIR
+    models_dir = MODELS_DIR / task_id
     models_dir.mkdir(parents=True, exist_ok=True)
     return models_dir
 

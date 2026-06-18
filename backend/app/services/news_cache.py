@@ -41,14 +41,20 @@ class NewsCacheService:
         cache.cache_article(article, provider, ticker)
     """
 
-    def __init__(self, cache_dir: str = "datasets/cache/news"):
+    def __init__(self, cache_dir: Optional[str] = None):
         """
         Initialize NewsCacheService.
 
         Args:
-            cache_dir: Base directory for news cache files
+            cache_dir: Base directory for news cache files. Defaults to the
+                test-bucket news cache (app.paths.NEWS_CACHE_DIR, under
+                ~/Documents/ba2/test/cache/news) — NOT the repo/CWD.
         """
-        self.cache_dir = Path(cache_dir)
+        if cache_dir is None:
+            from app.paths import NEWS_CACHE_DIR
+            self.cache_dir = Path(NEWS_CACHE_DIR)
+        else:
+            self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_url_hash(self, url: str) -> str:

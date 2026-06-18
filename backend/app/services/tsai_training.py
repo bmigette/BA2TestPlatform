@@ -60,16 +60,21 @@ class TSAITrainingService(ITrainingService):
     Scaler parameters are saved with the model for inference.
     """
 
-    def __init__(self, models_dir: str = "trained_models", normalize: bool = True, buffer_pct: float = 0.35):
+    def __init__(self, models_dir: str = None, normalize: bool = True, buffer_pct: float = 0.35):
         """Initialize TSAITrainingService.
 
         Args:
-            models_dir: Directory to save trained models
+            models_dir: Directory to save trained models. Defaults to the
+                test-bucket models dir (app.paths.MODELS_DIR) — not the repo/CWD.
             normalize: Whether to apply per-feature normalization (required for MiniRocket)
             buffer_pct: Extra room above/below observed min/max for price normalization (default 35%)
         """
-        self.models_dir = Path(models_dir)
-        self.models_dir.mkdir(exist_ok=True)
+        if models_dir is None:
+            from app.paths import MODELS_DIR
+            self.models_dir = Path(MODELS_DIR)
+        else:
+            self.models_dir = Path(models_dir)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         self.normalize = normalize
         self.buffer_pct = buffer_pct
         self.data_prep = None  # DataPreparationService instance, fitted on training data
