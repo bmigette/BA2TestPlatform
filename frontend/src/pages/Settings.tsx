@@ -324,11 +324,11 @@ const Settings: React.FC = () => {
   };
 
   const getStatusColor = (status: string, isEnabled: boolean) => {
-    if (!isEnabled) return 'bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600';
+    if (!isEnabled) return 'bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50';
     switch (status) {
-      case 'online': return 'bg-green-100 text-green-800 border border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700';
-      case 'busy': return 'bg-yellow-100 text-yellow-800 border border-yellow-300 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700';
-      default: return 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-700';
+      case 'online': return 'bg-green-100 text-green-800 border border-green-300 dark:bg-green-700/40 dark:text-green-100 dark:border-green-600/50';
+      case 'busy': return 'bg-yellow-100 text-yellow-800 border border-yellow-300 dark:bg-amber-700/40 dark:text-amber-100 dark:border-amber-600/50';
+      default: return 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-700/40 dark:text-red-100 dark:border-red-600/50';
     }
   };
 
@@ -404,11 +404,11 @@ const Settings: React.FC = () => {
                     <label className="sm:w-64 flex-shrink-0 text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
                       <span className="truncate">{ck.key}</span>
                       {ck.is_set ? (
-                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800 border border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700">
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800 border border-green-300 dark:bg-green-700/40 dark:text-green-100 dark:border-green-600/50">
                           set
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600">
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50">
                           unset
                         </span>
                       )}
@@ -528,7 +528,7 @@ const Settings: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <h3 className="font-semibold text-gray-900 dark:text-gray-100">{worker.name}</h3>
                           {worker.isLocal && (
-                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800 border border-blue-300 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-700">
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800 border border-blue-300 dark:bg-blue-700/40 dark:text-blue-100 dark:border-blue-600/50">
                               Local
                             </span>
                           )}
@@ -573,12 +573,12 @@ const Settings: React.FC = () => {
                         {/* Capabilities */}
                         <div className="flex gap-2 mt-2">
                           {worker.capabilities.train && (
-                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 border border-purple-300 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700">
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-800 border border-purple-300 dark:bg-purple-700/40 dark:text-purple-100 dark:border-purple-600/50">
                               Training
                             </span>
                           )}
                           {worker.capabilities.infer && (
-                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-700 border border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700">
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800 border border-green-300 dark:bg-green-700/40 dark:text-green-100 dark:border-green-600/50">
                               Inference
                             </span>
                           )}
