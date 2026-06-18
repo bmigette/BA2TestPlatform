@@ -226,10 +226,22 @@ async def startup_event():
 
     # Initialize database tables
     # Import all models before init_db to ensure tables are created
-    from app.models.database import init_db
+    from app.models.database import init_db, DATABASE_URL
     from app.models.optimization_profile import OptimizationProfile  # noqa: F401
     from app.models.model import TrainedModel  # noqa: F401
     init_db()
+
+    # The test platform OWNS its DB path (DATABASE_URL -> test/dl_forecasting.db). Point the
+    # shared ba2_common engine at the SAME file so providers/experts read API keys (appsetting)
+    # from the one test DB — ba2_common defaults to a neutral path, so this is required. (The
+    # LIVE platform does the analogous configure_db to its trade DB.) Per-run backtests still
+    # override via configure_db_threadlocal. Only meaningful for on-disk sqlite paths.
+    if DATABASE_URL.startswith("sqlite:///"):
+        try:
+            from ba2_common.core import db as _ba2_db
+            _ba2_db.configure_db(DATABASE_URL.replace("sqlite:///", "", 1))
+        except Exception as _e:  # noqa: BLE001 — non-fatal; key reads would fail loudly later
+            logger.warning(f"could not point ba2_common DB at the test DB: {_e}")
 
     # Run pending database migrations (ALTER TABLE etc.)
     try:

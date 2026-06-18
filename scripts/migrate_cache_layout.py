@@ -9,8 +9,8 @@ under ~/Documents/ba2_trade_platform) into the locked single-root layout:
         cache/                      shared raw provider cache (OHLCV/asof/fmp_history)
         options/                    options-history cache
       test/
-        db.sqlite                   test platform keys/app DB (ba2_common DB_FILE)
-        dl_forecasting.db           test platform FastAPI app DB
+        dl_forecasting.db           SINGLE test DB: FastAPI app data + appsetting keys
+                                    (ba2_common DB_FILE == this same file)
         datasets/                   generated dataset CSVs
         trained_models/             saved model artifacts
         cache/jobs/                 per-job cache
@@ -21,11 +21,16 @@ under ~/Documents/ba2_trade_platform) into the locked single-root layout:
         screener/                   screener metric store + history db
 
 DB placement: a DB is DATA, not a shared cache, so DBs are bucketed by owner —
-the live trade DB -> trade/, the test platform DBs -> test/. Only shared raw
-provider caches (OHLCV/fmp_history/screener/options) stay in common/cache. The
-legacy shared ~/Documents/ba2_trade_platform/db.sqlite is the TRADE DB; it is
-MOVED to trade/db.sqlite AND additionally COPIED to test/db.sqlite to seed the
-test platform's keys (so test backtests have API keys post-migrate).
+the live trade DB -> trade/, the test platform DB -> test/. Only shared raw
+provider caches (OHLCV/fmp_history/screener/options) stay in common/cache.
+
+The test platform now uses a SINGLE DB (test/dl_forecasting.db) for BOTH its app
+data AND its appsetting key rows; test/db.sqlite is DEPRECATED and no longer
+created. The legacy shared ~/Documents/ba2_trade_platform/db.sqlite is the TRADE
+DB; it is MOVED to trade/db.sqlite. Its API keys are NOT copied as a whole file —
+only the ``appsetting`` rows are seeded BY VALUE into test/dl_forecasting.db
+(a few KB) so test backtests have provider keys post-migrate. (The Settings UI
+"Import keys from trade platform" button can also do this at any time.)
 
 DRY-RUN by default — prints the planned moves/copies + sizes. Pass ``--apply``
 to perform them. Idempotent: skips an op when the source is missing OR the
@@ -110,9 +115,10 @@ def _build_moves(new: dict) -> List[Tuple[str, Path, Path, str]]:
 
     ``op`` is "move" (relocate) or "copy" (duplicate, leaving the source in
     place). DBs are bucketed by owner: the legacy shared DB is the TRADE DB ->
-    moved to trade/db.sqlite, and additionally COPIED to the test keys DB so the
-    test platform has API keys post-migrate. Only shared raw provider caches stay
-    in common/cache."""
+    moved to trade/db.sqlite. The test platform's appsetting KEYS are NOT copied
+    as a whole file; they are seeded BY VALUE (rows only) into the single test DB
+    by ``_seed_keys_by_value`` after the file moves. Only shared raw provider
+    caches stay in common/cache."""
     legacy = _legacy_root()
     backend = _backend_dir()
     trade_db = new["TRADE_DIR"] / "db.sqlite"
@@ -120,16 +126,13 @@ def _build_moves(new: dict) -> List[Tuple[str, Path, Path, str]]:
     # cache, news cache, options cache) are relocated to DIFFERENT destinations
     # than the wholesale `datasets` move, so they must be moved out FIRST — before
     # the parent `datasets` tree is moved — or they'd be swept into test/datasets.
-    # Likewise the trade DB is COPIED to seed the test keys DB BEFORE it is moved,
-    # so the copy still has a source to read.
     moves: List[Tuple[str, Path, Path, str]] = [
         # --- common bucket: shared provider cache ---
         ("legacy common cache", legacy / "cache", new["CACHE_FOLDER"], "move"),
         # --- DB placement (DATA, bucketed by owner) ---
-        # The legacy shared DB is the LIVE trade DB. Seed the test keys DB from it
-        # (copy) FIRST, then move the original into the trade/ bucket.
-        ("seed test keys DB (copy of legacy trade DB)", legacy / "db.sqlite",
-         new["DB_FILE"], "copy"),
+        # The legacy shared DB is the LIVE trade DB -> move into the trade/ bucket.
+        # (Its keys are seeded by VALUE into the single test DB separately; see
+        # _seed_keys_by_value. We do NOT copy the whole file into test/.)
         ("legacy trade DB", legacy / "db.sqlite", trade_db, "move"),
         ("legacy test app DB", backend / "dl_forecasting.db",
          new["TEST_DIR"] / "dl_forecasting.db", "move"),
@@ -217,6 +220,82 @@ def _apply_move(src: Path, dst: Path, clear_empty_dst: bool = False,
         return str(exc)
 
 
+def _seed_keys_by_value(trade_db: Path, test_db: Path, apply: bool) -> dict:
+    """Seed the test platform's ``appsetting`` KEY ROWS by value (not a file copy).
+
+    Opens ``trade_db`` READ-ONLY (stdlib sqlite3), reads its ``appsetting`` rows, and
+    ``INSERT OR REPLACE``\\s them into ``test_db``'s ``appsetting`` table (creating that
+    table from the trade DB's own DDL if it is missing). A few KB, not a 200MB file copy.
+
+    Returns a summary dict {action, reason, count}. ``action`` is one of
+    "seed"/"skip"/"would-seed"/"error". Never deletes anything. Idempotent
+    (INSERT OR REPLACE upserts on the appsetting PK)."""
+    import sqlite3
+
+    out = {"action": "skip", "reason": "", "count": 0}
+    if not trade_db.exists():
+        out["reason"] = f"trade DB not found ({trade_db})"
+        return out
+    if not test_db.exists():
+        # The single test DB should have been moved into place above; if it isn't
+        # there we cannot seed (the app will create it + the table on first run,
+        # then the Settings UI button can import keys).
+        out["reason"] = f"test DB not found ({test_db}); use the Settings UI button instead"
+        return out
+
+    # Read the trade DB's appsetting DDL + rows (read-only).
+    try:
+        ro = sqlite3.connect(f"file:{trade_db}?mode=ro", uri=True)
+        try:
+            ddl_row = ro.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='appsetting'"
+            ).fetchone()
+            if not ddl_row or not ddl_row[0]:
+                out["reason"] = "trade DB has no appsetting table"
+                return out
+            ddl = ddl_row[0]
+            cols = [r[1] for r in ro.execute("PRAGMA table_info(appsetting)").fetchall()]
+            rows = ro.execute(f"SELECT {', '.join(cols)} FROM appsetting").fetchall()
+        finally:
+            ro.close()
+    except sqlite3.OperationalError as exc:  # noqa: PERF203
+        out["action"] = "error"
+        out["reason"] = f"could not read trade DB appsetting: {exc}"
+        return out
+
+    if not rows:
+        out["reason"] = "no appsetting rows in trade DB"
+        return out
+
+    if not apply:
+        out["action"] = "would-seed"
+        out["count"] = len(rows)
+        return out
+
+    # Upsert into the test DB. Create the appsetting table from the trade DB's DDL
+    # if missing (won't clash with the app schema — appsetting is ba2_common-only).
+    try:
+        dst = sqlite3.connect(str(test_db))
+        try:
+            dst.execute(ddl.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1))
+            placeholders = ", ".join("?" for _ in cols)
+            dst.executemany(
+                f"INSERT OR REPLACE INTO appsetting ({', '.join(cols)}) VALUES ({placeholders})",
+                rows,
+            )
+            dst.commit()
+        finally:
+            dst.close()
+    except sqlite3.Error as exc:
+        out["action"] = "error"
+        out["reason"] = f"could not upsert into test DB: {exc}"
+        return out
+
+    out["action"] = "seed"
+    out["count"] = len(rows)
+    return out
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Migrate BA2 cache/data layout into BA2_HOME.")
     ap.add_argument("--apply", action="store_true",
@@ -254,11 +333,57 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     total = sum(p["bytes"] for p in to_move)
     print(f"Total to move/copy: {len(to_move)} item(s), {_human(total)}")
+    print("")
+
+    # --- keys-by-VALUE seed (rows only, not a file copy) ----------------------
+    # Source: the trade DB wherever it currently is — its post-move home if the
+    # move already happened, else the legacy path (dry-run reports from legacy).
+    trade_db_new = new["TRADE_DIR"] / "db.sqlite"
+    legacy_trade_db = _legacy_root() / "db.sqlite"
+    seed_src = trade_db_new if trade_db_new.exists() else legacy_trade_db
+    test_db = new["TEST_DIR"] / "dl_forecasting.db"  # the single test DB (== app DB); keys live here
+    print("Keys-by-value seed (appsetting rows -> single test DB, NOT a file copy):")
+    print(f"  source (trade DB): {seed_src}")
+    print(f"  target (test DB):  {test_db}")
+
+    # --- deprecation hint for a legacy bloated test/db.sqlite -----------------
+    legacy_test_keys_db = new["TEST_DIR"] / "db.sqlite"
+    if legacy_test_keys_db.exists():
+        try:
+            sz = legacy_test_keys_db.stat().st_size
+        except OSError:
+            sz = 0
+        print("")
+        print(f"NOTE: a deprecated test/db.sqlite exists ({_human(sz)}). The test platform now")
+        print("      uses a single DB (test/dl_forecasting.db); test/db.sqlite is no longer read.")
+        print(f"      You may delete it manually if unneeded: {legacy_test_keys_db}")
+        print("      (this script never deletes data itself).")
 
     if not args.apply:
+        # Dry-run: preview the seed without writing.
+        seed = _seed_keys_by_value(seed_src, test_db, apply=False)
+        if seed["action"] == "would-seed":
+            print(f"  would seed {seed['count']} appsetting row(s) by value")
+        else:
+            print(f"  seed skipped: {seed['reason']}")
         print("")
         print("DRY-RUN only — no files were moved. Re-run with --apply to perform the migration.")
         return 0
+
+    # SAFETY GUARD: never --apply into a TEMPORARY BA2_HOME. The migration's SOURCES are the real
+    # repo/legacy paths (resolved from the script's own location), so --apply with a throwaway
+    # BA2_HOME (e.g. a test pointing BA2_HOME at /tmp) would MOVE real data into a temp dir.
+    # Dry-run is always allowed; only --apply is gated. (This caused a data-loss incident.)
+    import tempfile as _tempfile
+    _home = str(Path(new["BA2_HOME"]).resolve())
+    _temps = {str(Path(p).resolve()) for p in
+              (_tempfile.gettempdir(), "/tmp", "/private/tmp", "/private/var/folders",
+               os.environ.get("TMPDIR") or "") if p}
+    if any(_home == t or _home.startswith(t + os.sep) for t in _temps):
+        print(f"REFUSING --apply: BA2_HOME resolves under a temporary directory:\n  {_home}")
+        print("The migration MOVES real repo/DB data; pointing BA2_HOME at a temp dir would")
+        print("relocate it into a throwaway location. Set a permanent BA2_HOME and retry.")
+        return 2
 
     print("")
     print("Applying...")
@@ -274,11 +399,26 @@ def main(argv: Optional[List[str]] = None) -> int:
             verb = "copied" if p["op"] == "copy" else "moved"
             print(f"  {verb:<7} {p['label']} -> {p['dst']}")
 
+    # Seed the appsetting keys BY VALUE after the moves. The trade DB has now moved
+    # to its new home; prefer it, else fall back to the legacy path.
+    print("")
+    seed_src_apply = trade_db_new if trade_db_new.exists() else legacy_trade_db
+    seed = _seed_keys_by_value(seed_src_apply, test_db, apply=True)
+    if seed["action"] == "seed":
+        print(f"  seeded {seed['count']} appsetting key row(s) by value -> {test_db}")
+    elif seed["action"] == "error":
+        print(f"  WARNING: key seed failed: {seed['reason']} "
+              "(use the Settings UI 'Import keys from trade platform' button)")
+    else:
+        print(f"  key seed skipped: {seed['reason']} "
+              "(use the Settings UI button if keys are missing)")
+
     print("")
     print("=== Summary ===")
     print(f"  moved:   {len(to_move) - failures}")
     print(f"  failed:  {failures}")
     print(f"  skipped: {len(skipped)}")
+    print(f"  keys seeded by value: {seed['count']}")
     print("")
     print("IMPORTANT: restart any running BA2 instances (test API + live trade apps)")
     print("so they pick up the new cache/data locations.")
