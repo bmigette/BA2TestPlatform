@@ -10,8 +10,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to repo root so the Python-template ``lib/`` doesn't snag frontend/src/lib/
+# (the backend venv's lib is already covered by the ``venv/`` rule below).
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -25,6 +27,9 @@ venv/
 ENV/
 env/
 .venv/
+
+# Claude Code session + agent worktrees (never commit)
+.claude/
 
 # IDE
 .idea/
