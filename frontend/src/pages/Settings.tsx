@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Server, Plus, Trash2, Edit2, X, RefreshCw, Cpu, HardDrive,
   Activity, Clock, Download, Upload, Power, PowerOff, AlertCircle,
-  CheckCircle, Loader2, KeyRound
+  CheckCircle, Loader2, KeyRound, Eye, EyeOff, Save
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -48,6 +48,12 @@ interface WorkerFormData {
   capabilities: WorkerCapabilities;
 }
 
+interface CredentialKey {
+  key: string;
+  is_set: boolean;
+  masked_value: string | null;
+}
+
 const API_BASE = 'http://localhost:8000/api';
 
 const Settings: React.FC = () => {
@@ -59,6 +65,13 @@ const Settings: React.FC = () => {
   const [healthChecking, setHealthChecking] = useState<number | null>(null);
   const [importingKeys, setImportingKeys] = useState(false);
   const [keyImportMessage, setKeyImportMessage] = useState<string | null>(null);
+
+  // Credential (API) keys: masked values from the server + local edits/reveal state.
+  const [credentialKeys, setCredentialKeys] = useState<CredentialKey[]>([]);
+  const [keyEdits, setKeyEdits] = useState<Record<string, string>>({});
+  const [revealedKeys, setRevealedKeys] = useState<Record<string, boolean>>({});
+  const [savingKeys, setSavingKeys] = useState(false);
+  const [keySaveMessage, setKeySaveMessage] = useState<string | null>(null);
 
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -89,9 +102,23 @@ const Settings: React.FC = () => {
     }
   }, []);
 
+  const fetchCredentialKeys = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/settings/credential-keys`);
+      if (!response.ok) throw new Error('Failed to fetch credential keys');
+      const data = await response.json();
+      setCredentialKeys(data.keys || []);
+      // Drop any in-progress edits so the refreshed masked values are shown.
+      setKeyEdits({});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch credential keys');
+    }
+  }, []);
+
   useEffect(() => {
     fetchWorkers();
-  }, [fetchWorkers]);
+    fetchCredentialKeys();
+  }, [fetchWorkers, fetchCredentialKeys]);
 
   const handleImportKeysFromTrade = async () => {
     try {
@@ -111,10 +138,47 @@ const Settings: React.FC = () => {
           ? `Imported ${data.count} key(s) from the trade platform: ${data.imported.join(', ')}`
           : 'No credential keys found in the trade platform DB.'
       );
+      // Refresh masked values so newly-imported keys show as set.
+      fetchCredentialKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to import keys from trade platform');
     } finally {
       setImportingKeys(false);
+    }
+  };
+
+  const handleSaveCredentialKeys = async () => {
+    const values = Object.fromEntries(
+      Object.entries(keyEdits).filter(([, v]) => v !== '')
+    );
+    if (Object.keys(values).length === 0) {
+      setKeySaveMessage('No changes to save.');
+      return;
+    }
+    try {
+      setSavingKeys(true);
+      setKeySaveMessage(null);
+      setError(null);
+      const response = await fetch(`${API_BASE}/settings/credential-keys`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Failed to save credential keys');
+      }
+      const data = await response.json();
+      setKeySaveMessage(
+        data.count > 0
+          ? `Saved ${data.count} key(s): ${data.updated.join(', ')}`
+          : 'No keys saved.'
+      );
+      fetchCredentialKeys();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save credential keys');
+    } finally {
+      setSavingKeys(false);
     }
   };
 
@@ -260,11 +324,11 @@ const Settings: React.FC = () => {
   };
 
   const getStatusColor = (status: string, isEnabled: boolean) => {
-    if (!isEnabled) return 'bg-gray-100 text-gray-600';
+    if (!isEnabled) return 'bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600';
     switch (status) {
-      case 'online': return 'bg-green-100 text-green-800';
-      case 'busy': return 'bg-yellow-100 text-yellow-800';
-      default: return 'bg-red-100 text-red-800';
+      case 'online': return 'bg-green-100 text-green-800 border border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700';
+      case 'busy': return 'bg-yellow-100 text-yellow-800 border border-yellow-300 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700';
+      default: return 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-700';
     }
   };
 
@@ -317,14 +381,82 @@ const Settings: React.FC = () => {
         </div>
         <div className="p-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Copy provider credentials (API keys, tokens, secrets) from the live trade
-            platform's database into this platform's keys database so backtests can
-            resolve them.
+            View and set provider credentials (API keys, tokens, secrets). Stored values
+            are masked. Enter a new value and Save to update; or import them all from the
+            live trade platform's database so backtests can resolve them.
           </p>
           {keyImportMessage && (
             <div className="mt-3 p-3 bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 rounded-lg flex items-start gap-2 text-sm">
               <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <span>{keyImportMessage}</span>
+            </div>
+          )}
+
+          <div className="mt-4 space-y-3">
+            {credentialKeys.length === 0 ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400">No credential keys available.</p>
+            ) : (
+              credentialKeys.map(ck => {
+                const editing = keyEdits[ck.key] !== undefined;
+                const revealed = !!revealedKeys[ck.key];
+                return (
+                  <div key={ck.key} className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <label className="sm:w-64 flex-shrink-0 text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                      <span className="truncate">{ck.key}</span>
+                      {ck.is_set ? (
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800 border border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700">
+                          set
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600">
+                          unset
+                        </span>
+                      )}
+                    </label>
+                    <div className="relative flex-1">
+                      <input
+                        type={revealed ? 'text' : 'password'}
+                        value={editing ? keyEdits[ck.key] : ''}
+                        onChange={e =>
+                          setKeyEdits(prev => ({ ...prev, [ck.key]: e.target.value }))
+                        }
+                        placeholder={ck.masked_value || 'Not set — enter a value'}
+                        className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRevealedKeys(prev => ({ ...prev, [ck.key]: !prev[ck.key] }))
+                        }
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                        title={revealed ? 'Hide' : 'Reveal'}
+                      >
+                        {revealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {credentialKeys.length > 0 && (
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                onClick={handleSaveCredentialKeys}
+                disabled={savingKeys}
+                className="flex items-center gap-2 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-60"
+              >
+                {savingKeys ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                Save keys
+              </button>
+              {keySaveMessage && (
+                <span className="text-sm text-green-700 dark:text-green-300">{keySaveMessage}</span>
+              )}
             </div>
           )}
         </div>
@@ -383,8 +515,8 @@ const Settings: React.FC = () => {
                   key={worker.id}
                   className={`p-4 border rounded-lg ${
                     worker.isLocal
-                      ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-                      : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600'
+                      ? 'bg-blue-50 dark:bg-gray-800/60 border-blue-200 dark:border-gray-600'
+                      : 'bg-white dark:bg-gray-800/60 border-gray-200 dark:border-gray-600'
                   }`}
                 >
                   <div className="flex items-start justify-between">
@@ -396,11 +528,11 @@ const Settings: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <h3 className="font-semibold text-gray-900 dark:text-gray-100">{worker.name}</h3>
                           {worker.isLocal && (
-                            <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-800 rounded">
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800 border border-blue-300 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-700">
                               Local
                             </span>
                           )}
-                          <span className={`px-2 py-0.5 text-xs rounded ${getStatusColor(worker.status, worker.isEnabled)}`}>
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getStatusColor(worker.status, worker.isEnabled)}`}>
                             {worker.isEnabled ? worker.status : 'disabled'}
                           </span>
                         </div>
@@ -441,12 +573,12 @@ const Settings: React.FC = () => {
                         {/* Capabilities */}
                         <div className="flex gap-2 mt-2">
                           {worker.capabilities.train && (
-                            <span className="px-2 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700 border border-purple-300 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700">
                               Training
                             </span>
                           )}
                           {worker.capabilities.infer && (
-                            <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded">
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-700 border border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700">
                               Inference
                             </span>
                           )}

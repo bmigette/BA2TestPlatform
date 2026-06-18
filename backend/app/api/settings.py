@@ -878,3 +878,134 @@ async def import_keys_from_trade():
 
     logger.info(f"Imported {len(imported)} credential key(s) from trade DB {trade_db}")
     return ImportKeysResponse(imported=imported, count=len(imported), source_db=trade_db)
+
+
+# ---------------------------------------------------------------------------
+# View / set individual credential keys (the ba2_common AppSetting table)
+# ---------------------------------------------------------------------------
+# These endpoints read/write the SAME AppSetting rows that get_app_setting() reads,
+# in the ba2_common-configured DB (the test platform's keys DB). The GET masks values
+# (last 4 chars) and never returns plaintext; the PUT upserts {key: value} pairs and
+# never logs the secret values.
+
+# Standard credential keys we always surface in the UI, even when currently unset, so
+# the user can add a missing one. (Derived list = these UNION whatever the DB already
+# has.) Keep names exactly as the providers read them via get_app_setting().
+KNOWN_CREDENTIAL_KEYS: List[str] = [
+    "FMP_API_KEY",
+    "finnhub_api_key",
+    "alpaca_market_api_key",
+    "alpaca_market_api_secret",
+    "alpaca_trade_api_key",
+    "alpaca_trade_api_secret",
+    "OPENAI_API_KEY",
+    "FRED_API_KEY",
+]
+
+
+class CredentialKey(BaseModel):
+    """A credential AppSetting key with a MASKED value (never plaintext)."""
+    key: str
+    is_set: bool
+    masked_value: Optional[str] = None
+
+
+class CredentialKeysResponse(BaseModel):
+    """Response model for listing credential keys (masked)."""
+    keys: List[CredentialKey]
+
+
+class CredentialKeysUpdate(BaseModel):
+    """Request model for upserting credential key/value pairs."""
+    values: Dict[str, str]
+
+
+class CredentialKeysUpdateResponse(BaseModel):
+    """Response model after upserting credential keys."""
+    updated: List[str]
+    count: int
+
+
+def _mask_secret(value: Optional[str]) -> Optional[str]:
+    """Mask a secret value, revealing only the last 4 characters."""
+    if not value:
+        return None
+    if len(value) <= 4:
+        return "*" * len(value)
+    return "*" * (len(value) - 4) + value[-4:]
+
+
+@router.get("/credential-keys", response_model=CredentialKeysResponse)
+async def list_credential_keys():
+    """List credential AppSetting keys with MASKED values.
+
+    Reads the ba2_common-configured DB (the same rows get_app_setting() reads). A key
+    counts as a credential if it contains api_key/_key/token/secret (case-insensitive).
+    The returned list is the UNION of the standard known keys and whatever credential
+    rows already exist in the DB, so the UI can also offer to set currently-unset keys.
+    Values are never returned in plaintext.
+    """
+    from ba2_common.core.db import get_engine, init_db
+    from ba2_common.core.models import AppSetting
+    from sqlmodel import Session, select
+
+    init_db()  # ensure AppSetting table exists in a fresh keys DB
+
+    existing: Dict[str, Optional[str]] = {}
+    engine = get_engine()
+    with Session(engine) as session:
+        for row in session.exec(select(AppSetting)).all():
+            if row.key and _credential_like(row.key):
+                existing[row.key] = row.value_str
+
+    # Union: known keys first (stable order), then any extra credential keys from the DB.
+    ordered: List[str] = list(KNOWN_CREDENTIAL_KEYS)
+    for k in existing:
+        if k not in ordered:
+            ordered.append(k)
+
+    keys = [
+        CredentialKey(
+            key=k,
+            is_set=bool(existing.get(k)),
+            masked_value=_mask_secret(existing.get(k)),
+        )
+        for k in ordered
+    ]
+    return CredentialKeysResponse(keys=keys)
+
+
+@router.put("/credential-keys", response_model=CredentialKeysUpdateResponse)
+async def update_credential_keys(payload: CredentialKeysUpdate):
+    """Upsert credential key/value pairs into the ba2_common AppSetting table.
+
+    Writes the SAME rows get_app_setting() reads. Empty values are skipped (use the
+    masked GET to see current state; sending a blank field is a no-op, not a clear).
+    Secret values are never logged — only the key names are.
+    """
+    from ba2_common.core.db import get_engine, init_db
+    from ba2_common.core.models import AppSetting
+    from sqlmodel import Session, select
+
+    init_db()  # ensure AppSetting table exists in a fresh keys DB
+
+    updated: List[str] = []
+    engine = get_engine()
+    with Session(engine) as session:
+        for key, value in payload.values.items():
+            if not key or value is None or value == "":
+                continue
+            existing = session.exec(
+                select(AppSetting).where(AppSetting.key == key)
+            ).first()
+            if existing:
+                existing.value_str = value
+                session.add(existing)
+            else:
+                session.add(AppSetting(key=key, value_str=value))
+            updated.append(key)
+        session.commit()
+
+    if updated:
+        logger.info(f"Updated {len(updated)} credential key(s): {', '.join(updated)}")
+    return CredentialKeysUpdateResponse(updated=updated, count=len(updated))
