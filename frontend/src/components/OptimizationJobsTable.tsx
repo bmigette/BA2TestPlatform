@@ -40,12 +40,12 @@ function fmtFitness(v?: number | null): string {
 // Status pills: high-contrast, readable text on a solid-tint pill with a matching border in
 // both themes. completed=green · running=blue · cancelled/stopped=gray · failed=red · pending=amber.
 const STATUS_STYLES: Record<string, string> = {
-  completed: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-200 dark:border-emerald-500/40',
-  running: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-500/20 dark:text-blue-200 dark:border-blue-500/40',
-  pending: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/20 dark:text-amber-200 dark:border-amber-500/40',
+  completed: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-700/40 dark:text-emerald-100 dark:border-emerald-600/50',
+  running: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-700/40 dark:text-blue-100 dark:border-blue-600/50',
+  pending: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-700/40 dark:text-amber-100 dark:border-amber-600/50',
   cancelled: 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50',
   stopped: 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50',
-  failed: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-500/20 dark:text-red-200 dark:border-red-500/40',
+  failed: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-700/40 dark:text-red-100 dark:border-red-600/50',
 };
 
 function StatusBadge({ status }: { status: string }) {

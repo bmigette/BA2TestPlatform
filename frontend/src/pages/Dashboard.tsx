@@ -251,10 +251,10 @@ const Dashboard: React.FC = () => {
                     </p>
                   </div>
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
-                    item.type === 'job' ? 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:border-blue-500/40' :
-                    item.type === 'dataset' ? 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-500/15 dark:text-purple-200 dark:border-purple-500/40' :
-                    item.type === 'model' ? 'bg-green-100 text-green-800 border-green-200 dark:bg-green-500/15 dark:text-green-200 dark:border-green-500/40' :
-                    'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:border-amber-500/40'
+                    item.type === 'job' ? 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-700/40 dark:text-blue-100 dark:border-blue-600/50' :
+                    item.type === 'dataset' ? 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-700/40 dark:text-purple-100 dark:border-purple-600/50' :
+                    item.type === 'model' ? 'bg-green-100 text-green-800 border-green-200 dark:bg-green-700/40 dark:text-green-100 dark:border-green-600/50' :
+                    'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-700/40 dark:text-amber-100 dark:border-amber-600/50'
                   }`}>
                     {item.type}
                   </span>
