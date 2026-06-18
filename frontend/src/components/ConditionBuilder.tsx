@@ -498,7 +498,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             }
             className="w-20 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
           />
-          <span className="text-sm text-gray-500">and</span>
+          <span className="text-sm text-gray-600 dark:text-gray-400">and</span>
           <input
             type="number"
             step="0.01"
@@ -574,7 +574,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
         <div className="w-full flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
           <span className="text-xs text-gray-500 dark:text-gray-400">Optimize:</span>
           <div className="flex items-center gap-1">
-            <label className="text-xs text-gray-500">Min:</label>
+            <label className="text-xs text-gray-600 dark:text-gray-400">Min:</label>
             <input
               type="number"
               step="0.01"
@@ -584,7 +584,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             />
           </div>
           <div className="flex items-center gap-1">
-            <label className="text-xs text-gray-500">Max:</label>
+            <label className="text-xs text-gray-600 dark:text-gray-400">Max:</label>
             <input
               type="number"
               step="0.01"
@@ -594,7 +594,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             />
           </div>
           <div className="flex items-center gap-1">
-            <label className="text-xs text-gray-500">Step:</label>
+            <label className="text-xs text-gray-600 dark:text-gray-400">Step:</label>
             <input
               type="number"
               step="0.01"
@@ -610,7 +610,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
       <div className="w-full flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
         <span className="text-xs text-gray-500 dark:text-gray-400">Confirm:</span>
         <div className="flex items-center gap-1">
-          <label className="text-xs text-gray-500">True</label>
+          <label className="text-xs text-gray-600 dark:text-gray-400">True</label>
           <input
             type="number"
             min="1"
@@ -619,7 +619,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
           />
         </div>
-        <span className="text-xs text-gray-500">times in last</span>
+        <span className="text-xs text-gray-600 dark:text-gray-400">times in last</span>
         <div className="flex items-center gap-1">
           <input
             type="number"
@@ -628,7 +628,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             onChange={(e) => onChange({...condition, confirmationBars: parseInt(e.target.value) || 1})}
             className="w-12 px-1 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
           />
-          <label className="text-xs text-gray-500">bars</label>
+          <label className="text-xs text-gray-600 dark:text-gray-400">bars</label>
         </div>
       </div>
 
@@ -718,9 +718,11 @@ export function validateExitRule(
 
   // Unknown ACTION (vocabulary known but action absent). Skip when the
   // vocabulary has no actions at all (offline / not yet loaded) to avoid a
-  // false positive on every rule.
-  if (actionValues.size > 0 && !actionValues.has(rule.action)) {
-    warnings.push(`Unknown action: ${rule.action}`);
+  // false positive on every rule. Loaded canonical/live rules may carry the
+  // backend `action_type` key instead of `action`, so fall back to it.
+  const ruleAction = rule.action ?? (rule as { action_type?: string }).action_type;
+  if (actionValues.size > 0 && !actionValues.has(ruleAction as string)) {
+    warnings.push(`Unknown action: ${ruleAction}`);
   }
 
   // Unknown FIELD on any leaf. Only check when the vocabulary actually carries
@@ -972,9 +974,9 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
 
           {/* Action */}
           <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-gray-200 dark:border-gray-600">
-            <label className="text-xs text-gray-500 dark:text-gray-400">Action:</label>
+            <label className="text-xs text-gray-600 dark:text-gray-400">Action:</label>
             <select
-              value={exitCond.action}
+              value={exitCond.action ?? (exitCond as { action_type?: string }).action_type ?? ''}
               onChange={(e) => {
                 const next = e.target.value;
                 const meta = actions.find((a) => a.value === next);
@@ -1039,10 +1041,10 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   placeholder="%"
                 />
-                <span className="text-xs text-gray-500">%</span>
+                <span className="text-xs text-gray-600 dark:text-gray-400">%</span>
 
                 {showOptimization && (
-                  <label className="flex items-center gap-1 text-xs text-gray-500">
+                  <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
                     <input
                       type="checkbox"
                       checked={exitCond.actionValueOptimize ?? false}
@@ -1079,7 +1081,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                     consensus_target (no scalar param). */}
                 {exitCond.optionStrikeMethod !== 'consensus_target' && (
                   <>
-                    <span className="text-xs text-gray-500">
+                    <span className="text-xs text-gray-600 dark:text-gray-400">
                       {exitCond.optionStrikeMethod === 'percent_otm' ? '% OTM' : 'Δ'}
                     </span>
                     <input
@@ -1094,7 +1096,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                       className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     />
                     {showOptimization && (
-                      <label className="flex items-center gap-1 text-xs text-gray-500">
+                      <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
                         <input
                           type="checkbox"
                           checked={exitCond.optionStrikeParamOptimize ?? false}
@@ -1113,7 +1115,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
 
                 {/* DTE min/max */}
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">DTE:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">DTE:</label>
                   <input
                     type="number"
                     step="1"
@@ -1124,7 +1126,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                     className="w-14 px-1 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     title="Min days to expiry"
                   />
-                  <span className="text-xs text-gray-500">-</span>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">-</span>
                   <input
                     type="number"
                     step="1"
@@ -1138,7 +1140,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                 </div>
 
                 {showOptimization && (
-                  <label className="flex items-center gap-1 text-xs text-gray-500" title="Optimize the DTE window">
+                  <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400" title="Optimize the DTE window">
                     <input
                       type="checkbox"
                       checked={exitCond.optionDteOptimize ?? false}
@@ -1153,7 +1155,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
 
                 {/* Sizing % */}
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Size:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Size:</label>
                   <input
                     type="number"
                     step="1"
@@ -1164,7 +1166,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                     className="w-16 px-1 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     title="Position sizing %"
                   />
-                  <span className="text-xs text-gray-500">%</span>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">%</span>
                 </div>
               </>
             )}
@@ -1177,7 +1179,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
               <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
                 <span className="text-xs text-gray-500 dark:text-gray-400">Range:</span>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Min:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Min:</label>
                   <input
                     type="number"
                     step="0.1"
@@ -1189,7 +1191,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   />
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Max:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Max:</label>
                   <input
                     type="number"
                     step="0.1"
@@ -1201,7 +1203,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   />
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Step:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Step:</label>
                   <input
                     type="number"
                     step="0.1"
@@ -1225,7 +1227,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   {exitCond.optionStrikeMethod === 'percent_otm' ? '% OTM' : 'Δ'} Range:
                 </span>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Min:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Min:</label>
                   <input
                     type="number"
                     step="0.01"
@@ -1237,7 +1239,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   />
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Max:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Max:</label>
                   <input
                     type="number"
                     step="0.01"
@@ -1249,7 +1251,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   />
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Step:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Step:</label>
                   <input
                     type="number"
                     step="0.01"
@@ -1270,7 +1272,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
               <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
                 <span className="text-xs text-gray-500 dark:text-gray-400">DTE Range:</span>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Min:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Min:</label>
                   <input
                     type="number"
                     step="1"
@@ -1282,7 +1284,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   />
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Max:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Max:</label>
                   <input
                     type="number"
                     step="1"
@@ -1294,7 +1296,7 @@ export const ExitConditionsBuilder: React.FC<ExitConditionsBuilderProps> = ({
                   />
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-gray-500">Step:</label>
+                  <label className="text-xs text-gray-600 dark:text-gray-400">Step:</label>
                   <input
                     type="number"
                     step="1"

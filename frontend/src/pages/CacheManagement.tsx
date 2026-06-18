@@ -16,8 +16,22 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
+  Play,
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
+import {
+  buildOhlcv,
+  buildScreenerMetrics,
+  buildOptions,
+  prewarmData,
+} from '../lib/btApi';
+import type { BuildResult } from '../lib/btApi';
+import { parseSymbols } from '../lib/symbols';
+
+// Flatten a build endpoint's {task_id} | {tasks:[...]} response into the task-id strings
+// so they can be surfaced to the user (the platform's task mechanism then tracks them).
+const taskIdsOf = (r: BuildResult): string[] =>
+  'tasks' in r ? (r.tasks || []).map((t) => t.task_id) : r.task_id ? [r.task_id] : [];
 
 // ---- Contract (matches app/api/cache.py / cache_manager.get_usage) ----
 interface CacheTypeUsage {
@@ -85,6 +99,54 @@ const CacheManagement: React.FC = () => {
     variant: 'danger' | 'warning' | 'info';
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} });
+
+  // --- Build / prewarm panel state (P2.6). Mirrors the ba2-test CLI data-prep commands. ---
+  const [buildOpen, setBuildOpen] = useState(false);
+  const [buildBusy, setBuildBusy] = useState<string | null>(null);  // which build is in-flight
+  // OHLCV
+  const [ohlcvSymbols, setOhlcvSymbols] = useState('');
+  const [ohlcvTimeframes, setOhlcvTimeframes] = useState('1d');
+  const [ohlcvStart, setOhlcvStart] = useState('2024-01-01');
+  const [ohlcvEnd, setOhlcvEnd] = useState('2024-12-31');
+  const [ohlcvProvider, setOhlcvProvider] = useState('');
+  // Screener metrics
+  const [smStore, setSmStore] = useState('~/Documents/ba2/trade/screener/metric_store');
+  const [smStart, setSmStart] = useState('2024-01-01');
+  const [smEnd, setSmEnd] = useState('2024-12-31');
+  const [smMarketCapMin, setSmMarketCapMin] = useState(1e9);
+  const [smPriceMin, setSmPriceMin] = useState('');
+  const [smVolumeMin, setSmVolumeMin] = useState('');
+  const [smCadenceDays, setSmCadenceDays] = useState(7);
+  const [smDropDays, setSmDropDays] = useState('');
+  // Options
+  const [optUnderlyings, setOptUnderlyings] = useState('');
+  const [optStart, setOptStart] = useState('2024-01-01');
+  const [optEnd, setOptEnd] = useState('2024-12-31');
+  const [optCacheDb, setOptCacheDb] = useState('');
+  const [optFeed, setOptFeed] = useState('');
+  // Prewarm
+  const [pwSymbols, setPwSymbols] = useState('');
+  const [pwExperts, setPwExperts] = useState('');
+  const [pwWorkers, setPwWorkers] = useState('');
+  const [pwEnd, setPwEnd] = useState('');
+
+  // Run a build action, surfacing the returned task id(s) in the shared message banner.
+  const runBuild = async (key: string, fn: () => Promise<BuildResult>) => {
+    setBuildBusy(key);
+    setError(null);
+    setMessage(null);
+    try {
+      const r = await fn();
+      const ids = taskIdsOf(r);
+      setMessage(ids.length
+        ? `${key}: queued ${ids.length} task(s) — ${ids.join(', ')}. Track progress in Running jobs.`
+        : `${key}: queued.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Build request failed');
+    } finally {
+      setBuildBusy(null);
+    }
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -340,6 +402,175 @@ const CacheManagement: React.FC = () => {
           {error}
         </div>
       )}
+
+      {/* Build / prewarm panel (P2.6) — POSTs to /api/data/* and surfaces the returned task id(s). */}
+      <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+        <button
+          onClick={() => setBuildOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left"
+        >
+          <span className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+            <Download size={18} />
+            Build / Prewarm data
+          </span>
+          {buildOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </button>
+        {buildOpen && (
+          <div className="px-4 pb-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* OHLCV */}
+            <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3 space-y-2">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">OHLCV history</h4>
+              <textarea
+                value={ohlcvSymbols}
+                onChange={(e) => setOhlcvSymbols(e.target.value)}
+                placeholder="Symbols: AAPL, MSFT, NVDA …"
+                rows={2}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input value={ohlcvTimeframes} onChange={(e) => setOhlcvTimeframes(e.target.value)}
+                  placeholder="Timeframes: 1d,5m" title="Comma-separated timeframes"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input value={ohlcvProvider} onChange={(e) => setOhlcvProvider(e.target.value)}
+                  placeholder="Provider (optional)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="date" value={ohlcvStart} onChange={(e) => setOhlcvStart(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="date" value={ohlcvEnd} onChange={(e) => setOhlcvEnd(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              </div>
+              <button
+                onClick={() => runBuild('OHLCV', () => buildOhlcv({
+                  symbols: parseSymbols(ohlcvSymbols),
+                  timeframes: ohlcvTimeframes.split(',').map((s) => s.trim()).filter(Boolean),
+                  start: ohlcvStart, end: ohlcvEnd,
+                  ...(ohlcvProvider.trim() ? { provider: ohlcvProvider.trim() } : {}),
+                }))}
+                disabled={buildBusy === 'OHLCV' || parseSymbols(ohlcvSymbols).length === 0}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+              >
+                {buildBusy === 'OHLCV' ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}
+                Build OHLCV
+              </button>
+            </div>
+
+            {/* Screener metrics */}
+            <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3 space-y-2">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Screener metrics</h4>
+              <input value={smStore} onChange={(e) => setSmStore(e.target.value)}
+                placeholder="Metric-store path"
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="date" value={smStart} onChange={(e) => setSmStart(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="date" value={smEnd} onChange={(e) => setSmEnd(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="number" value={smMarketCapMin} onChange={(e) => setSmMarketCapMin(Number(e.target.value))}
+                  placeholder="Market cap min" title="market_cap_min"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="number" value={smCadenceDays} onChange={(e) => setSmCadenceDays(Number(e.target.value))}
+                  placeholder="Cadence days" title="cadence_days"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="number" value={smPriceMin} onChange={(e) => setSmPriceMin(e.target.value)}
+                  placeholder="Price min (opt)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="number" value={smVolumeMin} onChange={(e) => setSmVolumeMin(e.target.value)}
+                  placeholder="Volume min (opt)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="number" value={smDropDays} onChange={(e) => setSmDropDays(e.target.value)}
+                  placeholder="Drop days (opt)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              </div>
+              <button
+                onClick={() => runBuild('Screener metrics', () => buildScreenerMetrics({
+                  store: smStore.trim(), start: smStart, end: smEnd, market_cap_min: smMarketCapMin,
+                  cadence_days: smCadenceDays,
+                  ...(smPriceMin.trim() ? { price_min: Number(smPriceMin) } : {}),
+                  ...(smVolumeMin.trim() ? { volume_min: Number(smVolumeMin) } : {}),
+                  ...(smDropDays.trim() ? { drop_days: Number(smDropDays) } : {}),
+                }))}
+                disabled={buildBusy === 'Screener metrics' || !smStore.trim()}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+              >
+                {buildBusy === 'Screener metrics' ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}
+                Build screener metrics
+              </button>
+            </div>
+
+            {/* Options */}
+            <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3 space-y-2">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Options chains</h4>
+              <textarea
+                value={optUnderlyings}
+                onChange={(e) => setOptUnderlyings(e.target.value)}
+                placeholder="Underlyings: AAPL, SPY …"
+                rows={2}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <input value={optCacheDb} onChange={(e) => setOptCacheDb(e.target.value)}
+                placeholder="Cache DB path"
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="date" value={optStart} onChange={(e) => setOptStart(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="date" value={optEnd} onChange={(e) => setOptEnd(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input value={optFeed} onChange={(e) => setOptFeed(e.target.value)}
+                  placeholder="Feed (optional)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              </div>
+              <button
+                onClick={() => runBuild('Options', () => buildOptions({
+                  underlyings: parseSymbols(optUnderlyings), start: optStart, end: optEnd,
+                  cache_db: optCacheDb.trim(),
+                  ...(optFeed.trim() ? { feed: optFeed.trim() } : {}),
+                }))}
+                disabled={buildBusy === 'Options' || parseSymbols(optUnderlyings).length === 0 || !optCacheDb.trim()}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+              >
+                {buildBusy === 'Options' ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}
+                Build options
+              </button>
+            </div>
+
+            {/* Prewarm */}
+            <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3 space-y-2">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Prewarm expert caches</h4>
+              <textarea
+                value={pwSymbols}
+                onChange={(e) => setPwSymbols(e.target.value)}
+                placeholder="Symbols: AAPL, MSFT …"
+                rows={2}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <input value={pwExperts} onChange={(e) => setPwExperts(e.target.value)}
+                placeholder="Experts (optional, comma-separated)"
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="number" value={pwWorkers} onChange={(e) => setPwWorkers(e.target.value)}
+                  placeholder="Workers (opt)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+                <input type="date" value={pwEnd} onChange={(e) => setPwEnd(e.target.value)}
+                  title="End date (optional)"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+              </div>
+              <button
+                onClick={() => runBuild('Prewarm', () => prewarmData({
+                  symbols: parseSymbols(pwSymbols),
+                  ...(pwExperts.trim() ? { experts: pwExperts.split(',').map((s) => s.trim()).filter(Boolean) } : {}),
+                  ...(pwWorkers.trim() ? { workers: Number(pwWorkers) } : {}),
+                  ...(pwEnd.trim() ? { end: pwEnd } : {}),
+                }))}
+                disabled={buildBusy === 'Prewarm' || parseSymbols(pwSymbols).length === 0}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+              >
+                {buildBusy === 'Prewarm' ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}
+                Prewarm
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {loading && Object.keys(usage).length === 0 ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400">

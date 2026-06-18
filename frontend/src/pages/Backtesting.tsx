@@ -32,11 +32,13 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import ConditionBuilder, {
   ExitConditionsBuilder,
   createEmptyGroup,
+  createEmptyCondition,
   isConditionGroup
 } from '../components/ConditionBuilder';
 // BacktestChart removed - price chart tab not used
 import type {
   ConditionGroup,
+  ConditionNode,
   ConditionTree,
   ExitConditionSet,
   AvailableField
@@ -53,7 +55,8 @@ import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
-import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport } from '../lib/btApi';
+import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport, listExperts, optimizeBatch } from '../lib/btApi';
+import type { ExpertInfo, OptimizeBatchJob, OptimizeBatchBody } from '../lib/btApi';
 import { RunningJobsPanel } from '../components/RunningJobsPanel';
 import { OptimizationJobsTable, OptJobSettingsDetail } from '../components/OptimizationJobsTable';
 import { TopIndividualsTable } from '../components/TopIndividualsTable';
@@ -341,6 +344,84 @@ const exitConditionFromStored = (raw: Record<string, unknown>): ExitConditionSet
   };
 };
 
+// Serialize a ConditionBuilder tree to the shape the optimizer reads: it walks each
+// leaf and adds the snake_case optimize-metadata keys the strategy_param_space builder
+// consumes (optimize, value_min/max/step, toggle_optimize, confirmation_bars_min/max/step)
+// ALONGSIDE the existing camelCase keys (so the editor still round-trips on reload). Each
+// node keeps its stable `id` (the optimizer keys genes by it: cond:<id>:*).
+const serializeConditionTree = (node: ConditionTree): Record<string, unknown> => {
+  if (isConditionGroup(node)) {
+    return {
+      ...node,
+      conditions: node.conditions.map(serializeConditionTree),
+    };
+  }
+  const leaf = node as unknown as Record<string, unknown> & {
+    optimizeEnabled?: boolean; valueMin?: number; valueMax?: number; valueStep?: number;
+    toggleOptimize?: boolean;
+    confirmationBars?: number; confirmationBarsMin?: number; confirmationBarsMax?: number; confirmationBarsStep?: number;
+  };
+  return {
+    ...leaf,
+    // optimize-metadata snake keys (additive; camelCase preserved by the spread above).
+    optimize: leaf.optimizeEnabled ?? false,
+    value_min: leaf.valueMin,
+    value_max: leaf.valueMax,
+    value_step: leaf.valueStep,
+    toggle_optimize: leaf.toggleOptimize,
+    confirmation_bars: leaf.confirmationBars,
+    confirmation_bars_min: leaf.confirmationBarsMin,
+    confirmation_bars_max: leaf.confirmationBarsMax,
+    confirmation_bars_step: leaf.confirmationBarsStep,
+  };
+};
+
+// Minimal snake->camel normalize for an imported ruleset JSON (#159). Loaded ruleset files
+// may carry the backend leaf vocabulary (event_type->field, operator->comparison) and snake
+// optimize keys; map them so the camelCase ConditionBuilder populates correctly. Tolerant of
+// either casing (already-camel files pass through unchanged).
+const normalizeLeaf = (raw: Record<string, unknown>): ConditionTree => {
+  // Group node: recurse into conditions.
+  if (Array.isArray(raw.conditions) && (raw.operator === 'AND' || raw.operator === 'OR')) {
+    return {
+      id: (raw.id as string) ?? createEmptyGroup('AND').id,
+      operator: raw.operator as 'AND' | 'OR',
+      conditions: (raw.conditions as Record<string, unknown>[]).map(normalizeLeaf),
+    } as ConditionGroup;
+  }
+  const pick = (...keys: string[]): unknown => {
+    for (const k of keys) if (raw[k] !== undefined) return raw[k];
+    return undefined;
+  };
+  return {
+    id: (raw.id as string) ?? createEmptyCondition().id,
+    field: (pick('field', 'event_type') as string) ?? '',
+    fieldType: (pick('fieldType', 'field_type') as string) ?? 'model_probability',
+    comparison: (pick('comparison', 'operator') as string) ?? 'gt',
+    value: (raw.value as ConditionNode['value']) ?? 0,
+    optimizeEnabled: (pick('optimizeEnabled', 'optimize') as boolean) ?? false,
+    toggleOptimize: pick('toggleOptimize', 'toggle_optimize') as boolean | undefined,
+    valueMin: pick('valueMin', 'value_min') as number | undefined,
+    valueMax: pick('valueMax', 'value_max') as number | undefined,
+    valueStep: pick('valueStep', 'value_step') as number | undefined,
+    confirmationRequired: pick('confirmationRequired', 'confirmation_required') as number | undefined,
+    confirmationBars: pick('confirmationBars', 'confirmation_bars') as number | undefined,
+    confirmationBarsMin: pick('confirmationBarsMin', 'confirmation_bars_min') as number | undefined,
+    confirmationBarsMax: pick('confirmationBarsMax', 'confirmation_bars_max') as number | undefined,
+    confirmationBarsStep: pick('confirmationBarsStep', 'confirmation_bars_step') as number | undefined,
+  } as ConditionNode;
+};
+
+// Normalize an imported entry tree into a ConditionGroup (the builders require a group root).
+const normalizeEntryTree = (raw: unknown): ConditionGroup => {
+  if (raw && typeof raw === 'object') {
+    const node = normalizeLeaf(raw as Record<string, unknown>);
+    if (isConditionGroup(node)) return node;
+    return { ...createEmptyGroup('AND'), conditions: [node] };
+  }
+  return createEmptyGroup('AND');
+};
+
 const Backtesting: React.FC = () => {
   const _navigate = useNavigate();
   void _navigate;
@@ -450,6 +531,74 @@ const Backtesting: React.FC = () => {
   const [launchingOpt, setLaunchingOpt] = useState(false);
   const [optNotice, setOptNotice] = useState<string | null>(null);
 
+  // Optimize-batch dialog (P3.8): launch one optimization per selected expert against the loaded
+  // strategy, reusing the same GA config + fitness + screener_opt assembly as runOptimization.
+  const [showBatchDialog, setShowBatchDialog] = useState(false);
+  const [batchExperts, setBatchExperts] = useState<ExpertInfo[]>([]);
+  const [batchSelected, setBatchSelected] = useState<Set<string>>(new Set());
+  const [batchLaunching, setBatchLaunching] = useState(false);
+  const [batchNotice, setBatchNotice] = useState<string | null>(null);
+  const [batchJobs, setBatchJobs] = useState<OptimizeBatchJob[]>([]);
+  useEffect(() => {
+    if (!showBatchDialog || batchExperts.length) return;
+    listExperts().then(setBatchExperts).catch(() => setBatchExperts([]));
+  }, [showBatchDialog, batchExperts.length]);
+
+  const runBatchOptimization = async () => {
+    if (loadedStrategyId == null) { setBatchNotice('Load or save a strategy first.'); return; }
+    if (batchSelected.size === 0) { setBatchNotice('Select at least one expert.'); return; }
+    try {
+      setBatchLaunching(true);
+      setBatchNotice(null);
+      setBatchJobs([]);
+      const backtestBlock: Record<string, unknown> = {
+        engine: 'daily',
+        universe,
+        start_date: startDate,
+        end_date: endDate,
+        initial_capital: initialCapital,
+        execution_interval: executionInterval,
+        commission,
+        slippage,
+      };
+      const body: OptimizeBatchBody = {
+        experts: [...batchSelected],
+        strategy_id: loadedStrategyId,
+        fitness_metric: optFitnessMetric,
+        optimization_type: optType,
+        expert_params: expertSettings.expert_params,
+        optimization_config: {
+          populationSize: optPopulationSize,
+          generations: optGenerations,
+          crossoverProb: optCrossoverProb,
+          mutationProb: optMutationProb,
+          earlyStoppingGenerations: optEarlyStopping,
+          elitismPercent: optElitismPercent,
+          seed: optSeed,
+          backtest: backtestBlock,
+        },
+        name_prefix: `Batch ${loadedStrategyName}`,
+      };
+      if (universe.mode === 'screener' && universe.screener_param_ranges
+          && Object.values(universe.screener_param_ranges).some(r => r.optimize)) {
+        if (!screenerStore.trim()) throw new Error('Screener metric-store path is required.');
+        body.screener_opt = {
+          store: screenerStore.trim(),
+          param_ranges: universe.screener_param_ranges,
+          cadence_days: screenerCadenceDays,
+          base_settings: universe.screener_settings,
+        };
+      }
+      const res = await optimizeBatch(body);
+      setBatchJobs(res.jobs ?? []);
+      setBatchNotice(`Queued ${res.count} optimization job(s).`);
+    } catch (e) {
+      setBatchNotice(e instanceof Error ? e.message : 'Failed to launch batch optimization.');
+    } finally {
+      setBatchLaunching(false);
+    }
+  };
+
   // Backtest settings
   const [initialCapital, setInitialCapital] = useState(10000);
   const [positionSizingType, setPositionSizingType] = useState('fixed');
@@ -532,11 +681,66 @@ const Backtesting: React.FC = () => {
   // Required by the daily_expert engine on the backend.
   const [fillModel, setFillModel] = useState<string>('next_bar_open');
   const [runSeed, setRunSeed] = useState<number>(42);
+  // Optional expert-engine New-Backtest fields (P1.2). warmupDays = extra history bars before the
+  // window; runSchedule controls how often the expert is invoked (daily vs a single weekday).
+  const [warmupDays, setWarmupDays] = useState<string>('');
+  const [runSchedule, setRunSchedule] = useState<'daily' | 'weekly'>('daily');
+  const [runScheduleDay, setRunScheduleDay] = useState<string>('Monday');
+  // Screener metric-store path for screener-settings optimization (P1.4). Defaults to the
+  // backend default; required when screener_opt is sent.
+  const [screenerStore, setScreenerStore] = useState<string>('~/Documents/ba2/trade/screener/metric_store');
+  // Cadence (days) for rebuilding the screener universe during screener-settings optimization.
+  const [screenerCadenceDays, setScreenerCadenceDays] = useState<number>(7);
 
   // New-Backtest "Import settings" control: outcome note after importing an exported
   // opt-settings / individual JSON into the form fields (part 5).
   const [importNote, setImportNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+
+  // Import-JSON ruleset (#159): load an expert ruleset JSON file (buy/sell enter trees + exit
+  // rules) into the condition builders, normalizing snake->camel so loaded rules populate.
+  const rulesetFileRef = useRef<HTMLInputElement>(null);
+  const importRulesetJson = (raw: string) => {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      setLiveImportNote({ kind: 'err', text: 'Invalid JSON — could not parse the ruleset file.' });
+      return;
+    }
+    try {
+      const buyRaw = parsed.buy_entry_conditions ?? parsed.buyEntryConditions;
+      const sellRaw = parsed.sell_entry_conditions ?? parsed.sellEntryConditions;
+      const exitRaw = (parsed.exit_rules ?? parsed.exit_conditions ?? parsed.rules ?? parsed.exitConditions) as unknown;
+      let buyCount = 0;
+      let sellCount = 0;
+      if (buyRaw) { const g = normalizeEntryTree(buyRaw); setBuyEntryConditions(g); buyCount = g.conditions.length; }
+      if (sellRaw) { const g = normalizeEntryTree(sellRaw); setSellEntryConditions(g); sellCount = g.conditions.length; }
+      const exitArr = Array.isArray(exitRaw) ? (exitRaw as Record<string, unknown>[]) : [];
+      if (exitArr.length) {
+        setExitConditions(exitArr.map((r, i) => {
+          const ec = exitConditionFromStored(r);
+          // exitConditionFromStored already maps action/action_value*; also resolve action_type
+          // and normalize the conditions tree (event_type->field, operator->comparison).
+          const action = (ec.action ?? (r.action_type as ExitConditionSet['action'])) as ExitConditionSet['action'];
+          const conds = r.conditions ? normalizeEntryTree(r.conditions) : ec.conditions;
+          return { ...ec, action, conditions: conds, id: ec.id ?? `exit-import-${Date.now()}-${i}` };
+        }));
+      }
+      setLiveImportNote({
+        kind: 'ok',
+        text: `Imported ruleset JSON: ${buyCount} buy / ${sellCount} sell condition(s), ${exitArr.length} exit rule(s).`,
+      });
+    } catch (e) {
+      setLiveImportNote({ kind: 'err', text: e instanceof Error ? e.message : 'Failed to apply the ruleset JSON.' });
+    }
+  };
+  const handleRulesetFile = (file: File | undefined) => {
+    if (!file) return;
+    file.text().then(importRulesetJson).catch(() =>
+      setLiveImportNote({ kind: 'err', text: 'Could not read the selected ruleset file.' }),
+    );
+  };
 
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -816,6 +1020,15 @@ const Backtesting: React.FC = () => {
             fill_model: fillModel,
             execution_interval: executionInterval,
             seed: runSeed,
+            // Optional expert-engine fields (P1.2) — omit when blank/default so existing runs
+            // are unchanged. warmup_days is a positive integer; run_schedule_day only matters
+            // when run_schedule is weekly.
+            ...(warmupDays.trim() !== '' && Number.isFinite(Number(warmupDays)) && Number(warmupDays) > 0
+              ? { warmup_days: Number(warmupDays) }
+              : {}),
+            ...(runSchedule === 'weekly'
+              ? { run_schedule: 'weekly', run_schedule_day: runScheduleDay }
+              : {}),
           })
         });
 
@@ -1074,12 +1287,16 @@ const Backtesting: React.FC = () => {
         body: JSON.stringify({
           name: saveStrategyName,
           description: saveStrategyDescription || null,
-          buy_entry_conditions: buyEntryConditions,
-          sell_entry_conditions: sellEntryConditions,
+          // Serialize the entry trees so each leaf carries the snake_case optimize metadata
+          // (optimize / value_min/max/step / toggle_optimize / confirmation_bars_*) the
+          // optimizer's strategy_param_space reads. camelCase keys are preserved too so the
+          // editor round-trips on reload.
+          buy_entry_conditions: serializeConditionTree(buyEntryConditions),
+          sell_entry_conditions: serializeConditionTree(sellEntryConditions),
           exit_conditions: exitConditions.map(ec => ({
             id: ec.id,
             name: ec.name,
-            conditions: ec.conditions,
+            conditions: serializeConditionTree(ec.conditions),
             action: ec.action,
             action_value: ec.actionValue,
             action_value_optimize: ec.actionValueOptimize,
@@ -1223,6 +1440,8 @@ const Backtesting: React.FC = () => {
         name: `Optimize ${loadedStrategyName} (${optFitnessMetric})`,
         fitness_metric: optFitnessMetric,
         optimization_type: optType,
+        // expert_params already carries the Opt-on expert settings + RM genes (keyed by real
+        // ba2 names) from ExpertSettingsForm.
         expert_params: expertSettings.expert_params,
         optimization_config: {
           populationSize: optPopulationSize,
@@ -1235,6 +1454,22 @@ const Backtesting: React.FC = () => {
           backtest: backtestBlock,
         },
       };
+
+      // Screener-settings optimization (P1.4): only when the universe is a screener AND at least
+      // one screener metric range is toggled to optimize. param_ranges keys are the unprefixed
+      // metric-store names produced by UniversePicker (market_cap_min, relative_volume_min, ...).
+      if (universe.mode === 'screener' && universe.screener_param_ranges
+          && Object.values(universe.screener_param_ranges).some(r => r.optimize)) {
+        if (!screenerStore.trim()) {
+          throw new Error('Screener metric-store path is required to optimize screener settings.');
+        }
+        body.screener_opt = {
+          store: screenerStore.trim(),
+          param_ranges: universe.screener_param_ranges,
+          cadence_days: screenerCadenceDays,
+          base_settings: universe.screener_settings,
+        };
+      }
 
       const res = await fetch(`${API_BASE}/strategies/${loadedStrategyId}/optimize`, {
         method: 'POST',
@@ -1882,7 +2117,7 @@ const Backtesting: React.FC = () => {
                       <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                         Expert Settings
                       </h4>
-                      <ExpertSettingsForm expertClass={expertClass} value={expertSettings} onChange={setExpertSettings} />
+                      <ExpertSettingsForm expertClass={expertClass} value={expertSettings} onChange={setExpertSettings} usesRiskManager={!expertBypassesRm} />
                     </div>
                   )}
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
@@ -1912,6 +2147,47 @@ const Backtesting: React.FC = () => {
                         className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                       />
                     </div>
+                  </div>
+                  {/* Warmup + run schedule (P1.2). warmup_days is optional (blank => engine default);
+                      run_schedule daily/weekly controls how often the expert is invoked. */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Warmup days (optional)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={warmupDays}
+                        placeholder="engine default"
+                        onChange={e => setWarmupDays(e.target.value)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Run schedule</label>
+                      <select
+                        value={runSchedule}
+                        onChange={e => setRunSchedule(e.target.value as 'daily' | 'weekly')}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      >
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                      </select>
+                    </div>
+                    {runSchedule === 'weekly' && (
+                      <div>
+                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Run day (weekly)</label>
+                        <select
+                          value={runScheduleDay}
+                          onChange={e => setRunScheduleDay(e.target.value)}
+                          className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        >
+                          {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(d => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2150,6 +2426,23 @@ const Backtesting: React.FC = () => {
                         {liveImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
                         Import from live
                       </button>
+                      {/* Import-JSON ruleset (#159): load buy/sell enter trees + exit rules from a
+                          ruleset JSON file (normalized snake->camel) into the builders below. */}
+                      <button
+                        type="button"
+                        onClick={() => rulesetFileRef.current?.click()}
+                        className="flex items-center gap-1 px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        <Upload className="w-4 h-4" />
+                        Import JSON
+                      </button>
+                      <input
+                        ref={rulesetFileRef}
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={(e) => { handleRulesetFile(e.target.files?.[0]); e.currentTarget.value = ''; }}
+                      />
                     </div>
                     {liveImportNote && (
                       <p
@@ -2369,6 +2662,18 @@ const Backtesting: React.FC = () => {
                   >
                     <Sliders className="w-4 h-4" />
                     Run Joint Optimization
+                  </button>
+                </Tooltip>
+                <Tooltip content={loadedStrategyId == null
+                  ? 'Load or save a strategy first'
+                  : 'Launch one optimization per selected expert against this strategy'}>
+                  <button
+                    onClick={() => { setBatchNotice(null); setBatchJobs([]); setShowBatchDialog(true); }}
+                    disabled={loadedStrategyId == null}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-indigo-500 rounded-lg hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <Layers className="w-4 h-4" />
+                    Optimize Batch
                   </button>
                 </Tooltip>
               </div>
@@ -2890,6 +3195,40 @@ const Backtesting: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Screener-settings optimization (P1.4). Shown when the universe is a screener
+                    with at least one metric range toggled to Opt — collects the metric-store path
+                    (required) + the rebuild cadence sent as screener_opt. */}
+                {universe.mode === 'screener'
+                  && universe.screener_param_ranges
+                  && Object.values(universe.screener_param_ranges).some(r => r.optimize) && (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-3">
+                    <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Screener optimization
+                    </h4>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Screener metric-store path</label>
+                      <input
+                        type="text"
+                        value={screenerStore}
+                        onChange={e => setScreenerStore(e.target.value)}
+                        placeholder="~/Documents/ba2/trade/screener/metric_store"
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Universe rebuild cadence (days)</label>
+                      <input
+                        type="number" min="1" step="1" value={screenerCadenceDays}
+                        onChange={e => setScreenerCadenceDays(parseInt(e.target.value) || 1)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {Object.values(universe.screener_param_ranges).filter(r => r.optimize).length} screener metric range(s) will be optimized.
+                    </p>
+                  </div>
+                )}
+
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   Backtest window {startDate} → {endDate}, capital ${initialCapital.toLocaleString()},
                   engine {selectedModel ? 'ML (model-driven)' : 'daily expert (multi-asset)'}.
@@ -2920,6 +3259,89 @@ const Backtesting: React.FC = () => {
                       Launch
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Optimize-Batch dialog (P3.8) */}
+      {showBatchDialog && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowBatchDialog(false)} />
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6">
+              <button onClick={() => setShowBatchDialog(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                <X className="w-5 h-5" />
+              </button>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center gap-2">
+                <Layers className="w-5 h-5 text-indigo-500" />
+                Optimize Batch
+              </h3>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
+                Launches one optimization per selected expert against "{loadedStrategyName}" using the GA
+                config + fitness metric below (set in the Run Joint Optimization dialog).
+              </p>
+              {batchNotice && (
+                <div className="mb-3 text-sm text-amber-600 dark:text-amber-400 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" /> {batchNotice}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Fitness Metric</label>
+                  <select value={optFitnessMetric} onChange={e => setOptFitnessMetric(e.target.value)}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100">
+                    {FITNESS_METRICS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Search</label>
+                  <select value={optType} onChange={e => setOptType(e.target.value as 'genetic' | 'brute_force')}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100">
+                    <option value="genetic">Genetic</option>
+                    <option value="brute_force">Brute Force</option>
+                  </select>
+                </div>
+              </div>
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-2 max-h-56 overflow-y-auto mb-3">
+                {batchExperts.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 p-2">Loading experts…</p>
+                ) : batchExperts.map(ex => (
+                  <label key={ex.class} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
+                    <input type="checkbox" className="rounded" checked={batchSelected.has(ex.class)}
+                      onChange={e => {
+                        const next = new Set(batchSelected);
+                        if (e.target.checked) next.add(ex.class); else next.delete(ex.class);
+                        setBatchSelected(next);
+                      }} />
+                    <span className="flex-1 text-sm text-gray-800 dark:text-gray-200">{ex.label}</span>
+                    {ex.bypasses_classic_rm && (
+                      <span className="text-xs px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded">bypass RM</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              {batchJobs.length > 0 && (
+                <div className="mb-3 text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                  {batchJobs.map(j => (
+                    <div key={j.optimizationId} className="flex justify-between bg-gray-50 dark:bg-gray-700/50 rounded px-2 py-1">
+                      <span className="font-medium">{j.expert}</span>
+                      <span className="text-gray-500 dark:text-gray-400">#{j.optimizationId} · task {j.taskId}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setShowBatchDialog(false)}
+                  className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+                  Close
+                </button>
+                <button onClick={runBatchOptimization} disabled={batchLaunching || batchSelected.size === 0}
+                  className="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-50 flex items-center gap-2">
+                  {batchLaunching ? <><Loader2 className="w-4 h-4 animate-spin" /> Launching…</> : <><Play className="w-4 h-4" /> Launch {batchSelected.size || ''}</>}
                 </button>
               </div>
             </div>

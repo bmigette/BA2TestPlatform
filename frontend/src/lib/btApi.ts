@@ -179,3 +179,55 @@ export const importLiveRuleset = (expertId: number) =>
 //   GET /experts/{id}/enter-market-ruleset           -> {buy_entry_conditions, sell_entry_conditions} (or 503/404)
 export const importLiveEnterMarket = (expertId: number) =>
   jget<{ buy_entry_conditions: any; sell_entry_conditions: any }>(`/experts/${expertId}/enter-market-ruleset`);
+
+// ---------------------------------------------------------------------------
+// Data build / prewarm endpoints (async). Each returns either {task_id} or
+// {tasks:[...]}; poll GET /api/tasks/{id} (listTasks/getTask) for progress.
+// Additive — these mirror the ba2-test CLI data-prep commands.
+// ---------------------------------------------------------------------------
+export interface TaskRef { task_id: string; }
+export interface TasksRef { tasks: Array<{ task_id: string; name?: string }>; }
+export type BuildResult = TaskRef | TasksRef;
+
+export interface BuildOhlcvBody {
+  symbols: string[]; timeframes: string[]; start: string; end: string; provider?: string;
+}
+export const buildOhlcv = (b: BuildOhlcvBody) => jpost<BuildResult>('/data/build-ohlcv', b);
+
+export interface BuildScreenerMetricsBody {
+  store: string; start: string; end: string; market_cap_min: number;
+  price_min?: number; volume_min?: number; cadence_days?: number; drop_days?: number;
+}
+export const buildScreenerMetrics = (b: BuildScreenerMetricsBody) =>
+  jpost<BuildResult>('/data/build-screener-metrics', b);
+
+export interface BuildOptionsBody {
+  underlyings: string[]; start: string; end: string; cache_db: string; feed?: string;
+}
+export const buildOptions = (b: BuildOptionsBody) => jpost<BuildResult>('/data/build-options', b);
+
+export interface PrewarmBody {
+  symbols: string[]; experts?: string[]; workers?: number; end?: string;
+}
+export const prewarmData = (b: PrewarmBody) => jpost<BuildResult>('/data/prewarm', b);
+
+// Fetch a single task's status (poll target for the build endpoints above).
+export const getTask = (id: string) => jget<TaskInfo>(`/tasks/${id}`);
+
+// ---------------------------------------------------------------------------
+// Batch optimization: launch one optimization per expert against a strategy.
+// POST /api/strategies/optimize-batch -> {jobs:[{expert,optimizationId,taskId,name}],count}.
+// ---------------------------------------------------------------------------
+export interface OptimizeBatchBody {
+  experts: string[];
+  strategy_id: number;
+  fitness_metric: string;
+  optimization_type: 'genetic' | 'brute_force';
+  optimization_config: Record<string, unknown>;
+  expert_params?: Record<string, unknown>;
+  screener_opt?: Record<string, unknown>;
+  name_prefix?: string;
+}
+export interface OptimizeBatchJob { expert: string; optimizationId: number; taskId: string; name: string; }
+export const optimizeBatch = (b: OptimizeBatchBody) =>
+  jpost<{ jobs: OptimizeBatchJob[]; count: number }>('/strategies/optimize-batch', b);
