@@ -73,6 +73,9 @@ class BacktestCreate(BaseModel):
     # falls back to its defaults (the bullish+flat enter ruleset / no brackets).
     buy_entry_conditions: Optional[dict] = None   # AND/OR condition tree -> config "buy_tree"
     sell_entry_conditions: Optional[dict] = None  # -> config "sell_tree"
+    enable_short: Optional[bool] = None           # -> config "enable_short": seed the symmetric
+                                                  # SHORT/sell enter rule + enable the RM sell gate
+                                                  # (the "Allow short" UI toggle). Default long-only.
     exit_conditions: Optional[list] = None        # -> config "exit_rules"
     initial_tp_percent: Optional[float] = None    # -> config "initial_tp_percent"
     initial_sl_percent: Optional[float] = None    # -> config "initial_sl_percent"
@@ -499,6 +502,8 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
         payload['buy_tree'] = backtest.buy_entry_conditions
     if backtest.sell_entry_conditions is not None:
         payload['sell_tree'] = backtest.sell_entry_conditions
+    if backtest.enable_short is not None:
+        payload['enable_short'] = bool(backtest.enable_short)
     if backtest.exit_conditions is not None:
         payload['exit_rules'] = backtest.exit_conditions
     if backtest.initial_tp_percent is not None:

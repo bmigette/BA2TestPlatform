@@ -573,6 +573,7 @@ const Backtesting: React.FC = () => {
         execution_interval: executionInterval,
         commission,
         slippage,
+        enable_short: allowShort,  // seed symmetric short entry + RM sell gate when shorting on
       };
       const body: OptimizeBatchBody = {
         experts: [...batchSelected],
@@ -1035,6 +1036,7 @@ const Backtesting: React.FC = () => {
             slippage,
             buy_entry_conditions: buyEntryConditions,
             sell_entry_conditions: effectiveSellEntryConditions,
+            enable_short: allowShort,  // seed symmetric short entry + RM sell gate when shorting on
             // snake_case so the daily-engine rule builder (action_from_rule) reads
             // the action + reference_value + option_* selection params.
             exit_conditions: exitConditions.map(exitConditionToSnake),
@@ -1452,6 +1454,7 @@ const Backtesting: React.FC = () => {
             execution_interval: executionInterval,
             commission,
             slippage,
+            enable_short: allowShort,  // seed symmetric short entry + RM sell gate when shorting on
           }
         : {
             engine: 'ml',

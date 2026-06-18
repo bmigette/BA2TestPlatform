@@ -755,6 +755,9 @@ def _build_daily_trial_config(
         "buy_tree": decoded.get("buy_tree"),
         "sell_tree": decoded.get("sell_tree"),
         "exit_rules": decoded.get("exit_rules"),
+        # "Allow short" -> seed the symmetric SHORT enter rule + RM sell gate (mirrors the
+        # single-backtest path). Carried from the run-level optimize backtest block.
+        "enable_short": bool(backtest_cfg.get("enable_short")),
         # Initial TP/SL bracket percents (the tp/sl genes) — applied per opened position by
         # the daily engine so trades actually close.
         "initial_tp_percent": initial_tp,
