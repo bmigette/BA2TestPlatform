@@ -446,6 +446,14 @@ const Backtesting: React.FC = () => {
   // Strategy configuration
   const [buyEntryConditions, setBuyEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
   const [sellEntryConditions, setSellEntryConditions] = useState<ConditionGroup>(createEmptyGroup('AND'));
+  // "Allow short" gates the short-entry ruleset. Default OFF (long-only). When ON, the Short
+  // Entry Conditions block is shown and sell_entry_conditions is sent in the payload; when OFF,
+  // an empty group is sent (the backend seeds no SELL/short enter rule for an empty tree).
+  // NOTE: the engine ALSO has an `enable_short` config flag (daily_backtest_handler) that gates
+  // the RM enable_sell + symmetric SELL rule, but the public BacktestCreate / optimize request
+  // schemas do NOT expose it (Pydantic drops unknown fields), so it cannot be wired from the
+  // frontend without a backend change. Gating the sell tree is the supported lever here.
+  const [allowShort, setAllowShort] = useState(false);
   const [exitConditions, setExitConditions] = useState<ExitConditionSet[]>([]);
   // Import-from-live-expert control (B8): the backtest UI picks an expert CLASS, but live import
   // needs a live expert INSTANCE id, so we collect it explicitly. Graceful on 503 (live DB not
@@ -476,6 +484,8 @@ const Backtesting: React.FC = () => {
       if (enter.sell_entry_conditions && isConditionGroup(enter.sell_entry_conditions)) {
         setSellEntryConditions(enter.sell_entry_conditions);
         sellCount = enter.sell_entry_conditions.conditions.length;
+        // Auto-enable "Allow short" when the imported expert carries a short tree.
+        if (sellCount > 0) setAllowShort(true);
       }
       const exitRules = Array.isArray(rules) ? rules : [];
       setExitConditions(
@@ -534,6 +544,9 @@ const Backtesting: React.FC = () => {
   // Optimize-batch dialog (P3.8): launch one optimization per selected expert against the loaded
   // strategy, reusing the same GA config + fitness + screener_opt assembly as runOptimization.
   const [showBatchDialog, setShowBatchDialog] = useState(false);
+  // The single "Optimize" button fires the single joint-optimization dialog when OFF, or the
+  // multi-expert batch dialog when ON. Both code paths are kept intact.
+  const [optimizeAcrossExperts, setOptimizeAcrossExperts] = useState(false);
   const [batchExperts, setBatchExperts] = useState<ExpertInfo[]>([]);
   const [batchSelected, setBatchSelected] = useState<Set<string>>(new Set());
   const [batchLaunching, setBatchLaunching] = useState(false);
@@ -718,7 +731,7 @@ const Backtesting: React.FC = () => {
       let buyCount = 0;
       let sellCount = 0;
       if (buyRaw) { const g = normalizeEntryTree(buyRaw); setBuyEntryConditions(g); buyCount = g.conditions.length; }
-      if (sellRaw) { const g = normalizeEntryTree(sellRaw); setSellEntryConditions(g); sellCount = g.conditions.length; }
+      if (sellRaw) { const g = normalizeEntryTree(sellRaw); setSellEntryConditions(g); sellCount = g.conditions.length; if (sellCount > 0) setAllowShort(true); }
       const exitArr = Array.isArray(exitRaw) ? (exitRaw as Record<string, unknown>[]) : [];
       if (exitArr.length) {
         setExitConditions(exitArr.map((r, i) => {
@@ -928,11 +941,18 @@ const Backtesting: React.FC = () => {
       return;
     }
 
-    const sellError = validateConditions(sellEntryConditions, 'Sell Entry');
-    if (sellError) {
-      setError(sellError);
-      return;
+    // Short entry is only validated/sent when "Allow short" is on. When off, an empty group is
+    // sent so the backend seeds no SELL/short enter rule.
+    if (allowShort) {
+      const sellError = validateConditions(sellEntryConditions, 'Short Entry');
+      if (sellError) {
+        setError(sellError);
+        return;
+      }
     }
+    const effectiveSellEntryConditions: ConditionGroup = allowShort
+      ? sellEntryConditions
+      : createEmptyGroup('AND');
 
     for (let i = 0; i < exitConditions.length; i++) {
       const exitError = validateConditions(exitConditions[i].conditions, `Exit Rule "${exitConditions[i].name}"`);
@@ -949,7 +969,7 @@ const Backtesting: React.FC = () => {
       // Build strategy params from current form state
       const strategyParams = {
         buyEntryConditions,
-        sellEntryConditions,
+        sellEntryConditions: effectiveSellEntryConditions,
         exitConditions: exitConditions.map(ec => ({
           id: ec.id,
           name: ec.name,
@@ -1014,7 +1034,7 @@ const Backtesting: React.FC = () => {
             commission,
             slippage,
             buy_entry_conditions: buyEntryConditions,
-            sell_entry_conditions: sellEntryConditions,
+            sell_entry_conditions: effectiveSellEntryConditions,
             // snake_case so the daily-engine rule builder (action_from_rule) reads
             // the action + reference_value + option_* selection params.
             exit_conditions: exitConditions.map(exitConditionToSnake),
@@ -1295,7 +1315,11 @@ const Backtesting: React.FC = () => {
           // optimizer's strategy_param_space reads. camelCase keys are preserved too so the
           // editor round-trips on reload.
           buy_entry_conditions: serializeConditionTree(buyEntryConditions),
-          sell_entry_conditions: serializeConditionTree(sellEntryConditions),
+          // When "Allow short" is off, persist an empty short tree so the saved strategy is
+          // long-only (and round-trips with allowShort=false on reload).
+          sell_entry_conditions: serializeConditionTree(
+            allowShort ? sellEntryConditions : createEmptyGroup('AND'),
+          ),
           exit_conditions: exitConditions.map(ec => ({
             id: ec.id,
             name: ec.name,
@@ -1368,11 +1392,14 @@ const Backtesting: React.FC = () => {
       setBuyEntryConditions(createEmptyGroup('AND'));
     }
 
-    // Load sell entry conditions
+    // Load sell entry conditions. Auto-enable "Allow short" when the saved strategy has a
+    // non-empty short tree so it round-trips (otherwise default to long-only).
     if (strategy.sellEntryConditions && isConditionGroup(strategy.sellEntryConditions)) {
       setSellEntryConditions(strategy.sellEntryConditions);
+      setAllowShort(strategy.sellEntryConditions.conditions.length > 0);
     } else {
       setSellEntryConditions(createEmptyGroup('AND'));
+      setAllowShort(false);
     }
 
     // Load exit conditions. Stored rules carry snake_case fields (save/run write
@@ -1883,7 +1910,7 @@ const Backtesting: React.FC = () => {
                             </div>
                             {buyConditions.length > 0 && (
                               <div>
-                                <h4 className="text-sm font-semibold text-green-600 mb-2">Buy Entry Conditions ({buyConditions.length})</h4>
+                                <h4 className="text-sm font-semibold text-green-600 mb-2">Entry Conditions ({buyConditions.length})</h4>
                                 <div className="space-y-1">
                                   {buyConditions.map((c: any, i: number) => (
                                     <div key={i} className="text-sm bg-green-50 dark:bg-green-900/20 rounded px-3 py-1.5 text-green-800 dark:text-green-300">
@@ -1895,7 +1922,7 @@ const Backtesting: React.FC = () => {
                             )}
                             {sellConditions.length > 0 && (
                               <div>
-                                <h4 className="text-sm font-semibold text-red-600 mb-2">Sell Entry Conditions ({sellConditions.length})</h4>
+                                <h4 className="text-sm font-semibold text-red-600 mb-2">Short Entry Conditions ({sellConditions.length})</h4>
                                 <div className="space-y-1">
                                   {sellConditions.map((c: any, i: number) => (
                                     <div key={i} className="text-sm bg-red-50 dark:bg-red-900/20 rounded px-3 py-1.5 text-red-800 dark:text-red-300">
@@ -2400,9 +2427,22 @@ const Backtesting: React.FC = () => {
 
               {/* Entry/Exit Condition Buttons */}
               <div className="space-y-2 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-                  <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                    Strategy Conditions
-                  </h4>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Strategy Conditions
+                    </h4>
+                    {/* Allow short: when off the strategy is long-only (Entry/Exit). When on, the
+                        Short Entry Conditions block is shown and its tree is sent. */}
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={allowShort}
+                        onChange={(e) => setAllowShort(e.target.checked)}
+                        className="rounded border-gray-300 dark:border-gray-600 text-red-600 focus:ring-red-500"
+                      />
+                      Allow short
+                    </label>
+                  </div>
 
                   {/* Import from a LIVE expert instance (B8). The backtest UI picks an expert CLASS,
                       so the live INSTANCE id is collected here. Loads buy/sell entry trees + exit
@@ -2462,7 +2502,7 @@ const Backtesting: React.FC = () => {
                     className="flex items-center gap-2 text-sm font-semibold text-white w-full p-2 bg-green-700 hover:bg-green-800 rounded-lg border border-green-800 shadow-sm"
                   >
                     <TrendingUp className="w-4 h-4 text-white" />
-                    <span className="flex-1 text-left">Buy Entry Conditions</span>
+                    <span className="flex-1 text-left">Entry Conditions</span>
                     <span className="text-xs font-medium text-green-100">{buyEntryConditions.conditions.length} condition{buyEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
                     <ChevronDown className="w-4 h-4 text-white" />
                   </button>
@@ -2473,22 +2513,26 @@ const Backtesting: React.FC = () => {
                       onImport={(tree) => { if (isConditionGroup(tree)) setBuyEntryConditions(tree); }}
                     />
                   </div>
-                  <button
-                    onClick={() => setShowConditionModal('sell')}
-                    className="flex items-center gap-2 text-sm font-semibold text-white w-full p-2 bg-red-700 hover:bg-red-800 rounded-lg border border-red-800 shadow-sm"
-                  >
-                    <TrendingDown className="w-4 h-4 text-white" />
-                    <span className="flex-1 text-left">Sell Entry Conditions</span>
-                    <span className="text-xs font-medium text-red-100">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
-                    <ChevronDown className="w-4 h-4 text-white" />
-                  </button>
-                  <div className="flex justify-end gap-1 text-xs">
-                    <RuleIO
-                      which="enter"
-                      tree={sellEntryConditions}
-                      onImport={(tree) => { if (isConditionGroup(tree)) setSellEntryConditions(tree); }}
-                    />
-                  </div>
+                  {allowShort && (
+                    <>
+                      <button
+                        onClick={() => setShowConditionModal('sell')}
+                        className="flex items-center gap-2 text-sm font-semibold text-white w-full p-2 bg-red-700 hover:bg-red-800 rounded-lg border border-red-800 shadow-sm"
+                      >
+                        <TrendingDown className="w-4 h-4 text-white" />
+                        <span className="flex-1 text-left">Short Entry Conditions</span>
+                        <span className="text-xs font-medium text-red-100">{sellEntryConditions.conditions.length} condition{sellEntryConditions.conditions.length !== 1 ? 's' : ''}</span>
+                        <ChevronDown className="w-4 h-4 text-white" />
+                      </button>
+                      <div className="flex justify-end gap-1 text-xs">
+                        <RuleIO
+                          which="enter"
+                          tree={sellEntryConditions}
+                          onImport={(tree) => { if (isConditionGroup(tree)) setSellEntryConditions(tree); }}
+                        />
+                      </div>
+                    </>
+                  )}
                   <button
                     onClick={() => setShowConditionModal('exit')}
                     className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 w-full p-2 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
@@ -2520,7 +2564,7 @@ const Backtesting: React.FC = () => {
                       same buy/sell/exit state, so it updates as Optimize toggles change. */}
                   <GeneCountPreview
                     buyTree={buyEntryConditions}
-                    sellTree={sellEntryConditions}
+                    sellTree={allowShort ? sellEntryConditions : createEmptyGroup('AND')}
                     exitRules={exitConditions}
                   />
                 </div>
@@ -2643,7 +2687,7 @@ const Backtesting: React.FC = () => {
                 </div>
               )}
 
-              {/* Save Strategy + Run Joint Optimization */}
+              {/* Save Strategy + Optimize (single joint, or batch across experts) */}
               <div className="flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-4">
                 <Tooltip content="Save current strategy configuration for later use">
                   <button
@@ -2654,30 +2698,41 @@ const Backtesting: React.FC = () => {
                     Save Strategy
                   </button>
                 </Tooltip>
+                {/* One Optimize button. The "across multiple experts" toggle selects which existing
+                    flow it fires: OFF -> single joint-optimization dialog (runOptimization path);
+                    ON -> multi-expert batch dialog (optimizeBatch path). Both paths are unchanged. */}
                 <Tooltip content={loadedStrategyId == null
                   ? 'Load or save a strategy first to optimize it'
-                  : `Run joint genetic optimization for "${loadedStrategyName}"`}>
+                  : optimizeAcrossExperts
+                    ? 'Launch one optimization per selected expert against this strategy'
+                    : `Run joint genetic optimization for "${loadedStrategyName}"`}>
                   <button
-                    onClick={() => { setOptNotice(null); setShowOptimizeDialog(true); }}
+                    onClick={() => {
+                      if (optimizeAcrossExperts) {
+                        setBatchNotice(null);
+                        setBatchJobs([]);
+                        setShowBatchDialog(true);
+                      } else {
+                        setOptNotice(null);
+                        setShowOptimizeDialog(true);
+                      }
+                    }}
                     disabled={loadedStrategyId == null}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-amber-500 rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
-                    <Sliders className="w-4 h-4" />
-                    Run Joint Optimization
+                    {optimizeAcrossExperts ? <Layers className="w-4 h-4" /> : <Sliders className="w-4 h-4" />}
+                    {optimizeAcrossExperts ? 'Optimize Batch' : 'Optimize'}
                   </button>
                 </Tooltip>
-                <Tooltip content={loadedStrategyId == null
-                  ? 'Load or save a strategy first'
-                  : 'Launch one optimization per selected expert against this strategy'}>
-                  <button
-                    onClick={() => { setBatchNotice(null); setBatchJobs([]); setShowBatchDialog(true); }}
-                    disabled={loadedStrategyId == null}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-indigo-500 rounded-lg hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Layers className="w-4 h-4" />
-                    Optimize Batch
-                  </button>
-                </Tooltip>
+                <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={optimizeAcrossExperts}
+                    onChange={(e) => setOptimizeAcrossExperts(e.target.checked)}
+                    className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  across multiple experts
+                </label>
               </div>
 
               {/* Advanced Options Toggle */}
@@ -3036,8 +3091,8 @@ const Backtesting: React.FC = () => {
                 <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-sm">
                   <p className="font-medium text-gray-700 dark:text-gray-300 mb-2">Current Configuration:</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 dark:text-gray-400">
-                    <span>Buy conditions: {buyEntryConditions.conditions.length}</span>
-                    <span>Sell conditions: {sellEntryConditions.conditions.length}</span>
+                    <span>Entry conditions: {buyEntryConditions.conditions.length}</span>
+                    {allowShort && <span>Short conditions: {sellEntryConditions.conditions.length}</span>}
                     <span>Exit rules: {exitConditions.length}</span>
                     <span>TP: {initialTpPercent}% / SL: {initialSlPercent}%</span>
                   </div>
@@ -3366,13 +3421,13 @@ const Backtesting: React.FC = () => {
                   {showConditionModal === 'buy' && (
                     <>
                       <TrendingUp className="w-5 h-5 text-green-500" />
-                      Buy Entry Conditions
+                      Entry Conditions
                     </>
                   )}
                   {showConditionModal === 'sell' && (
                     <>
                       <TrendingDown className="w-5 h-5 text-red-500" />
-                      Sell Entry Conditions
+                      Short Entry Conditions
                     </>
                   )}
                   {showConditionModal === 'exit' && (
