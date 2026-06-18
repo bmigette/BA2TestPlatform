@@ -150,3 +150,59 @@ The backtest already supports options end-to-end — defining it here for when w
   protective put** (hedge), with delta + DTE optimized. Calmar fitness, 5min fill clock.
 - **Status:** infrastructure done + unit-tested; **run after** the equity grids (needs the
   options cache fetched for the universe + the 2024-02 floor).
+
+---
+
+# Revised plan — approaches as optimization profiles (2026-06-18)
+
+The dev instances encode distinct APPROACHES across 4 dimensions. Some fold into genes (best),
+some need a separate run (a "profile"):
+
+| Dimension | Handled by | Covered? |
+|---|---|---|
+| reference price (cons/stat/low), risk type | **gene** (`target_price_type` categorical) | ✅ |
+| factor tilt (momentum/value/quality/multi) | **genes** (factor weights) | ✅ |
+| **universe** (nas30 / n50 / screener-large / screener-mid) | **separate run per universe** | needs profiles |
+| **options strategy** (11× OPT-*) | **one exit-ruleset template per strategy** | not built |
+
+## Code support — CONFIRMED ✅
+The screener universe is already optimizable: `metric_store.select` filters a pre-built store
+per-trial on `market_cap_min` **and** `market_cap_max`, `relative_volume_min`, `price_drop_pct`,
+`weinstein_stage2_only`, `max_stocks`, `sort_metric`. `optimize-batch --screener --screener-store`
+attaches the store + routes the `screener:*` genes per-trial. So **"pin the cap to mid/large,
+optimize the rest"** = put the cap min/max in the fixed screener base and keep cap OUT of the
+optimized genes. **No code change needed.**
+- Prereq (data): build a **broad** metric store covering midcaps — `ba2-test build-screener-metrics`.
+- One `--universe`/`--screener-store` per `optimize-batch` invocation today → run **one invocation
+  per universe profile** (or a small driver enhancement to iterate universes). The ~20 runs below
+  are a handful of invocations.
+
+## Universe set (your call)
+- **Keep** `nas30` (static large-cap NDQ30). **Add** `n50` (NASDAQ-50, static).
+- **Drop** `ark26`.
+- **Screener flavours** (cap FIXED, other screener settings OPTIMIZED): `scr-large`
+  (cap_min=10B, cap_max=0), `scr-mid` (cap_min=2B, cap_max=10B). Optimized screener genes:
+  `relative_volume_min`, `price_drop_pct`, `max_stocks`, `weinstein_stage2_only`.
+
+## Profile matrix (~20 runs)
+**FMPRating** × {nas30, n50, scr-large, scr-mid} × {S1, S2, S3, S4} = **16 runs**.
+**FactorRanker** × {n50, scr-large, scr-mid} = **3 runs** (factor weights are genes; screener
+settings optimized on the scr ones). Deferred to perf pass (#47).
+**Other FMP experts:**
+- **FMPEarningsDrift**, **FMPInsiderClusterBuy** → **scr-mid** × {S1,S2,S3} (small/midcap edge; #46).
+- **FMPSenateTraderWeight** → **broad universe** (senate trades are sparse; assess a wide list /
+  screener with no/low cap floor) × {S1,S2,S3}.
+- **FinnHubRating** → **dropped** (redundant with FMPRating).
+
+## Options strategies (the 11 OPT-* approaches)
+The dev account's 11 `OPT-*` FMPRating instances are 11 distinct **option-strategy templates**:
+LongCall, BullCallSpread, BearCallSpread, LongPut, BearPutSpread, ProtectivePut, CoveredCall,
+CashSecuredPut, Straddle, Strangle, Wheel. Each = an FMPRating entry + an option-action exit
+ruleset, optimized via `option_delta`/`option_dte` genes (2024-02 floor, $20k capital). These
+are the bulk of the options-backtest work — one template each — run **after** the equity grids.
+
+## Build order
+1. **Now:** FMPRating S1/S2/S3/S4 on **nas30** (running).
+2. Build broad metric store(s) → FMPRating on **n50 / scr-large / scr-mid**.
+3. Screener/midcap FMP experts (#46) + FactorRanker (#47) after the perf pass.
+4. Options templates (11) after the equity grids.

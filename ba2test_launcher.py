@@ -544,18 +544,8 @@ _EXPERT_OPT = {
         },
         "fixed_settings": {},
     },
-    # FinnHubRating — analyst-consensus rating (like FMPRating but FinnHub source); large-cap
-    # NDQ30 universe. Optimizes the rating bucket thresholds. (No analyst target price -> S4
-    # target-anchoring falls back to entry-percent; run S1/S2/S3.)
-    "FinnHubRating": {
-        "expert_params": {
-            "buy_threshold": {"optimize": True, "min": 3.8, "max": 5.0, "step": 0.1, "type": "float"},
-            "overweight_threshold": {"optimize": True, "min": 3.0, "max": 4.0, "step": 0.1, "type": "float"},
-            "hold_threshold": {"optimize": True, "min": 2.0, "max": 3.0, "step": 0.1, "type": "float"},
-            "underweight_threshold": {"optimize": True, "min": 1.0, "max": 2.0, "step": 0.1, "type": "float"},
-        },
-        "fixed_settings": {},
-    },
+    # NOTE: FinnHubRating is intentionally NOT optimized — it is REDUNDANT with FMPRating (both
+    # are analyst-consensus rating experts on the same large-cap universe).
     # FMPSenateTraderWeight — congressional (senate) disclosed-trade signal. Sparse per symbol,
     # so it needs a BROAD universe where senators actually trade (NDQ30 is too narrow; assess a
     # wider list). Optimizes the disclosure/recency/consensus knobs.
