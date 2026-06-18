@@ -279,12 +279,23 @@ async def startup_event():
     # queue does NOT exclude 'daily_backtest'/'strategy_optimization', so it consumes them.
     from app.services.backtest.daily_backtest_handler import handle_daily_backtest
     from app.services.strategy_optimization_handler import handle_strategy_optimization
+    # Data-build handlers (mirror the ba2-test build commands; driven by /api/data/* endpoints).
+    # These run on the main queue (it does NOT exclude these task types). OHLCV builds go to the
+    # dedicated OHLCV queue via its existing ohlcv_cache_fetch handler (registered below).
+    from app.services.data_build_handler import (
+        handle_build_screener_metrics,
+        handle_build_options,
+        handle_prewarm,
+    )
     task_queue = get_task_queue()
     task_queue.register_handler('dataset_regeneration', handle_dataset_regeneration)
     task_queue.register_handler('news_batch_fetch', handle_news_batch_fetch)
     task_queue.register_handler('daily_backtest', handle_daily_backtest)
     task_queue.register_handler('strategy_optimization', handle_strategy_optimization)
-    logger.info("Registered main task handlers: dataset_regeneration, news_batch_fetch, daily_backtest, strategy_optimization")
+    task_queue.register_handler('build_screener_metrics', handle_build_screener_metrics)
+    task_queue.register_handler('build_options', handle_build_options)
+    task_queue.register_handler('prewarm', handle_prewarm)
+    logger.info("Registered main task handlers: dataset_regeneration, news_batch_fetch, daily_backtest, strategy_optimization, build_screener_metrics, build_options, prewarm")
 
     # Initialize dedicated training queue (2 workers — keeps GPU from being overloaded)
     init_training_task_queue(max_workers=2)
@@ -379,7 +390,7 @@ async def global_exception_handler(request, exc):
 
 
 # Import and include routers
-from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools, target_sets, strategies, admin, cache, experts, rules, ruleset_meta
+from app.api import datasets, jobs, workers, dashboard, models, backtests, ml, settings, websocket, tasks, indicator_collections, tools, target_sets, strategies, admin, cache, experts, rules, ruleset_meta, data_build
 
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
@@ -400,6 +411,7 @@ app.include_router(rules.router)
 app.include_router(strategies.router, prefix="/api/strategies", tags=["strategies"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(cache.router, prefix="/api/cache", tags=["cache"])
+app.include_router(data_build.router, prefix="/api/data", tags=["data-build"])
 app.include_router(experts.router, tags=["experts"])
 # ruleset_meta carries its own /api prefix -> /api/ruleset/vocabulary, /api/ruleset/exit-presets
 app.include_router(ruleset_meta.router, tags=["ruleset-meta"])

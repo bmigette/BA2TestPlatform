@@ -17,6 +17,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Weekday names the engine's _entry_schedule recognises (matches the CLI launcher's set).
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _run_schedule_override(run_schedule: Optional[str], run_schedule_day: Optional[str]) -> Optional[dict]:
+    """Translate the API's run_schedule/run_schedule_day knobs into the engine's
+    ``run_schedule_override`` dict, mirroring the CLI launcher's daily/weekly handling.
+
+      * run_schedule None or "daily"  -> None (no override; the engine analyses every bar).
+      * run_schedule "weekly"         -> {"days": {weekday: bool}, "times": ["09:30"]} with only
+        ``run_schedule_day`` (default "monday") enabled. ``times`` pins ANALYSIS to the first
+        regular-session bar so an intraday fill clock still analyses once that day (identical to
+        the CLI's _cmd_optimize/_cmd_backtest behaviour).
+
+    Fail-early (no silent bad defaults, backend/CLAUDE.md): an unknown run_schedule or an unknown
+    weekday raises ValueError (the route turns it into a 400).
+    """
+    if run_schedule is None or run_schedule == "daily":
+        return None
+    if run_schedule != "weekly":
+        raise ValueError(f"run_schedule must be 'daily' or 'weekly', got {run_schedule!r}")
+    day = (run_schedule_day or "monday").lower()
+    if day not in _WEEKDAYS:
+        raise ValueError(f"run_schedule_day must be one of {_WEEKDAYS}, got {run_schedule_day!r}")
+    return {"days": {d: (d == day) for d in _WEEKDAYS}, "times": ["09:30"]}
+
 
 class BacktestCreate(BaseModel):
     """Request model for creating a backtest.
@@ -70,6 +96,15 @@ class BacktestCreate(BaseModel):
     seed: Optional[int] = None
     warmup_days: Optional[int] = None
     execution_interval: Optional[str] = None  # simulation bar size, e.g. "1d" (default) | "1h" | "5m"
+    # ENTRY CADENCE (daily_expert path; mirrors the CLI run_daily_backtest --run-schedule).
+    # run_schedule "daily" (default) -> analyse every bar; "weekly" -> analyse once per week on
+    # ``run_schedule_day`` (a weekday name, default "monday"). The engine reads a
+    # ``run_schedule_override`` dict ({"days": {weekday: bool}, "times": [...]}) which this build
+    # path derives from these two fields (see ``_run_schedule_override``). Both OPTIONAL: omitted
+    # or run_schedule="daily" -> no override -> the engine analyses every bar (byte-for-byte
+    # unchanged from before). Ignored on the ML path.
+    run_schedule: Optional[str] = None        # "daily" (default) | "weekly"
+    run_schedule_day: Optional[str] = None    # weekday name for run_schedule="weekly"; default "monday"
 
 
 class DailyExpertSpec(BaseModel):
@@ -99,6 +134,10 @@ class DailyBacktestCreate(BaseModel):
     seed: int
     fitness_metric: Optional[str] = None
     warmup_days: Optional[int] = None
+    # Entry cadence (mirrors BacktestCreate / the CLI --run-schedule). Optional: omitted ->
+    # analyse every bar. See ``_run_schedule_override``.
+    run_schedule: Optional[str] = None        # "daily" (default) | "weekly"
+    run_schedule_day: Optional[str] = None    # weekday name for run_schedule="weekly"
 
 
 class BacktestListResponse(BaseModel):
@@ -391,6 +430,15 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
 
+    # Entry cadence: derive the engine's run_schedule_override from the optional run_schedule
+    # knobs (fail-early on a bad value). None -> analyse every bar (legacy).
+    try:
+        run_schedule_override = _run_schedule_override(
+            backtest.run_schedule, backtest.run_schedule_day
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     db_backtest = Backtest(
         name=backtest.name,
         model_id=None,  # daily expert runs are not model-driven
@@ -430,6 +478,10 @@ def _create_daily_expert_backtest(backtest: "BacktestCreate", db: Session) -> di
         'warmup_days': backtest.warmup_days,
         'execution_interval': backtest.execution_interval or "1d",
     }
+    # Only forward a non-None override so we never clobber the engine's "every bar" default
+    # with None on the daily path (and the payload stays identical for run_schedule="daily").
+    if run_schedule_override is not None:
+        payload['run_schedule_override'] = run_schedule_override
     if screener_universe is not None:
         payload['universe'] = screener_universe
         universe_desc = f"screener cache (group {screener_universe['group']})"
@@ -518,6 +570,13 @@ async def create_daily_backtest(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
 
+    try:
+        run_schedule_override = _run_schedule_override(
+            request.run_schedule, request.run_schedule_day
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     db_backtest = Backtest(
         name=request.name,
         model_id=None,  # daily expert runs are not model-driven (Task-7 migration makes this nullable)
@@ -555,6 +614,8 @@ async def create_daily_backtest(
             'fill_model': request.fill_model,
             'seed': request.seed,
             'warmup_days': request.warmup_days,
+            # None on the daily-cadence path -> engine analyses every bar (unchanged).
+            'run_schedule_override': run_schedule_override,
         },
         description=f'Daily expert backtest over {len(request.enabled_instruments)} instruments',
     )

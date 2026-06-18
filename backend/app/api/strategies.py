@@ -446,7 +446,26 @@ class OptimizeRequest(BaseModel):
     fitness_metric: str                      # sharpe/return/profit_factor/win_rate/max_drawdown/...
     optimization_type: str = "genetic"       # genetic | brute_force
     optimization_config: dict                # GA params + backtest{}
+    # expert_params carries BOTH the expert's numeric decision genes AND the classic-RM sizing
+    # genes — the RM genes are keyed by the REAL ba2 setting names (risk_per_trade_pct,
+    # atr_multiplier, min_stop_loss_pct, max_virtual_equity_per_instrument_percent), NOT a
+    # separate rm: namespace. The handler folds these into the model:* search space and the RM
+    # reads them off the expert. Shape: {param: {optimize: bool, min, max, step, type}}.
     expert_params: Optional[dict] = None     # {param:{optimize,min,max,step,type}}
+    # SCREENER-settings optimization (OPTIONAL — omit for a static/explicit universe). When
+    # present, this is woven into the optimization in two places, exactly like the CLI
+    # (_cmd_optimize --screener):
+    #   * ``store`` / ``base_settings`` / ``cadence_days`` / ``apply_to_expert_settings`` are
+    #     merged into ``optimization_config.backtest["screener_opt"]`` — the block the handler's
+    #     ``_build_hoisted_state`` reads to warm the metric store + gate per-day entries.
+    #   * ``param_ranges`` ({setting: {optimize, min, max, step, type}}) are merged into
+    #     ``expert_params`` PRE-PREFIXED with ``screener:`` so the param-space router emits the
+    #     ``screener:<setting>`` genes (the handler splits ``screener:``-prefixed keys out of
+    #     expert_params into the screener namespace).
+    # The screener setting names mirror the CLI's _SCREENER_OPT: screener_market_cap_min,
+    # screener_relative_volume_min, screener_price_drop_pct, screener_max_stocks,
+    # screener_weinstein_stage2_only.
+    screener_opt: Optional[dict] = None
 
 
 @router.post("/{strategy_id}/optimize")
@@ -467,6 +486,11 @@ async def optimize_strategy(
     cfg = dict(req.optimization_config or {})
     if req.expert_params is not None:
         cfg["expert_params"] = req.expert_params
+    # Weave the optional screener-settings optimization into the config exactly like the CLI:
+    # the store/base/cadence block onto backtest["screener_opt"] + the param ranges merged into
+    # expert_params pre-prefixed with "screener:". No-op when screener_opt is absent.
+    if req.screener_opt is not None:
+        _merge_screener_opt(cfg, req.screener_opt)
 
     row = StrategyOptimization(
         strategy_id=strategy_id,
@@ -476,19 +500,185 @@ async def optimize_strategy(
         optimization_config=cfg,
         status="pending",
     )
+    row, task_id = _enqueue_optimization(
+        db,
+        strategy_id=strategy_id,
+        name=req.name,
+        fitness_metric=req.fitness_metric,
+        optimization_type=req.optimization_type,
+        cfg=cfg,
+        description=f"Joint genetic optimization for strategy {strategy_id}",
+        task_name=req.name or f"Optimize strategy {strategy.name} ({req.fitness_metric})",
+    )
+    return {"optimizationId": row.id, "taskId": task_id, **row.to_dict()}
+
+
+def _enqueue_optimization(
+    db: Session,
+    *,
+    strategy_id: int,
+    name: Optional[str],
+    fitness_metric: str,
+    optimization_type: str,
+    cfg: dict,
+    description: str,
+    task_name: str,
+):
+    """Persist ONE StrategyOptimization row and enqueue its 'strategy_optimization' task.
+
+    The single shared create+enqueue path used by both /{strategy_id}/optimize and the
+    /optimize-batch fan-out, so a batched job is byte-identical to a single one. Returns
+    (row, task_id).
+    """
+    row = StrategyOptimization(
+        strategy_id=strategy_id,
+        name=name,
+        fitness_metric=fitness_metric,
+        optimization_type=optimization_type,
+        optimization_config=cfg,
+        status="pending",
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
 
-    task_name = req.name or f"Optimize strategy {strategy.name} ({req.fitness_metric})"
     task_id = get_task_queue().queue_task(
         task_type="strategy_optimization",
         name=task_name,
         payload={"optimization_id": row.id},
-        description=f"Joint genetic optimization for strategy {strategy_id}",
+        description=description,
     )
     logger.info(f"Enqueued strategy_optimization {row.id} (task {task_id})")
-    return {"optimizationId": row.id, "taskId": task_id, **row.to_dict()}
+    return row, task_id
+
+
+class OptimizeBatchRequest(BaseModel):
+    """Fan-out request: one joint genetic optimization PER expert (mirrors the CLI
+    optimize-batch's per-expert expansion).
+
+    Each created job reuses the EXACT single-optimize path (``_enqueue_optimization``): the
+    shared ``optimization_config`` (GA params + a ``backtest`` template) is copied per expert and
+    the expert is injected into ``backtest.experts`` (replacing/setting it). All jobs target the
+    same ``strategy_id`` (the strategy whose TP/SL + condition ranges are searched). ``expert_params``
+    (the expert/RM genes, RM keyed by real ba2 names) and ``screener_opt`` are applied to EVERY
+    job identically — supply per-expert tuning by issuing separate calls if needed.
+
+    NOTE: this is intentionally simple (one strategy, fanned across experts). The CLI's S1-S4
+    per-strategy template expansion is a CLI-only convenience; the UI drives the StrategyBuilder
+    to create the strategy row, then batches experts against it.
+    """
+    experts: List[str]                       # ["FMPRating", "FMPEarningsDrift", ...]
+    strategy_id: int                         # the strategy whose ruleset/TP-SL ranges are searched
+    fitness_metric: str
+    optimization_type: str = "genetic"
+    optimization_config: dict                # GA params + backtest{} template (experts injected per job)
+    expert_params: Optional[dict] = None     # applied to every job (incl. RM genes by real ba2 name)
+    screener_opt: Optional[dict] = None      # applied to every job (see OptimizeRequest.screener_opt)
+    name_prefix: Optional[str] = None        # job name = f"{name_prefix}-{expert}" (default "batch")
+
+
+@router.post("/optimize-batch")
+async def optimize_batch(req: OptimizeBatchRequest, db: Session = Depends(get_db)):
+    """Create + enqueue one optimization job per expert (fan-out).
+
+    Validates the strategy exists + experts is non-empty (fail-early), then for each expert:
+    deep-copies the optimization_config, injects the expert into ``backtest.experts``, folds in
+    the shared expert_params / screener_opt, and enqueues via the same path as the single
+    optimize route. Returns the list of created job ids/names/task ids.
+    """
+    import copy as _copy
+
+    strategy = db.query(Strategy).filter(Strategy.id == req.strategy_id).first()
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy {req.strategy_id} not found")
+    experts = [e.strip() for e in (req.experts or []) if e and e.strip()]
+    if not experts:
+        raise HTTPException(status_code=400, detail="experts must be a non-empty list")
+
+    prefix = req.name_prefix or "batch"
+    created = []
+    for expert in experts:
+        cfg = _copy.deepcopy(req.optimization_config or {})
+        if req.expert_params is not None:
+            cfg["expert_params"] = _copy.deepcopy(req.expert_params)
+        if req.screener_opt is not None:
+            _merge_screener_opt(cfg, req.screener_opt)
+
+        # Inject THIS expert into the backtest block's experts list. Preserve any per-expert
+        # fixed settings already present in the template for the same class; otherwise add a bare
+        # spec. The handler validates the class fail-early, so an unknown expert fails its own job
+        # (not the whole batch enqueue).
+        backtest = dict(cfg.get("backtest") or {})
+        existing = backtest.get("experts") or []
+        matched = next(
+            (s for s in existing
+             if (s.get("class") if isinstance(s, dict) else s) == expert),
+            None,
+        )
+        backtest["experts"] = [matched] if matched is not None else [{"class": expert, "settings": {}}]
+        cfg["backtest"] = backtest
+
+        job_name = f"{prefix}-{expert}-{req.fitness_metric}"
+        row, task_id = _enqueue_optimization(
+            db,
+            strategy_id=req.strategy_id,
+            name=job_name,
+            fitness_metric=req.fitness_metric,
+            optimization_type=req.optimization_type,
+            cfg=cfg,
+            description=f"Batch optimization ({expert}) for strategy {req.strategy_id}",
+            task_name=job_name,
+        )
+        created.append({
+            "expert": expert,
+            "optimizationId": row.id,
+            "taskId": task_id,
+            "name": job_name,
+        })
+
+    logger.info(f"optimize-batch enqueued {len(created)} jobs for strategy {req.strategy_id}")
+    return {"jobs": created, "count": len(created)}
+
+
+def _merge_screener_opt(cfg: dict, screener_opt: dict) -> None:
+    """Weave a screener-settings optimization block into an optimization_config IN PLACE.
+
+    Mirrors the CLI's _cmd_optimize --screener wiring so a UI-launched screener optimization
+    behaves identically to the headless one:
+
+      1. ``cfg["backtest"]["screener_opt"]`` gets {store, base_settings, cadence_days,
+         apply_to_expert_settings} — the block the handler's ``_build_hoisted_state`` reads to
+         load the parquet metric store once + gate per-day entries. ``store`` is required
+         (fail-early, no silent default). ``base_settings`` defaults to {} and ``cadence_days``
+         to 7 (weekly) — matching the handler's own ``.get`` defaults.
+      2. ``param_ranges`` ({setting: {optimize,min,max,step,type}}) are merged into
+         ``cfg["expert_params"]`` with each key prefixed ``screener:`` so the handler routes them
+         to the screener namespace (it splits ``screener:``-prefixed keys out of expert_params).
+
+    Raises HTTPException(400) on a missing store (the only hard requirement).
+    """
+    store = screener_opt.get("store")
+    if not store:
+        raise HTTPException(
+            status_code=400,
+            detail="screener_opt.store is required (path to the parquet metric store)",
+        )
+    backtest = dict(cfg.get("backtest") or {})
+    backtest["screener_opt"] = {
+        "store": store,
+        "base_settings": screener_opt.get("base_settings") or {},
+        "cadence_days": int(screener_opt.get("cadence_days", 7)),
+        "apply_to_expert_settings": bool(screener_opt.get("apply_to_expert_settings", False)),
+    }
+    cfg["backtest"] = backtest
+
+    param_ranges = screener_opt.get("param_ranges") or {}
+    if param_ranges:
+        expert_params = dict(cfg.get("expert_params") or {})
+        for name, spec in param_ranges.items():
+            key = name if str(name).startswith("screener:") else f"screener:{name}"
+            expert_params[key] = spec
+        cfg["expert_params"] = expert_params
 
 
 def _top_individuals(row, n: int = 8) -> list:
