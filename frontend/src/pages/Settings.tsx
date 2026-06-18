@@ -323,12 +323,14 @@ const Settings: React.FC = () => {
     }
   };
 
+  // SOLID mid-tone bg + white text: readable in both themes (native `dark:` is inert here and a
+  // global `.dark .font-*` rule force-lightens pill text, so light `-100` pills were unreadable).
   const getStatusColor = (status: string, isEnabled: boolean) => {
-    if (!isEnabled) return 'bg-gray-100 text-gray-600 border border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50';
+    if (!isEnabled) return 'bg-slate-500 text-white border border-slate-500';
     switch (status) {
-      case 'online': return 'bg-green-100 text-green-800 border border-green-300 dark:bg-green-700/40 dark:text-green-100 dark:border-green-600/50';
-      case 'busy': return 'bg-yellow-100 text-yellow-800 border border-yellow-300 dark:bg-amber-700/40 dark:text-amber-100 dark:border-amber-600/50';
-      default: return 'bg-red-100 text-red-800 border border-red-300 dark:bg-red-700/40 dark:text-red-100 dark:border-red-600/50';
+      case 'online': return 'bg-emerald-600 text-white border border-emerald-600';
+      case 'busy': return 'bg-amber-600 text-white border border-amber-600';
+      default: return 'bg-red-600 text-white border border-red-600';
     }
   };
 

@@ -37,20 +37,22 @@ function fmtFitness(v?: number | null): string {
   return typeof v === 'number' && isFinite(v) ? v.toFixed(4) : '—';
 }
 
-// Status pills: high-contrast, readable text on a solid-tint pill with a matching border in
-// both themes. completed=green · running=blue · cancelled/stopped=gray · failed=red · pending=amber.
+// Status pills: SOLID mid-tone background + white text. Readable in BOTH themes and immune to
+// this app's dark-mode quirks — the native `dark:` variant doesn't fire here (the app toggles a
+// `.dark` class while the OS is light) AND a global `.dark .font-semibold` rule force-lightens
+// pill text; light `bg-*-100` pills therefore rendered light-text-on-light-bg. White-on-*-600 is
+// high-contrast regardless. completed=green · running=blue · cancelled/stopped=gray · failed=red · pending=amber.
 const STATUS_STYLES: Record<string, string> = {
-  completed: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-700/40 dark:text-emerald-100 dark:border-emerald-600/50',
-  running: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-700/40 dark:text-blue-100 dark:border-blue-600/50',
-  pending: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-700/40 dark:text-amber-100 dark:border-amber-600/50',
-  cancelled: 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50',
-  stopped: 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50',
-  failed: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-700/40 dark:text-red-100 dark:border-red-600/50',
+  completed: 'bg-emerald-600 text-white border-emerald-600',
+  running: 'bg-blue-600 text-white border-blue-600',
+  pending: 'bg-amber-600 text-white border-amber-600',
+  cancelled: 'bg-slate-500 text-white border-slate-500',
+  stopped: 'bg-slate-500 text-white border-slate-500',
+  failed: 'bg-red-600 text-white border-red-600',
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const cls = STATUS_STYLES[status]
-    ?? 'bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-600/40 dark:text-gray-200 dark:border-gray-500/50';
+  const cls = STATUS_STYLES[status] ?? 'bg-slate-500 text-white border-slate-500';
   return (
     <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded-full border ${cls}`}>
       {status}

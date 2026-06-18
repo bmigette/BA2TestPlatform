@@ -551,14 +551,16 @@ const JobDetails: React.FC = () => {
     }
   };
 
+  // SOLID mid-tone bg + white text: readable in both themes (native `dark:` is inert here and a
+  // global `.dark .font-*` rule force-lightens pill text, so light `-100` pills were unreadable).
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'running': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
-      case 'completed': return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
-      case 'failed': return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
-      case 'paused': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
-      case 'stopped': return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300';
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+      case 'running': return 'bg-blue-600 text-white';
+      case 'completed': return 'bg-emerald-600 text-white';
+      case 'failed': return 'bg-red-600 text-white';
+      case 'paused': return 'bg-amber-600 text-white';
+      case 'stopped': return 'bg-orange-600 text-white';
+      default: return 'bg-slate-500 text-white';
     }
   };
 

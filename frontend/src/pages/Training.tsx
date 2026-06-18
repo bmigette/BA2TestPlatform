@@ -909,14 +909,16 @@ const Training: React.FC = () => {
                 cancelled: <XCircle size={16} className="text-gray-500" />,
               };
               const statusIcon = statusIcons[job.status] || statusIcons.queued;
+              // SOLID mid-tone bg + white text: readable in both themes and immune to the dead
+              // native `dark:` variant + the global `.dark .font-semibold` text-lightening here.
               const statusColors: Record<string, string> = {
-                queued: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300',
-                running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
-                paused: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300',
-                stopped: 'bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-300',
-                completed: 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300',
-                failed: 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-300',
-                cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
+                queued: 'bg-amber-600 text-white',
+                running: 'bg-blue-600 text-white',
+                paused: 'bg-amber-600 text-white',
+                stopped: 'bg-orange-600 text-white',
+                completed: 'bg-emerald-600 text-white',
+                failed: 'bg-red-600 text-white',
+                cancelled: 'bg-slate-500 text-white',
               };
               const statusColor = statusColors[job.status] || statusColors.queued;
 
