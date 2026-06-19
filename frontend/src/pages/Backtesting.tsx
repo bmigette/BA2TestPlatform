@@ -55,8 +55,8 @@ import { GeneCountPreview } from '../components/GeneCountPreview';
 import { RunHistoryTable } from '../components/RunHistoryTable';
 import ResolvedRulesetView from '../components/ResolvedRulesetView';
 import type { BestParams } from '../lib/resolveRuleset';
-import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, convertLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport, listExperts, optimizeBatch } from '../lib/btApi';
-import type { ExpertInfo, OptimizeBatchJob, OptimizeBatchBody } from '../lib/btApi';
+import { getRulesetVocabulary, importLiveEnterMarket, importLiveRuleset, convertLiveRuleset, listTasks, listBacktests, fetchOptSettingsExport, listExperts, optimizeBatch, listRunningOptimizations } from '../lib/btApi';
+import type { ExpertInfo, OptimizeBatchJob, OptimizeBatchBody, RunningOpt } from '../lib/btApi';
 import { RunningJobsPanel } from '../components/RunningJobsPanel';
 import { OptimizationJobsTable, OptJobSettingsDetail } from '../components/OptimizationJobsTable';
 import { TopIndividualsTable } from '../components/TopIndividualsTable';
@@ -682,9 +682,16 @@ const Backtesting: React.FC = () => {
     let alive = true;
     const tick = async () => {
       try {
-        const all = await listTasks('running');
+        const [all, runningOpts] = await Promise.all([
+          listTasks('running'),
+          listRunningOptimizations().catch(() => [] as RunningOpt[]),
+        ]);
         const bt = all.filter(t => !t.task_type || ['daily_backtest', 'backtest', 'strategy_optimization'].includes(t.task_type));
-        if (alive) setRunningJobCount(bt.length);
+        // Include running optimizations that have no API task (CLI-launched) — counted by the
+        // RunningJobsPanel as orphan rows, so the badge must match.
+        const jobNames = new Set(bt.map(t => t.name).filter(Boolean) as string[]);
+        const orphanOpts = runningOpts.filter(o => !(o.name && jobNames.has(o.name)));
+        if (alive) setRunningJobCount(bt.length + orphanOpts.length);
       } catch { /* ignore */ }
     };
     tick();

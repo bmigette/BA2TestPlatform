@@ -62,6 +62,11 @@ export function RunningJobsPanel() {
 
   // Match a running optimization to its task by name (task name == optimization name).
   const optByName = new Map(opts.map(o => [o.name, o] as const));
+  // Running optimizations launched OUTSIDE the API task queue (e.g. the `ba2-test optimize` CLI)
+  // have a StrategyOptimization row but NO task — surface them as their own rows so they aren't
+  // invisible here. (API-submitted opts have a task AND a row, matched by name -> not orphaned.)
+  const jobNames = new Set(jobs.map(j => j.name).filter(Boolean) as string[]);
+  const orphanOpts = opts.filter(o => !(o.name && jobNames.has(o.name)));
 
   const onCancel = (taskId: string) => {
     cancelTask(taskId)
@@ -69,7 +74,7 @@ export function RunningJobsPanel() {
       .catch(() => { /* keep row; next poll reconciles */ });
   };
 
-  if (loaded && !jobs.length) {
+  if (loaded && !jobs.length && !orphanOpts.length) {
     return (
       <div className="flex flex-col items-center justify-center text-center py-16 text-gray-400 dark:text-gray-500">
         <Activity className="w-10 h-10 mb-3 opacity-50" />
@@ -82,7 +87,7 @@ export function RunningJobsPanel() {
   return (
     <div className="space-y-3">
       <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-        Running jobs ({jobs.length})
+        Running jobs ({jobs.length + orphanOpts.length})
       </div>
       {jobs.map(j => {
         const { gen, total, ind, indTotal, best } = parseProgress(j.progress_message);
@@ -142,6 +147,36 @@ export function RunningJobsPanel() {
 
             {/* Live optimization detail: best metric + top individuals */}
             <OptimizationDetail opt={optByName.get(j.name ?? '')} />
+          </div>
+        );
+      })}
+
+      {/* Running optimizations with no API task (e.g. launched via the `ba2-test optimize` CLI). */}
+      {orphanOpts.map(o => {
+        const pct = Math.max(0, Math.min(100, Math.round(o.progress ?? 0)));
+        return (
+          <div key={`opt-${o.id}`}
+            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 break-words">
+                  {o.name ?? `Optimization #${o.id}`}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  strategy_optimization · {o.status} (CLI)
+                </div>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <span>Total</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{pct}%</span>
+              </div>
+              <div className="bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+                <div className="bg-blue-500 h-2.5 rounded-full transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+            <OptimizationDetail opt={o} />
           </div>
         );
       })}
