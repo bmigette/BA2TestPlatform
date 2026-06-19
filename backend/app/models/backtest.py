@@ -7,6 +7,67 @@ from sqlalchemy.sql import func
 from .database import Base
 
 
+# Max points per curve in a detail response. A 3yr × 5min run has ~58k equity/drawdown points;
+# rendering that many in the recharts AreaChart froze the UI on load. We thin the curves to this
+# many points for DISPLAY only (the full curves stay in the DB columns + CSV/JSON export).
+_CHART_MAX_POINTS = 2000
+
+
+def _num(v):
+    return float(v) if isinstance(v, (int, float)) else 0.0
+
+
+def _lttb_indices(values, target):
+    """Largest-Triangle-Three-Buckets downsampling — returns sorted indices into ``values`` that
+    preserve the curve's visual shape (peaks/troughs), unlike a uniform stride which can drop them.
+    x is the point position (curves are evenly spaced in time). Full range when n <= target."""
+    n = len(values)
+    if n <= target or target < 3:
+        return list(range(n))
+    out = [0]
+    bucket = (n - 2) / (target - 2)
+    a = 0  # index of the previously selected point
+    for i in range(target - 2):
+        start = int((i + 1) * bucket) + 1
+        end = min(int((i + 2) * bucket) + 1, n)
+        avg_start = int((i + 2) * bucket) + 1
+        avg_end = min(int((i + 3) * bucket) + 1, n)
+        if avg_start >= avg_end:
+            avg_start, avg_end = max(start, n - 1), n
+        avg_x = (avg_start + avg_end - 1) / 2.0
+        avg_y = sum(values[j] for j in range(avg_start, avg_end)) / max(1, avg_end - avg_start)
+        ay = values[a]
+        best_area, best = -1.0, start
+        for j in range(start, end):
+            area = abs((a - avg_x) * (values[j] - ay) - (a - j) * (avg_y - ay))
+            if area > best_area:
+                best_area, best = area, j
+        out.append(best)
+        a = best
+    if out[-1] != n - 1:  # the last bucket may already have picked n-1; don't duplicate it
+        out.append(n - 1)
+    return out
+
+
+def _downsample_curves(equity, drawdown, target=_CHART_MAX_POINTS):
+    """Thin the (index-aligned) equity + drawdown curves to ~target points for charting: LTTB on
+    equity plus the global max-drawdown trough, applied with the SAME indices to both so the two
+    series stay aligned and the worst-drawdown point is never lost. Returns (equity, drawdown)
+    lists; unchanged when already <= target."""
+    eq = equity or []
+    dd = drawdown or []
+    n = len(eq)
+    if n <= target:
+        return eq, dd
+    idx = set(_lttb_indices([_num(p.get("equity")) for p in eq], target))
+    aligned = bool(dd) and len(dd) == n
+    if aligned:
+        dd_vals = [_num(p.get("drawdown")) for p in dd]
+        idx.add(min(range(n), key=lambda j: dd_vals[j]))  # always keep the max-drawdown trough
+    order = sorted(idx)
+    return [eq[j] for j in order], ([dd[j] for j in order] if aligned else dd)
+
+
 class Backtest(Base):
     """Backtest model"""
 
@@ -169,10 +230,14 @@ class Backtest(Base):
         # Transform trades to frontend format
         transformed_trades = self._transform_trades_for_frontend()
 
+        # Downsample the curves for DISPLAY (the full curves stay in the DB columns + CSV/JSON
+        # export). A dense 5min run has ~58k points, which froze the recharts AreaChart on load.
+        equity_curve, drawdown_curve = _downsample_curves(self.equity_curve, self.drawdown_curve)
+
         # Build results object that frontend expects
         results = {
-            "equityCurve": self.equity_curve or [],
-            "drawdownCurve": self.drawdown_curve or [],
+            "equityCurve": equity_curve,
+            "drawdownCurve": drawdown_curve,
             "trades": transformed_trades,
             "priceData": [],  # Price data would need to be fetched separately
         }
@@ -199,8 +264,8 @@ class Backtest(Base):
             "status": self.status,
             "results": results,  # Nested results object for frontend
             "trades": transformed_trades,  # Also at top level for backwards compat
-            "equityCurve": self.equity_curve,
-            "drawdownCurve": self.drawdown_curve,
+            "equityCurve": equity_curve,
+            "drawdownCurve": drawdown_curve,
             "totalReturn": self.total_return,
             "sharpeRatio": self.sharpe_ratio,
             "maxDrawdown": self.max_drawdown,
