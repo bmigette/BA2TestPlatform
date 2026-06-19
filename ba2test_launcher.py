@@ -980,11 +980,29 @@ def _cmd_optimize(args) -> int:
                 "apply_to_expert_settings": bool(spec.get("bypass")),
             }
             from ba2_providers.screener import metric_store as _ms
-            store_syms = sorted(str(s) for s in _ms.load_store(args.screener_store)["symbol"].unique())
-            if not store_syms:
+            _store_df = _ms.load_store(args.screener_store)
+            if _store_df.empty:
                 sys.exit(f"optimize: --screener-store {args.screener_store!r} has no symbols")
-            backtest_block["enabled_instruments"] = store_syms
-            universe = store_syms  # for the progress line / submit description below
+            # Preload only the symbols ANY individual could screen in — the union under the LOOSEST
+            # end of every screener gene (most-admitting thresholds + max_stocks at its ceiling).
+            # This is the correct superset for the whole population (tighter individuals select a
+            # subset) and is far smaller than the raw store union (e.g. ~26-150 vs 868), so the
+            # OHLCV preload doesn't load/hold ~800 never-selected symbols. The per-bar
+            # screener_runtime gate still applies each individual's actual thresholds.
+            _loosest = dict(base)
+            _loosest.update({
+                "market_cap_min": _SCREENER_OPT["screener_market_cap_min"]["min"],
+                "relative_volume_min": _SCREENER_OPT["screener_relative_volume_min"]["min"],
+                "price_drop_pct": _SCREENER_OPT["screener_price_drop_pct"]["min"],
+                "weinstein_stage2_only": 0,
+                "max_stocks": _SCREENER_OPT["screener_max_stocks"]["max"],
+            })
+            enabled = _ms.screened_symbol_union(_store_df, args.start, args.end, _loosest)
+            if not enabled:
+                sys.exit(f"optimize: --screener-store {args.screener_store!r} selected zero symbols "
+                         f"for {args.start}..{args.end} under the loosest gene settings")
+            backtest_block["enabled_instruments"] = enabled
+            universe = enabled  # for the progress line / submit description below
             screener_genes = {f"screener:{k}": v for k, v in _SCREENER_OPT.items()}
 
         cfg = {

@@ -23,9 +23,12 @@ Verified against the installed ba2_providers OHLCV provider:
 from __future__ import annotations
 
 import bisect
+import logging
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=16)
@@ -186,12 +189,20 @@ class AsOfPriceSource:
             )
         fetch_start = start - timedelta(days=warmup_days)
         for sym in symbols:
-            df = self._ohlcv.get_ohlcv_data(
-                sym,
-                start_date=fetch_start,
-                end_date=end,
-                interval=self._interval,
-            )
+            # Resilient: a symbol with no cached data for the window (e.g. a recent IPO before its
+            # first bar, or a gap in the cache) must NOT abort the whole run — load it as empty and
+            # continue. bar_at/close_at return None for it (no fills, drops from MTM), exactly as
+            # for a symbol that simply has no bar on a given tick.
+            try:
+                df = self._ohlcv.get_ohlcv_data(
+                    sym,
+                    start_date=fetch_start,
+                    end_date=end,
+                    interval=self._interval,
+                )
+            except Exception as e:  # noqa: BLE001 — one data-less symbol can't kill the backtest
+                logger.warning(f"AsOfPriceSource.preload: no data for {sym} ({e}); skipping")
+                df = None
             self.load_bars_df(sym, df)  # vectorized build (avoids per-row dict + _norm loop)
 
     def load_bars(self, symbol: str, rows: List[Dict[str, Any]]) -> None:

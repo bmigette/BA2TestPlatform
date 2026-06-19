@@ -39,6 +39,7 @@ Reuses (does NOT redefine):
 """
 from __future__ import annotations
 
+import bisect
 import random
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
@@ -92,7 +93,8 @@ def resolve_universe(as_of: datetime, config: Dict[str, Any], price_source) -> L
 
 
 def _screened_symbols_for_bar(
-    screener_runtime: Optional[Dict[str, Any]], as_of_dt: datetime
+    screener_runtime: Optional[Dict[str, Any]], as_of_dt: datetime,
+    cache: Optional[Dict[str, List[str]]] = None,
 ) -> Optional[List[str]]:
     """The dynamic per-day universe of symbols ALLOWED TO ENTER on this bar.
 
@@ -103,18 +105,33 @@ def _screened_symbols_for_bar(
     constant between scans). The returned list gates ENTRIES only — open-position management /
     exits are NOT restricted (handled at the call site).
 
-    ``screener_runtime`` is the ``screener_runtime`` config block the optimizer's trial config
-    sets: ``{"store": <metric-store dir>, "settings": {screener_* thresholds}}``. The store is
-    memoised per worker by ``load_store`` so this is an in-memory pandas filter (microseconds).
+    PERF: the screened set only changes per SCAN DATE (weekly), not per 5-min bar — so (1) the
+    as-of scan date is resolved via an O(log n) bisect over the store's memoised sorted scan
+    dates (NOT a per-bar ``df['date'] <= day`` object comparison over the whole store, which was
+    ~28% of a screener backtest), and (2) the screen for a scan date is computed ONCE and reused
+    for every bar in that period via ``cache`` (the engine passes its per-run dict). Without the
+    cache (e.g. unit tests) it still returns the correct set, just recomputed each call.
+
+    ``screener_runtime`` = ``{"store": <metric-store dir>, "settings": {screener thresholds}}``;
+    the store is memoised per worker by ``load_store``.
     """
     if not screener_runtime:
         return None
     from ba2_providers.screener import metric_store as ms
 
-    df = ms.load_store(screener_runtime["store"])
-    return ms.screen_universe_as_of(
-        df, as_of_dt.strftime("%Y-%m-%d"), screener_runtime["settings"]
-    )
+    store = screener_runtime["store"]
+    df = ms.load_store(store)
+    days = ms.scan_dates(df, store_key=store)
+    i = bisect.bisect_right(days, as_of_dt.strftime("%Y-%m-%d")) - 1
+    if i < 0:
+        return []
+    day = days[i]
+    if cache is not None and day in cache:
+        return cache[day]
+    syms = ms.screen_universe_for_day(df, day, screener_runtime["settings"])
+    if cache is not None:
+        cache[day] = syms
+    return syms
 
 
 def _to_dt(d: Any) -> datetime:
@@ -342,6 +359,10 @@ class DailyBacktestEngine:
         # absent (every non-screener run) this is None and the per-bar entry gate is a no-op, so
         # behaviour is byte-identical to before.
         self._screener_runtime = config.get("screener_runtime")
+        # Per-run memo for the screener entry gate: {resolved_scan_date: [symbols]}. The screened
+        # set only changes per scan date (weekly cadence), so it's computed once per scan date and
+        # reused for every bar in that period (vs recomputing the full-store filter every 5min bar).
+        self._screened_cache: Dict[str, List[str]] = {}
         # BYPASS-expert (FactorRanker) per-run caches. The FactorPortfolioManager holds only
         # run-CONSTANT state (the resolver expert/account instances + ids), and the per-bar stop
         # pass runs on ~every non-rebalance 5min bar — so reconstructing the manager (and its
@@ -482,7 +503,7 @@ class DailyBacktestEngine:
             #     (byte-identical to a non-screener run — the hot path is untouched).
             entry_universe = universe
             if self._screener_runtime:
-                allowed = _screened_symbols_for_bar(self._screener_runtime, as_of_dt)
+                allowed = _screened_symbols_for_bar(self._screener_runtime, as_of_dt, self._screened_cache)
                 if allowed is not None:
                     allowed_set = set(allowed)
                     entry_universe = [s for s in universe if s in allowed_set]

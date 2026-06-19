@@ -434,14 +434,21 @@ def _resolve_enabled_instruments(
         store = universe.get("screener_store")
         if not store:
             raise ValueError("universe.screener_store is required for screener mode")
-        # The candidate superset = the store's full symbol union; the per-bar screener_runtime
-        # gate restricts entries to each bar's screened survivors. Engine loads OHLCV for all.
+        # Candidate universe = the symbols THIS run's screen can ever select (the union of the
+        # per-bar screen over the window), NOT the whole store. The store is the loosest-bound
+        # superset of every gene (e.g. 868 symbols) but a given run selects far fewer (~26) —
+        # preloading the full store loads/holds OHLCV for ~800 never-touched symbols (huge memory
+        # + load time, and one data-less symbol aborts the run). The per-bar screener_runtime gate
+        # still restricts entries each bar; this only bounds what OHLCV gets loaded.
         df = ms.load_store(store)
-        instruments = sorted(str(s) for s in df["symbol"].unique())
+        settings = _metric_store_settings(universe.get("screener_settings") or {})
+        instruments = ms.screened_symbol_union(
+            df, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), settings
+        )
         if not instruments:
             raise ValueError(
-                f"screener metric_store {store!r} has no symbols (build it first via "
-                f"ba2-test build-screener-metrics)"
+                f"screener metric_store {store!r} selected zero symbols for the window/settings "
+                f"(check screener_settings / build the store via ba2-test build-screener-metrics)"
             )
         return instruments
 
