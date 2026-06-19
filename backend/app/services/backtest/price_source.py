@@ -6,15 +6,18 @@ _get_instrument_current_price_impl`` and the fill engine delegate every price lo
 here. Because all prices come from a pre-loaded, date-keyed bar store, a run is
 hermetic and reproducible (no per-call network, no wall-clock dependence).
 
-Backing store: each symbol's bounded daily history is pulled ONCE via the injected
-ba2_providers OHLCV provider (``get_ohlcv_data`` -> pandas DataFrame with columns
-``Date, Open, High, Low, Close, Volume``), normalised to::
-
-    self._bars[symbol] = {date(YYYY-MM-DD): {"open","high","low","close","volume"}, ...}
-
-so a bar lookup is O(1) by date. Daily bars are keyed by calendar ``date`` (the
-timestamp's time component is dropped), which makes ``close_at(symbol, as_of)`` robust
-to whatever time-of-day the virtual clock carries.
+Backing store: each symbol's bounded history is pulled ONCE via the injected ba2_providers
+OHLCV provider (``get_ohlcv_data`` -> pandas DataFrame with columns ``Date, Open, High, Low,
+Close, Volume``) and kept COLUMNAR — a per-symbol ascending Python key list (``date`` for
+daily/coarser, tz-naive UTC ``datetime`` for intraday) plus parallel float64 OHLCV arrays
+(``self._keys/_o/_h/_l/_c/_v[symbol]``). Clock lookups advance a monotonic per-symbol cursor
+(O(1) amortised; the clock only moves forward); arbitrary ``as_of`` lookups bisect the key list.
+A ``{"open",...}`` bar dict is materialised lazily, only for the bars actually accessed. This
+replaced a dict-of-dicts (``{key: {"open",...}}``) that cost ~400 bytes/bar (~9 GB for a screened
+union × 3yr × 5min) — almost all of it the ~9M tiny inner dicts; dropping them is ~98 bytes/bar
+(~4× less) and loads faster (no per-bar dict allocation), with equal-or-lower per-lookup CPU.
+Daily/coarser bars are keyed at midnight (the time component is dropped, mirroring ``_norm``);
+intraday keys carry the full tz-naive UTC bar timestamp.
 
 Verified against the installed ba2_providers OHLCV provider:
   * public method = ``get_ohlcv_data(symbol, start_date=, end_date=, interval=, ...)``
@@ -28,6 +31,8 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -152,17 +157,30 @@ class AsOfPriceSource:
     def __init__(self, ohlcv_provider: Any, interval: str = "1d"):
         self._ohlcv = ohlcv_provider          # ba2_providers OHLCV provider (or None for pre-seeded fixtures)
         self._interval = interval
+        self._intraday = _is_intraday(interval)  # cached: interval is constant for a run
         self._clock: Optional[datetime] = None
-        # symbol -> {bar_key -> bar dict}. The key is a calendar ``date`` for daily/
-        # coarser intervals and a tz-naive UTC ``datetime`` for intraday (see ``_norm``).
-        self._bars: Dict[str, Dict[Any, Dict[str, float]]] = {}
-        self._clock_key: Any = None  # normalised key of the current clock bar (set in set_clock)
-        # symbol -> ascending list of that symbol's bar keys. Built once at load time so
-        # ``next_bar``/``next_bar_date`` can binary-search the next key after ``after`` (O(log n))
-        # instead of scanning + min-ing the whole series every call — the latter was the #1
-        # cost of a dense 5-minute run (next_bar = 41% of profiled time: 158k calls each
-        # scanning ~55k bars).
-        self._sorted_keys: Dict[str, List[Any]] = {}
+        # COLUMNAR bar store. The old store was a per-symbol dict-of-dicts ({key: {"open",...}}) at
+        # ~400 bytes/bar — for a screened union × 3yr × 5min that was ~7-9 GB/worker, almost all of
+        # it the ~9M tiny inner dicts. Here each symbol keeps a sorted Python key list (date for
+        # daily/coarser, tz-naive UTC datetime for intraday — same objects the old store used, so
+        # lookups stay native-Python-comparison fast, ~no CPU regression) PLUS parallel float64
+        # OHLCV arrays. Dropping the inner dicts is the win: ~98 bytes/bar (~4× less). A bar dict is
+        # materialised lazily only for the bars actually accessed, never for the whole store.
+        # (datetime64 keys would be ~8× smaller but make every per-bar lookup box a numpy scalar,
+        # which measured ~3× slower than the dict.get/bisect they replace — rejected.)
+        self._keys: Dict[str, List[Any]] = {}    # symbol -> ascending Python date/datetime keys
+        self._o: Dict[str, np.ndarray] = {}      # symbol -> float64 open  (aligned to _keys)
+        self._h: Dict[str, np.ndarray] = {}      # high
+        self._l: Dict[str, np.ndarray] = {}      # low
+        self._c: Dict[str, np.ndarray] = {}      # close
+        self._v: Dict[str, np.ndarray] = {}      # volume
+        self._clock_key: Any = None      # normalised Python key of the current clock bar (set_clock)
+        # Per-symbol monotonic cursor: index of the last key <= the current clock. The engine's
+        # clock only ever moves forward, so a clock-based lookup advances this cursor (O(1)
+        # amortised) instead of bisecting the whole list every call — so the hot path is at least
+        # as fast as the old dict.get. Reset per instance (a fresh AsOfPriceSource per backtest);
+        # bisect serves the rarer arbitrary-``as_of`` / next-bar lookups.
+        self._cursor: Dict[str, int] = {}
 
     @property
     def interval(self) -> str:
@@ -222,7 +240,8 @@ class AsOfPriceSource:
             # symbol's bar index for the same window -> adopt it (no re-fetch, no re-parse).
             cached = _WORKER_BAR_CACHE.get((sym, *win))
             if cached is not None:
-                self._bars[sym], self._sorted_keys[sym] = cached
+                (self._keys[sym], self._o[sym], self._h[sym],
+                 self._l[sym], self._c[sym], self._v[sym]) = cached
                 continue
             # A symbol whose cache EXISTS but has no rows in the window (e.g. a recent IPO before
             # its first bar, or a gap) loads as empty and continues — that is a legitimate data
@@ -239,8 +258,11 @@ class AsOfPriceSource:
             except BacktestCacheMiss:
                 missing.append(sym)
                 continue
-            self.load_bars_df(sym, df)  # vectorized build (avoids per-row dict + _norm loop)
-            _WORKER_BAR_CACHE[(sym, *win)] = (self._bars[sym], self._sorted_keys[sym])
+            self.load_bars_df(sym, df)  # vectorized columnar build (no per-bar dict)
+            _WORKER_BAR_CACHE[(sym, *win)] = (
+                self._keys[sym], self._o[sym], self._h[sym],
+                self._l[sym], self._c[sym], self._v[sym],
+            )
 
         if missing:
             interval = self._interval
@@ -255,57 +277,113 @@ class AsOfPriceSource:
                 f"(native OHLCV cache)."
             )
 
-    def load_bars(self, symbol: str, rows: List[Dict[str, Any]]) -> None:
-        """Index a list of OHLCV row dicts for ``symbol`` by calendar date.
+    def _set_empty(self, symbol: str) -> None:
+        self._keys[symbol] = []
+        self._o[symbol] = np.array([], dtype=float)
+        self._h[symbol] = np.array([], dtype=float)
+        self._l[symbol] = np.array([], dtype=float)
+        self._c[symbol] = np.array([], dtype=float)
+        self._v[symbol] = np.array([], dtype=float)
 
-        Used by ``preload`` and directly by fixtures/tests (hand-built bar series).
-        Each row must carry a date (``Date``/``date``) and OHLC(V) fields.
+    def _store(self, symbol: str, keys64: np.ndarray,
+               o: np.ndarray, h: np.ndarray, l: np.ndarray,
+               c: np.ndarray, v: np.ndarray) -> None:
+        """Sort by key (ascending) + dedup keeping the LAST of each duplicate (byte-identical to the
+        old dict-of-dicts, where a later row overwrote an earlier one with the same key), all via
+        fast numpy on the datetime64 keys; then materialise the sorted Python key list (date for
+        daily/coarser, tz-naive datetime for intraday) used by the lookups, and keep OHLCV columnar."""
+        if not len(keys64):
+            self._set_empty(symbol)
+            return
+        order = np.argsort(keys64, kind="stable")  # stable -> equal keys keep original order
+        keys64, o, h, l, c, v = keys64[order], o[order], h[order], l[order], c[order], v[order]
+        keep = np.ones(len(keys64), dtype=bool)
+        keep[:-1] = keys64[1:] != keys64[:-1]  # keep only the LAST of each run of equal keys
+        if not keep.all():
+            keys64, o, h, l, c, v = keys64[keep], o[keep], h[keep], l[keep], c[keep], v[keep]
+        objs = keys64.astype("datetime64[us]").astype(object)  # ndarray of datetime.datetime
+        self._keys[symbol] = list(objs) if self._intraday else [d.date() for d in objs]
+        self._o[symbol], self._h[symbol], self._l[symbol] = o, h, l
+        self._c[symbol], self._v[symbol] = c, v
+
+    def load_bars(self, symbol: str, rows: List[Dict[str, Any]]) -> None:
+        """Index a list of OHLCV row dicts for ``symbol`` into the columnar store.
+
+        Used directly by fixtures/tests (hand-built bar series). Each row must carry a date
+        (``Date``/``date``) and OHLC(V) fields.
         """
-        indexed: Dict[Any, Dict[str, float]] = {}
-        for row in rows:
+        if not rows:
+            self._set_empty(symbol)
+            return
+        n = len(rows)
+        keys64 = np.empty(n, dtype="datetime64[ns]")
+        o = np.empty(n); h = np.empty(n); l = np.empty(n); c = np.empty(n); v = np.empty(n)
+        for i, row in enumerate(rows):
             d = _norm(row.get("Date", row.get("date")), self._interval)
-            indexed[d] = _bar_from_row(row)
-        self._bars[symbol] = indexed
-        self._sorted_keys[symbol] = sorted(indexed.keys())  # for binary-search next_bar
+            bar = _bar_from_row(row)
+            keys64[i] = np.datetime64(d, "ns")
+            o[i], h[i], l[i] = bar["open"], bar["high"], bar["low"]
+            c[i], v[i] = bar["close"], bar["volume"]
+        self._store(symbol, keys64, o, h, l, c, v)
 
     def load_bars_df(self, symbol: str, df: Any) -> None:
-        """VECTORIZED index build straight from a pandas OHLCV DataFrame (the hot preload path).
+        """VECTORIZED columnar build straight from a pandas OHLCV DataFrame (the hot preload path).
 
-        Avoids the per-row ``to_dict("records")`` + ``_norm`` + ``_bar_from_row`` Python loop over
-        ~every bar — the dominant cold-load cost for large intraday runs (1.8M rows for 30 syms ×
-        3yr × 5min). Date keys + OHLCV columns are converted in bulk via pandas/numpy; only the
-        final per-key bar dict is built in a comprehension (the dict-of-dicts store is unchanged,
-        so all lookups/semantics are identical to ``load_bars``)."""
+        Builds the per-symbol datetime64[ns] key array + float64 OHLCV arrays in bulk — no per-bar
+        Python dict (the old dict-of-dicts allocated ~9M small dicts for a 158-symbol 5min run,
+        which dominated both the warmup time and the ~9 GB worker footprint)."""
         if df is None or len(df) == 0:
-            self._bars[symbol] = {}
-            self._sorted_keys[symbol] = []
+            self._set_empty(symbol)
             return
-        import numpy as np
         import pandas as pd
         dcol = "Date" if "Date" in df.columns else "date"
         dates = pd.to_datetime(df[dcol])
-        if _is_intraday(self._interval):
+        if self._intraday:
             # tz-naive UTC datetime keys (identical to _norm's intraday path).
             if getattr(dates.dt, "tz", None) is not None:
                 dates = dates.dt.tz_convert("UTC").dt.tz_localize(None)
-            keys = list(dates.dt.to_pydatetime())
+            keys64 = dates.to_numpy(dtype="datetime64[ns]")
         else:
-            keys = list(dates.dt.date)
+            # daily/coarser: drop the time component (midnight) — mirrors _norm's date key.
+            keys64 = dates.dt.normalize().to_numpy(dtype="datetime64[ns]")
         o = df["Open"].to_numpy(dtype=float)
         h = df["High"].to_numpy(dtype=float)
-        low = df["Low"].to_numpy(dtype=float)
+        l = df["Low"].to_numpy(dtype=float)
         c = df["Close"].to_numpy(dtype=float)
         v = (df["Volume"].to_numpy(dtype=float) if "Volume" in df.columns
              else np.zeros(len(df), dtype=float))
-        self._bars[symbol] = {
-            keys[i]: {"open": o[i], "high": h[i], "low": low[i], "close": c[i], "volume": v[i]}
-            for i in range(len(keys))
-        }
-        self._sorted_keys[symbol] = sorted(self._bars[symbol].keys())  # for binary-search next_bar
+        self._store(symbol, keys64, o, h, l, c, v)
 
     # ---- queries -----------------------------------------------------------
+    def _exact_index(self, symbol: str, key: Any) -> int:
+        """Index of the EXACT bar at the (Python) ``key`` for ``symbol``, or -1 — mirrors the old
+        ``dict.get(key)`` via bisect + equality on the ascending Python key list."""
+        k = self._keys.get(symbol)
+        if not k:
+            return -1
+        i = bisect.bisect_left(k, key)
+        return i if i < len(k) and k[i] == key else -1
+
+    def _cursor_at_clock(self, symbol: str) -> int:
+        """Index of the last key <= the current clock for ``symbol``, advancing a per-symbol
+        monotonic cursor. O(1) amortised — the engine's clock only moves forward, so across a whole
+        run a cursor advances at most ``len(keys)`` times total — using fast native date/datetime
+        comparisons. Returns -1 if no bar <= clock yet."""
+        k = self._keys.get(symbol)
+        if not k:
+            return -1
+        n = len(k)
+        cur = self._cursor.get(symbol, -1)
+        ck = self._clock_key
+        # Advance while the NEXT key is still <= the clock (handles multi-bar jumps for a symbol not
+        # queried every bar). Never moves backward (clock is monotonic).
+        while cur + 1 < n and k[cur + 1] <= ck:
+            cur += 1
+        self._cursor[symbol] = cur
+        return cur
+
     def has_symbol(self, symbol: str) -> bool:
-        return symbol in self._bars and len(self._bars[symbol]) > 0
+        return bool(self._keys.get(symbol))
 
     def bar_at(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[Dict[str, float]]:
         """The bar for ``symbol`` on the as-of bar (or current clock bar), or None."""
@@ -314,15 +392,31 @@ class AsOfPriceSource:
                 raise RuntimeError(
                     "AsOfPriceSource clock not set; the engine must call set_clock() per bar"
                 )
-            d = self._clock_key  # precomputed once per bar in set_clock (hot path)
+            cur = self._cursor_at_clock(symbol)  # O(1) amortised clock cursor (hot path)
+            if cur < 0 or self._keys[symbol][cur] != self._clock_key:
+                return None  # no EXACT bar at the clock
+            i = cur
         else:
-            d = _norm(as_of, self._interval)
-        return self._bars.get(symbol, {}).get(d)
+            i = self._exact_index(symbol, _norm(as_of, self._interval))
+            if i < 0:
+                return None
+        return {"open": float(self._o[symbol][i]), "high": float(self._h[symbol][i]),
+                "low": float(self._l[symbol][i]), "close": float(self._c[symbol][i]),
+                "volume": float(self._v[symbol][i])}
 
     def close_at(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[float]:
         """Close price for ``symbol`` on the as-of day (or current clock day), or None."""
-        bar = self.bar_at(symbol, as_of)
-        return float(bar["close"]) if bar is not None else None
+        if as_of is None:
+            if self._clock is None:
+                raise RuntimeError(
+                    "AsOfPriceSource clock not set; the engine must call set_clock() per bar"
+                )
+            cur = self._cursor_at_clock(symbol)
+            if cur < 0 or self._keys[symbol][cur] != self._clock_key:
+                return None
+            return float(self._c[symbol][cur])
+        i = self._exact_index(symbol, _norm(as_of, self._interval))
+        return float(self._c[symbol][i]) if i >= 0 else None
 
     def close_asof(self, symbol: str, as_of: Optional[datetime] = None) -> Optional[float]:
         """Last-known close AT OR BEFORE the clock (forward-fill), or None if never priced.
@@ -331,36 +425,42 @@ class AsOfPriceSource:
         clock is the union of every symbol's timestamps, so a held symbol routinely lacks a
         bar on ticks driven by other symbols (and on data gaps / half-days / split days).
         ``close_at`` returns None there, which previously made the position vanish from the
-        equity MTM ($0) and produced spurious 90%+ drawdowns. This binary-searches the
-        symbol's keys for the most recent bar <= the clock. It is valuation-only: TP/SL fill
-        checks still use ``bar_at``/``next_bar`` against EXACT bars (never a forward-filled one)."""
-        keys = self._sorted_keys.get(symbol)
-        if not keys:
+        equity MTM ($0) and produced spurious 90%+ drawdowns. Uses the monotonic clock cursor
+        (most recent bar <= clock). Valuation-only: TP/SL fill checks still use ``bar_at``/
+        ``next_bar`` against EXACT bars (never a forward-filled one)."""
+        if as_of is None:
+            if self._clock is None:
+                return None
+            cur = self._cursor_at_clock(symbol)
+            return float(self._c[symbol][cur]) if cur >= 0 else None
+        k = self._keys.get(symbol)
+        if not k:
             return None
-        d = self._clock_key if as_of is None else _norm(as_of, self._interval)
-        i = bisect.bisect_right(keys, d) - 1
-        if i < 0:
-            return None
-        bar = self._bars[symbol].get(keys[i])
-        return float(bar["close"]) if bar is not None else None
+        i = bisect.bisect_right(k, _norm(as_of, self._interval)) - 1
+        return float(self._c[symbol][i]) if i >= 0 else None
 
     def next_bar(self, symbol: str, after: datetime) -> Optional[Dict[str, float]]:
         """The NEXT trading bar strictly after ``after`` (for next-bar fills)."""
-        k = self.next_bar_date(symbol, after)
-        return self._bars[symbol][k] if k is not None else None
+        k = self._keys.get(symbol)
+        if not k:
+            return None
+        i = bisect.bisect_right(k, _norm(after, self._interval))
+        if i >= len(k):
+            return None
+        return {"open": float(self._o[symbol][i]), "high": float(self._h[symbol][i]),
+                "low": float(self._l[symbol][i]), "close": float(self._c[symbol][i]),
+                "volume": float(self._v[symbol][i])}
 
     def next_bar_date(self, symbol: str, after: datetime) -> Optional[Any]:
         """The key of the next trading bar strictly after ``after`` (date or datetime), or None.
 
-        Binary-searches the symbol's ascending key list (``bisect_right`` -> first key strictly
-        greater than the cutoff) — O(log n) vs the old O(n) scan+min over the whole series, which
-        was the dominant cost of dense 5-minute runs (called per working order per bar)."""
-        keys = self._sorted_keys.get(symbol)
-        if not keys:
+        Binary-searches the symbol's ascending Python key list (``bisect_right`` -> first key
+        strictly greater than the cutoff) — O(log n)."""
+        k = self._keys.get(symbol)
+        if not k:
             return None
-        cutoff = _norm(after, self._interval)
-        i = bisect.bisect_right(keys, cutoff)
-        return keys[i] if i < len(keys) else None
+        i = bisect.bisect_right(k, _norm(after, self._interval))
+        return k[i] if i < len(k) else None
 
     def all_dates(self) -> List[Any]:
         """Sorted union of all bar keys across every loaded symbol (the trading clock).
@@ -368,8 +468,8 @@ class AsOfPriceSource:
         Keys are ``date`` for daily/coarser intervals and ``datetime`` for intraday.
         """
         seen: set = set()
-        for bars in self._bars.values():
-            seen.update(bars.keys())
+        for k in self._keys.values():
+            seen.update(k)
         return sorted(seen)
 
 
