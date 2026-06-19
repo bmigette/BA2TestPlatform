@@ -30,6 +30,20 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# WORKER-PERSISTENT parsed-bar cache: (symbol, interval, fetch_start_iso, end_iso) -> (bars, keys).
+# Each backtest builds a fresh AsOfPriceSource, but a GA worker runs MANY individuals over the
+# SAME [start-warmup, end] window — re-parsing each symbol's OHLCV DataFrame into the dict-of-dicts
+# bar index per individual was a large optimizer cost (~12s/individual for a 300-symbol 5min run).
+# Keyed by (symbol, interval, window) — NOT the per-run provider instance — so every individual in
+# the worker reuses the parsed index built by the first one. Bytewise-identical bars (same parquet,
+# same parse). Cleared via clear_worker_bar_cache() (between unrelated optimizations / in tests).
+_WORKER_BAR_CACHE: Dict[Any, Any] = {}
+
+
+def clear_worker_bar_cache() -> None:
+    """Drop the process-wide parsed-bar cache (call between unrelated runs / in tests)."""
+    _WORKER_BAR_CACHE.clear()
+
 
 @lru_cache(maxsize=16)
 def _is_intraday(interval: str) -> bool:
@@ -188,7 +202,14 @@ class AsOfPriceSource:
                 "provider or pre-seed bars via load_bars() (fixtures/tests)."
             )
         fetch_start = start - timedelta(days=warmup_days)
+        win = (self._interval, fetch_start.isoformat(), end.isoformat())
         for sym in symbols:
+            # Worker-persistent reuse: a prior individual in this worker already parsed this
+            # symbol's bar index for the same window -> adopt it (no re-fetch, no re-parse).
+            cached = _WORKER_BAR_CACHE.get((sym, *win))
+            if cached is not None:
+                self._bars[sym], self._sorted_keys[sym] = cached
+                continue
             # Resilient: a symbol with no cached data for the window (e.g. a recent IPO before its
             # first bar, or a gap in the cache) must NOT abort the whole run — load it as empty and
             # continue. bar_at/close_at return None for it (no fills, drops from MTM), exactly as
@@ -204,6 +225,7 @@ class AsOfPriceSource:
                 logger.warning(f"AsOfPriceSource.preload: no data for {sym} ({e}); skipping")
                 df = None
             self.load_bars_df(sym, df)  # vectorized build (avoids per-row dict + _norm loop)
+            _WORKER_BAR_CACHE[(sym, *win)] = (self._bars[sym], self._sorted_keys[sym])
 
     def load_bars(self, symbol: str, rows: List[Dict[str, Any]]) -> None:
         """Index a list of OHLCV row dicts for ``symbol`` by calendar date.
