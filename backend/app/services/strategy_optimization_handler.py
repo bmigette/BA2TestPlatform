@@ -107,7 +107,12 @@ def _trial_worker(config: Dict[str, Any], fitness_metric: str) -> Dict[str, Any]
         return {"ok": True, "fitness": float(fit),
                 "trades": int(results.get("total_trades") or 0), "error": None}
     except Exception as e:  # noqa: BLE001 — surface as a failed trial, don't kill the pool
-        return {"ok": False, "fitness": 0.0, "trades": 0, "error": repr(e)}
+        # A cache miss is FATAL (a data/config problem, not a bad-parameter trial): every trial
+        # will hit the same gap, so flag it so the parent can abort with the actionable message
+        # instead of grinding the whole population to 0 fitness.
+        fatal = type(e).__name__ == "BacktestCacheMiss"
+        return {"ok": False, "fitness": 0.0, "trades": 0, "error": str(e) if fatal else repr(e),
+                "fatal": fatal}
 
 
 def _fail(opt_id: int, db: Any, msg: str) -> Dict[str, Any]:
@@ -219,6 +224,7 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         memo = TrialMemo()
         all_results: list = []
         best = {"fitness": None, "params": None}
+        fatal = {"msg": None}  # first FATAL trial error (e.g. OHLCV cache miss) -> abort loudly
 
         tq = get_task_queue()
 
@@ -404,6 +410,8 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
                         )
                     elif out.get("error"):
                         logger.warning(f"trial failed in worker: {out['error']}")
+                        if out.get("fatal") and fatal["msg"] is None:
+                            fatal["msg"] = out["error"]
                     if best["fitness"] is None or fit > best["fitness"]:
                         best["fitness"] = fit
                         best["params"] = flat
@@ -473,6 +481,10 @@ def handle_strategy_optimization(task_id: str, payload: Dict[str, Any]) -> Dict[
         # exceptions as warnings, so without this guard the optimization would report
         # "completed" having evaluated NOTHING. Fail loudly instead.
         if not all_results:
+            if fatal["msg"]:
+                # A FATAL data error (OHLCV cache miss) — surface the actionable message directly
+                # instead of the generic "check the logs" hint.
+                return _fail(opt_id, db, fatal["msg"])
             return _fail(
                 opt_id, db,
                 "optimization produced 0 successful trials — every backtest failed. Check the "

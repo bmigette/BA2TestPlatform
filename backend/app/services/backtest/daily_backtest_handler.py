@@ -577,7 +577,13 @@ def run_daily_backtest(
         # (via the seam override below) AND the clamped indicator/ATR path.
         raw_ohlcv = get_provider("ohlcv", "fmp")
         fetch_start = config["start_date"] - timedelta(days=int(config["warmup_days"]))
-        ohlcv = MemoizedOHLCVProvider(raw_ohlcv, fetch_start, config["end_date"], interval=interval)
+        # cached_only=True: a backtest is HERMETIC — serve bars from the on-disk caches only and
+        # raise a clear BacktestCacheMiss (aggregated by preload) for any symbol absent from every
+        # cache layout, instead of network-fetching mid-run (429 backoff -> multi-minute hang) or
+        # silently skipping it. Pre-cache with `ba2-test fetch-cache` / `build-screener-metrics`.
+        ohlcv = MemoizedOHLCVProvider(
+            raw_ohlcv, fetch_start, config["end_date"], interval=interval, cached_only=True
+        )
 
         ps = AsOfPriceSource(ohlcv_provider=ohlcv, interval=interval)
         ps.preload(

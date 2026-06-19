@@ -24,11 +24,24 @@ from __future__ import annotations
 
 import bisect
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class BacktestCacheMiss(Exception):
+    """A required symbol has no on-disk OHLCV cache anywhere a backtest reads.
+
+    A backtest is HERMETIC: it never fetches over the network mid-run (that storms the
+    provider rate limit, hangs the run, and risks lookahead). When a symbol's bars are
+    absent from BOTH cache locations the backtest reads (see ``MemoizedOHLCVProvider.
+    _read_cached_df``), this is raised instead of silently skipping the symbol or
+    fetching it live. ``AsOfPriceSource.preload`` collects these across all symbols and
+    re-raises ONE aggregated, actionable error naming what to cache.
+    """
 
 # WORKER-PERSISTENT parsed-bar cache: (symbol, interval, fetch_start_iso, end_iso) -> (bars, keys).
 # Each backtest builds a fresh AsOfPriceSource, but a GA worker runs MANY individuals over the
@@ -203,6 +216,7 @@ class AsOfPriceSource:
             )
         fetch_start = start - timedelta(days=warmup_days)
         win = (self._interval, fetch_start.isoformat(), end.isoformat())
+        missing: List[str] = []  # symbols with NO cached series anywhere (hermetic mode)
         for sym in symbols:
             # Worker-persistent reuse: a prior individual in this worker already parsed this
             # symbol's bar index for the same window -> adopt it (no re-fetch, no re-parse).
@@ -210,10 +224,11 @@ class AsOfPriceSource:
             if cached is not None:
                 self._bars[sym], self._sorted_keys[sym] = cached
                 continue
-            # Resilient: a symbol with no cached data for the window (e.g. a recent IPO before its
-            # first bar, or a gap in the cache) must NOT abort the whole run — load it as empty and
-            # continue. bar_at/close_at return None for it (no fills, drops from MTM), exactly as
-            # for a symbol that simply has no bar on a given tick.
+            # A symbol whose cache EXISTS but has no rows in the window (e.g. a recent IPO before
+            # its first bar, or a gap) loads as empty and continues — that is a legitimate data
+            # gap, not an error. A symbol whose cache is ABSENT everywhere raises BacktestCacheMiss
+            # (hermetic mode); collect those and fail once, loudly, after the loop (the user asked
+            # for a hard error naming what to cache — never a silent skip).
             try:
                 df = self._ohlcv.get_ohlcv_data(
                     sym,
@@ -221,11 +236,24 @@ class AsOfPriceSource:
                     end_date=end,
                     interval=self._interval,
                 )
-            except Exception as e:  # noqa: BLE001 — one data-less symbol can't kill the backtest
-                logger.warning(f"AsOfPriceSource.preload: no data for {sym} ({e}); skipping")
-                df = None
+            except BacktestCacheMiss:
+                missing.append(sym)
+                continue
             self.load_bars_df(sym, df)  # vectorized build (avoids per-row dict + _norm loop)
             _WORKER_BAR_CACHE[(sym, *win)] = (self._bars[sym], self._sorted_keys[sym])
+
+        if missing:
+            interval = self._interval
+            sample = ", ".join(missing[:20]) + ("…" if len(missing) > 20 else "")
+            raise BacktestCacheMiss(
+                f"OHLCV cache miss: {len(missing)} of {len(symbols)} symbol(s) have no cached "
+                f"{interval} bars on disk (e.g. {sample}). A backtest is hermetic — it never "
+                f"fetches during a run. Populate the cache first, e.g.:\n"
+                f"    ba2-test fetch-cache --provider fmp --timeframes {interval} "
+                f"--symbols {' '.join(missing[:5])}{' …' if len(missing) > 5 else ''}\n"
+                f"Expected at CACHE_FOLDER/FMPOHLCVProvider/<SYM>_{interval}.parquet "
+                f"(native OHLCV cache)."
+            )
 
     def load_bars(self, symbol: str, rows: List[Dict[str, Any]]) -> None:
         """Index a list of OHLCV row dicts for ``symbol`` by calendar date.
@@ -431,11 +459,40 @@ class MemoizedOHLCVProvider:
     delegated to the inner provider unchanged.
     """
 
-    def __init__(self, inner: Any, bounds_start: Any, bounds_end: Any, interval: str = "1d"):
+    def __init__(self, inner: Any, bounds_start: Any, bounds_end: Any, interval: str = "1d",
+                 cached_only: bool = False):
         self._inner = inner
         self._bs = bounds_start
         self._be = bounds_end
         self._interval = interval
+        # HERMETIC backtest mode: when True, the series is read ONLY from the on-disk OHLCV
+        # caches (never a live network fetch). A screener optimization's candidate universe can
+        # be hundreds of symbols; fetching missing ones mid-backtest storms the FMP rate limit
+        # (429 backoff -> the run hangs for many minutes) and is lookahead-prone. A backtest is
+        # meant to be hermetic: the data is pre-built (ba2-test fetch-cache / build-screener-
+        # metrics). When a symbol is absent from EVERY cache location we read, raise
+        # BacktestCacheMiss (the user asked for a hard error, NOT a silent skip) so preload can
+        # report exactly what to cache. cached_only=False keeps the live passthrough (fetch).
+        self._cached_only = cached_only
+
+    def _read_cached_df(self, symbol: str, interval: str):
+        """Read a symbol's full OHLCV series from the native on-disk cache. None on miss.
+
+        Reads ``CACHE_FOLDER/<ProviderClassName>/<SYM>_<interval>.parquet`` — the single native
+        parquet cache that ``MarketDataProviderInterface.get_ohlcv_data`` AND ``ba2-test
+        fetch-cache`` (via ohlcv_cache_provider) both write. Returns a DataFrame (columns
+        Date,Open,High,Low,Close,Volume[,effective_date]) or None when the file is absent.
+        """
+        import pandas as pd
+
+        try:
+            from ba2_common.core import native_cache
+            p = native_cache.timeseries_path(type(self._inner).__name__, symbol, interval)
+            if os.path.exists(p):
+                return pd.read_parquet(p)
+        except Exception:  # pragma: no cover
+            pass
+        return None
 
     def _full(self, symbol: str, interval: str):
         import numpy as np
@@ -444,9 +501,30 @@ class MemoizedOHLCVProvider:
         key = (symbol, interval, _to_utc(self._bs).isoformat(), _to_utc(self._be).isoformat())
         hit = _FULL_SERIES_MEMO.get(key)
         if hit is None:
-            df = self._inner.get_ohlcv_data(
-                symbol, start_date=self._bs, end_date=self._be, interval=interval
-            )
+            if self._cached_only:
+                # Hermetic: read from the on-disk caches only (both layouts). Absent from every
+                # layout -> hard error (aggregated by preload), never a silent skip or live fetch.
+                df = self._read_cached_df(symbol, interval)
+                if df is None:
+                    # Only a REAL, network-backed provider (FMPOHLCVProvider et al — they expose
+                    # get_provider_name) must error on miss; an in-memory test/synthetic provider
+                    # (no get_provider_name, no network) is served directly so fixtures still work.
+                    if hasattr(self._inner, "get_provider_name"):
+                        raise BacktestCacheMiss(symbol)
+                    df = self._inner.get_ohlcv_data(
+                        symbol, start_date=self._bs, end_date=self._be, interval=interval
+                    )
+                elif len(df) and "Date" in df.columns:
+                    # _read_cached_df returns the WHOLE on-disk series; clamp to [bounds] so the
+                    # memo matches the live path (get_ohlcv_data(start,end)) and memory stays bounded.
+                    _d = pd.to_datetime(df["Date"], utc=True).dt.tz_localize(None)
+                    _bs = _to_utc(self._bs).replace(tzinfo=None)
+                    _be = _to_utc(self._be).replace(tzinfo=None)
+                    df = df[(_d >= _bs) & (_d <= _be)]
+            else:
+                df = self._inner.get_ohlcv_data(
+                    symbol, start_date=self._bs, end_date=self._be, interval=interval
+                )
             if df is None or len(df) == 0:
                 import pandas as _pd
                 df = _pd.DataFrame() if df is None else df

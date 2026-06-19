@@ -1141,89 +1141,93 @@ async def fetch_ohlcv_cache(request: Dict[str, Any]):
     }
 
 
+def _ohlcv_cache_roots() -> "list[Path]":
+    """The native OHLCV cache provider dirs (CACHE_FOLDER/<*OHLCV*Provider>/).
+
+    Single source of truth for the OHLCV cache location — the same dirs cache_manager counts
+    and the backtest/live read. Repointed here (was the old CACHE_FOLDER/ohlcv/<short>/ layout)
+    after the cache unification. Patch this in tests to control the scan root.
+    """
+    from app.services.cache_manager import _ohlcv_roots
+    return _ohlcv_roots()
+
+
+def _iter_ohlcv_cache_files() -> "list[tuple[str, Path]]":
+    """(provider_dir_name, file) for every native OHLCV cache file (parquet + legacy csv)."""
+    out: "list[tuple[str, Path]]" = []
+    for root in _ohlcv_cache_roots():
+        if not root.exists():
+            continue
+        for fp in sorted(list(root.glob("*.parquet")) + list(root.glob("*.csv"))):
+            out.append((root.name, fp))
+    return out
+
+
+def _read_ohlcv_dates(fp: Path):
+    """Sorted, tz-aware, NaT-dropped Date series for a native OHLCV cache file (parquet or csv)."""
+    import pandas as pd
+    if fp.suffix == ".csv":
+        df = pd.read_csv(fp, usecols=['Date'])
+    else:
+        df = pd.read_parquet(fp, columns=['Date'])
+    d = pd.to_datetime(df['Date'], utc=True, errors='coerce').dropna().sort_values()
+    return d.reset_index(drop=True)
+
+
 @router.get("/ohlcv/cache-status")
 async def get_ohlcv_cache_status():
     """
     Get information about existing OHLCV cache files.
 
-    Scans the cache directory for CSV files and returns metadata.
+    Scans the native OHLCV cache (CACHE_FOLDER/<*OHLCV*Provider>/, parquet — the single unified
+    cache) and returns per-file metadata.
 
     Returns:
         List of cache file entries with symbol, interval, size, and modification time
     """
-    from app.services.ohlcv_cache_provider import DEFAULT_OHLCV_CACHE_DIR
-    # Wrap in Path(...) so the OHLCV cache root is the shared common cache (not the
-    # repo/CWD) while keeping the `app.api.tools.Path` patch point that tests rely on.
-    cache_dir = Path(DEFAULT_OHLCV_CACHE_DIR)
     entries = []
+    for provider_name, filepath in _iter_ohlcv_cache_files():
+        try:
+            name_parts = filepath.stem.rsplit('_', 1)
+            if len(name_parts) == 2:
+                symbol, interval = name_parts
+            else:
+                symbol, interval = filepath.stem, "unknown"
 
-    if cache_dir.exists():
-        # Scan both legacy flat files and new per-provider subdirectories
-        csv_files = list(cache_dir.glob("*.csv"))       # legacy flat files
-        csv_files += list(cache_dir.glob("*/*.csv"))    # per-provider subdirs
-        for filepath in csv_files:
+            stat = filepath.stat()
+            rows = 0
+            date_from = None
+            date_to = None
             try:
-                # Provider name: parent dir name, or 'unknown' for legacy flat files
-                if filepath.parent == cache_dir:
-                    provider_name = "unknown"
-                else:
-                    provider_name = filepath.parent.name
+                dates = _read_ohlcv_dates(filepath)
+                rows = len(dates)
+                if rows:
+                    date_from = dates.iloc[0].isoformat()
+                    date_to = dates.iloc[-1].isoformat()
+            except Exception:
+                pass
 
-                name_parts = filepath.stem.rsplit('_', 1)
-                if len(name_parts) == 2:
-                    symbol, interval = name_parts
-                else:
-                    symbol = filepath.stem
-                    interval = "unknown"
+            entries.append({
+                "provider": provider_name,
+                "symbol": symbol,
+                "interval": interval,
+                "file_size": stat.st_size,
+                "file_size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "last_modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "rows": max(0, rows),
+                "date_from": date_from,
+                "date_to": date_to,
+                "filename": filepath.name,
+            })
+        except Exception as e:
+            logger.warning(f"Error reading cache file {filepath}: {e}")
 
-                stat = filepath.stat()
-                file_size = stat.st_size
-                rows = 0
-                date_from = None
-                date_to = None
-                try:
-                    with open(filepath, 'r') as f:
-                        first_line = None
-                        last_line = None
-                        for i, line in enumerate(f):
-                            if i == 0:
-                                continue  # skip header
-                            if i == 1:
-                                first_line = line
-                            last_line = line
-                            rows += 1
-                        if first_line:
-                            date_from = first_line.split(',')[0].strip()
-                        if last_line:
-                            date_to = last_line.split(',')[0].strip()
-                        # Ensure date_from <= date_to (CSV might be reverse sorted)
-                        if date_from and date_to and date_from > date_to:
-                            date_from, date_to = date_to, date_from
-                except Exception:
-                    pass
-
-                entries.append({
-                    "provider": provider_name,
-                    "symbol": symbol,
-                    "interval": interval,
-                    "file_size": file_size,
-                    "file_size_mb": round(file_size / (1024 * 1024), 2),
-                    "last_modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    "rows": max(0, rows),
-                    "date_from": date_from,
-                    "date_to": date_to,
-                    "filename": filepath.name
-                })
-            except Exception as e:
-                logger.warning(f"Error reading cache file {filepath}: {e}")
-
-    # Sort by provider, symbol, interval
     entries.sort(key=lambda x: (x['provider'], x['symbol'], x['interval']))
-
+    roots = _ohlcv_cache_roots()
     return {
         "cache_files": entries,
         "count": len(entries),
-        "cache_directory": str(cache_dir)
+        "cache_directory": str(roots[0].parent) if roots else "",
     }
 
 
@@ -1235,58 +1239,50 @@ async def check_ohlcv_gaps():
     A gap is defined as a time interval between consecutive rows
     that exceeds 5 calendar days (covers weekends + holidays).
 
+    Scans the native OHLCV cache (CACHE_FOLDER/<*OHLCV*Provider>/, parquet — the single unified
+    cache).
+
     Returns:
         Report with gap details per cache file, sorted by gap count descending
     """
     import pandas as pd
 
-    from app.services.ohlcv_cache_provider import DEFAULT_OHLCV_CACHE_DIR
-    # Path(...) keeps the patch point for tests while defaulting to the common cache.
-    cache_dir = Path(DEFAULT_OHLCV_CACHE_DIR)
     results = []
+    for provider_name, filepath in _iter_ohlcv_cache_files():
+        try:
+            name_parts = filepath.stem.rsplit('_', 1)
+            symbol, interval = name_parts if len(name_parts) == 2 else (filepath.stem, "unknown")
 
-    if cache_dir.exists():
-        csv_files = list(cache_dir.glob("*.csv"))
-        csv_files += list(cache_dir.glob("*/*.csv"))
+            df = _read_ohlcv_dates(filepath).to_frame(name='Date')
 
-        for filepath in csv_files:
-            try:
-                provider_name = "unknown" if filepath.parent == cache_dir else filepath.parent.name
-                name_parts = filepath.stem.rsplit('_', 1)
-                symbol, interval = name_parts if len(name_parts) == 2 else (filepath.stem, "unknown")
+            gaps = []
+            if len(df) > 1:
+                diffs = df['Date'].diff()
+                gap_threshold = pd.Timedelta(days=5)
+                for idx in diffs[diffs > gap_threshold].index:
+                    gap_start = df.loc[idx - 1, 'Date']
+                    gap_end = df.loc[idx, 'Date']
+                    gap_days = int((gap_end - gap_start).total_seconds() / 86400)
+                    gaps.append({
+                        "gap_start": gap_start.isoformat(),
+                        "gap_end": gap_end.isoformat(),
+                        "gap_days": gap_days,
+                    })
 
-                df = pd.read_csv(filepath, usecols=['Date'])
-                df['Date'] = pd.to_datetime(df['Date'], utc=True, errors='coerce')
-                df = df.dropna(subset=['Date']).sort_values('Date').reset_index(drop=True)
-
-                gaps = []
-                if len(df) > 1:
-                    diffs = df['Date'].diff()
-                    gap_threshold = pd.Timedelta(days=5)
-                    for idx in diffs[diffs > gap_threshold].index:
-                        gap_start = df.loc[idx - 1, 'Date']
-                        gap_end = df.loc[idx, 'Date']
-                        gap_days = int((gap_end - gap_start).total_seconds() / 86400)
-                        gaps.append({
-                            "gap_start": gap_start.isoformat(),
-                            "gap_end": gap_end.isoformat(),
-                            "gap_days": gap_days,
-                        })
-
-                results.append({
-                    "provider": provider_name,
-                    "symbol": symbol,
-                    "interval": interval,
-                    "filename": filepath.name,
-                    "rows": len(df),
-                    "date_from": df['Date'].min().isoformat() if not df.empty else None,
-                    "date_to": df['Date'].max().isoformat() if not df.empty else None,
-                    "gap_count": len(gaps),
-                    "gaps": gaps,
-                    "has_gaps": len(gaps) > 0,
-                })
-            except Exception as e:
-                logger.warning(f"Error checking gaps in {filepath}: {e}")
+            results.append({
+                "provider": provider_name,
+                "symbol": symbol,
+                "interval": interval,
+                "filename": filepath.name,
+                "rows": len(df),
+                "date_from": df['Date'].min().isoformat() if not df.empty else None,
+                "date_to": df['Date'].max().isoformat() if not df.empty else None,
+                "gap_count": len(gaps),
+                "gaps": gaps,
+                "has_gaps": len(gaps) > 0,
+            })
+        except Exception as e:
+            logger.warning(f"Error checking gaps in {filepath}: {e}")
 
     # Files with gaps first (descending gap count), then clean files alphabetically
     results.sort(key=lambda x: (-x['gap_count'], x['provider'], x['symbol'], x['interval']))

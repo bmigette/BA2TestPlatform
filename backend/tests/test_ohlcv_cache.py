@@ -98,8 +98,10 @@ class TestHandleOHLCVCacheFetch:
                 'timeframes': ['1d', '4h', '1h']
             })
 
-            # Should update progress: 1 initial + 3 timeframes + 1 final = 5
-            assert mock_task_queue.update_progress.call_count == 5
+            # 1 initial + 2 per timeframe (a "cache status" line then a "done" line) + 1 final
+            # = 1 + 2*3 + 1 = 8. (extend_ohlcv_cache is mocked, so its own progress_callback,
+            # which would add more, never fires here.)
+            assert mock_task_queue.update_progress.call_count == 8
 
     def test_handler_uses_extend_ohlcv_cache(self, mock_task_queue, mock_provider):
         """Handler must call extend_ohlcv_cache, not get_ohlcv_data."""
@@ -177,41 +179,38 @@ class TestOHLCVCacheStatusEndpoint:
     """Tests for the cache status endpoint."""
 
     def test_cache_status_empty_dir(self):
-        """Test cache status with empty or non-existent cache directory."""
+        """Test cache status with no native OHLCV provider dirs."""
         import asyncio
         from app.api.tools import get_ohlcv_cache_status
 
-        with patch('app.api.tools.Path') as MockPath:
-            mock_path = MagicMock()
-            mock_path.exists.return_value = False
-            MockPath.return_value = mock_path
-
+        # Repoint the unified-cache root resolver at nothing (the new scan source).
+        with patch('app.api.tools._ohlcv_cache_roots', return_value=[]):
             result = asyncio.get_event_loop().run_until_complete(get_ohlcv_cache_status())
 
             assert result['count'] == 0
             assert result['cache_files'] == []
 
     def test_cache_status_with_files(self):
-        """Test cache status correctly parses cache files."""
+        """Test cache status correctly parses native parquet cache files."""
         import asyncio
+        from pathlib import Path as RealPath
         from app.api.tools import get_ohlcv_cache_status
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a fake cache file
-            cache_file = os.path.join(tmpdir, "AAPL_1d.csv")
-            with open(cache_file, 'w') as f:
-                f.write("Date,Open,High,Low,Close,Volume\n")
-                f.write("2024-01-01,100,105,99,103,1000000\n")
-                f.write("2024-01-02,103,108,102,107,1200000\n")
+            # A native OHLCV provider dir IS the scan root; files live directly under it.
+            root = RealPath(tmpdir) / "FMPOHLCVProvider"
+            root.mkdir()
+            pd.DataFrame({
+                'Date': pd.to_datetime(['2024-01-01', '2024-01-02']),
+                'Open': [100, 103], 'High': [105, 108], 'Low': [99, 102],
+                'Close': [103, 107], 'Volume': [1000000, 1200000],
+            }).to_parquet(root / "AAPL_1d.parquet", index=False)
 
-            with patch('app.api.tools.Path') as MockPath:
-                from pathlib import Path as RealPath
-                real_path = RealPath(tmpdir)
-                MockPath.return_value = real_path
-
+            with patch('app.api.tools._ohlcv_cache_roots', return_value=[root]):
                 result = asyncio.get_event_loop().run_until_complete(get_ohlcv_cache_status())
 
                 assert result['count'] == 1
+                assert result['cache_files'][0]['provider'] == 'FMPOHLCVProvider'
                 assert result['cache_files'][0]['symbol'] == 'AAPL'
                 assert result['cache_files'][0]['interval'] == '1d'
                 assert result['cache_files'][0]['rows'] == 2
@@ -221,10 +220,12 @@ import pathlib
 
 
 class TestCacheFilePerProvider:
-    """Test that cache files are stored per-provider in subdirectories."""
+    """UNIFIED CACHE: cache files are the native parquet store, keyed by provider CLASS name
+    (CACHE_FOLDER/<ProviderClassName>/<SYM>_<interval>.parquet) — the same store get_ohlcv_data uses."""
 
-    def test_cache_file_is_per_provider(self):
-        """Cache file path must include provider name as subdirectory."""
+    def test_cache_file_is_native_classname_parquet(self, monkeypatch):
+        """Cache file path is CACHE_FOLDER/<ClassName>/<SYM>_<interval>.parquet (native cache)."""
+        from ba2_common.core import native_cache
         from app.services.ohlcv_cache_provider import OHLCVCacheProviderBase as MarketDataProviderInterface
 
         class _Stub(MarketDataProviderInterface):
@@ -238,13 +239,15 @@ class TestCacheFilePerProvider:
                 return True
 
         with tempfile.TemporaryDirectory() as tmp:
+            monkeypatch.setattr(native_cache, "CACHE_FOLDER", tmp, raising=False)
             s = _Stub()
-            s.cache_folder = pathlib.Path(tmp)
             p = s._get_cache_file("AAPL", "1h")
-            assert p == pathlib.Path(tmp) / "testprov" / "AAPL_1h.csv"
+            # Native key is the CLASS name (_Stub), NOT get_provider_name(); parquet, not csv.
+            assert p == pathlib.Path(tmp) / "_Stub" / "AAPL_1h.parquet"
 
-    def test_cache_file_creates_directory(self):
+    def test_cache_file_creates_directory(self, monkeypatch):
         """_get_cache_file must create the provider subdirectory if it does not exist."""
+        from ba2_common.core import native_cache
         from app.services.ohlcv_cache_provider import OHLCVCacheProviderBase as MarketDataProviderInterface
 
         class _Stub(MarketDataProviderInterface):
@@ -258,8 +261,8 @@ class TestCacheFilePerProvider:
                 return True
 
         with tempfile.TemporaryDirectory() as tmp:
+            monkeypatch.setattr(native_cache, "CACHE_FOLDER", tmp, raising=False)
             s = _Stub()
-            s.cache_folder = pathlib.Path(tmp)
             p = s._get_cache_file("MSFT", "1d")
             assert p.parent.exists(), "Provider subdirectory should have been created"
 
@@ -274,8 +277,11 @@ class TestExtendOHLCVCache:
             'Low': 0.5, 'Close': 1.5, 'Volume': 100.0
         })
 
-    def _make_provider(self, tmp_dir: str):
+    def _make_provider(self, tmp_dir: str, monkeypatch):
+        """A stub provider whose native cache is isolated to tmp_dir (CACHE_FOLDER repointed)."""
+        from ba2_common.core import native_cache
         from app.services.ohlcv_cache_provider import OHLCVCacheProviderBase as MarketDataProviderInterface
+        monkeypatch.setattr(native_cache, "CACHE_FOLDER", tmp_dir, raising=False)
 
         class _Stub(MarketDataProviderInterface):
             def _get_ohlcv_data_impl(self, symbol, start, end, interval):
@@ -288,38 +294,39 @@ class TestExtendOHLCVCache:
             def get_supported_features(self): return []
             def validate_config(self): return True
 
-        p = _Stub()
-        p.cache_folder = pathlib.Path(tmp_dir)
-        return p
+        return _Stub()
 
-    def test_no_fetch_when_range_covered(self):
+    def _seed_cache(self, prov, start: str, end: str):
+        """Write existing bars to the native cache via the provider's own writer (parquet+eff_date)."""
+        prov._write_cache_df(self._make_df(start, end), "AAPL", "1d")
+
+    def test_no_fetch_when_range_covered(self, monkeypatch):
         """If cache covers the range, _get_ohlcv_data_impl must not be called."""
         with tempfile.TemporaryDirectory() as tmp:
-            prov = self._make_provider(tmp)
-            cache_file = prov._get_cache_file("AAPL", "1d")
-            self._make_df("2024-01-01", "2024-12-31").to_csv(cache_file, index=False)
+            prov = self._make_provider(tmp, monkeypatch)
+            self._seed_cache(prov, "2024-01-01", "2024-12-31")
 
             with patch.object(prov, '_get_ohlcv_data_impl',
                               wraps=prov._get_ohlcv_data_impl) as mock_impl:
                 prov.extend_ohlcv_cache("AAPL", datetime(2024, 3, 1), datetime(2024, 6, 1), "1d")
                 mock_impl.assert_not_called()
 
-    def test_full_fetch_when_no_cache(self):
-        """If no cache exists, fetches the full requested range and saves."""
+    def test_full_fetch_when_no_cache(self, monkeypatch):
+        """If no cache exists, fetches the full requested range and saves (native parquet)."""
         with tempfile.TemporaryDirectory() as tmp:
-            prov = self._make_provider(tmp)
+            prov = self._make_provider(tmp, monkeypatch)
             prov.extend_ohlcv_cache("AAPL", datetime(2024, 1, 1), datetime(2024, 3, 31), "1d")
             cache_file = prov._get_cache_file("AAPL", "1d")
             assert cache_file.exists()
-            df = pd.read_csv(cache_file)
+            df = pd.read_parquet(cache_file)
             assert len(df) > 0
+            assert "effective_date" in df.columns  # unified-cache schema
 
-    def test_extends_right_only(self):
+    def test_extends_right_only(self, monkeypatch):
         """Only fetches the right-side gap, not the already-cached portion."""
         with tempfile.TemporaryDirectory() as tmp:
-            prov = self._make_provider(tmp)
-            cache_file = prov._get_cache_file("AAPL", "1d")
-            self._make_df("2024-01-01", "2024-06-30").to_csv(cache_file, index=False)
+            prov = self._make_provider(tmp, monkeypatch)
+            self._seed_cache(prov, "2024-01-01", "2024-06-30")
 
             with patch.object(prov, '_get_ohlcv_data_impl',
                               wraps=prov._get_ohlcv_data_impl) as mock_impl:
@@ -329,12 +336,12 @@ class TestExtendOHLCVCache:
                 call_start = mock_impl.call_args[0][1]
                 assert call_start >= datetime(2024, 6, 28)
 
-    def test_no_duplicate_rows_after_extend(self):
+    def test_no_duplicate_rows_after_extend(self, monkeypatch):
         """Merged cache must not have duplicate Date rows."""
         with tempfile.TemporaryDirectory() as tmp:
-            prov = self._make_provider(tmp)
-            cache_file = prov._get_cache_file("AAPL", "1d")
-            self._make_df("2024-01-01", "2024-06-30").to_csv(cache_file, index=False)
+            prov = self._make_provider(tmp, monkeypatch)
+            self._seed_cache(prov, "2024-01-01", "2024-06-30")
             prov.extend_ohlcv_cache("AAPL", datetime(2024, 1, 1), datetime(2024, 9, 30), "1d")
-            df = pd.read_csv(cache_file, parse_dates=['Date'])
+            df = pd.read_parquet(prov._get_cache_file("AAPL", "1d"))
+            df['Date'] = pd.to_datetime(df['Date'])
             assert df['Date'].duplicated().sum() == 0

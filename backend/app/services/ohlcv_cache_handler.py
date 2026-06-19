@@ -54,10 +54,15 @@ def _fetch_symbol_timeframes(
 
     def fetch_timeframe(tf: str):
         try:
-            cache_file = provider._get_cache_file(symbol, tf)
-            if cache_file.exists():
+            # The cache is now native Parquet (CACHE_FOLDER/<ProviderClassName>/), so read the Date
+            # column with the parquet-aware reader; _existing_cache_file resolves parquet-or-legacy-csv.
+            cache_file = provider._existing_cache_file(symbol, tf)
+            if cache_file is not None:
                 try:
-                    cached = pd.read_csv(cache_file, usecols=['Date'])
+                    if cache_file.suffix == ".csv":
+                        cached = pd.read_csv(cache_file, usecols=['Date'])
+                    else:
+                        cached = pd.read_parquet(cache_file, columns=['Date'])
                     if not cached.empty:
                         cached['Date'] = pd.to_datetime(cached['Date'])
                         c_min = cached['Date'].min().strftime('%Y-%m-%d')

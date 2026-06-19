@@ -14,24 +14,26 @@ as a mixin. ``wrap_with_cache`` layers it onto a shared provider instance so the
 cache handler keeps working unchanged; ``OHLCVCacheProviderBase`` is the abstract
 base the cache tests subclass (same shape the local base had).
 
-Cache files live under
-``<ba2_common CACHE_FOLDER>/ohlcv/<provider_name>/<SYMBOL>_<interval>.parquet``
-(default ``~/Documents/ba2/common/cache/ohlcv`` — NOT the repo/CWD; see
-``DEFAULT_OHLCV_CACHE_DIR``). Legacy ``.csv`` caches are read transparently and
-migrated to Parquet on the next write.
+UNIFIED CACHE (2026-06): this layer no longer keeps a SEPARATE store. Its reads/writes now target
+the SAME native parquet cache the rest of the system uses —
+``<CACHE_FOLDER>/<ProviderClassName>/<SYMBOL>_<interval>.parquet`` (ba2_common ``native_cache``,
+schema carries an ``effective_date`` column) — so a bulk ``fetch-cache`` download is immediately
+usable by the backtest/live/experts with NO second cache and no migration. ``extend_ohlcv_cache``
+keeps its gap-fill / head-tail-extension behaviour; only its storage target changed. Legacy ``.csv``
+caches are still read transparently and migrated to Parquet on the next write.
 """
 
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, List, Optional
 import logging
-import os
 import threading
 
 import pandas as pd
+
+from ba2_common.core import native_cache
 
 logger = logging.getLogger(__name__)
 
@@ -44,19 +46,6 @@ try:
     DEFAULT_OHLCV_CACHE_DIR = Path(_COMMON_CACHE_FOLDER) / "ohlcv"
 except Exception:  # pragma: no cover
     DEFAULT_OHLCV_CACHE_DIR = Path("datasets/cache/ohlcv")
-
-# Per-file write locks so parallel optimization trials that fill the SAME symbol's
-# cache don't corrupt the parquet (a half-written file). Different files lock
-# independently.
-_CACHE_WRITE_LOCKS: "defaultdict[str, threading.Lock]" = defaultdict(threading.Lock)
-_CACHE_LOCKS_GUARD = threading.Lock()
-
-
-def _cache_write_lock(path: Path) -> threading.Lock:
-    """Return the process-wide write lock for a given cache file path."""
-    with _CACHE_LOCKS_GUARD:
-        return _CACHE_WRITE_LOCKS[str(path)]
-
 
 class OHLCVCacheMixin:
     """Parquet-backed, gap-filling OHLCV disk-cache for a market-data provider.
@@ -78,16 +67,18 @@ class OHLCVCacheMixin:
         return folder
 
     def _get_cache_file(self, symbol: str, interval: str) -> Path:
-        """Return the per-provider cache file path (Parquet), creating the dir if needed.
+        """Return the canonical NATIVE cache file path (Parquet), creating the dir if needed.
 
-        Parquet is ~3-5x smaller than CSV for OHLCV and preserves dtypes, so reads
-        are faster and there is no string<->float reparsing. Legacy ``.csv`` caches
-        are read transparently (see ``_existing_cache_file``) and migrated to
-        Parquet on next write.
+        UNIFIED CACHE: this used to return a separate backend layout
+        (``CACHE_FOLDER/ohlcv/<get_provider_name()>/...``); it now points at the SAME native
+        parquet cache the rest of the system reads/writes —
+        ``CACHE_FOLDER/<ProviderClassName>/<SYM>_<interval>.parquet`` (ba2_common ``native_cache``).
+        When ``wrap_with_cache`` binds this mixin onto a real provider, ``type(self).__name__`` is
+        the provider class name (e.g. ``FMPOHLCVProvider``) — exactly the ``native_cache`` key used
+        by ``MarketDataProviderInterface.get_ohlcv_data``. Legacy ``.csv`` caches are still read
+        transparently (see ``_existing_cache_file``) and migrated to Parquet on next write.
         """
-        provider_dir = Path(self.cache_folder) / self.get_provider_name()
-        provider_dir.mkdir(parents=True, exist_ok=True)
-        return provider_dir / f"{symbol}_{interval}.parquet"
+        return Path(native_cache.timeseries_path(type(self).__name__, symbol, interval))
 
     def _existing_cache_file(self, symbol: str, interval: str) -> Optional[Path]:
         """The on-disk cache file to READ: Parquet if present, else legacy CSV, else None."""
@@ -102,24 +93,25 @@ class OHLCVCacheMixin:
         return pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
 
     def _write_cache_df(self, df: pd.DataFrame, symbol: str, interval: str) -> Path:
-        """Write ``df`` to the Parquet cache and remove any legacy CSV sibling. Returns the path.
+        """Write ``df`` to the canonical native Parquet cache and remove any legacy CSV sibling.
 
-        Thread-safe: holds the per-file write lock and writes to a temp file then
-        atomically replaces, so concurrent optimization trials never corrupt the
-        cache or read a half-written file.
+        UNIFIED CACHE: delegates to ``native_cache.write_timeseries`` — the SAME atomic
+        (temp+rename) + per-path-locked writer ``MarketDataProviderInterface._write_ohlcv_parquet``
+        uses — so a ``fetch-cache`` download lands in the ONE cache the backtest/live/experts read.
+        Stamps ``effective_date == Date`` (OHLCV is public on its bar date -> no lookahead),
+        matching ``_write_ohlcv_parquet``; ``native_cache.write_timeseries`` requires the column.
         """
+        out = df.copy()
+        out["Date"] = pd.to_datetime(out["Date"])
+        out["effective_date"] = out["Date"]
+        native_cache.write_timeseries(type(self).__name__, symbol, interval, out)
         path = self._get_cache_file(symbol, interval)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with _cache_write_lock(path):
-            tmp = path.with_suffix(".parquet.tmp")
-            df.to_parquet(tmp, index=False)
-            os.replace(tmp, path)  # atomic on the same filesystem
-            legacy = path.with_suffix(".csv")
-            if legacy.exists():
-                try:
-                    legacy.unlink()
-                except OSError:
-                    pass
+        legacy = path.with_suffix(".csv")
+        if legacy.exists():
+            try:
+                legacy.unlink()
+            except OSError:
+                pass
         return path
 
     def extend_ohlcv_cache(
@@ -292,7 +284,10 @@ class OHLCVCacheMixin:
             logger.info(f"Saved {len(final)} rows to {cache_file}")
 
         _report(100.0, f"{symbol}/{interval}: Done - {len(final)} rows total")
-        return final
+        # The native cache (and thus a re-read of `existing`) carries an effective_date column;
+        # callers expect the public Date+OHLCV shape, so drop it (mirrors get_ohlcv_data). It was
+        # already (re)stamped on write by _write_cache_df.
+        return final.drop(columns=["effective_date"], errors="ignore")
 
 
 class OHLCVCacheProviderBase(OHLCVCacheMixin, ABC):
