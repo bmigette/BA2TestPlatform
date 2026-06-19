@@ -470,6 +470,7 @@ const Backtesting: React.FC = () => {
     }
     setLiveImporting(true);
     setLiveImportNote(null);
+    setSource('expert');  // live expert rules use expert-event vocabulary in the entry builders
     try {
       const [enter, rules] = await Promise.all([
         importLiveEnterMarket(id),
@@ -478,15 +479,21 @@ const Backtesting: React.FC = () => {
       let buyCount = 0;
       let sellCount = 0;
       if (enter.buy_entry_conditions && isConditionGroup(enter.buy_entry_conditions)) {
-        setBuyEntryConditions(enter.buy_entry_conditions);
-        buyCount = enter.buy_entry_conditions.conditions.length;
+        const g = normalizeEntryTree(enter.buy_entry_conditions);
+        setBuyEntryConditions(g);
+        buyCount = g.conditions.length;
+      } else {
+        setBuyEntryConditions(createEmptyGroup('AND'));
       }
       if (enter.sell_entry_conditions && isConditionGroup(enter.sell_entry_conditions)) {
-        setSellEntryConditions(enter.sell_entry_conditions);
-        sellCount = enter.sell_entry_conditions.conditions.length;
-        // Auto-enable "Allow short" when the imported expert carries a short tree.
-        if (sellCount > 0) setAllowShort(true);
+        const g = normalizeEntryTree(enter.sell_entry_conditions);
+        setSellEntryConditions(g);
+        sellCount = g.conditions.length;
+      } else {
+        setSellEntryConditions(createEmptyGroup('AND'));
       }
+      // Reflect THIS import: short on only when it carries a short tree (no stale empty Short block).
+      setAllowShort(sellCount > 0);
       const exitRules = Array.isArray(rules) ? rules : [];
       setExitConditions(
         exitRules.map((r, i) => ({
@@ -716,8 +723,9 @@ const Backtesting: React.FC = () => {
   const expertSettingsFileRef = useRef<HTMLInputElement>(null);
 
   // Import expert settings JSON exported from the live trade platform
-  // (expert_settings_<type>_<id>_<ts>.json). Maps expert_settings key-value pairs to form fields.
-  const importExpertSettingsJson = (raw: string) => {
+  // (expert_settings_<type>_<id>_<ts>.json). Maps expert_settings key-value pairs to form fields
+  // AND selects the exported expert in the Source/Expert picker.
+  const importExpertSettingsJson = async (raw: string) => {
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(raw);
@@ -731,10 +739,32 @@ const Backtesting: React.FC = () => {
       return;
     }
     applyIndividualParams(settings);
-    const expertType = typeof parsed.expert_type === 'string' ? parsed.expert_type : '';
+    // The expert class may be exported under expert_type (test-platform export) or expert
+    // (live settings_export_import). Select it in the ExpertPicker (which keys on the expert CLASS).
+    const expertType = (['expert_type', 'expert', 'expert_class']
+      .map((k) => parsed[k])
+      .find((v) => typeof v === 'string' && v) as string | undefined) ?? '';
+    let matched = '';
+    if (expertType) {
+      try {
+        const experts = await listExperts();
+        const info = experts.find((e) => e.class === expertType)
+          ?? experts.find((e) => e.class.toLowerCase() === expertType.toLowerCase());
+        if (info) {
+          setSource('expert');
+          setExpertClass(info.class);
+          setExpertBypassesRm(info.bypasses_classic_rm ?? false);
+          matched = info.class;
+        }
+      } catch {
+        /* offline / no experts list: leave the picker for manual selection */
+      }
+    }
     setImportNote({
       kind: 'ok',
-      text: `Imported expert settings${expertType ? ` from "${expertType}"` : ''}: pre-filled TP/SL and other params.`,
+      text: matched
+        ? `Imported expert settings for "${matched}": selected the expert and pre-filled TP/SL and other params.`
+        : `Imported expert settings${expertType ? ` from "${expertType}" (not a known expert — select it manually)` : ''}: pre-filled TP/SL and other params.`,
     });
   };
   const handleExpertSettingsFile = (file: File | undefined) => {
@@ -762,18 +792,31 @@ const Backtesting: React.FC = () => {
     if (exportType === 'rulesets' || exportType === 'ruleset' || exportType === 'rule') {
       try {
         const res = await convertLiveRuleset(parsed);
+        // A live ruleset is expert-event rules (confidence/bullish/…); ensure the expert source is
+        // active so the entry builders thread the ruleset vocabulary (else the fields show blank).
+        setSource('expert');
         let buyCount = 0;
         let sellCount = 0;
+        // normalizeEntryTree maps the converter's snake optimize keys (field_type/optimize/
+        // value_min) -> the camelCase the ConditionBuilder reads, so numeric leaves render their
+        // operator/value + optimize range (the field itself already matches).
         if (res.buy_entry_conditions && isConditionGroup(res.buy_entry_conditions)) {
-          setBuyEntryConditions(res.buy_entry_conditions);
-          buyCount = res.buy_entry_conditions.conditions.length;
+          const g = normalizeEntryTree(res.buy_entry_conditions);
+          setBuyEntryConditions(g);
+          buyCount = g.conditions.length;
+        } else {
+          setBuyEntryConditions(createEmptyGroup('AND'));
         }
         if (res.sell_entry_conditions && isConditionGroup(res.sell_entry_conditions)) {
-          setSellEntryConditions(res.sell_entry_conditions);
-          sellCount = res.sell_entry_conditions.conditions.length;
-          // Auto-enable "Allow short" when the imported ruleset carries a short (sell) tree.
-          if (sellCount > 0) setAllowShort(true);
+          const g = normalizeEntryTree(res.sell_entry_conditions);
+          setSellEntryConditions(g);
+          sellCount = g.conditions.length;
+        } else {
+          setSellEntryConditions(createEmptyGroup('AND'));
         }
+        // Reset "Allow short" to reflect THIS import: on when it carries a short tree, OFF for a
+        // buy-only ruleset (otherwise a stale allowShort=true leaves an empty Short Entry block shown).
+        setAllowShort(sellCount > 0);
         const exitRules = Array.isArray(res.exit_conditions) ? res.exit_conditions : [];
         setExitConditions(
           exitRules.map((r, i) => ({
@@ -802,7 +845,11 @@ const Backtesting: React.FC = () => {
       let buyCount = 0;
       let sellCount = 0;
       if (buyRaw) { const g = normalizeEntryTree(buyRaw); setBuyEntryConditions(g); buyCount = g.conditions.length; }
-      if (sellRaw) { const g = normalizeEntryTree(sellRaw); setSellEntryConditions(g); sellCount = g.conditions.length; if (sellCount > 0) setAllowShort(true); }
+      else { setBuyEntryConditions(createEmptyGroup('AND')); }
+      if (sellRaw) { const g = normalizeEntryTree(sellRaw); setSellEntryConditions(g); sellCount = g.conditions.length; }
+      else { setSellEntryConditions(createEmptyGroup('AND')); }
+      // Reset "Allow short" to match THIS import (OFF for a buy-only file; avoids a stale empty Short block).
+      setAllowShort(sellCount > 0);
       const exitArr = Array.isArray(exitRaw) ? (exitRaw as Record<string, unknown>[]) : [];
       if (exitArr.length) {
         setExitConditions(exitArr.map((r, i) => {
@@ -3624,6 +3671,11 @@ const Backtesting: React.FC = () => {
                       }}
                       availableFields={availableFields}
                       showOptimization={true}
+                      // Expert-source entry conditions ARE expert events (confidence/bullish/…), so
+                      // give the builder the ruleset vocabulary — otherwise an imported live rule's
+                      // field has no <option> and the dropdown renders blank. ML source keeps the
+                      // prediction-field-only boundary.
+                      vocabulary={source === 'expert' ? rulesetVocabulary : undefined}
                     />
                   </div>
                 )}
@@ -3642,6 +3694,7 @@ const Backtesting: React.FC = () => {
                       }}
                       availableFields={availableFields}
                       showOptimization={true}
+                      vocabulary={source === 'expert' ? rulesetVocabulary : undefined}
                     />
                   </div>
                 )}

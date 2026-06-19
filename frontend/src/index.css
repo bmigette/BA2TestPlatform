@@ -414,12 +414,14 @@ body {
   color: rgb(209 213 219); /* gray-300 */
 }
 
-/* Fix description text in forms */
+/* Fix description text + small field labels in forms (e.g. the condition-builder
+   Min/Max/Step/Confirm labels) — gray-400 reads weak on the dark condition rows, so
+   lift small gray helper text to gray-300 for better dark-mode contrast. */
 .dark .text-xs.text-gray-500,
 .dark .text-sm.text-gray-500,
 .dark .text-xs.text-gray-600,
 .dark .text-sm.text-gray-600 {
-  color: rgb(156 163 175) !important; /* gray-400 */
+  color: rgb(209 213 219) !important; /* gray-300 */
 }
 
 /* Fix text in cards and panels */
